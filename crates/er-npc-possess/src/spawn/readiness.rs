@@ -1,22 +1,22 @@
-//! WHEN A SPAWNED CREATURE MAY BE POSSESSED, and what to do when it never can be.
+//! When a spawned creature may be possessed, and what to do when it never can be.
 //!
 //! # The deadline is the mod's, because the game has none
 //!
 //! There is no error edge and no timeout anywhere in the eight `ChrRes` states or the eleven
 //! `EneDat` ones. A chr id whose `chrbnd` does not exist does not fail -- it sits in `LoadWait`
 //! forever, quietly, with a `ChrIns` allocated and registered and nothing ever completing. So the
-//! deadline here is not belt-and-braces around a native failure path; it is the ONLY thing that
+//! deadline here is not belt-and-braces around a native failure path; it is the only thing that
 //! ends that state, and its expiry is the one signal that says "that was a bad pick".
 //!
 //! Nothing is pumped while it waits: `EneDatManImp::Update` walks all sixty-four slots every frame
 //! from the game's own `STEP_Update`, so the load progresses whether or not this mod looks at it.
 //! Waiting is genuinely waiting.
 //!
-//! # The gate ORDER is a safety property, not a presentation choice
+//! # The gate order is a safety property, not a presentation choice
 //!
 //! [`Gate::ORDER`] is evaluated front to back and stops at the first one that is not satisfied.
 //! That matters for [`Gate::AssetsResident`]: the predicate it mirrors, `FUN_1404ca4a0`, does not
-//! null-check its `EneDat*`, and the only thing that establishes there IS an `EneDat` is
+//! null-check its `EneDat*`, and the only thing that establishes there is an `EneDat` is
 //! [`Gate::ChrResLoaded`] -- `ChrIns::GetEneDat` returns null unless the step is in `3..6`. The
 //! live reader defends itself as well, but the ordering is where the contract lives and
 //! [`Readiness::observe`] enforces it for every caller rather than asking each one to remember.
@@ -24,7 +24,7 @@
 //! # Three outcomes, and only one of them may call `RemoveChrIns`
 //!
 //! * [`Poll::Expired`] -- we gave up. The creature exists and is ours, so we remove it.
-//! * [`Poll::Vanished`] -- the GAME removed it. `EnemyIns::InitializeCharacterRendering`
+//! * [`Poll::Vanished`] -- the game removed it. `EnemyIns::InitializeCharacterRendering`
 //!   self-despawns a character whose caps loaded but yielded no FLVER, and `ChrSet::RemoveChrIns`
 //!   nulls the entry on its way out. Calling `RemoveChrIns` on that pointer again would hand a
 //!   freed `ChrIns` to `CSDelayDeleteMan` a second time. Drop the pointer and say so.
@@ -38,14 +38,14 @@
 pub(crate) enum Gate {
     /// `chrSet->entries[slot].chrIns` is still the pointer the spawn returned.
     ///
-    /// First because it is the cheapest and because everything after it reads THROUGH that pointer:
+    /// First because it is the cheapest and because everything after it reads through that pointer:
     /// once the game has taken the character back, the rest are reads of freed memory.
     Registered = 0,
     /// `3 <= chrRes->step < 6`, which is `ChrIns::IsInLoadedState` spelled as a field read.
     ChrResLoaded = 1,
     /// The chrbnd cap has finished (`FD4FileCap+0x88 == 4`) and yielded a `FlverResCap`.
     ///
-    /// MUST NOT be evaluated before [`Self::ChrResLoaded`]; see the module docs.
+    /// Must not be evaluated before [`Self::ChrResLoaded`]; see the module docs.
     AssetsResident = 2,
     /// The `ChrCtrl` chain possession itself needs -- the control block, its back-pointer to this
     /// `ChrIns`, and the real `ComManipulator` the thunk will forward to.
@@ -106,7 +106,7 @@ pub(crate) enum Poll {
     Waiting(Gate),
     /// Every gate is satisfied. Possession may start.
     Ready,
-    /// THE GAME took the character away. Drop the pointer; do NOT remove it again.
+    /// The game took the character away. Drop the pointer; do not remove it again.
     Vanished,
     /// The deadline passed with this gate still unsatisfied. Remove the character and report.
     Expired(Gate),
@@ -139,11 +139,11 @@ impl Readiness {
         self.reached
     }
 
-    /// Evaluate the gates IN ORDER, stopping at the first that is not satisfied.
+    /// Evaluate the gates in order, stopping at the first that is not satisfied.
     ///
     /// `evaluate` answers `Some(true)`, `Some(false)`, or `None` for a gate that cannot be decided
     /// on the running build -- which is [`Gate::AssetsResident`] on a build whose `EneDat` offsets
-    /// nobody has measured. `None` SKIPS the gate rather than failing it: the alternative is a
+    /// nobody has measured. `None` skips the gate rather than failing it: the alternative is a
     /// spawn layer that refuses to work at all on a third build, when three of its four gates are
     /// byte-proven identical across both known ones.
     ///
@@ -171,7 +171,7 @@ impl Readiness {
                     });
                 }
                 Some(false) => {
-                    // Registration going away AFTER it was there is the game's own despawn, and it
+                    // Registration going away after it was there is the game's own despawn, and it
                     // is not a timeout however long we have been waiting -- the pointer is gone
                     // either way, and removing it again would double-free.
                     if gate == Gate::Registered && self.seen_registered {
@@ -192,7 +192,7 @@ impl Readiness {
 mod tests {
     use super::*;
 
-    /// A gate closure that answers from a fixed table and RECORDS what it was asked, so the
+    /// A gate closure that answers from a fixed table and records what it was asked, so the
     /// ordering contract is observable rather than assumed.
     struct Recorder {
         answers: [Option<bool>; 4],
@@ -225,7 +225,7 @@ mod tests {
         assert_eq!(readiness.reached(), Some(Gate::Drivable));
     }
 
-    /// THE ORDERING CONTRACT. `FUN_1404ca4a0` does not null-check its `EneDat*`, and the only thing
+    /// The ordering contract. `FUN_1404ca4a0` does not null-check its `EneDat*`, and the only thing
     /// that establishes there is one is the step gate before it. A poll that asked for assets while
     /// the step said "not loaded" would be reading through a pointer the game has not published.
     #[test]
@@ -241,7 +241,7 @@ mod tests {
         );
     }
 
-    /// THE ONE OUTCOME THAT MUST NOT REMOVE THE CHARACTER. The game self-despawns a chr whose caps
+    /// The one outcome that must not remove the character. The game self-despawns a chr whose caps
     /// loaded but yielded no FLVER, and `ChrSet::RemoveChrIns` nulls the entry on its way out.
     /// Handing that same pointer to `WorldChrManImp::RemoveChrIns` again hands a freed `ChrIns` to
     /// `CSDelayDeleteMan` twice.
@@ -259,7 +259,7 @@ mod tests {
         assert_eq!(readiness.observe(99_999, |_| Some(false)), Poll::Vanished);
     }
 
-    /// Registration that was NEVER there is an ordinary wait, and then an ordinary expiry -- there
+    /// Registration that was never there is an ordinary wait, and then an ordinary expiry -- there
     /// is nothing to double-free, and something did go wrong.
     #[test]
     fn registration_that_never_arrived_expires_rather_than_vanishing() {
@@ -290,7 +290,7 @@ mod tests {
         );
     }
 
-    /// An undecidable gate is SKIPPED, not failed: three of the four are byte-proven identical on
+    /// An undecidable gate is skipped, not failed: three of the four are byte-proven identical on
     /// both known builds, so a third build gets a working spawn layer with a weaker residency
     /// check rather than no spawn layer.
     #[test]
@@ -333,7 +333,7 @@ mod tests {
         assert_eq!(readiness.reached(), Some(Gate::Drivable));
     }
 
-    /// Every gate has to explain what being stuck on it MEANS, because the gate name is a symptom
+    /// Every gate has to explain what being stuck on it means, because the gate name is a symptom
     /// and the player needs the cause.
     #[test]
     fn every_gate_names_itself_and_says_what_being_stuck_there_means() {

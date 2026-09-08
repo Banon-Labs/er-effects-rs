@@ -3,19 +3,19 @@
 //! # Why the git sha and not a version string
 //!
 //! Every crate in this workspace is `version = "0.1.0"`, so the manifest version identifies
-//! nothing. The question a log has to answer is "which SOURCE produced the binary that wrote
+//! nothing. The question a log has to answer is "which source produced the binary that wrote
 //! this line", and the only honest answer is a commit id plus whether the tree was clean.
 //!
 //! # Why `dirty` is load-bearing
 //!
 //! A sha alone invites a false certainty: `git show <sha>` looks authoritative, but if the
-//! build came from a tree with uncommitted edits, that diff is NOT what ran. `+dirty` is the
+//! build came from a tree with uncommitted edits, that diff is not what ran. `+dirty` is the
 //! flag that stops someone reading the wrong source with total confidence.
 //!
 //! # The staleness this cannot fully close
 //!
 //! `rerun-if-changed` on `.git/HEAD`, the ref it names, and `.git/index` catches commits,
-//! checkouts and `git add`. It does NOT catch a bare edit to a tracked file that is never
+//! checkouts and `git add`. It does not catch a bare edit to a tracked file that is never
 //! staged -- cargo has no reason to rebuild this crate for that, so the `+dirty` suffix can
 //! be absent from a build whose tree had edits. That is why the runtime line pairs this with the DLL's
 //! own PE timestamp, which is written by the linker on every relink and cannot go stale.
@@ -46,13 +46,13 @@ fn main() {
         .map(|out| !out.trim().is_empty())
         .unwrap_or(false);
 
-    // ONE pre-composed string, not a sha plus a flag the runtime re-joins.
+    // One pre-composed string, not a sha plus a flag the runtime re-joins.
     //
     // The first cut emitted them separately and let `build_id` append "+dirty" behind an
     // `if GIT_DIRTY == "true"`. Both sides of that comparison are compile-time constants, so
     // the optimiser resolves the branch and drops the untaken literal -- and the failure is
     // silent and one-directional: a build that folded the wrong way ships a sha with no
-    // warning attached, which reads as a CLEAN build. Composing here means the binary either
+    // warning attached, which reads as a clean build. Composing here means the binary either
     // contains the right string or contains nothing, with no branch in between to get this
     // wrong.
     let description = if dirty { format!("{sha}+dirty") } else { sha };
@@ -81,7 +81,7 @@ fn declare_rerun(repo: &Path) {
             println!("cargo::rerun-if-changed={}", path.display());
         }
     }
-    // `HEAD` normally holds `ref: refs/heads/<branch>`; a detached HEAD holds a raw sha and
+    // `HEAD` normally holds `ref: refs/heads/<branch>`; a detached head holds a raw sha and
     // there is no second file to watch.
     if let Ok(head) = std::fs::read_to_string(git_dir.join("HEAD"))
         && let Some(reference) = head.trim().strip_prefix("ref: ")
@@ -118,16 +118,16 @@ const VERIFIED_MAP: &str = "../../docs/recon/rva-map-1162-to-1170.verified.tsv";
 ///
 /// # What it is a stand-in for
 ///
-/// `IDENTICAL` is a claim about a PREFIX. The verifier's decode stopped for a reason unrelated to
+/// `IDENTICAL` is a claim about a prefix. The verifier's decode stopped for a reason unrelated to
 /// where the function ends -- its instruction limit, or a `ret` in a body that runs on past it --
 /// so nothing is known about the instruction after the last one compared, and this floor is a
 /// proxy for "enough of it was seen to be worth something". It is a poor proxy in both
 /// directions, and both failures were measured on 2026-08-30:
 ///
-/// * it discards a function SHORTER than the floor even when the comparison was complete. Five
+/// * it discards a function shorter than the floor even when the comparison was complete. Five
 ///   leaves of 3 to 13 instructions verified at ratio 1.000 over their entire bodies and were
 ///   dropped anyway, taking the Seamless null-container guard (`0x4f9940`) with them;
-/// * it waves through a PREFIX of a long function. `STEP_MoveMap` matched over 120 instructions
+/// * it waves through a prefix of a long function. `STEP_MoveMap` matched over 120 instructions
 ///   of 975, cleared this floor comfortably, and was promoted to detour-safe -- while the two
 ///   instructions 1.17 inserted sat at index 873.
 ///
@@ -136,7 +136,7 @@ const VERIFIED_MAP: &str = "../../docs/recon/rva-map-1162-to-1170.verified.tsv";
 /// it is a different claim, and there is no next instruction for a floor to insure against.
 const MIN_VERIFIED_INSNS: u32 = 12;
 
-/// Verdicts that compared the WHOLE of both functions, and so are exempt from
+/// Verdicts that compared the whole of both functions, and so are exempt from
 /// [`MIN_VERIFIED_INSNS`]. The list is duplicated as `EXHAUSTIVE_VERDICTS` in
 /// `scripts/verify-rva-map-1170.py`, which writes these strings; the two drifting apart is how a
 /// rescued row would quietly go back to being discarded, so change them together.
@@ -148,7 +148,7 @@ const MIN_VERIFIED_INSNS: u32 = 12;
 ///   x64 ABI omits unwind data for a function that allocates no stack and calls nothing, so
 ///   ELDEN RING's small getters simply have no entry and no extent can be read; the verifier
 ///   decodes the end instead, and three facts back that decode -- it stops on a real terminator
-///   past every forward branch target, the two images decoded separately arrive at the SAME byte
+///   past every forward branch target, the two images decoded separately arrive at the same byte
 ///   length, and the streams agree over all of it.
 ///
 ///   `IDENTICAL-LEAF` is also the one verdict that carries its own detour licence. A leaf has no
@@ -161,37 +161,37 @@ const MIN_VERIFIED_INSNS: u32 = 12;
 ///   * no branch inside the body targets the five bytes the patch overwrites
 ///     (`branch_into_prologue`);
 ///   * the body is at least those five bytes long (`leaf_fits_patch`). Added 2026-08-30 after
-///     the first regeneration that admitted leaves put two THREE-byte bodies in
+///     the first regeneration that admitted leaves put two three-byte bodies in
 ///     `DETOUR_SAFE_1162_TO_1170` -- `0x7add70` and `0x1c92f30`, the latter being
-///     `xor eax,eax; ret`. `scripts/audit-1170-hook-targets.py` refuses both PATCH-UNSAFE with
+///     `xor eax,eax; ret`. `scripts/audit-1170-hook-targets.py` refuses both patch-unsafe with
 ///     the bytes to show for it: there is nowhere to put the jump. They stay CALLABLE.
 const EXHAUSTIVE_VERDICTS: [&str; 3] = ["BYTE-IDENTICAL", "IDENTICAL-WHOLE", "IDENTICAL-LEAF"];
 
-/// Verdicts where the two bodies are NOT the same, and the detour is licensed anyway because the
+/// Verdicts where the two bodies are not the same, and the detour is licensed anyway because the
 /// difference is nowhere near the five bytes MinHook writes.
 ///
 /// Deliberately its own list rather than a fourth [`EXHAUSTIVE_VERDICTS`] entry: those three all
-/// assert the normalised instruction streams are EQUAL, and this one asserts they are not. Reading
+/// assert the normalised instruction streams are equal, and this one asserts they are not. Reading
 /// a row as "the bodies match" when the verdict says "the bodies differ, elsewhere" is precisely
 /// the confusion that would let this widen the gate by accident.
 ///
 /// * `PATCH-SITE-IDENTICAL` -- both images' `.pdata` declare a function starting at the two
 ///   addresses; the comparison covered both bodies in full; MinHook's own trampoline walk (ported
-///   from `vendor/minhook/src/trampoline.c`, run against BOTH images) builds a trampoline at each
+///   from `vendor/minhook/src/trampoline.c`, run against both images) builds a trampoline at each
 ///   and consumes the same instructions doing it; nothing in either body branches into the bytes
 ///   the patch overwrites; and every instruction the two bodies disagree about lies strictly after
 ///   the last instruction that walk relocates -- so the instruction the trampoline returns into is
 ///   inside the equal prefix. `MAX_DRIFT_HUNKS`/`MAX_DRIFT_INSNS` in the verifier additionally cap
 ///   the difference at a localised edit, and any `replace` hunk refuses it outright.
 ///
-/// WHY THIS IS NOT A PROLOGUE RE-CHECK. A bare "the first bytes still match" test is what the
+/// Why this is not a prologue RE-check. A bare "the first bytes still match" test is what the
 /// impostor at 1.16.2 `0x140aec480` would have passed: `IDENTICAL 1.000` over 56 instructions, and
 /// `+0x360` inside a completely different function. That address is not a `.pdata` start in either
-/// image, so it never reaches the byte comparison at all -- and a pair whose entry region DID
+/// image, so it never reaches the byte comparison at all -- and a pair whose entry region did
 /// change is refused by the position test however small the total difference is. The verdict is a
 /// claim about the patch site and the relocated window, not about total body length.
 ///
-/// MEASURED, 2026-08-30. Across all 128,602 pairs in `rva-map-1162-to-1170.functions.tsv` this
+/// Measured, 2026-08-30. Across all 128,602 pairs in `rva-map-1162-to-1170.functions.tsv` this
 /// verdict admits 23 -- 0.018% -- and the only one in either ledger is `MOVEMAPSTEP_STEP_MOVEMAP`
 /// (`0x140af7cf0 -> 0x140af9000`), whose `.pdata` extent grew by 8 bytes because 1.17 inserted
 /// `mov rcx,rbx; call _UpdateHorseType` at instruction 873 of 975, 0x1055 bytes past a prologue
@@ -203,11 +203,11 @@ const PATCH_SITE_VERDICTS: [&str; 1] = ["PATCH-SITE-IDENTICAL"];
 ///
 /// # The hole this closes
 ///
-/// [`PATCH_SITE_VERDICTS`] is the one verdict that admits a pair whose BODIES DIFFER to
+/// [`PATCH_SITE_VERDICTS`] is the one verdict that admits a pair whose bodies differ to
 /// `DETOUR_SAFE_1162_TO_1170`, and it decides that on machine caps alone: no `replace` hunk, at
 /// most `MAX_DRIFT_HUNKS` places, at most `MAX_DRIFT_INSNS` instructions, all of it after the
-/// window MinHook relocates. Those caps are about the PATCH SITE. They say nothing about what the
-/// inserted code DOES, and our detours are not only five bytes at an entry -- they read and write
+/// window MinHook relocates. Those caps are about the patch site. They say nothing about what the
+/// inserted code does, and our detours are not only five bytes at an entry -- they read and write
 /// the object the function is stepping. `STEP_MoveMap`'s after-original detour clears the advance
 /// gate at `MoveMapStep+0x4b8`; the insertion 1.17 made lands two instructions before the native
 /// read of that same field. It was benign, and nothing in the pipeline had to look to find that
@@ -223,7 +223,7 @@ const PATCH_SITE_VERDICTS: [&str; 1] = ["PATCH-SITE-IDENTICAL"];
 /// insertion, because clause 4 of `patch_site_drift` refuses any `replace` hunk -- a body that
 /// reaches this verdict differs by pure insertion and deletion, which moves the extent.
 ///
-/// NOT CHECKED HERE: the `note`. It is prose, and build.rs has no image to compare it against
+/// Not checked HERE: the `note`. It is prose, and build.rs has no image to compare it against
 /// (`eldenring-deobf*.bin` are untracked, 94 MB, and no build may depend on them). Reproduce it
 /// with `python3 scripts/diff-function-bodies-1162-1170.py <old> <new>`.
 const PATCH_SITE_ACKNOWLEDGED: [(&str, &str, &str, &str, &str); 1] = [(
@@ -243,9 +243,9 @@ const PATCH_SITE_ACKNOWLEDGED: [(&str, &str, &str, &str, &str); 1] = [(
      fields our detour holds (+0x100, +0x270, +0x4b8, +0x4c, +0x50) are untouched by it.",
 )];
 
-/// Verdicts admitted to [`VERIFIED_1162_TO_1170`] -- CALL and READ -- and to NOTHING else.
+/// Verdicts admitted to [`VERIFIED_1162_TO_1170`] -- Call and read -- and to nothing else.
 ///
-/// A THIRD LIST RATHER THAN A LONGER SECOND ONE, and the separation is the whole feature.
+/// A third list rather than a longer second one, and the separation is the whole feature.
 /// [`EXHAUSTIVE_VERDICTS`] and [`PATCH_SITE_VERDICTS`] are both read by `detourable_pairs`, which
 /// is the only function `emit_address_map` builds the detour table from; this list is read by
 /// `callable_only_pairs`, which the detour table never calls. The two paths do not merely apply
@@ -257,10 +257,10 @@ const PATCH_SITE_ACKNOWLEDGED: [(&str, &str, &str, &str, &str); 1] = [(
 ///   image declares the address in `.pdata`, so both extents were DECODED; the two decodes agreed
 ///   on the byte length; the normalised streams are equal over all of both bodies; nothing
 ///   branches into the bytes a patch would overwrite -- and the body is shorter than the five
-///   bytes MinHook writes, with the ported `CreateTrampolineFunction` refusing the site in BOTH
+///   bytes MinHook writes, with the ported `CreateTrampolineFunction` refusing the site in both
 ///   images rather than a length test standing in for it.
 ///
-/// WHY IT HAD TO EXIST. Until 2026-08-30 the CALL map was seeded from `detourable_pairs`, so
+/// Why it had to exist. Until 2026-08-30 the call map was seeded from `detourable_pairs`, so
 /// "too short to hook" and "unsafe to call or compare" were one decision, and a three-byte
 /// function proved byte-for-byte identical in both builds was thrown out of both tables. Two rows
 /// were paying for it, each with a live consumer that never wanted a hook:
@@ -268,21 +268,21 @@ const PATCH_SITE_ACKNOWLEDGED: [(&str, &str, &str, &str, &str); 1] = [(
 /// * `0x7add70 -> 0x7aebf0` -- `CS::MenuItem`'s constant-false accept predicate, `xor eax,eax;
 ///   ret`. er-quickload compares a menu row's `+0xf8` against it to tell a disabled Continue from
 ///   an enabled one; unmapped, the comparison is against 0 and every row reads disabled. It is a
-///   `.pdata`-less leaf that nothing calls -- its address is only ever TAKEN -- so the whole-image
+///   `.pdata`-less leaf that nothing calls -- its address is only ever taken -- so the whole-image
 ///   function-table alignment cannot see it and the caller-vote tools could not either until they
-///   learned to count `lea`s. The evidence is a unanimous 1-of-1: each image holds exactly ONE
+///   learned to count `lea`s. The evidence is a unanimous 1-of-1: each image holds exactly one
 ///   reference to its address, both `48 8d 05 44 0d 00 00` at byte +0xa5 of `0x7acf80 ->
-///   0x7ade00`, itself an `IDENTICAL-WHOLE` pair over 151 instructions.
+///   0x7ade00`, itself an `identical-whole` pair over 151 instructions.
 /// * `0x1c92f30 -> 0x1c94d30` -- `CTRL_SUBOBJECT_RELEASE_RVA`, body `ret 0`. er-invasion-path
-///   CALLS it while tearing a spawned effect down, and its `let (Some(..), ..) = (..) else
-///   { return; }` abandons the ENTIRE teardown when one address will not resolve, so an unmapped
+///   calls it while tearing a spawned effect down, and its `let (Some(..), ..) = (..) else
+///   { return; }` abandons the entire teardown when one address will not resolve, so an unmapped
 ///   three-byte stub leaks every effect the crate spawns. 185 of 189 caller votes carry it, the
 ///   three runners-up at 2/1/1 votes and unrelated deltas.
 const CALLABLE_ONLY_VERDICTS: [&str; 1] = ["IDENTICAL-LEAF-NOPATCH"];
-/// Mappings held back despite verifying, because the HANDLER at that address is what turned out
+/// Mappings held back despite verifying, because the handler at that address is what turned out
 /// to be stale. See the file's own header for the distinction it exists to record.
 const QUARANTINE: &str = "../../docs/recon/rva-1170-quarantine.tsv";
-/// The SECOND, weaker source of pairs, selected by `scripts/select-needed-1170-rows.py` from a
+/// The second, weaker source of pairs, selected by `scripts/select-needed-1170-rows.py` from a
 /// whole-image alignment of both `.pdata` function tables.
 ///
 /// # Why a weaker source is worth having
@@ -297,11 +297,11 @@ const QUARANTINE: &str = "../../docs/recon/rva-1170-quarantine.tsv";
 ///
 /// These pairs come from masked-signature identity, calibrated against 41 pairs derived without
 /// it (62 of the bundle's 96 fields come from RTTI class names, which involve no pattern matching
-/// at all) with zero disagreements. That is strong enough to CALL. It is not the same claim as
+/// at all) with zero disagreements. That is strong enough to call. It is not the same claim as
 /// the verified map, so the verified map wins wherever both cover an address, and a detour still
 /// owes `audit-1170-hook-targets.py` a check that the destination has room for the patch.
 const FUNCTION_MAP: &str = "../../docs/recon/rva-map-1162-to-1170.needed.tsv";
-/// The THIRD source: globals, vtables and tables, which the function map structurally cannot
+/// The third source: globals, vtables and tables, which the function map structurally cannot
 /// cover because a datum has no content to compare -- at rest a global is eight zero bytes like
 /// every other global.
 ///
@@ -315,14 +315,14 @@ const FUNCTION_MAP: &str = "../../docs/recon/rva-map-1162-to-1170.needed.tsv";
 /// Each row is carried by the code that references it, and only rows where independent
 /// references agree are used; see the file's own header.
 const DATA_MAP: &str = "../../docs/recon/rva-map-1162-to-1170.data.tsv";
-/// The needed map, put through the SAME byte comparison the verified map gets.
+/// The needed map, put through the same byte comparison the verified map gets.
 ///
 /// This is what makes a detour promotable. `FUNCTION_MAP` says where a signature re-occurs, which
-/// is enough to call; this file says the normalised instruction sequences agree over the body AND
+/// is enough to call; this file says the normalised instruction sequences agree over the body and
 /// what each image's own `.pdata` declares about the two endpoints. Both claims are required
 /// before a row reaches `DETOUR_SAFE_1162_TO_1170`.
 ///
-/// MEASURED, and the reason the byte comparison is not optional: of the five detours
+/// Measured, and the reason the byte comparison is not optional: of the five detours
 /// er-armament-icons installed when the game died at the first overlay draw on 2026-08-29, four
 /// are the same function in 1.17 and one -- `HUD_WEAPON_SLOT_UPDATE`, 1.16.2 `0x8d2110` -- was
 /// paired by signature with a function sharing 18% of its instruction shape. The entry-and-
@@ -335,29 +335,29 @@ const NEEDED_VERIFIED_MAP: &str = "../../docs/recon/rva-map-1162-to-1170.needed-
 ///
 /// `BOTH-ENTRIES` is the ordinary case: both images' `.pdata` declare a function starting there.
 /// `NEITHER-ENTRY` is accepted too, and deliberately: `SCALEFORM_HANDLER_CTOR_RVA` (0x11a8870)
-/// sits 0x20 bytes before the entry Ghidra names, in BOTH builds, and that symmetry is itself
-/// evidence the pair is aligned. What is refused is an ASYMMETRIC verdict -- a source that is an
+/// sits 0x20 bytes before the entry Ghidra names, in both builds, and that symmetry is itself
+/// evidence the pair is aligned. What is refused is an asymmetric verdict -- a source that is an
 /// entry paired with a destination that is not, or the reverse -- because that is precisely the
 /// shape of a mapping that landed mid-function.
 ///
-/// THE HOLE IN `NEITHER-ENTRY`, and why `IDENTICAL-LEAF` does not fall through it. The clause was
+/// The hole in `NEITHER-ENTRY`, and why `IDENTICAL-LEAF` does not fall through it. The clause was
 /// written for a deliberate fixed offset into a known function, and it makes no claim about the
 /// bytes MinHook is about to overwrite; it is safe there because the offset is identical in both
-/// builds and a human chose it. A LEAF also lands on `NEITHER-ENTRY`, for the unrelated reason
+/// builds and a human chose it. A leaf also lands on `NEITHER-ENTRY`, for the unrelated reason
 /// that the x64 ABI emits no unwind data for it -- so admitting leaves on this clause alone would
 /// widen the gate by accident, on a technicality rather than on evidence. It does not happen:
-/// `verify-rva-map-1170.py` issues `IDENTICAL-LEAF` only after checking, in BOTH images, that no
+/// `verify-rva-map-1170.py` issues `IDENTICAL-LEAF` only after checking, in both images, that no
 /// branch inside the body targets the patched bytes, which is the claim a `.pdata` entry stands
 /// in for. A leaf that fails that check falls back to `IDENTICAL`/`IDENTICAL-SHORT` and is held
 /// to the floor like any other prefix.
 const DETOURABLE_ENTRY_EVIDENCE: [&str; 2] = ["BOTH-ENTRIES", "NEITHER-ENTRY"];
 
-/// 1.16.2 RVAs a verdict table says are paired with the WRONG 1.17 function.
+/// 1.16.2 RVAs a verdict table says are paired with the wrong 1.17 function.
 ///
 /// This is not the same as an unverified row. The whole-image signature map carries hundreds of
 /// pairs nobody has compared, and they stay -- an unexamined pair is the ordinary case and the
 /// calls need the coverage. A `DIVERGES` verdict is different: the comparison ran and disagreed,
-/// so the row is positive evidence of a wrong address, and a wrong address reached as a CALL is
+/// so the row is positive evidence of a wrong address, and a wrong address reached as a call is
 /// how `0x1405eefb0` took a boot down. Those are dropped from the call map as well as the detour
 /// one.
 fn refuted_sources(path: &Path) -> Vec<u32> {
@@ -381,7 +381,7 @@ fn refuted_sources(path: &Path) -> Vec<u32> {
     out
 }
 
-/// Pairs from a `verify-rva-map-1170.py` verdict table that are good enough to DETOUR.
+/// Pairs from a `verify-rva-map-1170.py` verdict table that are good enough to detour.
 fn detourable_pairs(path: &Path) -> Vec<(u32, u32)> {
     println!("cargo:rerun-if-changed={}", path.display());
     let mut rows = Vec::new();
@@ -406,10 +406,10 @@ fn detourable_pairs(path: &Path) -> Vec<(u32, u32)> {
             // The bodies differ and the patch site does not. Like the exhaustive verdicts this
             // takes no instruction floor -- and for a stronger reason: the floor is a proxy for
             // "was enough of the body seen", and this verdict is issued only after all of both
-            // bodies were seen AND the difference was located relative to the bytes MinHook
+            // bodies were seen and the difference was located relative to the bytes MinHook
             // writes. A count of compared instructions has nothing left to add.
             verdict if PATCH_SITE_VERDICTS.contains(&verdict) => {}
-            // Normalised instruction sequences agree over a PREFIX of unknown remainder. How MUCH
+            // Normalised instruction sequences agree over a prefix of unknown remainder. How much
             // of the body they agree over is the whole question, hence the floor.
             "IDENTICAL" => {
                 if fields[4].trim().parse::<u32>().unwrap_or(0) < MIN_VERIFIED_INSNS {
@@ -430,9 +430,9 @@ fn detourable_pairs(path: &Path) -> Vec<(u32, u32)> {
     rows
 }
 
-/// Pairs a verdict table admits to the CALL map and to NOTHING else.
+/// Pairs a verdict table admits to the call map and to nothing else.
 ///
-/// A SEPARATE FUNCTION, not a flag on [`detourable_pairs`], and that is the point rather than a
+/// A separate function, not a flag on [`detourable_pairs`], and that is the point rather than a
 /// style choice. The detour table is built only from `detourable_pairs`, whose match arms do not
 /// mention [`CALLABLE_ONLY_VERDICTS`] -- so a row admitted here cannot reach a detour by any
 /// route through this file, and the separation survives someone editing either rule without
@@ -443,7 +443,7 @@ fn detourable_pairs(path: &Path) -> Vec<(u32, u32)> {
 /// `IDENTICAL-LEAF-NOPATCH` only after seeing all of both.
 ///
 /// Entry evidence is still required, from the same list. Its name says `DETOURABLE` and the check
-/// is worth making anyway: what that list refuses is an ASYMMETRIC verdict -- a source the linker
+/// is worth making anyway: what that list refuses is an asymmetric verdict -- a source the linker
 /// declares a function start paired with a destination it does not, or the reverse -- which is
 /// the shape of a pair that landed mid-function, and reading four bytes out of the middle of the
 /// wrong 1.17 function is not made safe by never hooking it.
@@ -581,18 +581,18 @@ fn emit_address_map(root_dir: &str) {
     assert_patch_sites_acknowledged(root_dir);
     let verified_path = Path::new(root_dir).join(VERIFIED_MAP);
     let verified_detourable: Vec<(u32, u32)> = detourable_pairs(&verified_path);
-    // The CALL map is seeded from the detourable rows PLUS the callable-only ones. Those were the
+    // The call map is seeded from the detourable rows plus the callable-only ones. Those were the
     // same set until 2026-08-30, and that is what made "too short to hook" mean "unsafe to call":
     // a three-byte function proved byte-for-byte identical in both builds was refused a detour,
     // correctly, and thereby refused a comparison too. See [`CALLABLE_ONLY_VERDICTS`].
     let callable_only: Vec<(u32, u32)> = callable_only_pairs(&verified_path);
     let mut rows: Vec<(u32, u32)> = verified_detourable.clone();
     rows.extend(callable_only.iter().copied());
-    // Both verdict tables feed the DETOUR set. They differ only in which candidate map they were
+    // Both verdict tables feed the detour set. They differ only in which candidate map they were
     // run over -- the byte-search one and the whole-image one -- and a row from either has passed
     // the same two tests, so there is no reason to trust one and not the other.
     //
-    // Built from `detourable_pairs` ALONE, on purpose: `rows` is no longer the same set, so
+    // Built from `detourable_pairs` alone, on purpose: `rows` is no longer the same set, so
     // cloning it here would hand every callable-only row a detour licence in one line.
     let mut detour_safe: Vec<(u32, u32)> = verified_detourable;
     detour_safe.extend(detourable_pairs(
@@ -647,21 +647,21 @@ fn emit_address_map(root_dir: &str) {
     rows.retain(|(old, _)| !held_back.contains(old));
     rows.sort_unstable();
     rows.dedup_by_key(|(old, _)| *old);
-    // A FIFTH LEDGER USED TO BE DECLARED HERE AND PARKED UNDER `let _ = AUDITED_DETOURS;`.
+    // A fifth ledger used to be declared here and parked under `let _ = AUDITED_DETOURS;`.
     //
     // `docs/recon/rva-1170-detour-audited.tsv` was deleted on 2026-08-31, with the reason recorded
     // rather than the file: 89 of the 448 rows it promoted rested on its "unwindless leaf" clause,
-    // and ALL 89 destinations are in NON-EXECUTABLE sections of the 1.17 image. `.pdata` declares
+    // and all 89 destinations are in non-EXECUTABLE sections of the 1.17 image. `.pdata` declares
     // no function containing a `.data` global for the same reason it declares none containing a
     // leaf, so the clause could not tell the two apart and never once fired on real code. Four of
-    // those rows are 24 bytes of zeros in BOTH images, described as `6B relocatable`.
+    // those rows are 24 bytes of zeros in both images, described as `6B relocatable`.
     //
     // Nothing read it -- this `let _` was the whole of its wiring -- so it had no consequence and
     // no way to be caught being wrong. `scripts/check-ledger-section-kind.py` now enforces what it
     // violated (a ledger whose rows license a hook may only name executable memory) and refuses
     // the file's return, since `audit-1170-hook-targets.py --promote` can still write it.
     //
-    // What replaced it as EVIDENCE answers both questions better. Semantic identity comes from the
+    // What replaced it as evidence answers both questions better. Semantic identity comes from the
     // byte comparison in NEEDED_VERIFIED_MAP; entry evidence comes from that same file's last
     // column, read out of each image's `.pdata` rather than counted from forward references.
     let mut detour_rows = detour_safe;
@@ -669,7 +669,7 @@ fn emit_address_map(root_dir: &str) {
     detour_rows.sort_unstable();
     detour_rows.dedup_by_key(|(old, _)| *old);
 
-    // THE SEPARATION, MEASURED ON THE FINISHED TABLES rather than argued from the code above.
+    // The separation, measured on the finished tables rather than argued from the code above.
     // `CALLABLE_ONLY_VERDICTS` is disjoint from the two detour lists and `detourable_pairs` never
     // reads it, so this cannot fire from a verdict-list edit alone -- what it catches is the other
     // way in: the same 1.16.2 address admitted callable-only by one ledger and detourable by

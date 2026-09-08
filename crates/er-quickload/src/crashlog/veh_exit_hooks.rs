@@ -23,14 +23,14 @@ use crate::{experiments::*, ffi::*, hooks::*, telemetry::*};
 
 pub(crate) const NO_PROCESS_HANDLE: usize = 0;
 
-/// The crash/exit logger is now ALWAYS installed (user directive 2026-07-08). It is non-fatal
+/// The crash/exit logger is now always installed (user directive 2026-07-08). It is non-fatal
 /// diagnostic telemetry: the VEH logs the fault's register/stack context and then leaves the
 /// exception for the game's own handlers (`VECTORED_FIRST_HANDLER` + `EXCEPTION_CONTINUE_SEARCH`),
 /// so writing it unconditionally never changes game behavior -- it only guarantees an
 /// `er-quickload-crash-log.txt` (or the `ER_QUICKLOAD_CRASH_LOG_PATH` redirect) exists for every run,
 /// instead of self-enabling only after a first crash had already created the sentinel file (which
 /// meant the very first crash of a clean install went unlogged). `deliberate_fail_fast_enabled()`
-/// stays a separate explicit opt-in, so this does NOT turn semaphore mismatches into crashes.
+/// stays a separate explicit opt-in, so this does not turn semaphore mismatches into crashes.
 pub(crate) fn crash_logger_enabled() -> bool {
     true
 }
@@ -39,14 +39,14 @@ pub(crate) fn crash_logger_enabled() -> bool {
 /// it must not turn semantic semaphore mismatches into crashes unless a run explicitly asks for
 /// release/fail-fast behavior.
 pub(crate) fn deliberate_fail_fast_enabled() -> bool {
-    // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): fail-fast changed control flow
+    // De-gated (deprecate-env-marker-gate-allowlists-2026-07-19): fail-fast changed control flow
     // (turned semaphore mismatches into deliberate crashes) -- a behavioral proof-gate, not passive
     // diagnostics. Env/marker feature gates are forbidden; retired (never fail-fast). A release/proof
     // build wanting fail-fast should express it via a compile-time cfg, not an env/marker toggle.
     false
 }
 
-/// One-line file naming HOW the run ended, written beside the game executable.
+/// One-line file naming how the run ended, written beside the game executable.
 ///
 /// It exists because "the process is gone" is not a diagnosis and reading it as one is expensive:
 /// on 2026-08-28 a player quitting to desktop was reported as three crashes, and 26 hook addresses
@@ -54,24 +54,24 @@ pub(crate) fn deliberate_fail_fast_enabled() -> bool {
 /// every one `fatal=false`). The crash log cannot settle it either -- `note_process_detach` says so
 /// in its own doc comment: a detach with no fatal record means "shut down OR killed from outside".
 ///
-/// THE EXIT CODE DOES NOT SEPARATE THEM ON THIS TARGET. That was this file's first design and it
+/// The exit code does not separate them on this target. That was this file's first design and it
 /// was wrong: the user quit to desktop and the run was recorded as `fault`, because a normal
 /// ELDEN RING quit under Wine/Proton exits through `NtTerminateProcess` carrying `0xc0000005` --
 /// the same code an access violation would carry. An exit code is not a diagnosis here.
 ///
-/// What DOES separate them is whether an exception went UNHANDLED, which is the one thing a
+/// What does separate them is whether an exception went UNHANDLED, which is the one thing a
 /// first-chance handler structurally cannot tell you and the only thing that means "the process is
-/// dying BY this fault". So [`fatal_exception_filter`] stamps the file the moment the top-level
+/// dying by this fault". So [`fatal_exception_filter`] stamps the file the moment the top-level
 /// filter is reached, and that stamp wins:
 ///
 /// * `fatal-exception` -- an exception reached the unhandled filter. This one really crashed.
 /// * `clean-exit` -- an exit path ran with code 0.
-/// * `exit-unclassified` -- an exit path ran with a non-zero code and NO fatal exception was seen.
+/// * `exit-unclassified` -- an exit path ran with a non-zero code and no fatal exception was seen.
 ///   Recorded verbatim and left uninterpreted, because on this target that is what a quit looks
 ///   like.
 ///
-/// AND OUR OWN FILTER IS NOT THE ONLY WITNESS, which was this file's second wrong assumption.
-/// `SetUnhandledExceptionFilter` keeps exactly ONE top-level filter: whoever registers last owns
+/// And our own filter is not the only witness, which was this file's second wrong assumption.
+/// `SetUnhandledExceptionFilter` keeps exactly one top-level filter: whoever registers last owns
 /// it, and earlier ones are reachable only by being chained to. This DLL and `er-crash-logging`
 /// both register. On 2026-08-28 a run ended with `er-crash-latest.txt` recording `fatal=true` --
 /// an access violation at `eldenring.exe+0x1ebb799` that reached a top-level filter -- while this
@@ -79,14 +79,14 @@ pub(crate) fn deliberate_fail_fast_enabled() -> bool {
 /// [`log_process_exit`] now also reads that record, and `fatal-exception` is stamped whichever
 /// filter saw it.
 ///
-/// The file is also written ONCE AT INSTALL as `outcome=running`, which is what makes its later
+/// The file is also written once at install as `outcome=running`, which is what makes its later
 /// states readable. Without that, two very different things looked identical -- the process being
 /// killed from outside, and these hooks never installing at all -- and a reader has no way to tell
 /// which. So:
 ///
 /// * `running`, after the process is gone -- no exit path ran: killed from outside (an agent
 ///   teardown, `wineserver`, the OOM killer) or died without reaching any exit API.
-/// * file ABSENT -- this logger never installed, so the file says nothing about the game and the
+/// * file absent -- this logger never installed, so the file says nothing about the game and the
 ///   reader should go looking for why the DLL did not start.
 const RUN_OUTCOME_FILE_NAME: &str = "er-run-outcome.txt";
 /// The crash logger's newest-record file. Read, never written, by this module.
@@ -118,7 +118,7 @@ pub(crate) fn install_fatal_exception_filter() {
     );
 }
 
-/// Classify an exit code -- WITHOUT pretending a non-zero code means a fault. See the module note:
+/// Classify an exit code -- Without pretending a non-zero code means a fault. See the module note:
 /// a normal quit exits `0xc0000005` on this target, so the only honest split here is "zero" and
 /// "not zero, and I am not going to guess".
 fn classify_exit_code(code: u32) -> &'static str {
@@ -212,8 +212,8 @@ pub(crate) fn log_process_exit(api: &str, code: u32, handle: usize) {
     // A fatal stamp is a diagnosis; an exit code on this target is not. Never overwrite the former
     // with the latter.
     //
-    // OUR filter firing is not the only way to learn the run died by an exception, and relying on
-    // it alone was wrong. `SetUnhandledExceptionFilter` keeps ONE top-level filter: whoever
+    // Our filter firing is not the only way to learn the run died by an exception, and relying on
+    // it alone was wrong. `SetUnhandledExceptionFilter` keeps one top-level filter: whoever
     // registers last owns it and every earlier one is reachable only by being chained to. This DLL
     // and `er-crash-logging` both register, and on 2026-08-28 the crash logger recorded
     // `fatal=true` -- an access violation that reached a top-level filter -- while this instrument
@@ -275,13 +275,13 @@ pub(crate) unsafe extern "system" fn nt_terminate_process_hook(
     HOOK_FALSE_RETURN as i32
 }
 
-/// When set, the assert-wrapper hook returns WITHOUT chaining the original, so a
+/// When set, the assert-wrapper hook returns without chaining the original, so a
 /// failed FromSoft assertion does not crash -- the game continues past the check.
 /// Diagnostic only (may continue in a degraded state); off by default.
 pub(crate) fn assert_nonfatal() -> bool {
-    // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): making a failed FromSoft assertion
+    // De-gated (deprecate-env-marker-gate-allowlists-2026-07-19): making a failed FromSoft assertion
     // non-fatal (skip chaining the original -> game continues in a degraded state) is a control-flow
-    // BEHAVIORAL change, not passive diagnostics. Env/marker feature gates are forbidden; retired.
+    // behavioral change, not passive diagnostics. Env/marker feature gates are forbidden; retired.
     false
 }
 
@@ -339,11 +339,11 @@ const AV_STACK_MAX_RETURNS: usize = 8;
 /// game `.text` return address at all — the raw window still shows the smashed frame).
 const AV_STACK_RAW_QWORDS: usize = 8;
 /// Max module-resolved backtrace frames emitted from the AV stack scan (consecutive duplicates
-/// collapsed). Names frames in ANY loaded module — game, me3_mod_host.dll, ntdll.dll, our er_*.dll.
+/// collapsed). Names frames in any loaded module — game, me3_mod_host.dll, ntdll.dll, our er_*.dll.
 const AV_MODULE_BT_MAX_FRAMES: usize = 24;
 
 /// Scan the crashing thread's stack (from `rsp` upward) for values inside the game
-/// module's `.text` (return addresses of the game-side frames) AND dump the raw head of
+/// module's `.text` (return addresses of the game-side frames) and dump the raw head of
 /// the frame. The recorded `callers=[...]` trail only holds our own instrumentation trail
 /// (under wine it surfaces ntdll addresses), so this is what actually names the game
 /// function at the fault. Reads are `ReadProcessMemory`-guarded so an unmapped slot yields
@@ -408,7 +408,7 @@ fn av_stack_game_returns(rsp: usize, base: usize) -> String {
 }
 
 /// Module-resolved backtrace for an access violation: scan the crashing thread's stack (from `rsp`,
-/// reusing [`AV_STACK_SCAN_SLOTS`]) and, for each qword that lands inside ANY loaded module, emit
+/// reusing [`AV_STACK_SCAN_SLOTS`]) and, for each qword that lands inside any loaded module, emit
 /// `module_name+0xoffset`. Consecutive identical frames are collapsed; capped at
 /// [`AV_MODULE_BT_MAX_FRAMES`]. This names the non-game frames the game-only `av_stack_game_returns`
 /// scan leaves raw (me3_mod_host.dll, ntdll.dll, kernelbase.dll, our own er_*.dll), producing the
@@ -518,7 +518,7 @@ fn annotate_addr(addr: usize, game_base: usize) -> String {
 }
 
 std::thread_local! {
-    /// Closed while THIS thread is somewhere inside [`crash_vectored_handler`].
+    /// Closed while this thread is somewhere inside [`crash_vectored_handler`].
     static VEH_IN_PROGRESS: er_game_base::reentry::ReentryLatch =
         const { er_game_base::reentry::ReentryLatch::new() };
 }
@@ -531,16 +531,16 @@ std::thread_local! {
 /// to the faulting thread: `av_stack_game_returns` and `av_module_backtrace` walk its stack,
 /// `av_object_probe` and `safe_read_usize` chase pointers out of its registers, `loaded_modules`
 /// walks the loader list. That is exactly the state a fault says is not trustworthy, so any of
-/// them can fault in turn -- and a VEH is re-entered for its OWN faults, on the SAME thread, on
+/// them can fault in turn -- and a VEH is re-entered for its own faults, on the same thread, on
 /// top of the frame it is already in.
 ///
 /// `MAX_AV_LOG_LINES` does not bound that. It is checked once per entry and each entry costs a
 /// whole handler frame, so the stack runs out first:
 ///
-/// MEASURED 2026-08-28 on ELDEN RING 1.17, `control-quickload-only.me3`. One execute-fault
+/// Measured 2026-08-28 on ELDEN RING 1.17, `control-quickload-only.me3`. One execute-fault
 /// (`exception_access_kind=8`) at `0x3cb67a0` entered this handler; describing it read
 /// NULL inside `ntdll+0x3969c`; that re-entered the handler, which read NULL again. The crash log
-/// holds 215 copies of that identical second fault with `rsp` marching DOWN by exactly `0x1260` a
+/// holds 215 copies of that identical second fault with `rsp` marching down by exactly `0x1260` a
 /// line, from `0x2fc50` to `0x13a50`. At 4704 bytes a level the 1 MiB main-thread stack is gone
 /// after ~220 levels, and the budget is 256 -- it could never have been reached. The whole record
 /// is preserved in the game directory as `er-net-effects-crash-telemetry.log.prev` (record 1 is
@@ -548,20 +548,20 @@ std::thread_local! {
 ///
 /// The thread then took a SIGSEGV that Wine could not even report: `virtual_setup_exception` needs
 /// stack to build the exception frame, had none, and called `abort_thread`. So the game died with
-/// no crash record, no minidump and no unhandled-filter line, and the ROOT fault -- the single
+/// no crash record, no minidump and no unhandled-filter line, and the root fault -- the single
 /// line at the top naming the bad call target -- was buried under 215 copies of the amplifier.
 ///
-/// TWO CORRECTIONS TO THE ABOVE, both measured after it was first written (2026-08-30):
+/// Two corrections to the above, both measured after it was first written (2026-08-30):
 ///
-/// 1. "called from `eldenring.exe+0xb3d2e8`" was WRONG and is deleted. That address came from the
-///    `modbt=` field, which is a stack SCAN and mixes dead frames with live. In 1.17 it is the
+/// 1. "called from `eldenring.exe+0xb3d2e8`" was wrong and is deleted. That address came from the
+///    `modbt=` field, which is a stack scan and mixes dead frames with live. In 1.17 it is the
 ///    return address of `call 0x141ebbfc0` at `0x140b3d2e3` -- an atomic AddRef leaf inside
 ///    `0x140b3d215..0x140b3d2f8`. A leaf that returns cannot have called `0x3cb67a0`. The real
 ///    caller is `CS::CSFadeImp::CSFadeImp` (1.16.2 `0x140b3cc40` -> 1.17 `0x140b3e2e0`), whose
 ///    `call *0x18(%rax)` at `0x140b3e43a` is vtable slot 3 of the helper it HeapAlloc'd itself;
 ///    `[rsp]=0x3cb67a0` with `[rsp+8]=0x3cb67f8` is `this` and `this+0x58` == `param_1 + 0xb`,
 ///    the loop sentinel, which fits that constructor and nothing else.
-/// 2. This latch is correct defensive code but it is NOT what stops that descent. Re-run with the
+/// 2. This latch is correct defensive code but it is not what stops that descent. Re-run with the
 ///    latch in place, the 215-line descent reproduced byte for byte with
 ///    `oracle_veh_reentrant_refusals = 0` -- every dispatch is a fresh top-level VEH entry and the
 ///    recursion lives in Wine's own exception dispatch. See bd
@@ -581,7 +581,7 @@ fn enter_veh() -> Option<er_game_base::reentry::ReentryToken> {
 pub(crate) unsafe extern "system" fn crash_vectored_handler(
     info: *mut ExceptionPointersMin,
 ) -> i32 {
-    // FIRST, before `info` is even dereferenced: a fault raised while describing a fault must not
+    // First, before `info` is even dereferenced: a fault raised while describing a fault must not
     // re-enter this handler. See `enter_veh` -- without this the descent exhausts the stack
     // long before any line budget notices.
     let Some(_not_nested) = enter_veh() else {
@@ -599,8 +599,8 @@ pub(crate) unsafe extern "system" fn crash_vectored_handler(
         {
             let cbase = context as *mut u8;
             let rip = unsafe { *(cbase.add(CONTEXT_RIP_OFFSET) as *const u64) } as usize;
-            // Windows leaves the saved Rip PAST the INT3 (bp = Rip-1); wine/Proton may leave it
-            // AT the INT3 (bp = Rip). Accept either so the lookup is robust across both.
+            // Windows leaves the saved Rip past the INT3 (bp = Rip-1); wine/Proton may leave it
+            // at the INT3 (bp = Rip). Accept either so the lookup is robust across both.
             let cand_past = rip.wrapping_sub(INT3_RIP_BACKUP);
             let cand_at = rip;
             let mut slot = SW_BP_EMPTY;
@@ -633,7 +633,7 @@ pub(crate) unsafe extern "system" fn crash_vectored_handler(
                     let r9 = read_reg(CONTEXT_R9_OFFSET);
                     let rax = read_reg(CONTEXT_RAX_OFFSET);
                     let rsp = read_reg(CONTEXT_RSP_OFFSET);
-                    // RAW stack qwords (NOT rva'd): in-image game return addresses show as full
+                    // Raw stack qwords (not rva'd): in-image game return addresses show as full
                     // 0x140xxxxxxx (subtract base for the RVA), our DLL frames as 0x6ffe..., stack/heap
                     // as 0x7ffe..., locals as small values -- so the caller chain up from the BP'd
                     // function is identifiable. Deepened to capture the map-load orchestrator frames.
@@ -651,11 +651,11 @@ pub(crate) unsafe extern "system" fn crash_vectored_handler(
                         trace_callers_summary()
                     ));
                 }
-                // (Reverted: an OVERFLOW-GUARD here that reset [rcx+0x48] on the 0x7ad53b push was
-                // based on a WRONG premise -- that field is a POINTER (~0x7fff...), not a small count,
-                // so dialog+0x50 is NOT a valid DLFixedVector in our context; zeroing it corrupted the
+                // (Reverted: an overflow-guard here that reset [rcx+0x48] on the 0x7ad53b push was
+                // based on a wrong premise -- that field is a pointer (~0x7fff...), not a small count,
+                // so dialog+0x50 is not a valid DLFixedVector in our context; zeroing it corrupted the
                 // dialog -> a new AV. The real issue is the load job's mis-contextualized push target,
-                // not an 8-full vector. bd dialog-plus0x50-NOT-a-vector-built-job-miscontextualized.)
+                // not an 8-full vector. bd dialog-plus0x50-not-a-vector-built-job-miscontextualized.)
                 let orig = (SW_BP_ORIG[slot].load(Ordering::SeqCst) & SW_BP_ORIG_BYTE_MASK) as u8;
                 unsafe { write_code_byte(bp_addr, orig) };
                 unsafe {
@@ -667,7 +667,7 @@ pub(crate) unsafe extern "system" fn crash_vectored_handler(
                 return EXCEPTION_CONTINUE_EXECUTION;
             }
             // #BP not at one of our armed addresses. Log it once (diagnostic: confirms the VEH
-            // IS invoked for #BP under wine; the rip tells us if it is ours with a different
+            // is invoked for #BP under wine; the rip tells us if it is ours with a different
             // Rip convention or a foreign breakpoint).
             let seen = SW_BP_UNMATCHED_LOGGED.fetch_add(SW_BP_HIT_INCREMENT, Ordering::SeqCst);
             if seen < SW_BP_MAX_UNMATCHED_LOGS {
@@ -686,9 +686,9 @@ pub(crate) unsafe extern "system" fn crash_vectored_handler(
         }
         // Hardware watchpoint (DR0) on GameMan+0xc30: a data-write trap surfaces as a
         // single-step exception with DR6 bit0 set. Log the writing instruction's RIP +
-        // call stack -- this pins the EXACT function that mounts the save (vanilla
-        // 0x67b290-class OR Seamless/ERSC), no guessing -- then one-shot disarm DR7 in
-        // the CONTEXT that gets restored and resume execution.
+        // call stack -- this pins the exact function that mounts the save (vanilla
+        // 0x67b290-class or Seamless/ERSC), no guessing -- then one-shot disarm DR7 in
+        // the context that gets restored and resume execution.
         if !record.is_null()
             && !context.is_null()
             && unsafe { (*record).exception_code } == EXCEPTION_SINGLE_STEP_CODE
@@ -740,7 +740,7 @@ pub(crate) unsafe extern "system" fn crash_vectored_handler(
         {
             let address = unsafe { (*record).exception_address } as usize;
             // For an access violation ExceptionInformation[0] is the access kind
-            // (0=read, 1=write, 8=execute) and [1] is the faulting DATA address --
+            // (0=read, 1=write, 8=execute) and [1] is the faulting data address --
             // the pointer that was actually dereferenced. That plus the accessor
             // registers (RCX/RDX/R8) distinguishes a bad `this` pointer from a wild
             // index without decompilation guesswork.
@@ -784,7 +784,7 @@ pub(crate) unsafe extern "system" fn crash_vectored_handler(
             let ret0_tag = annotate_addr(ret0, base);
             let self_base = SELF_DLL_BASE.load(Ordering::SeqCst);
             // Only treat the fault instruction as an in-module RVA when it actually lands in
-            // `.text`; an execute-fault RIP in the heap (access=8) is NOT a game RVA and a
+            // `.text`; an execute-fault RIP in the heap (access=8) is not a game RVA and a
             // blind `addr - base` there prints a misleading value.
             let rva = address.checked_sub(base).filter(|r| {
                 base != NULL_MODULE_BASE && (AV_GAME_TEXT_RVA_MIN..AV_GAME_TEXT_RVA_MAX).contains(r)
@@ -800,7 +800,7 @@ pub(crate) unsafe extern "system" fn crash_vectored_handler(
                 )),
             }
         }
-        // CATCH-ALL for every OTHER error-severity exception. Until 2026-07-30 this handler logged
+        // Catch-all for every other error-severity exception. Until 2026-07-30 this handler logged
         // access violations and nothing else, so an empty crash log was read as "no crash" when it
         // only ever meant "no ACCESS VIOLATION". Everything a fault in this DLL actually produces --
         // `STATUS_STACK_OVERFLOW` from unbounded recursion, a Rust panic (`_CxxThrowException`), a
@@ -828,7 +828,7 @@ pub(crate) unsafe extern "system" fn crash_vectored_handler(
                 let label = exception_code_label(code);
                 if code == EXCEPTION_STACK_OVERFLOW_CODE {
                     // The guard page is already gone and this handler is running on whatever is
-                    // left of the dying thread's stack, so take NOTHING that walks or allocates
+                    // left of the dying thread's stack, so take nothing that walks or allocates
                     // against it -- no `trace_callers_summary`, no module resolution. A raw RIP is
                     // enough to name the recursing detour, and a line that might not make it out is
                     // still infinitely better than the silence this replaced.
@@ -880,7 +880,7 @@ pub(crate) fn c30_watch_enabled() -> bool {
 
 /// Set DR0 = target_addr and DR7 = 4-byte data-write breakpoint on every game thread
 /// (except ours) via Suspend/Get/Set/ResumeThread. Returns how many threads were armed.
-/// Deadlock-safe: the CONTEXT buffer is stack-only and no heap alloc happens while a
+/// Deadlock-safe: the context buffer is stack-only and no heap alloc happens while a
 /// thread is suspended (one thread suspended at a time).
 pub(crate) unsafe fn arm_c30_watchpoint(target_addr: usize) -> i32 {
     let process_id = unsafe { GetCurrentProcessId() };
@@ -904,7 +904,7 @@ pub(crate) unsafe fn arm_c30_watchpoint(target_addr: usize) -> i32 {
                 };
                 if handle != INVALID_THREAD_HANDLE {
                     unsafe { SuspendThread(handle) };
-                    // 16-byte-aligned stack CONTEXT (over-allocate + round the ptr up).
+                    // 16-byte-aligned stack context (over-allocate + round the ptr up).
                     let mut raw = [CONTEXT_ZERO_FILL; CONTEXT_AMD64_SIZE + CONTEXT_ALIGN];
                     let aligned =
                         (raw.as_mut_ptr() as usize + CONTEXT_ALIGN_MASK) & !CONTEXT_ALIGN_MASK;

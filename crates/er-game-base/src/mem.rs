@@ -36,7 +36,7 @@ pub fn game_module_base() -> Result<usize, String> {
     Ok(module as usize)
 }
 
-/// `game_module_base() + rva`, resolved for the RUNNING build.
+/// `game_module_base() + rva`, resolved for the running build.
 ///
 /// Every RVA in this workspace is a 1.16.2 RVA. On a build that moved the code, this returns the
 /// translated address when one has been verified and an `Err` when it has not -- so a caller
@@ -45,7 +45,7 @@ pub fn game_module_base() -> Result<usize, String> {
 ///
 /// # Why `#[track_caller]`
 ///
-/// This is the UNNAMED spelling, so its refusals used to be labelled `game_rva` and nothing else
+/// This is the unnamed spelling, so its refusals used to be labelled `game_rva` and nothing else
 /// -- which names ~150 call sites at once and therefore names none of them. It has now cost two
 /// hunts. The first was 57 refusals in one boot. The second was a session that logged **339,764**
 /// refusals of `0x140000000` (image base + RVA 0, which is never a meaningful address) with no
@@ -60,11 +60,11 @@ pub fn game_rva(rva: u32) -> Result<usize, String> {
     resolve_rva(rva, "game_rva", core::panic::Location::caller())
 }
 
-/// `game_module_base() + rva`, deliberately NOT resolved for the running build.
+/// `game_module_base() + rva`, deliberately not resolved for the running build.
 ///
 /// # The one caller shape this is for
 ///
-/// An address about to be handed to a hook API that resolves it ITSELF -- `er_hook::MhHook::new`,
+/// An address about to be handed to a hook API that resolves it itself -- `er_hook::MhHook::new`,
 /// `register_union_hook`, `register_shared_hook`, or a local helper that forwards into one. Those
 /// own the single 1.16.2 -> 1.17 resolve, and [`game_rva`] would perform a second one.
 ///
@@ -72,12 +72,12 @@ pub fn game_rva(rva: u32) -> Result<usize, String> {
 ///
 /// It is usually a no-op: the address is a 1.17 destination, `already_translated_in` recognises it
 /// and hands it straight back. That is exactly why this survived so long unnoticed. But an address
-/// can be BOTH a 1.17 destination of one row and the 1.16.2 SOURCE of a different row -- which is
+/// can be both a 1.17 destination of one row and the 1.16.2 source of a different row -- which is
 /// what happens whenever a region's shift equals the local spacing between two functions, so
 /// `B - A == C - B`. On such an address translation wins over the shortcut (it must; see
 /// `already_translated_in`), and the second resolve silently returns C.
 ///
-/// MEASURED on the 2026-08-30 18:42 boot, three detours installed on unrelated functions:
+/// Measured on the 2026-08-30 18:42 boot, three detours installed on unrelated functions:
 ///
 /// | intended                  | resolve 1     | resolve 2 (the detour that was installed) |
 /// |---------------------------|---------------|-------------------------------------------|
@@ -85,14 +85,14 @@ pub fn game_rva(rva: u32) -> Result<usize, String> {
 /// | `native_submit_7ac890`    | `0x1407ad710` | `0x1407ae590` (hot Scaleform, 16 callers) |
 /// | profile per-frame push    | `0x140bbbd90` | `0x140bbd440` (`CSMenuFaceModelRend`)     |
 ///
-/// No error, no refusal, no log line -- and each feature then logged the address it MEANT, which
+/// No error, no refusal, no log line -- and each feature then logged the address it meant, which
 /// is why nobody noticed. `scripts/check-double-resolved-hook-targets.py` is the gate that keeps
 /// the shape out.
 ///
 /// # What the `Result` means here, and what moved
 ///
-/// It is the module-base lookup and NOTHING else, so a call site that already had an `else` branch
-/// for a failed [`game_rva`] keeps it unchanged. What moves is WHERE an unmappable address is
+/// It is the module-base lookup and nothing else, so a call site that already had an `else` branch
+/// for a failed [`game_rva`] keeps it unchanged. What moves is where an unmappable address is
 /// refused: no longer here, but inside the hook API, which logs `HOOK REFUSED` naming the address
 /// and the build. That is the better place for it anyway -- it is the layer that knows whether the
 /// row is merely callable or actually audited as a detour target, which are different questions
@@ -101,10 +101,10 @@ pub fn game_rva_for_hook(rva: u32) -> Result<usize, String> {
     Ok(game_module_base()? + rva as usize)
 }
 
-/// [`game_rva`], but the caller names the address so a refusal is attributable by NAME as well
+/// [`game_rva`], but the caller names the address so a refusal is attributable by name as well
 /// as by source line.
 ///
-/// Both halves earn their place: the name says WHICH constant went inert (the thing a reader
+/// Both halves earn their place: the name says which constant went inert (the thing a reader
 /// wants), and the location says which of the several sites that resolve it was asking (the
 /// thing that makes it fixable). Prefer this form when a name exists.
 #[track_caller]
@@ -132,7 +132,7 @@ fn resolve_rva(rva: u32, what: &str, at: &core::panic::Location<'_>) -> Result<u
     })
 }
 
-/// `base + rva` for a READ, resolved for the running build -- or `0` when there is no mapping.
+/// `base + rva` for a read, resolved for the running build -- or `0` when there is no mapping.
 ///
 /// # Why zero rather than an error
 ///
@@ -144,31 +144,31 @@ fn resolve_rva(rva: u32, what: &str, at: &core::panic::Location<'_>) -> Result<u
 ///
 /// # Why reads needed this at all
 ///
-/// A stale CALL announces itself: 1.16.2's `0x1405eefb0` is mid-instruction on 1.17 and the
-/// process dies immediately. A stale READ does not. Every `.data` global moved between the
+/// A stale call announces itself: 1.16.2's `0x1405eefb0` is mid-instruction on 1.17 and the
+/// process dies immediately. A stale read does not. Every `.data` global moved between the
 /// builds -- most by +0x4070, `runtime_heap_allocator` by +0x4080, `multiplay_properties` by
-/// +0x4000 -- so `safe_read_usize` SUCCEEDS and returns whatever now occupies the old slot. Two
+/// +0x4000 -- so `safe_read_usize` succeeds and returns whatever now occupies the old slot. Two
 /// measured consequences: a garbage repository pointer reached `CreateTpfResCap`, which divided
 /// by zero 894ms into boot; and the swapchain find read a stale `GX_DRAW_CONTEXT_RVA` root, missed
 /// for 1200 consecutive tries, and left a live process behind a black screen.
 ///
-/// NEVER use this for a call target. Zero is a safe address to fail a read at and a fatal one to
+/// Never use this for a call target. Zero is a safe address to fail a read at and a fatal one to
 /// jump to; call sites must take the `Option` from [`crate::game_build::resolve_game_address`]
 /// and decide what refusing means for them.
 pub fn game_data_addr(base: usize, rva: usize, what: &'static str) -> usize {
     crate::game_build::resolve_game_address(base + rva, what).unwrap_or(0)
 }
 
-/// [`game_data_addr`] for an INDEXED global -- a table row, an array element -- returning
+/// [`game_data_addr`] for an indexed global -- a table row, an array element -- returning
 /// `base + rva + byte_offset`, or `0` when the base RVA has no mapping.
 ///
 /// # Why the plain form is not enough
 ///
 /// [`game_data_addr`] answers `0` for a refusal, and every caller's null check depends on that
 /// `0` surviving. `game_data_addr(base, TABLE_RVA, "TABLE") + slot * 8` destroys it: a refusal on
-/// slot 3 produces the address `24`, which is not zero, so an `if address != 0` guard PASSES and
+/// slot 3 produces the address `24`, which is not zero, so an `if address != 0` guard passes and
 /// the caller dereferences page zero. Reads survive that (`safe_read_*` is kernel-validated and
-/// merely fails), but a WRITE faults -- and there is such a write: the loading-portrait teardown
+/// merely fails), but a write faults -- and there is such a write: the loading-portrait teardown
 /// nulls `table[slot]` to spare a renderer from the native delete.
 ///
 /// Adding the offset here keeps the refusal a refusal all the way to the caller.
@@ -190,11 +190,11 @@ pub fn game_data_addr_offset(
 /// # Why this exists as one call
 ///
 /// The two halves are useless apart and were repeatedly written apart. Resolving without a safe
-/// read turns a REFUSAL into a crash, because [`game_data_addr`] answers 0 and `*(0 as *const _)`
+/// read turns a refusal into a crash, because [`game_data_addr`] answers 0 and `*(0 as *const _)`
 /// faults. Safe-reading without resolving is worse and quieter: every `.data` global moved between
-/// 1.16.2 and 1.17, so the read SUCCEEDS and returns whatever now occupies the old slot.
+/// 1.16.2 and 1.17, so the read succeeds and returns whatever now occupies the old slot.
 ///
-/// This is a SAFE function on purpose. It dereferences nothing the caller can get wrong: the
+/// This is a safe function on purpose. It dereferences nothing the caller can get wrong: the
 /// address is resolved here and the read is kernel-validated, so there is no precondition to
 /// state and no `unsafe` block for a caller to write around it. Marking it `unsafe` would only
 /// add ceremony at every site and make the safe form look like the risky one.
@@ -211,7 +211,7 @@ pub fn read_global_u8(base: usize, rva: usize, what: &'static str) -> u8 {
 ///
 /// A store is the one access that must never go through unresolved. Reading a moved global returns
 /// nonsense the caller can at least notice; writing one corrupts whatever now lives there, and
-/// writing a REFUSAL (address 0) crashes outright. Measured 2026-08-29: the title's zero-input
+/// writing a refusal (address 0) crashes outright. Measured 2026-08-29: the title's zero-input
 /// menu-accept byte moved +0x4080 on 1.17 and its raw store landed on a neighbouring byte, logging
 /// success while the title menu never opened.
 ///
@@ -232,12 +232,12 @@ pub unsafe fn write_global_u8(base: usize, rva: usize, what: &'static str, value
 ///
 /// # Safety
 ///
-/// There is NO precondition and no unsafety here: this function dereferences nothing.
+/// There is no precondition and no unsafety here: this function dereferences nothing.
 /// It is integer arithmetic on `ptr` -- a range test against the low 64 KiB reserve and
 /// an alignment mask -- and would be sound as a safe `fn`. The `unsafe` marker is
 /// vestigial, kept only because removing it would change the signature of a function
 /// called across every DLL in this workspace. A `true` result is a cheap plausibility
-/// screen, NOT proof that `ptr` is mapped or points at a live object.
+/// screen, not proof that `ptr` is mapped or points at a live object.
 pub unsafe fn is_heap_aligned_ptr(ptr: usize) -> bool {
     const HEAP_LO: usize = 0x10000;
     const PTR_ALIGN_MASK: usize = 0x7;
@@ -256,13 +256,13 @@ pub fn vtable_in_game_image(vtable: usize, base: usize) -> bool {
 ///
 /// # Safety
 ///
-/// `addr` has NO precondition: any value, including 0, a freed pointer, or a wholly
+/// `addr` has no precondition: any value, including 0, a freed pointer, or a wholly
 /// unmapped address, is safe to pass. The read goes through `ReadProcessMemory`, which
 /// validates the range in the kernel and returns `FALSE` rather than raising an access
 /// violation, so this function cannot fault on a bad address -- that fault-tolerance is
 /// the entire reason it exists.
 ///
-/// What the CALLER owns is the meaning of the bytes that come back. A successful read
+/// What the caller owns is the meaning of the bytes that come back. A successful read
 /// only proves those bytes were mapped at that instant; it does not prove they are a
 /// live object of the expected type, and the game may free or overwrite the region on
 /// another thread immediately afterwards. Treat the value as a sample, not a borrow.
@@ -293,13 +293,13 @@ pub unsafe fn safe_read_usize(addr: usize) -> Option<usize> {
 ///
 /// # Safety
 ///
-/// `addr` has NO precondition: any value, including 0, a freed pointer, or a wholly
+/// `addr` has no precondition: any value, including 0, a freed pointer, or a wholly
 /// unmapped address, is safe to pass. The read goes through `ReadProcessMemory`, which
 /// validates the range in the kernel and returns `FALSE` rather than raising an access
 /// violation, so this function cannot fault on a bad address -- that fault-tolerance is
 /// the entire reason it exists.
 ///
-/// What the CALLER owns is the meaning of the bytes that come back. A successful read
+/// What the caller owns is the meaning of the bytes that come back. A successful read
 /// only proves those bytes were mapped at that instant; it does not prove they are a
 /// live object of the expected type, and the game may free or overwrite the region on
 /// another thread immediately afterwards. Treat the value as a sample, not a borrow.
@@ -330,13 +330,13 @@ pub unsafe fn safe_read_i32(addr: usize) -> Option<i32> {
 ///
 /// # Safety
 ///
-/// `addr` has NO precondition: any value, including 0, a freed pointer, or a wholly
+/// `addr` has no precondition: any value, including 0, a freed pointer, or a wholly
 /// unmapped address, is safe to pass. The read goes through `ReadProcessMemory`, which
 /// validates the range in the kernel and returns `FALSE` rather than raising an access
 /// violation, so this function cannot fault on a bad address -- that fault-tolerance is
 /// the entire reason it exists.
 ///
-/// What the CALLER owns is the meaning of the bytes that come back. A successful read
+/// What the caller owns is the meaning of the bytes that come back. A successful read
 /// only proves those bytes were mapped at that instant; it does not prove they are a
 /// live object of the expected type, and the game may free or overwrite the region on
 /// another thread immediately afterwards. Treat the value as a sample, not a borrow.
@@ -367,13 +367,13 @@ pub unsafe fn safe_read_f32(addr: usize) -> Option<f32> {
 ///
 /// # Safety
 ///
-/// `addr` has NO precondition: any value, including 0, a freed pointer, or a wholly
+/// `addr` has no precondition: any value, including 0, a freed pointer, or a wholly
 /// unmapped address, is safe to pass. The read goes through `ReadProcessMemory`, which
 /// validates the range in the kernel and returns `FALSE` rather than raising an access
 /// violation, so this function cannot fault on a bad address -- that fault-tolerance is
 /// the entire reason it exists.
 ///
-/// What the CALLER owns is the meaning of the bytes that come back. A successful read
+/// What the caller owns is the meaning of the bytes that come back. A successful read
 /// only proves those bytes were mapped at that instant; it does not prove they are a
 /// live object of the expected type, and the game may free or overwrite the region on
 /// another thread immediately afterwards. Treat the value as a sample, not a borrow.
@@ -406,7 +406,7 @@ pub unsafe fn safe_read_u8(addr: usize) -> Option<u8> {
 ///
 /// # Safety
 ///
-/// `addr` has NO precondition -- see [`safe_read_usize`]; the read is performed by
+/// `addr` has no precondition -- see [`safe_read_usize`]; the read is performed by
 /// `ReadProcessMemory` and fails closed on an unmapped range instead of faulting. This
 /// is what lets the `.text` AOB scanner walk a drifted or partially-unmapped image
 /// without crashing the game.
@@ -482,13 +482,13 @@ pub fn module_text_range() -> Option<(usize, usize)> {
 ///
 /// # Safety
 ///
-/// `addr` has NO precondition: any value, including 0, a freed pointer, or a wholly
+/// `addr` has no precondition: any value, including 0, a freed pointer, or a wholly
 /// unmapped address, is safe to pass. The read goes through `ReadProcessMemory`, which
 /// validates the range in the kernel and returns `FALSE` rather than raising an access
 /// violation, so this function cannot fault on a bad address -- that fault-tolerance is
 /// the entire reason it exists.
 ///
-/// What the CALLER owns is the meaning of the bytes that come back. A successful read
+/// What the caller owns is the meaning of the bytes that come back. A successful read
 /// only proves those bytes were mapped at that instant; it does not prove they are a
 /// live object of the expected type, and the game may free or overwrite the region on
 /// another thread immediately afterwards. Treat the value as a sample, not a borrow.
@@ -520,7 +520,7 @@ pub unsafe fn safe_read_u16(addr: usize) -> Option<u16> {
 /// that cannot fail merely because of where the string happens to sit.
 const PAGE_SIZE: usize = 0x1000;
 
-/// Fault-safe, LENGTH-BOUNDED read of a NUL-terminated C string.
+/// Fault-safe, length-bounded read of a NUL-terminated C string.
 ///
 /// This exists because `CStr::from_ptr` on a pointer that came from outside our own code is a
 /// crash waiting for the right afternoon: it calls `strlen`, `strlen` dereferences, and a
@@ -529,7 +529,7 @@ const PAGE_SIZE: usize = 0x1000;
 /// `0x011000010e05acda` and `0x0110000107be5e2c`, both very much non-null (bd
 /// `ersc-steam-garbage-key-ptr-crashes-lobby-publish-2026-08-24`).
 ///
-/// Returns the bytes BEFORE the NUL, or `None` if the string is unreadable, if `addr` is null,
+/// Returns the bytes before the NUL, or `None` if the string is unreadable, if `addr` is null,
 /// or if no NUL appears within `max_len`. That last case is deliberately a failure and not a
 /// truncation: a readable region with no terminator in range is not a string we have any reason
 /// to trust, and silently returning `max_len` bytes of it would launder junk into a value the
@@ -537,12 +537,12 @@ const PAGE_SIZE: usize = 0x1000;
 ///
 /// # Safety
 ///
-/// `addr` has NO precondition -- see [`safe_read_usize`]. Every read goes through
+/// `addr` has no precondition -- see [`safe_read_usize`]. Every read goes through
 /// `ReadProcessMemory`, which fails closed on an unmapped page instead of faulting. The reads
 /// are page-bounded so a legitimate string ending in the last mapped page of a region is not
 /// rejected just because the next page is absent.
 ///
-/// The caller still owns the MEANING of the bytes: a successful read proves only that they were
+/// The caller still owns the meaning of the bytes: a successful read proves only that they were
 /// mapped at that instant.
 pub unsafe fn safe_read_cstr(addr: usize, max_len: usize) -> Option<Vec<u8>> {
     cstr_walk(addr, max_len, &mut |at, out| unsafe { read_bytes(at, out) })
@@ -593,7 +593,7 @@ mod cstr_tests {
     /// the entire point: the guard they defeated was a null check.
     const CRASH_POINTERS: [usize; 2] = [0x0110_0001_0e05_acda, 0x0110_0001_07be_5e2c];
 
-    /// A reader that models ONE mapped page at `base` whose contents start with `bytes`;
+    /// A reader that models one mapped page at `base` whose contents start with `bytes`;
     /// everything outside that page is unmapped. The page is a full [`PAGE_SIZE`] because that is
     /// what mapping granularity means -- a stub page shorter than that would reject the
     /// page-bounded chunk the walk legitimately asks for, and test the stub rather than the code.

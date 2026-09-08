@@ -1,7 +1,7 @@
 // ---- CS::PlayerGameData correctness oracle (read at in-world) ----
 /// `GameDataMan::play_time` (u32, in-game play time in milliseconds, maxed at 999:59:59.999).
-/// WORLD-LIVE LIVENESS signal for the render gate: the game advances this clock only while the
-/// world simulation is actually stepping; it is PAUSED during loads/menus/frozen-world states.
+/// World-live LIVENESS signal for the render gate: the game advances this clock only while the
+/// world simulation is actually stepping; it is paused during loads/menus/frozen-world states.
 /// So a rising `oracle_play_time_ms` across a dwell window proves the world is live (not a
 /// render-frozen "present but nothing moving" reload). Bound to the typed layout so it tracks
 /// fromsoftware-rs and fails the build on struct drift.
@@ -71,7 +71,7 @@ pub(crate) const CHR_ASM_OVERRIDE_HANDS_ADDEND: i32 = 200;
 pub(crate) const CHR_ASM_OVERRIDE_LEGS_ADDEND: i32 = 300;
 /// `CS::ChrAsm::GetDefaultProtectorParamId` (deobf 0x140d47420) is a pure switch:
 /// 0 -> 10000, 1 -> 10100, 2 -> 10200, 3 -> 10300, anything else -> -1. The profile feed
-/// `set_model_source` calls it only with 2 and 3, so a portrait's HANDS and LEGS are always these
+/// `set_model_source` calls it only with 2 and 3, so a portrait's hands and legs are always these
 /// bare-body rows -- vanilla behaviour, not a defect.
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const PROTECTOR_DEFAULT_PARAM_ID_BASE: i32 = 10000;
@@ -132,13 +132,13 @@ pub(crate) const PGD_STAT_END_OFFSET: usize =
 pub(crate) const PGD_STAT_COUNT: usize =
     (PGD_STAT_END_OFFSET - PGD_STAT_BASE_3C_OFFSET) / core::mem::size_of::<u32>();
 /// GameMan last field: `character_name_is_empty` (a cheap blank/new-game discriminator).
-/// RESOLVED (autoresearch 2026-06-18) via static RE of `eldenring-deobf.bin`: the in-game
+/// Resolved (autoresearch 2026-06-18) via static RE of `eldenring-deobf.bin`: the in-game
 /// getter at 0x140679d90 is `mov rax,[GameMan]; movzbl 0xe70(rax),eax; ret`, so the field is
 /// at +0xe70 -- our prior hand-decoded offset was 8 bytes too far (read padding past the field),
-/// a real BUG. Now bound to the upstream typed field, which the disassembly confirms correct.
+/// a real bug. Now bound to the upstream typed field, which the disassembly confirms correct.
 pub(crate) const GAME_MAN_NAME_IS_EMPTY_E70_OFFSET: usize =
     core::mem::offset_of!(GameMan, character_name_is_empty);
-/// One-shot latch for the in-world LOAD-CORRECTNESS dump.
+/// One-shot latch for the in-world load-correctness dump.
 pub(crate) use er_telemetry_core::counters::LOAD_CORRECTNESS_DUMPED;
 pub(crate) const LOAD_CORRECTNESS_NOT_DUMPED: usize = 0;
 /// Synthetic `this` for the IngameInit-tail stream-worker register call 0x140b0a980

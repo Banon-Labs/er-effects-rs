@@ -1,4 +1,4 @@
-//! THE ORDER RELEASE HAPPENS IN, as a state machine that cannot be run out of order or stopped
+//! The order release happens in, as a state machine that cannot be run out of order or stopped
 //! half way.
 //!
 //! # Why the order is not a comment in one function
@@ -8,30 +8,30 @@
 //! plausible order that is subtly the wrong one. Six of the nine steps have a consequence if
 //! they move:
 //!
-//! * **The HUD is handed back FIRST.** The retarget post-pass reads the creature's
+//! * **The HUD is handed back first.** The retarget post-pass reads the creature's
 //!   `CSChrDataModule` every frame until it is told to stop, and every step below it either reads
 //!   through that creature or is what makes it stop resolving.
-//! * **The camera must be cleared AFTER the player has been moved.** Clearing first gives a
+//! * **The camera must be cleared after the player has been moved.** Clearing first gives a
 //!   visible frame of the old body standing wherever it was; moving first means the camera snaps
 //!   to a player already standing in the right place.
-//! * **The body is made mortal LAST of the body steps -- after it has been placed.** Invincibility
+//! * **The body is made mortal last of the body steps -- after it has been placed.** Invincibility
 //!   is the only thing stopping `CSChrFallModule::Update` charging the body for the difference
 //!   between its `lastGroundedPosition` and where it actually is (the gate is byte-read in
 //!   [`crate::possess::fall`]), so clearing it before the placement hands back a mortal body at a
 //!   position nothing has checked. Both abnormal releases in the reference log did exactly that
 //!   and then failed the move.
-//! * **The camera's SIZE must go back before the camera does.** While `WorldChrManDbg+0xb8` still
+//! * **The camera's size must go back before the camera does.** While `WorldChrManDbg+0xb8` still
 //!   names the creature, `ChrExFollowCam+0x468` still names the patched `LockCamParam` row -- so
 //!   undoing them in this order shows at most one frame of the creature framed for a player, and
 //!   the other order shows one frame of the player framed for a dragon.
-//! * **`ChrCtrl+0x3b0` must be cleared BEFORE anything can tear the character down.**
+//! * **`ChrCtrl+0x3b0` must be cleared before anything can tear the character down.**
 //!   `ChrCtrl::Unref` compares that slot against zero and **DLPanics** when it is non-null. This
 //!   is the step that must run even when every step before it failed.
-//! * **A spawned creature is removed AFTER that clear**, for exactly the same reason from the other
+//! * **A spawned creature is removed after that clear**, for exactly the same reason from the other
 //!   side: `WorldChrManImp::RemoveChrIns` hands the character to `CSDelayDeleteMan`, and the
 //!   destruction that eventually follows is the thing that runs `ChrCtrl::Unref`. Despawning first
 //!   arms the crash the step before it exists to prevent -- on a delay, in a destructor.
-//! * **Save suppression is lifted LAST**, because `PlayerIns::UpdateSafePosition` and
+//! * **Save suppression is lifted last**, because `PlayerIns::UpdateSafePosition` and
 //!   `UpdateBlockPosition` write the save's respawn fields the instant that gate opens, and they
 //!   must not do it from a position the player is about to leave.
 //!
@@ -53,7 +53,7 @@
 pub(crate) enum Step {
     /// Give the HP / FP / stamina bars back to the real player.
     ///
-    /// FIRST, and for the same reason the camera is cleared before the player is moved: it is the
+    /// First, and for the same reason the camera is cleared before the player is moved: it is the
     /// most externally visible lie the possession is telling, so it is the first one to stop.
     /// It must also precede every step below on its own account -- all of them either read
     /// through the creature or make it stop resolving, and the HUD post-pass reads the creature's
@@ -67,47 +67,47 @@ pub(crate) enum Step {
     /// a no-op in effect, because co-location already left them exactly there; it matters when the
     /// creature died airborne and the point resolves to its last grounded position instead.
     ///
-    /// **BEFORE [`Self::RestoreBody`], AND THAT REORDERING IS A BUG FIX.** See that variant.
+    /// **before [`Self::RestoreBody`], and that REORDERING is a bug fix.** See that variant.
     MovePlayer = 2,
     /// Invincibility off, alpha back to opaque, `debugFlags` cleared. The player's own body
     /// becomes an ordinary character again.
     ///
-    /// **AFTER [`Self::MovePlayer`], because this step is the one that makes the body mortal and
+    /// **after [`Self::MovePlayer`], because this step is the one that makes the body mortal and
     /// it must not run while the body is still wherever the world last pushed it.** The two
     /// abnormal releases in the reference log both reported
-    /// `FAILED=[restore-body move-player restore-manipulator-vtable]`: `RestoreBody` ran FIRST and
-    /// its five writes are AND-ed into one result, so the invincibility clear can land while the
+    /// `FAILED=[restore-body move-player restore-manipulator-vtable]`: `RestoreBody` ran first and
+    /// its five writes are and-ed into one result, so the invincibility clear can land while the
     /// move that was supposed to put the body somewhere survivable never happens at all. Running
     /// the placement first means the body is put down and its `lastGroundedPosition` pinned while
     /// it is still immune, and mortality is the last thing handed back.
     ///
     /// The old order had no reason behind it -- the module docs above justify six of the nine
     /// steps and this was not one of them -- and nothing else in the release depends on the body
-    /// being restored early: the camera steps read the CREATURE, and the body scale this also
+    /// being restored early: the camera steps read the creature, and the body scale this also
     /// undoes is render-only (`ChrCtrl::SetScaleSize` touches no physics field).
     RestoreBody = 3,
     /// Put `ChrExFollowCam+0x468` and the patched `LockCamParam` row back exactly as they were.
     ///
-    /// BEFORE the camera is handed back, for two reasons. The override is still pointing at the
+    /// Before the camera is handed back, for two reasons. The override is still pointing at the
     /// patched row at this moment, so undoing them in this order costs at most one frame of the
-    /// creature framed with the player's parameters rather than one frame of the PLAYER framed
+    /// creature framed with the player's parameters rather than one frame of the player framed
     /// with a dragon's. And the row is shared game state that anything could read, unlike
     /// `+0x468`, which nothing in the game ever touches -- so the shared thing goes back first.
     RestoreCameraSize = 4,
     /// Clear `WorldChrManDbg+0xb8`. Camera and lock-on return to the real player.
     ClearCameraOverride = 5,
-    /// Put the creature's own vtable pointer back and give it its AI back. THE STEP THAT MUST
-    /// HAPPEN.
+    /// Put the creature's own vtable pointer back and give it its AI back. The step that must
+    /// happen.
     ///
     /// Possession swizzles the real `ComManipulator`'s vptr to a patched copy of its own table in
     /// a page we allocated. That page is freed when the `Thunk` drops, so a creature left pointing
     /// at it dispatches through unmapped memory on its very next tick.
     RestoreManipulatorVtable = 6,
-    /// Hand a creature this mod SPAWNED back to the game. A no-op for a creature the map placed.
+    /// Hand a creature this mod spawned back to the game. A no-op for a creature the map placed.
     ///
-    /// **AFTER [`Self::RestoreManipulatorVtable`], AND THAT IS A CRASH IF IT MOVES.**
+    /// **after [`Self::RestoreManipulatorVtable`], and that is a crash if it moves.**
     /// `WorldChrManImp::RemoveChrIns` passes the character to `CSDelayDeleteMan`, and the eventual
-    /// destruction DISPATCHES THROUGH THE MANIPULATOR'S VTABLE -- which, until the step before has
+    /// destruction dispatches through the MANIPULATOR'S VTABLE -- which, until the step before has
     /// run, is ours, in a page that is freed with the possession. Removing first therefore arms a
     /// call through unmapped memory inside the engine's own teardown, where nothing of ours is
     /// left to notice.
@@ -156,7 +156,7 @@ impl Step {
     /// possession, which is bad and survivable; a failed `RestoreManipulatorVtable` leaves a
     /// DLPanic armed inside `ChrCtrl::Unref` for whenever that creature is unloaded.
     ///
-    /// `DespawnCreature` deliberately does NOT qualify, and the difference is the point: its
+    /// `DespawnCreature` deliberately does not qualify, and the difference is the point: its
     /// failure leaves a live NPC standing in the world, which is visible, survivable, and cleaned
     /// up by the next map load. It gets a [`Self::failure_note`] instead, because "despawn-creature
     /// failed" does not tell the reader what is now standing behind them.
@@ -164,7 +164,7 @@ impl Step {
         matches!(self, Self::RestoreManipulatorVtable)
     }
 
-    /// What the reader needs to know when THIS step fails, spelled out because the consequence is
+    /// What the reader needs to know when this step fails, spelled out because the consequence is
     /// nowhere near the cause.
     ///
     /// `None` for the steps whose failure is self-explanatory from the name.
@@ -196,7 +196,7 @@ pub(crate) enum Reason {
     /// A spawned creature never became drivable inside `[spawn].readiness_ms`.
     ///
     /// Its own reason rather than [`Self::CreatureGone`], which is what it was first written as and
-    /// is the opposite claim: the creature is still THERE, and still ours to remove. Reporting a
+    /// is the opposite claim: the creature is still there, and still ours to remove. Reporting a
     /// deadline as a disappearance would send the reader looking for what removed it.
     SpawnTimedOut,
     /// `DLL_PROCESS_DETACH`, or the shell shutting down. The path that exists purely so the
@@ -294,7 +294,7 @@ impl Teardown {
 mod tests {
     use super::*;
 
-    /// The order IS the discriminants, and the list must be sorted. A step inserted in the wrong
+    /// The order is the discriminants, and the list must be sorted. A step inserted in the wrong
     /// place fails here rather than silently reordering the release.
     #[test]
     fn the_steps_are_in_the_order_they_must_happen() {
@@ -325,7 +325,7 @@ mod tests {
             Step::MovePlayer < Step::RestoreCameraSize,
             "the creature's framing is still the right one until the player has been moved"
         );
-        // THE ORDERING THIS FIX EXISTS FOR. `RestoreBody` is what takes the invincibility bit off,
+        // The ordering this fix exists for. `RestoreBody` is what takes the invincibility bit off,
         // and that bit is the only thing stopping `CSChrFallModule::Update` charging the body for
         // `lastGroundedPosition.y - position.y`. It must not run until the body has been put
         // somewhere and that field has been pinned to it.
@@ -344,7 +344,7 @@ mod tests {
         }
     }
 
-    /// THE HUD GOES BACK FIRST. Every step after it either reads through the creature or is what
+    /// The HUD goes back first. Every step after it either reads through the creature or is what
     /// stops the creature resolving, and the retarget reads its `CSChrDataModule` once a frame
     /// until this step runs.
     #[test]
@@ -375,7 +375,7 @@ mod tests {
         assert_eq!(teardown.line(), "release: reason=hotkey steps=9/9 ok");
     }
 
-    /// THE ORDERING THAT IS A CRASH IF IT MOVES. `WorldChrManImp::RemoveChrIns` hands the character
+    /// The ordering that is a crash if it moves. `WorldChrManImp::RemoveChrIns` hands the character
     /// to `CSDelayDeleteMan`, and the delayed destruction runs `ChrCtrl::Unref`, which DLPanics on a
     /// non-null `ChrCtrl+0x3b0`. Despawning before the override is cleared therefore arms the exact
     /// crash the clear exists to prevent -- and arms it on a delay, in a destructor.
@@ -398,7 +398,7 @@ mod tests {
     }
 
     /// A despawn that did not happen leaves a live NPC nobody will remove, which is not guessable
-    /// from the step's name -- and is NOT the crash class, so it must not claim to be.
+    /// from the step's name -- and is not the crash class, so it must not claim to be.
     #[test]
     fn a_failed_despawn_names_the_orphan_and_is_not_reported_as_a_crash() {
         let mut teardown = Teardown::new(Reason::Hotkey);
@@ -413,7 +413,7 @@ mod tests {
         assert!(!line.contains("DLPanic"), "{line}");
     }
 
-    /// THE PROPERTY THAT MATTERS. A step failing must not stop the run -- in particular the
+    /// The property that matters. A step failing must not stop the run -- in particular the
     /// override clear must still be attempted after everything before it has failed.
     #[test]
     fn a_failing_step_does_not_stop_the_ones_after_it() {

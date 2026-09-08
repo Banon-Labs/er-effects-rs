@@ -2,16 +2,16 @@
 """Per-load (epoch) frame-time decomposition for the samechar reload FPS investigation.
 
 Splits telemetry-timeseries.jsonl by oracle_current_load_epoch and, for each load's
-MOVABLE window, decomposes the frame budget:
+movable window, decomposes the frame budget:
 
     frame_ms  ==  game_task_us + build_driver_us + composite_us + present_call_us + residual
 
 where `residual` (frame_ms minus the measured CPU components) is the flip/vsync/GPU-wait
-portion. Comparing load1 vs load2/load3 names WHERE the reload dip's extra per-frame cost
+portion. Comparing load1 vs load2/load3 names where the reload dip's extra per-frame cost
 lands: a CPU component that balloons => product per-frame CPU work; residual that balloons
 => present-stack / GPU / DXGI-side (the Windows-vs-Linux amplification suspect).
 
-A "settled" view drops the first SETTLE frames of each movable window so the transient
+A "settled" view drops the first settle frames of each movable window so the transient
 asset-streaming overlap (which reproduces cross-OS) does not mask the persistent component.
 
 Usage:
@@ -131,8 +131,8 @@ def analyze(path: Path, settle: int) -> None:
             qpc_s = f"{qpc['median']:.0f}us" if qpc else "n/a"
             print(f"   --- present cadence ---")
             print(f"   sync_interval(requested)={dict(si)}  refresh/present(observed)={rpp_s}  qpc_delta={qpc_s}")
-        # GPU-BUSY per frame (goal §3.3 gpu_frame_us, bd er-effects-rs-03ma): injected D3D12 timestamp
-        # pair on the game queue, EXCLUDING the vsync/present-wait. Splits the residual(flip/gpu) bucket:
+        # GPU-busy per frame (goal §3.3 gpu_frame_us, bd er-effects-rs-03ma): injected D3D12 timestamp
+        # pair on the game queue, excluding the vsync/present-wait. Splits the residual(flip/gpu) bucket:
         # gpu_frame ~= residual => render-bound; gpu_frame << residual => the residual is present-wait.
         # Drop 0s (pre-production frames). samples/state make an empty window attributable.
         gpu = _stats([_f(r.get("oracle_gpu_frame_us")) for r in settled if _f(r.get("oracle_gpu_frame_us"))])

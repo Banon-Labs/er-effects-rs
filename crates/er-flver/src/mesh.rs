@@ -89,7 +89,7 @@ pub(crate) fn bounding_box(flver: &FLVER) -> ([f32; 3], [f32; 3]) {
     )
 }
 
-/// Extract a mesh's MAIN faceset (skipping LOD/shadow/motion variants) as a triangle
+/// Extract a mesh's main faceset (skipping LOD/shadow/motion variants) as a triangle
 /// list (de-stripping and dropping degenerate triangles when needed). Shared by both
 /// the normalized and raw paths.
 pub(crate) fn extract_main_indices(flver: &FLVER, mesh: &FLVERMesh) -> Vec<u32> {
@@ -128,7 +128,7 @@ pub fn parse(bytes: &[u8]) -> Result<ObjectModel, FlverError> {
             ..Default::default()
         };
 
-        // Vertex buffers of a mesh are PARALLEL (same vertex_count, attributes split
+        // Vertex buffers of a mesh are parallel (same vertex_count, attributes split
         // across them). Take each semantic from the first buffer that carries it.
         for &vb_idx in &mesh.vertex_buffer_indices {
             let Some(vb) = flver.vertex_buffers.get(vb_idx as usize) else {

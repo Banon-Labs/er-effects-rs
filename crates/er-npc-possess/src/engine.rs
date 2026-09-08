@@ -1,4 +1,4 @@
-//! THE SEAM. Everything that actually possesses a character plugs in here.
+//! The seam. Everything that actually possesses a character plugs in here.
 //!
 //! Stack layer 1 shipped the config file, the hotkeys and this module with a [`NullEngine`] behind
 //! it that refused politely. Layer 2 filled it in: [`crate::possess::NpcPossessionEngine`] is
@@ -24,7 +24,7 @@
 //! playing, and swapping them under it would finish one character's swing with another's. Only the
 //! engine knows whether the possessed body is in a neutral state, so it -- not the file poller --
 //! decides when a reload may be consumed. Layer 1's engine has no animation state and always says
-//! yes; the gate is wired up NOW so a later layer only has to answer the question, not also find
+//! yes; the gate is wired up now so a later layer only has to answer the question, not also find
 //! the place to ask it. `crate::tick` is the caller.
 
 // Windows-only crate in practice; this module is pure state handling and stays ungated so its
@@ -43,7 +43,7 @@ use crate::settings::{ButtonSettings, MappingSettings, TargetSettings};
 /// naming what was requested has to describe what the engine was actually handed.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PossessionRequest {
-    /// The `[target]` table IN FORCE -- which is not necessarily the one on disk. See
+    /// The `[target]` table in force -- which is not necessarily the one on disk. See
     /// `crate::config::PossessConfig::adopt_staged_target`.
     pub(crate) target: TargetSettings,
     pub(crate) mapping: MappingSettings,
@@ -109,13 +109,13 @@ pub(crate) trait PossessionEngine: Send {
     /// One frame. Called from the FrameBegin task whether or not anything is possessed.
     ///
     /// Added when the real engine landed. Layer 1's design note said an engine only had to call
-    /// `install_engine` -- that was true of everything ABOVE this line and false of possession
+    /// `install_engine` -- that was true of everything above this line and false of possession
     /// itself, which is a per-frame job: the player's body has to be re-neutered (the alpha has a
     /// decay modifier, the sound mute is cleared by four respawn paths), co-located, and the
     /// creature's position cached before a death makes it unreadable.
     fn tick(&mut self) {}
 
-    /// Is a possession in flight RIGHT NOW?
+    /// Is a possession in flight right now?
     ///
     /// Not the same question as [`Possession::state`], and the difference is the reason this
     /// exists: an engine can let go on its own -- the creature died, or despawned -- with nobody
@@ -129,7 +129,7 @@ pub(crate) trait PossessionEngine: Send {
     /// The process is going away. Release whatever is held, now.
     ///
     /// Distinct from [`Self::release`] because a shutdown release is not optional and not a
-    /// player action: an engine that has written `ChrCtrl+0x3b0` MUST clear it before this DLL
+    /// player action: an engine that has written `ChrCtrl+0x3b0` must clear it before this DLL
     /// unloads, or the game DLPanics inside `ChrCtrl::Unref` the next time that character is torn
     /// down -- with our code no longer present to explain why.
     fn shutdown(&mut self) {
@@ -227,7 +227,7 @@ impl Possession {
 
     /// One rising edge of the hotkey. Possess when idle, release when not.
     ///
-    /// A REFUSAL LEAVES THE STATE ALONE. An engine that declines because there is no valid target
+    /// A refusal leaves the state alone. An engine that declines because there is no valid target
     /// must not leave the mod believing it possessed something -- the next press would then
     /// "release" a possession that never happened, and the player would have to press twice to get
     /// anywhere. `NoEngine` is the exception and is deliberately not a refusal: layer 1 has to be
@@ -277,10 +277,10 @@ static POSSESSION: Mutex<Possession> = Mutex::new(Possession {
     presses: 0,
 });
 
-/// Plug the possession engine in. THE ENTRY POINT FOR EVERY LATER LAYER.
+/// Plug the possession engine in. The entry point for every later layer.
 ///
 /// Call once, from the owning DLL's init, before the first frame task tick. Returns `false` if an
-/// engine was already installed and the new one was DROPPED -- two engines writing the same
+/// engine was already installed and the new one was dropped -- two engines writing the same
 /// `ChrIns` is the failure this refuses rather than resolving by install order.
 pub(crate) fn install_engine(engine: Box<dyn PossessionEngine>) -> bool {
     let mut slot = lock(&ENGINE);
@@ -316,7 +316,7 @@ pub(crate) fn on_hotkey_edge(source: &'static str, request: PossessionRequest) -
 
 /// One frame. Drives the installed engine and reconciles the state machine with it.
 ///
-/// THE RECONCILIATION IS THE POINT. An engine can let go on its own -- the possessed creature died
+/// The reconciliation is the point. An engine can let go on its own -- the possessed creature died
 /// or despawned -- and without this the toggle would still read `Active`, so the player's next
 /// press would spend itself "releasing" something that had already ended.
 pub(crate) fn tick_engine() {
@@ -405,7 +405,7 @@ mod tests {
         }
     }
 
-    /// LAYER 1'S WHOLE RUNTIME CLAIM: the press is seen and the state flips. Nothing is possessed,
+    /// Layer 1'S whole runtime CLAIM: the press is seen and the state flips. Nothing is possessed,
     /// and the report says exactly that rather than implying otherwise.
     #[test]
     fn with_no_engine_a_press_flips_to_requested_and_says_no_engine() {

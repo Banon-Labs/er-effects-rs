@@ -4,7 +4,7 @@
 //! telemetry source files (write_telemetry / write_game_module_oracles /
 //! write_oracle / game_man_snapshot / bootstrap / save_policy_logs) is migrated
 //! here file-group by file-group as the ~900-symbol ownership inversion described
-//! in the extraction plan is completed. This crate depends ONLY on er-game-base +
+//! in the extraction plan is completed. This crate depends only on er-game-base +
 //! upstream game libs, never on er-quickload (product).
 //!
 //! Per-tick product data enters via [`TelemetryFrameInput`] rather than a direct
@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The handful of per-frame product-owned values telemetry actually reads,
-/// built by the product BEFORE calling into telemetry (so telemetry never
+/// built by the product before calling into telemetry (so telemetry never
 /// touches the product's `Arc<Mutex<EffectsState>>`). Extended as write_telemetry
 /// migrates over.
 #[derive(Clone, Copy, Debug, Default)]
@@ -52,8 +52,8 @@ fn standalone_json_path() -> PathBuf {
 /// to call `write_game_module_oracles` / `write_oracle_telemetry` with an absent
 /// [`TelemetryFrameInput`] and default (product-unwritten) counters.
 /// Wall-clock ms since boot (GetTickCount64), 0 off-windows. Same clock the input-harness stamps into
-/// `er-input-harness-phases.jsonl` (`start_tick_ms`/`end_tick_ms`), so the ORACLE can align an fps sample
-/// to the harness phase it falls inside and compute per-phase fps. bd ORACLE-dll-decides-reports-2026-07-22.
+/// `er-input-harness-phases.jsonl` (`start_tick_ms`/`end_tick_ms`), so the oracle can align an fps sample
+/// to the harness phase it falls inside and compute per-phase fps. bd oracle-dll-decides-reports-2026-07-22.
 fn tick_ms() -> u64 {
     #[cfg(windows)]
     {
@@ -69,8 +69,8 @@ fn tick_ms() -> u64 {
     }
 }
 
-/// Per-core CPU + this-process CPU sampler, to test whether single-core CONTENTION (H-B) is a factor in
-/// the load2 20fps (bd NEXT-telemetry-capture-per-core-cpu). Returns (max_core_busy%, cores_over_85,
+/// Per-core CPU + this-process CPU sampler, to test whether single-core contention (H-B) is a factor in
+/// the load2 20fps (bd next-telemetry-capture-per-core-cpu). Returns (max_core_busy%, cores_over_85,
 /// ncores, proc_cpu_core_equivalents). Delta-based vs the previous call. -1 until it has two samples.
 #[cfg(windows)]
 mod cpu {
@@ -186,7 +186,7 @@ mod cpu {
 }
 
 /// Programmatic RenderDoc frame trigger (bd RENDERDOC-inject-via-me3-native). When `renderdoc.dll` is
-/// loaded into ER (as the first me3 native -- native Windows D3D12, NOT a Vulkan layer), fire
+/// loaded into ER (as the first me3 native -- native Windows D3D12, not a Vulkan layer), fire
 /// `TriggerCapture` at the reload's playable window so we capture the 20fps product-reload frame -- and,
 /// with `ER_RENDERDOC_SLOW_MS=0`, the fast vanilla-reload frame -- agent-driven, no F12 timing. No-op
 /// when `renderdoc.dll` is absent (a normal run without RENDERDOC=1).
@@ -241,9 +241,9 @@ mod renderdoc {
     pub fn trigger_capture() -> bool {
         let mut api = API_PTR.load(Ordering::SeqCst);
         if api == 0 {
-            // RE-CHECK each call until found (do NOT permanently cache "absent"): RenderDoc may be injected
-            // AFTER boot via `renderdoccmd inject --PID` (the native-Windows capture path -- injecting at
-            // boot/device-creation stalls ER, bd STEP4-me3-native-renderdoc-dll-STALLS-boot). trigger_capture
+            // RE-check each call until found (do not permanently cache "absent"): RenderDoc may be injected
+            // after boot via `renderdoccmd inject --PID` (the native-Windows capture path -- injecting at
+            // boot/device-creation stalls ER, bd STEP4-me3-native-renderdoc-dll-stalls-boot). trigger_capture
             // only runs on slow steady frames, so the GetModuleHandle re-check is negligible. Cache only the
             // positive result.
             api = resolve();
@@ -276,7 +276,7 @@ mod renderdoc {
 }
 
 /// Slow-frame threshold (ms) above which an in-world frame is a capture candidate. Default 40ms (~25fps)
-/// catches the 20fps reload but NOT the ~30fps boot; set `ER_RENDERDOC_SLOW_MS=0` for the fast vanilla
+/// catches the 20fps reload but not the ~30fps boot; set `ER_RENDERDOC_SLOW_MS=0` for the fast vanilla
 /// reload so its playable frame is captured too.
 fn renderdoc_slow_ms() -> f32 {
     use std::sync::atomic::AtomicU32;
@@ -285,9 +285,9 @@ fn renderdoc_slow_ms() -> f32 {
     if c != u32::MAX {
         return f32::from_bits(c);
     }
-    // Prefer a GAME-DIR MARKER file (er-quickload-rdoc-slow-ms.txt): env does NOT propagate through
-    // me3/Proton to the game process (bd CORRECTION-RenderDoc...), so a marker is the reliable way to set a
-    // low threshold that captures the FAST vanilla/mod reload (16-18ms) for the per-pass GPU A/B diff.
+    // Prefer a game-DIR marker file (er-quickload-rdoc-slow-ms.txt): env does not propagate through
+    // me3/Proton to the game process (bd correction-RenderDoc...), so a marker is the reliable way to set a
+    // low threshold that captures the fast vanilla/mod reload (16-18ms) for the per-pass GPU A/B diff.
     let v = std::fs::read_to_string("er-quickload-rdoc-slow-ms.txt")
         .ok()
         .and_then(|s| s.trim().parse::<f32>().ok())
@@ -302,13 +302,13 @@ fn renderdoc_slow_ms() -> f32 {
 }
 
 /// Fire a RenderDoc capture once the world has been simulating (play_time rising) for a settled window
-/// AND the frame is slow enough (reload) -- throttled + capped. Returns the running capture count.
+/// and the frame is slow enough (reload) -- throttled + capped. Returns the running capture count.
 fn maybe_trigger_renderdoc(play_time_ms: i64, task_delta: f32, _tick_n: u64) -> u32 {
     use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32};
     static PREV_PT: AtomicI64 = AtomicI64::new(-1);
     static STREAK: AtomicU32 = AtomicU32::new(0);
-    static FLAT: AtomicU32 = AtomicU32::new(0); // consecutive ticks play_time did NOT advance
-    static ARMED: AtomicBool = AtomicBool::new(true); // eligible to capture ONCE this in-world window
+    static FLAT: AtomicU32 = AtomicU32::new(0); // consecutive ticks play_time did not advance
+    static ARMED: AtomicBool = AtomicBool::new(true); // eligible to capture once this in-world window
     static CAPS: AtomicU32 = AtomicU32::new(0);
     const MAX_CAPS: u32 = 6; // load1 + 2 reloads + headroom
     const SETTLE_TICKS: u32 = 8; // ~32 game frames of settled in-world play before a capture
@@ -319,10 +319,10 @@ fn maybe_trigger_renderdoc(play_time_ms: i64, task_delta: f32, _tick_n: u64) -> 
         return caps;
     }
     let prev = PREV_PT.swap(play_time_ms, Ordering::SeqCst);
-    // ONE capture per in-world window (fixes "4x load1, 0x reload" -- MAX_CAPS was burned inside load1's
-    // window before the quit->reload). play_time NOT advancing = a load/loading pause; a SUSTAINED flat
-    // window (>= LOADING_GAP_TICKS) is a load boundary that RE-ARMS the next window's single capture, so
-    // we get load1 AND each reload (a single in-world hiccup does not re-arm).
+    // One capture per in-world window (fixes "4x load1, 0x reload" -- MAX_CAPS was burned inside load1's
+    // window before the quit->reload). play_time not advancing = a load/loading pause; a sustained flat
+    // window (>= LOADING_GAP_TICKS) is a load boundary that RE-arms the next window's single capture, so
+    // we get load1 and each reload (a single in-world hiccup does not re-arm).
     if play_time_ms <= 0 || !(prev >= 0 && play_time_ms > prev) {
         STREAK.store(0, Ordering::SeqCst);
         if FLAT.fetch_add(1, Ordering::SeqCst) + 1 >= LOADING_GAP_TICKS {
@@ -345,7 +345,7 @@ fn maybe_trigger_renderdoc(play_time_ms: i64, task_delta: f32, _tick_n: u64) -> 
 }
 
 /// Game-thread sampling profiler (bd: reload 29ms is CPU-bound, present=0.2ms). A separate thread
-/// suspends the game/main thread during SLOW frames (`task_delta` >= threshold) and records its RIP as an
+/// suspends the game/main thread during slow frames (`task_delta` >= threshold) and records its RIP as an
 /// RVA (rip - game_base); the histogram's top RVAs name the native function eating the reload's per-frame
 /// cost. No RenderDoc / no admin needed. Dumps `er-cpu-profile.txt` to the game dir.
 #[cfg(windows)]
@@ -381,7 +381,7 @@ mod profiler {
     static HIST: Mutex<Option<HashMap<usize, u32>>> = Mutex::new(None);
     static SAMPLES: AtomicUsize = AtomicUsize::new(0);
 
-    /// Called from `standalone_tick` (which runs ON the game thread): record the thread id + latest frame
+    /// Called from `standalone_tick` (which runs on the game thread): record the thread id + latest frame
     /// time + base, and start the sampler once.
     pub fn note_frame(base: usize, task_delta: f32) {
         GAME_TID.store(unsafe { GetCurrentThreadId() }, Ordering::Relaxed);
@@ -431,7 +431,7 @@ mod profiler {
         if h == 0 {
             return None;
         }
-        // 16-byte-aligned CONTEXT buffer; we only set ContextFlags + read Rip.
+        // 16-byte-aligned context buffer; we only set ContextFlags + read Rip.
         #[repr(align(16))]
         struct Ctx([u8; CTX_SIZE]);
         let mut ctx = Ctx([0u8; CTX_SIZE]);
@@ -472,7 +472,7 @@ mod profiler {
                 100.0 * *c as f64 / total as f64
             ));
         }
-        // Redirectable like every other per-run artifact, and it needs it MORE than most: this
+        // Redirectable like every other per-run artifact, and it needs it more than most: this
         // one is a bare `fs::write`, so it keeps zero previous generations — the run before this
         // one is gone the instant this one dumps, with no `.prev` to fall back on.
         let path = er_game_base::log::redirected_artifact_path(
@@ -494,7 +494,7 @@ const ALWAYS_SAMPLED: [&str; 2] = ["oracle_standalone_ticks", "oracle_tick_ms"];
 
 /// Render one JSONL record, omitting fields byte-identical to the previously written record.
 ///
-/// The omission is keyed on the VALUE, never on the field name: a field is dropped only when the
+/// The omission is keyed on the value, never on the field name: a field is dropped only when the
 /// exact bytes this record would have written are the bytes the last record already carries, so a
 /// reader that carries values forward reconstructs the full series losslessly, and a reader that
 /// filters (all three in `scripts/`) sees exactly the transitions.
@@ -568,7 +568,7 @@ pub fn standalone_tick() {
     // Throttle disk writes so the series stays dense enough to sample the game frame time across a
     // ~3s vanilla-reload playable window -- ~0.2s between writes -- but no denser.
     //
-    // THE FLOOR IS IN TIME, NOT IN TICKS. This used to be `every 4th tick`, a frame-count proxy for
+    // The floor is in time, not in ticks. This used to be `every 4th tick`, a frame-count proxy for
     // that 0.2s which tightens exactly when the game is healthy: 0.2s at 20fps, 0.067s at 60fps. So
     // the file grew three times denser than its own stated requirement precisely when nothing
     // interesting was happening. Measured on run `br-20260831-160354-2513`: 4,350 records at a
@@ -589,7 +589,7 @@ pub fn standalone_tick() {
     }
 
     let base = er_game_base::mem::game_module_base().unwrap_or(0);
-    // EVERY SINGLETON READ ASKS WHERE THE GLOBAL LIVES ON THIS BUILD. This closure was
+    // Every singleton read asks where the global lives on this build. This closure was
     // `safe_read_usize(base + rva)` until 2026-08-31, and that one line is why four of the fields
     // below were byte-identical in all 4,350 records of run `br-20260831-160354-2513`.
     //
@@ -602,7 +602,7 @@ pub fn standalone_tick() {
     // name `.?AVNWSteamConnectionManager@DLNW3@@`, which 1.17 parks where GameDataMan used to be.
     // The other three stale slots landed in still-blank `.data` and read `0x0`, which is
     // indistinguishable from a global the game has not created yet. That is the whole hazard: a
-    // wrong pointer oracle does not go quiet, it goes CONSTANT, and a constant is invisible.
+    // wrong pointer oracle does not go quiet, it goes constant, and a constant is invisible.
     //
     // `game_data_addr` translates through the verified 1.16.2 -> 1.17 map and answers `0` for an
     // address with no mapping, which `safe_read_usize` then fails on -- so the next stale RVA
@@ -632,23 +632,23 @@ pub fn standalone_tick() {
         "CS_MENU_MAN_GLOBAL_RVA",
     );
 
-    // VANILLA-RELOAD FPS COMPARISON (2026-07-22): read the game's own frame timer. CSFlipperImp
+    // Vanilla-reload FPS comparison (2026-07-22): read the game's own frame timer. CSFlipperImp
     // singleton at 1.16.2 base+0x4589ad8; task_delta (+0x268) = the game loop frame time
     // (1/task_delta = fps), fixed_spf (+0x1c) = the flip target (0.0167=60). play_time
     // (GameDataMan+0xa0, u32 ms) rises only while the world simulates -> the in-world/playable
     // gate. Lets a telemetry-only run measure a user-driven native reload's playable fps to
-    // compare against our reload path. bd USER-chose-vanilla-reload-comparison-2026-07-22.
+    // compare against our reload path. bd user-chose-vanilla-reload-comparison-2026-07-22.
     //
     // Both OFFSETS are 1.17-confirmed and neither moved: `GetPlayTime` (1.16.2 `0x1402565d0`,
-    // 1.17 `0x1402565a0`) is `mov rax,[GameDataMan]; ...; mov eax,[rax+0xa0]` in BOTH images,
-    // byte-identical apart from the rip displacement. Only the GLOBAL moved.
+    // 1.17 `0x1402565a0`) is `mov rax,[GameDataMan]; ...; mov eax,[rax+0xa0]` in both images,
+    // byte-identical apart from the rip displacement. Only the global moved.
     const CS_FLIPPER_SINGLETON_RVA: usize = 0x4589ad8;
     const GAME_DATA_MAN_PLAY_TIME_A0_OFFSET: usize = 0xa0;
     let flipper = read_singleton(CS_FLIPPER_SINGLETON_RVA, "CS_FLIPPER_SINGLETON_RVA");
     // `-2.0` = the CSFlipperImp global could not be resolved for this build; `-1.0` = it resolved
     // and the object is not there (or the field read faulted). Every reader of these fields
     // (`analyze-core-contention.py`, `report-harness-phases.py`, `analyze-vanilla-reload-fps.py`)
-    // filters on a POSITIVE value, so the second sentinel costs them nothing and buys a run's
+    // filters on a positive value, so the second sentinel costs them nothing and buys a run's
     // telemetry the ability to say which of the two happened.
     let read_f32 = |ptr: Option<usize>, off: usize| -> f32 {
         match ptr {
@@ -659,7 +659,7 @@ pub fn standalone_tick() {
         }
     };
     let flip_task_delta = read_f32(flipper, 0x268);
-    // Feed the game-thread CPU sampler: this tick runs ON the game thread, so record its id + frame time.
+    // Feed the game-thread CPU sampler: this tick runs on the game thread, so record its id + frame time.
     profiler::note_frame(base, flip_task_delta);
     let flip_fixed_spf = read_f32(flipper, 0x1c);
     let play_time_ms: i64 = match game_data_man {
@@ -699,8 +699,8 @@ pub fn standalone_tick() {
     let winreconfig_early_apply_ms = counters::WINRECONFIG_EARLY_APPLY_MS.load(Ordering::SeqCst);
     let winreconfig_early_apply_rect =
         counters::WINRECONFIG_EARLY_APPLY_RECT.load(Ordering::SeqCst);
-    // ONE FIELD PER ROW, SO A FIELD THAT DID NOT MOVE COSTS NOTHING. `render_sample` omits any
-    // field whose rendered value is byte-identical to the previously WRITTEN record. Measured on
+    // One field per row, so a field that did not move costs nothing. `render_sample` omits any
+    // field whose rendered value is byte-identical to the previously written record. Measured on
     // run `br-20260831-160354-2513`: of 27 fields across 4,350 records, 18 never changed once and
     // the 13 `oracle_winreconfig_*` counters alone were 58% of every line's bytes while changing
     // at most twice all run. Every reader in the repo reaches these through `dict.get(...)` with a
@@ -708,7 +708,7 @@ pub fn standalone_tick() {
     // `report-harness-phases.py`), so an absent field reads as "no new sample", which is exactly
     // what it means. A field that genuinely varies per sample is never elided, so this tightens
     // itself now that the singleton reads below go through the resolver: six of those 18 frozen
-    // fields were frozen BECAUSE the reads were unresolved, not because nothing was happening.
+    // fields were frozen because the reads were unresolved, not because nothing was happening.
     let fields = [
         ("oracle_standalone_ticks", n.to_string()),
         ("oracle_game_module_base", format!("\"0x{base:x}\"")),
@@ -778,10 +778,10 @@ pub fn standalone_tick() {
         ),
     ];
     let body = render_sample(&fields);
-    // APPEND one JSON line per write -> a timeseries jsonl the agent reads AFTER the run (no polling,
+    // APPEND one JSON line per write -> a timeseries jsonl the agent reads after the run (no polling,
     // no sleep). body already ends in '\n'.
     //
-    // The timeseries is per RUN, so the file is truncated by this process's first sample (previous
+    // The timeseries is per run, so the file is truncated by this process's first sample (previous
     // run kept one generation as `.prev`). A file spanning launches would make the tick stamps jump
     // backwards mid-file and every "how long did phase X take" read off it wrong.
     use std::io::Write as _;
@@ -844,7 +844,7 @@ mod sample_rendering_tests {
         );
     }
 
-    /// NON-VACUITY guard against eliding by NAME: the same field must come back the moment its
+    /// Non-VACUITY guard against eliding by NAME: the same field must come back the moment its
     /// value moves, or the series silently freezes at whatever it read first.
     #[test]
     fn a_field_that_changes_after_a_flat_stretch_reappears() {

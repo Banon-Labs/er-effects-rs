@@ -4,8 +4,8 @@
 The FD4 scheduler ticks load1's MoveMapStep child ~145x (field25 walks 0->9 -> mms19) but stops
 ticking load2's after ~6 (field25 stuck 0, mms stuck 18). The product now publishes the child ptr +
 header window (oracle_mms_child_ptr / h00..h30) every frame. This tool, given an observe timeseries
-that has both load1 (deser=0) and load2 (deser=1), collects each epoch's child header WHILE mms=18 and
-reports which field DIFFERS between the (ticking) load1 child and the (dropped) load2 child -- the
+that has both load1 (deser=0) and load2 (deser=1), collects each epoch's child header while mms=18 and
+reports which field differs between the (ticking) load1 child and the (dropped) load2 child -- the
 residual state the in-world teardown leaves that a fresh boot doesn't. Read-only.
 
 Usage: python3 scripts/analyze-mms-child-residual.py <telemetry-timeseries.jsonl>
@@ -82,7 +82,7 @@ def main() -> int:
         for f in CHILD_FIELDS:
             vals = per[e][f]
             print(f"  {f}: {vals[:8]}{' ...' if len(vals) > 8 else ''}")
-    # DIFF load1 (0) vs load2 (1): fields whose STABLE mms=18 value differs.
+    # Diff load1 (0) vs load2 (1): fields whose stable mms=18 value differs.
     if 0 in per and 1 in per:
         print("\n== load1(0) vs load2(1) at mms=18 -- residual-state candidates ==")
 

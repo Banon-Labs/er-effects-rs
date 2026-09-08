@@ -1,4 +1,4 @@
-"""Detect a closing message that CLAIMS a repo artifact was built when the turn wrote no file.
+"""Detect a closing message that claims a repo artifact was built when the turn wrote no file.
 
 Sibling of the unexecuted-promise scan: that one catches "I'll build it" ending in nothing, this
 one catches "I built it" when nothing was built. See
@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 
 # First-person completion verbs. Present-perfect and simple past only: a future promise is the
-# SIBLING guard's job, and matching both here would double-halt one turn.
+# sibling guard's job, and matching both here would double-halt one turn.
 _CLAIM = re.compile(
     r"\bI(?:'ve| have)?\s+(?:just\s+|already\s+)?"
     r"(built|added|created|wrote|written|wired|landed|shipped|implemented|patched|updated|"
@@ -21,7 +21,7 @@ _CLAIM = re.compile(
     re.IGNORECASE,
 )
 
-# The claim only counts when its object is something in THIS repo. A claim about the game, a run,
+# The claim only counts when its object is something in this repo. A claim about the game, a run,
 # or an external service is not what this guard is for.
 _ARTIFACT = re.compile(
     r"(?:\b(?:scripts|crates|tools|docs|\.cupcake)/[\w./-]+"
@@ -56,7 +56,7 @@ _WRITE_TOOLS = ("Edit", "Write", "NotebookEdit", "MultiEdit")
 
 
 def strip_quoted(text: str) -> str:
-    """Remove fenced/backticked/quoted spans so QUOTING a claim cannot trip the guard."""
+    """Remove fenced/backticked/quoted spans so quoting a claim cannot trip the guard."""
     text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
     text = re.sub(r"`[^`]*`", " ", text)
     text = re.sub(r'"[^"]{0,400}"', " ", text)

@@ -2,7 +2,7 @@
 //!
 //! Pressing the row opens the game's own `CS::SoftwareKeyboard` over the Quit dialog, pre-filled
 //! with the link on the clipboard (or the bare `?b=` prefix). Accepting a link that validates
-//! imports it; accepting one that does not RE-OPENS the field with the text still in it and the
+//! imports it; accepting one that does not RE-opens the field with the text still in it and the
 //! reason on the row's help line; backing out applies nothing.
 //!
 //! # Why "refuse to accept" is a re-open and not a veto
@@ -27,7 +27,7 @@
 //! save picker learned this the expensive way: an OS dialog that reopened ~57 ms after every cancel,
 //! with no way out of the flow (bd `er-effects-rs-rsxi`).
 //!
-//! # Why the clipboard is read while the field is OPEN and not only when it opens
+//! # Why the clipboard is read while the field is open and not only when it opens
 //!
 //! Ctrl+V inside the field does nothing -- the field has no paste, and the one native clipboard
 //! reader in the image is unreachable from it (`build_url_clipboard`'s module docs carry the
@@ -45,15 +45,15 @@
 //! [+158095ms] native editor accepted ...?b=bc2a932db14675  -> ACCEPTED, import applied
 //! ```
 //!
-//! Two things are proven there. The round trip is sound: 36 seconds in the field returned EXACTLY
+//! Two things are proven there. The round trip is sound: 36 seconds in the field returned exactly
 //! the 43 units that were put in it, so nothing is stale, dangling or misread. And the link only
-//! appeared on a LATER open because that is the only moment this DLL looked at the clipboard. The
+//! appeared on a later open because that is the only moment this DLL looked at the clipboard. The
 //! player experiences that as a one-entry lag -- paste, see nothing, accept, back out, re-enter,
 //! and there it is.
 //!
 //! So the mirror runs every frame the field is up: [`clipboard_sequence`] is a lock-free counter
 //! that says whether anything was copied at all, and only a change justifies a real read. A read
-//! that yields an importable link REPLACES the field through the game's own SetText. An unrelated
+//! that yields an importable link replaces the field through the game's own SetText. An unrelated
 //! copy cannot pass [`clipboard_build_url`]'s validation, so it cannot overwrite what the player is
 //! typing.
 //!
@@ -93,7 +93,7 @@ static NEXT_TEXT: Mutex<Option<String>> = Mutex::new(None);
 
 /// The last link this DLL put into the live field, so the mirror re-pushes only on a real change.
 /// Cleared with the rest of the editor state, because a stale value here would make the first paste
-/// of the NEXT open look like a repeat and be skipped.
+/// of the next open look like a repeat and be skipped.
 static MIRRORED_TEXT: Mutex<Option<String>> = Mutex::new(None);
 
 /// The clipboard write-count last acted on. A frame whose [`clipboard_sequence`] still equals this
@@ -104,7 +104,7 @@ static MIRRORED_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 /// not moved.
 ///
 /// Wine's clipboard bridge is asynchronous: a link copied just before the row press can be visible
-/// to `GetClipboardSequenceNumber` before its DATA can be fetched, so the open-time read misses it
+/// to `GetClipboardSequenceNumber` before its data can be fetched, so the open-time read misses it
 /// and no later change ever arrives to re-trigger the mirror. A short unconditional window closes
 /// that hole. It is short enough that a player cannot type inside it, and the validation gate means
 /// even a re-read inside it cannot overwrite anything with non-link text.
@@ -123,7 +123,7 @@ static MIRROR_FRAMES: AtomicUsize = AtomicUsize::new(0);
 
 /// The 02_990 MenuWindow this editor has been driving.
 ///
-/// Both fields load the SAME movie, so the run post-hook has to decide which editor a given window
+/// Both fields load the same movie, so the run post-hook has to decide which editor a given window
 /// belongs to, and "is the build-url keyboard up right now" alone is one frame too narrow: the
 /// keyboard's job slot clears the instant the terminal callback fires, while its window still runs
 /// for a frame or two afterwards. Those frames would be handed to the save picker's editor state,
@@ -161,7 +161,7 @@ pub(crate) fn build_url_editor_active() -> bool {
     phase() != EditorPhase::Idle || build_url_keyboard_active()
 }
 
-/// WHAT, EXACTLY, IS CLAIMING TO BE ACTIVE.
+/// What, exactly, is claiming to be active.
 ///
 /// [`build_url_editor_active`] answers yes/no, and a yes that turns out to be wrong is
 /// indistinguishable from a yes that is right -- which is how three consecutive presses of the row
@@ -187,7 +187,7 @@ fn active_latch_state() -> String {
 /// the row permanently dead: every future press sees "already active" and refuses, forever, because
 /// nothing will ever arrive to clear a latch whose field no longer exists.
 ///
-/// So the press does not trust the latch. A latch taken against a DIFFERENT dialog than the one now
+/// So the press does not trust the latch. A latch taken against a different dialog than the one now
 /// pressing cannot be a live field on this one, and a non-Idle phase with no keyboard job and no
 /// window behind it is a request that died before it ever opened. Either is debris, and the press
 /// that found it is entitled to clear it and proceed -- a stale flag must never outrank a player
@@ -222,7 +222,7 @@ pub(crate) fn request_build_url_editor(dialog: usize) -> bool {
             return false;
         }
     }
-    // Read the clipboard HERE rather than at submit time: this is the instant the player pressed
+    // Read the clipboard here rather than at submit time: this is the instant the player pressed
     // the row, so it is their clipboard as it was when they asked, not as it is some frames later.
     let initial = build_url_initial_text();
     *NEXT_TEXT
@@ -263,7 +263,7 @@ fn reset_build_url_mirror() {
     EDITOR_WINDOW.store(0, Ordering::SeqCst);
 }
 
-// THE LINK FIELD IS TOLD APART BY ITS RESOURCE NAME, NOT BY ASKING WHO OWNS THE WINDOW.
+// The link field is told apart by its resource name, not by asking who owns the window.
 //
 // A `build_url_editor_owns_window` helper lived here, deciding between the two 02_990 fields from
 // keyboard-active state plus a remembered window address. It became dead on 2026-08-23, when the
@@ -277,10 +277,10 @@ fn reset_build_url_mirror() {
 ///
 /// `reopens` is how many times this press has already been refused, and it is what keeps the
 /// unconditional window off a RE-open. On a first open the field holds whatever the clipboard said
-/// at press time, so re-reading can only improve it. On a re-open the field holds text the PLAYER
+/// at press time, so re-reading can only improve it. On a re-open the field holds text the player
 /// edited into being wrong, and re-reading the same unchanged clipboard would throw their edit away
 /// and hand back the link they were in the middle of correcting. Past that, a genuine clipboard
-/// CHANGE still lands either way -- copying a new link is a deliberate act.
+/// change still lands either way -- copying a new link is a deliberate act.
 ///
 /// Split out so the rule is testable without a live field.
 fn mirror_rereads_unconditionally(frame: usize, reopens: usize) -> bool {
@@ -292,7 +292,7 @@ fn mirror_rereads_unconditionally(frame: usize, reopens: usize) -> bool {
 /// Per-frame work for the live link field's own `02_990` MenuWindow.
 ///
 /// Called from `system_quit_menu_window_run_post` when the window that just ran is the 02_990 movie
-/// AND the build-url keyboard owns it -- the same context the save picker's editor uses for its
+/// and the build-url keyboard owns it -- the same context the save picker's editor uses for its
 /// caret, and the only context in which the field's SceneObjProxies are safe to resolve.
 ///
 /// Two jobs, in order: put the caret at the end of the prefilled link so typing appends, and mirror
@@ -308,7 +308,7 @@ pub(crate) unsafe fn build_url_editor_window_run(base: usize, menu_window: usize
         // The field is not necessarily focused on the frame its window first runs, and taking focus
         // is what resets a caret set too early -- so this repeats over the same short window the
         // path editor's caret pass uses. Without it the link field opens with its caret at index 0
-        // and a player's first keystroke lands in FRONT of the prefilled link.
+        // and a player's first keystroke lands in front of the prefilled link.
         let _ = unsafe { place_text_input_02_990_caret_at_end(base, menu_window) };
     }
     unsafe { mirror_clipboard_into_field(base, menu_window, frame) };
@@ -337,7 +337,7 @@ unsafe fn mirror_clipboard_into_field(base: usize, menu_window: usize, frame: us
         if mirrored.as_deref() == Some(link.as_str()) {
             return;
         }
-        // Claim it BEFORE the native call. A push that the engine refuses is not retried on the
+        // Claim it before the native call. A push that the engine refuses is not retried on the
         // next frame -- retrying a refused push every frame is how a per-frame path turns one
         // failure into a permanent stall -- and the sequence number still moves on the next copy.
         *mirrored = Some(link.clone());
@@ -361,7 +361,7 @@ unsafe fn mirror_clipboard_into_field(base: usize, menu_window: usize, frame: us
 
 /// Menu-pump step: submit a queued field, and consume the answer to one that closed.
 ///
-/// Runs from `system_quit_menu_window_run_post`, which IS the game's own `MenuWindowJob::Run`
+/// Runs from `system_quit_menu_window_run_post`, which is the game's own `MenuWindowJob::Run`
 /// post-hook -- the same context the save picker's editor and the return-title chain submit from.
 /// Building or submitting a `MenuJob` from the game task instead produced the Scaleform race that
 /// caused the non-deterministic execute faults (bd `system-quit-return-title-scaleform-race`).
@@ -429,7 +429,7 @@ pub(crate) unsafe fn build_url_editor_menu_pump() {
         set_phase(EditorPhase::Open);
         // The field now holds this, so the mirror's first frames -- which will read the very
         // clipboard this text came from -- see no change and leave it alone. Baselining the
-        // SEQUENCE here as well is what makes a re-open quiet: it means "nothing has been copied
+        // sequence here as well is what makes a re-open quiet: it means "nothing has been copied
         // since this field went up", so only a deliberate new copy can move the text under a
         // player who is mid-correction.
         reset_build_url_mirror();
@@ -475,11 +475,11 @@ unsafe fn on_accepted(text: String) {
                 reset_build_url_editor_state();
                 return;
             }
-            // Carry the rejected text back into the field so it can be corrected in place. This IS
+            // Carry the rejected text back into the field so it can be corrected in place. This is
             // the "did not accept" the player sees: the field they just accepted is in front of
             // them again, unchanged, with the reason on the row behind it.
             //
-            // EXCEPT when there is nothing to correct. The live log caught this: a player cleared
+            // Except when there is nothing to correct. The live log caught this: a player cleared
             // the field, accepted, and the refusal re-opened with `initial_units=0` -- an empty box
             // with no prefix to build on and no way back to one short of backing out entirely.
             // Empty is not a typo, so an empty accept restarts from the clipboard-or-prefix the
@@ -513,7 +513,7 @@ fn reopen_text_after_rejection(rejected: &str) -> String {
 mod tests {
     use super::*;
 
-    /// THE `initial_units=0` STEP FROM THE LIVE LOG. A player cleared the field and accepted; the
+    /// The `initial_units=0` step from the live log. A player cleared the field and accepted; the
     /// refusal carried the empty string back and re-opened an empty box. An empty accept is not a
     /// typo to correct in place, so it must restart from something usable.
     ///
@@ -536,7 +536,7 @@ mod tests {
         }
     }
 
-    /// A REAL typo is still carried back verbatim -- that is the whole point of the re-open, and
+    /// A real typo is still carried back verbatim -- that is the whole point of the re-open, and
     /// replacing it with the prefix would throw away what the player typed.
     #[test]
     fn a_typo_is_carried_back_verbatim_for_correction() {
@@ -575,7 +575,7 @@ mod tests {
     }
 
     /// The unconditional window exists for Wine's asynchronous clipboard bridge, and it must cost a
-    /// HANDFUL of clipboard locks, not one per frame. Reading on every frame of the window would be
+    /// handful of clipboard locks, not one per frame. Reading on every frame of the window would be
     /// three dozen round trips to the X11 selection owner in half a second.
     #[test]
     fn the_unconditional_rereads_are_spaced_and_bounded() {
@@ -620,7 +620,7 @@ mod tests {
         }
     }
 
-    /// These cases drive PROCESS-GLOBAL statics, and cargo runs tests on many threads, so without a
+    /// These cases drive process-global statics, and cargo runs tests on many threads, so without a
     /// lock they corrupt each other's setup and fail in whichever order the scheduler picks. The
     /// lock is deliberately poison-tolerant: one panicking case must not turn the rest into
     /// spurious failures that hide it.
@@ -631,7 +631,7 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// THE ROW WENT DEAD FOR THREE PRESSES, AND THE ONLY REASON IT CAME BACK WAS A DIALOG REBUILD.
+    /// The row went dead for three presses, and the only reason it came back was a dialog rebuild.
     ///
     /// Live log `dll:e9e66c62`, 2026-08-23: presses at +106002/+107447/+108703ms were all refused
     /// with "editor already active" against controller `0x1ad3a180`; the press that finally opened
@@ -664,7 +664,7 @@ mod tests {
         );
     }
 
-    /// The guard must NOT eat a genuine double-press. A field really running on THIS dialog, with a
+    /// The guard must not eat a genuine double-press. A field really running on this dialog, with a
     /// window behind it, is the case the latch exists for -- clearing that would stack a second
     /// field on the first, which is the bug the whole guard was written to prevent.
     #[test]

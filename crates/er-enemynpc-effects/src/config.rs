@@ -5,10 +5,10 @@
 //!
 //! # Why it reloads
 //!
-//! The hotkey was read ONCE, at attach, into a `OnceLock`. Changing it meant quitting Elden Ring,
+//! The hotkey was read once, at attach, into a `OnceLock`. Changing it meant quitting Elden Ring,
 //! which is a long way to go to find out you picked a key another mod had already taken -- and
 //! finding that out is exactly what makes a player want to change it. The file is now re-read about
-//! once a second (`er_hotkey_config::HotFile`, which compares the file's TEXT so a fast edit cannot
+//! once a second (`er_hotkey_config::HotFile`, which compares the file's text so a fast edit cannot
 //! fall inside one mtime tick) and the new key is live on the next keyboard poll.
 //!
 //! Two rules the reload has to get right, both of them ways a "working" reload looks broken:
@@ -16,10 +16,10 @@
 //! * A key that moved RESETS the edge detector. Without that, a key held at the instant of the swap
 //!   is already latched as down, and releasing it -- or the very next poll -- reads as a fresh
 //!   press the player never made.
-//! * A key that did NOT move must not report a change, or every reformatting of the file produces
+//! * A key that did not move must not report a change, or every reformatting of the file produces
 //!   that same phantom press.
 //!
-//! # Why it also WRITES
+//! # Why it also writes
 //!
 //! `enabled` is the one setting that changes from inside the game: the hotkey toggles it. Holding
 //! that in memory only means the feature is off again on every launch, so [`persist_enabled`]
@@ -27,16 +27,16 @@
 //! that is a feedback loop with three ways to go wrong. All three are handled where they arise
 //! rather than discovered at runtime:
 //!
-//! * The write must not read back as somebody's EDIT. `HotFile` compares text, so the write is
+//! * The write must not read back as somebody's edit. `HotFile` compares text, so the write is
 //!   followed by a read-back and [`HotFile::adopt`] of the exact bytes that landed. A reload
 //!   resets the key edge detector, so a self-write reported as an edit is a phantom keypress once
 //!   a second.
-//! * The write must not DESTROY the file. It is mostly comments, and those comments are this
+//! * The write must not destroy the file. It is mostly comments, and those comments are this
 //!   feature's only documentation. `er_hotkey_config::persist::set_scalar` rewrites the one
 //!   `enabled` line where it already is and copies every other byte through.
 //! * The player may be editing at the same time. The write re-reads the file immediately before
 //!   rewriting it, so an edit made since the last poll is carried through rather than reverted,
-//!   and the read-back is applied so that edit takes effect NOW instead of a second later. What is
+//!   and the read-back is applied so that edit takes effect now instead of a second later. What is
 //!   left is a microsecond-wide window between that read and the rename in which their save loses;
 //!   nothing portable closes it, and only the `enabled` line is ever at stake.
 
@@ -148,7 +148,7 @@ pub(crate) struct CharmConfig {
     pub(crate) remove_on_disable: bool,
     /// Whether the charm is on. The only setting this DLL writes as well as reads.
     ///
-    /// FALSE when the key is absent, and deliberately so: a fresh install, or a player who
+    /// False when the key is absent, and deliberately so: a fresh install, or a player who
     /// deleted the line, must not find every enemy in the world charmed on their first launch
     /// because a file was missing. The fail-safe direction for a toggle is off.
     pub(crate) enabled: bool,
@@ -159,13 +159,13 @@ pub(crate) struct CharmConfig {
 /// `Default` is "nothing moved", which is what almost every poll produces.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ConfigUpdate {
-    /// `(old name, new name)` when the hotkey moved. THIS is the edge-reset signal.
+    /// `(old name, new name)` when the hotkey moved. This is the edge-reset signal.
     pub(crate) hotkey_moved: Option<(String, String)>,
     /// The value that could not be read, and what is still in force instead.
     pub(crate) hotkey_rejected: Option<(String, String)>,
     pub(crate) effect_id_moved: Option<(i32, i32)>,
     pub(crate) remove_on_disable_moved: Option<(bool, bool)>,
-    /// The toggle moved because the FILE said so -- a hand edit, or the state restored at attach.
+    /// The toggle moved because the file said so -- a hand edit, or the state restored at attach.
     /// The caller drives the sweep off this exactly as it does off a keypress.
     pub(crate) enabled_moved: Option<(bool, bool)>,
 }
@@ -203,7 +203,7 @@ impl CharmConfig {
 
     /// Apply one file's text to the settings in force.
     ///
-    /// Absent keys keep what is already in force -- which for the FIRST load is the built-in
+    /// Absent keys keep what is already in force -- which for the first load is the built-in
     /// default, and for a reload is whatever was last read successfully. That is what makes
     /// deleting a line the same as never having written it.
     pub(crate) fn apply(&mut self, text: &str) -> ConfigUpdate {
@@ -244,8 +244,8 @@ impl CharmConfig {
         }
 
         // Anything that is not `true` is off -- the opposite convention to `remove_on_disable`
-        // above, and on purpose: that one defaults ON so an unreadable value should keep it on,
-        // this one defaults OFF so an unreadable value must not charm the world.
+        // above, and on purpose: that one defaults on so an unreadable value should keep it on,
+        // this one defaults off so an unreadable value must not charm the world.
         if let Some(raw) = setting(text, ENABLED_KEY) {
             let enabled = raw.eq_ignore_ascii_case("true");
             if enabled != self.enabled {
@@ -347,7 +347,7 @@ pub(crate) fn live_hotkey() -> Chord {
 /// Re-read the file if it changed, and report what moved.
 ///
 /// Returns `None` when nothing happened -- which is the overwhelmingly common case, and the one
-/// that must stay silent in the log. `Some` carries a report the caller logs AND acts on: a moved
+/// that must stay silent in the log. `Some` carries a report the caller logs and acts on: a moved
 /// hotkey is the signal to reset the key edge state.
 pub(crate) fn poll_reload() -> Option<ConfigUpdate> {
     let mut guard = state();
@@ -377,7 +377,7 @@ pub(crate) struct PersistOutcome {
     ///
     /// The write re-reads the file first, so an edit the player made since the last poll is in
     /// this text. Applying it here rather than leaving it for the next poll is what stops the
-    /// write-back from swallowing their edit: it goes into force NOW, and the caller logs and acts
+    /// write-back from swallowing their edit: it goes into force now, and the caller logs and acts
     /// on it exactly as it does for a reload.
     pub(crate) update: ConfigUpdate,
     /// `None` when the file now holds the new state. `Some` is the reason it does not -- a
@@ -389,7 +389,7 @@ pub(crate) struct PersistOutcome {
 /// The text a write-back must be built on, or the reason there must not be one.
 ///
 /// `Ok(None)` is the only case that licenses writing the shipped default: the file is not there,
-/// which is how it gets created in the first place. EVERY other read failure means the file exists
+/// which is how it gets created in the first place. Every other read failure means the file exists
 /// and we could not see it -- a permission bit, a lock, a bad sector -- and the one thing that must
 /// not happen then is writing [`DEFAULT_CONFIG_TOML`] over a config nobody has read. That turns an
 /// unreadable file into a destroyed one, and it would take the player's whole config with it.
@@ -407,7 +407,7 @@ fn readable_base(path: &std::path::Path) -> Result<Option<String>, String> {
 
 /// Write `enabled` back into the player's config, so the toggle survives a relaunch.
 ///
-/// READ-MODIFY-WRITE, deliberately, and re-reading here rather than reusing the text the last poll
+/// Read-modify-write, deliberately, and re-reading here rather than reusing the text the last poll
 /// saw: an edit made in the last second is on disk and not in memory, and rewriting from the stale
 /// copy would silently undo it.
 ///
@@ -445,8 +445,8 @@ pub(crate) fn persist_enabled(enabled: bool) -> PersistOutcome {
 
     if let Err(error) = write_atomic(&path, &updated) {
         PERSIST_FAILURES.fetch_add(1, Ordering::Relaxed);
-        // Baseline the watcher on what IS on disk, not on what we wanted to be there. Without
-        // this the failed write comes back a second later as an "edit" carrying the OLD value,
+        // Baseline the watcher on what is on disk, not on what we wanted to be there. Without
+        // this the failed write comes back a second later as an "edit" carrying the old value,
         // and the toggle the player just pressed flips itself back.
         if let Some(disk) = disk {
             hot.adopt(disk);
@@ -541,7 +541,7 @@ mod tests {
         assert_eq!(parsed.effect_id, 503350);
     }
 
-    /// RELOAD, the whole point: a changed key is picked up, and reported so the caller can reset
+    /// Reload, the whole point: a changed key is picked up, and reported so the caller can reset
     /// its edge state and the log can name both ends.
     #[test]
     fn a_changed_hotkey_is_picked_up_and_names_both_ends() {
@@ -572,7 +572,7 @@ mod tests {
         }
     }
 
-    /// RELOAD: a malformed value falls back to the PREVIOUS working key, not to the built-in
+    /// RELOAD: a malformed value falls back to the previous working key, not to the built-in
     /// default and not to nothing. A typo must leave the player with a hotkey that still works and
     /// a log line naming the typo.
     #[test]
@@ -611,9 +611,9 @@ mod tests {
         assert_eq!(config.effect_id, 503350);
     }
 
-    /// The config the USER actually has in the game directory, as of 2026-09-01: written by a
+    /// The config the user actually has in the game directory, as of 2026-09-01: written by a
     /// build that predates `enabled`, hand-edited since, carrying a commented-out alternative and
-    /// a trailing note on the live value. Every persistence test below runs against THIS rather
+    /// a trailing note on the live value. Every persistence test below runs against this rather
     /// than against the shipped default, because the shipped default is the easy case.
     const USER_CONFIG: &str = r#"# er-enemynpc-effects standalone DLL configuration.
 #
@@ -642,7 +642,7 @@ remove_on_disable = true
         )
     }
 
-    /// A toggle nobody has ever pressed is OFF. Not "keep whatever was there", not "on because
+    /// A toggle nobody has ever pressed is off. Not "keep whatever was there", not "on because
     /// the file is missing" -- a fresh install must not charm every enemy in the world.
     #[test]
     fn an_absent_enabled_key_means_off() {
@@ -686,7 +686,7 @@ remove_on_disable = true
         }
     }
 
-    /// THE DESTRUCTIVE-WRITE TEST. Persisting the toggle into the user's real file changes ONE
+    /// The destructive-write test. Persisting the toggle into the user's real file changes one
     /// line and copies every other byte through. The comments are this feature's only
     /// documentation and the commented-out `effect_id` is a choice they mean to come back to; a
     /// writer that renders the four settings it knows about deletes all of it on the first
@@ -740,7 +740,7 @@ remove_on_disable = true
         );
     }
 
-    /// ROUND TRIP: parse, toggle, write, re-parse. The value comes back and nothing else moved,
+    /// Round TRIP: parse, toggle, write, re-parse. The value comes back and nothing else moved,
     /// which is the assertion that the writer and the reader agree about the same file.
     #[test]
     fn the_toggle_round_trips_through_the_file() {
@@ -760,7 +760,7 @@ remove_on_disable = true
         assert!(!parse(&back).enabled);
     }
 
-    /// A file that is MISSING is the one case that licenses writing the shipped default -- that is
+    /// A file that is missing is the one case that licenses writing the shipped default -- that is
     /// how the config gets created. A file that is there and unreadable must not be: writing the
     /// default over it would turn "could not read your config" into "destroyed your config".
     #[test]
@@ -798,7 +798,7 @@ remove_on_disable = true
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// THE SELF-WRITE MUST NOT READ AS AN EDIT. Applying the text we just wrote to the config that
+    /// The self-write must not read as an edit. Applying the text we just wrote to the config that
     /// wrote it reports nothing -- because a reported change resets the key edge detector, and
     /// doing that once a second turns a held key into a keypress the player never made.
     #[test]
@@ -810,7 +810,7 @@ remove_on_disable = true
         assert!(update.is_quiet(), "our own write reported {update:?}");
     }
 
-    /// A hand edit that lands between the last poll and the write is CARRIED THROUGH, not
+    /// A hand edit that lands between the last poll and the write is carried through, not
     /// reverted. The write re-reads the file first, so their new hotkey is in the text we rewrite
     /// -- and applying the read-back is what puts it into force a second early instead of losing
     /// it. This is the whole reason `persist_enabled` re-reads rather than reusing the last poll's
@@ -821,7 +821,7 @@ remove_on_disable = true
 
         // The player saves a new hotkey; the DLL has not polled yet.
         let edited = USER_CONFIG.replace("ctrl+alt+c", "shift+f9");
-        // The keypress reads the file as it is NOW and rewrites one line of it.
+        // The keypress reads the file as it is now and rewrites one line of it.
         let written = write_enabled(&edited, true);
         assert!(
             written.contains("shift+f9"),

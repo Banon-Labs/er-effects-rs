@@ -4,9 +4,9 @@
 # Regenerates a small `.beads/PRIME.md` (see scripts/gen-beads-prime.py), then runs
 # `bd prime`, which emits that bounded file instead of the multi-MB default
 # (every-memory-body) dump. Keeping regeneration here means the index is always fresh
-# AND always bounded, and any bare `bd prime` (Pi, Codex, manual) also gets it.
+# and always bounded, and any bare `bd prime` (Pi, Codex, manual) also gets it.
 #
-# Regeneration is SKIPPED when PRIME.md is younger than BEADS_PRIME_MAX_AGE_SECONDS
+# Regeneration is skipped when PRIME.md is younger than BEADS_PRIME_MAX_AGE_SECONDS
 # (default 6h). It costs a 4.6 MB `bd memories --json` read plus a 212 KB `bd ready
 # --json` read, and this hook also fires on PreCompact -- the one moment where the
 # session is already under pressure and the memory index has not meaningfully changed
@@ -21,7 +21,7 @@ MAX_AGE="${BEADS_PRIME_MAX_AGE_SECONDS:-21600}"
 # Resolve the real bd binary rather than hard-coding one developer's home. A literal
 # /home/<someone>/.local/bin/bd here made this hook -- and therefore every SessionStart
 # and PreCompact -- fail outright for every other user on the machine.
-# The bare `bd` command is deliberately NOT a candidate: it is an interactive-shell guard
+# The bare `bd` command is deliberately not a candidate: it is an interactive-shell guard
 # *function* that errors out unless BD_REAL_BIN is exported, and hooks run non-interactively.
 resolve_bd() {
 	local candidate

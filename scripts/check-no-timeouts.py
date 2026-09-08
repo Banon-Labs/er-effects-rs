@@ -28,28 +28,28 @@ IGNORED_DIRECTORIES = {
 IGNORED_FILES = {
     Path("scripts/check-no-timeouts.py"),
     Path("scripts/test-no-timeouts.py"),
-    # Host-side VM GUI-automation tools -- NOT runtime probes. Keystroke pacing and
+    # Host-side VM GUI-automation tools -- Not runtime probes. Keystroke pacing and
     # display-wake waits are inherent to driving a Windows guest via `virsh send-key`
     # / `virsh screenshot`; there is no readiness primitive for "the guest input queue
     # drained" or "the display woke". The no-sleep rule targets runtime probes.
     Path("scripts/vm-sendkeys.py"),
     Path("scripts/vanilla-control-probe.py"),
-    # Per-DLL runtime sweep. Its `time.sleep` is the WATCH WINDOW -- the measurement itself --
+    # Per-DLL runtime sweep. Its `time.sleep` is the watch window -- the measurement itself --
     # not synchronization: the question it answers is "is this DLL's thread-group leader still
     # alive N seconds after launch", and N is the datum. Its stop conditions are real semaphores
     # (/proc leader state `Z`, or the process disappearing), never a timer; the window only bounds
     # how long a surviving game is watched. There is no readiness primitive for "nothing has gone
     # wrong yet", which is precisely what a boot verdict asserts.
     Path("scripts/sweep-dll-1170-runtime.py"),
-    # Sampling profiler / flight recorder, NOT a runtime probe that waits on a readiness
-    # signal. Its `time.sleep` is the sample PERIOD -- the measurement instrument itself --
+    # Sampling profiler / flight recorder, not a runtime probe that waits on a readiness
+    # signal. Its `time.sleep` is the sample period -- the measurement instrument itself --
     # not synchronization: the tool exists to record a thread's state at a fixed rate right
     # up to the instant that thread dies, and its stop condition is that observed death (a
     # real semaphore: /proc state Z or the task disappearing), never a timer. There is no
     # readiness primitive that can replace a sampling rate, and the event-driven alternative
     # (ptrace stops) is exactly what this tier avoids so it cannot perturb the game.
     Path("scripts/wine-thread-death-watch.py"),
-    # Steam lobby probes. Their `time.sleep` is a SAMPLE PERIOD, for the same reason as the
+    # Steam lobby probes. Their `time.sleep` is a sample period, for the same reason as the
     # profiler above: `RequestLobbyList` results arrive through a callback that lives inside
     # ersc.dll's Themida-virtualised region, so there is nothing to hook for "results are ready"
     # and no readiness primitive exists to replace re-reading at a fixed rate. Both stop on a real
@@ -58,9 +58,9 @@ IGNORED_FILES = {
     Path("scripts/frida-lobby-watch-members.py"),
     Path("scripts/frida-hunt-drive-query.py"),
     # Stack sampler for a wedged game, same class as wine-thread-death-watch.py above: its
-    # `time.sleep` is the CPU SAMPLE PERIOD, and its stop condition is an observed state (the
+    # `time.sleep` is the CPU sample period, and its stop condition is an observed state (the
     # process flatlining, or its leader going Z), never a timer. There is no readiness primitive
-    # for "the game has stopped doing work" -- measuring whether it has IS the tool.
+    # for "the game has stopped doing work" -- measuring whether it has is the tool.
     Path("scripts/er-wedge-stacks.py"),
 }
 SOURCE_SUFFIXES = {
@@ -102,7 +102,7 @@ PYTHON_SUBPROCESS_FUNCTIONS = {
 # Files allowed to call `thread::yield_now()` directly, and why each one is not the hazard the
 # `rust-unbounded-yield-spin` rule exists to catch.
 YIELD_SPIN_ALLOWED = {
-    # The helper itself: one yield per backed-off round IS the fix.
+    # The helper itself: one yield per backed-off round is the fix.
     Path("crates/er-game-base/src/wait.rs"),
     # Already bounded by an `Instant` deadline a few milliseconds out, not by hope.
     Path("crates/er-loading-portrait-core/src/portrait_shared.rs"),
@@ -238,8 +238,8 @@ def tracked_relative_paths() -> set[Path] | None:
     Untracked scratch files (git status ??) are -- exactly like the gitignored `.worktrees` sandboxes
     exempted above -- not part of the committed tree, so their sleep/timeout state must not gate a commit
     of tracked files. `git ls-files` reports the index, so a staged-but-uncommitted (about-to-be-committed)
-    file IS still gated; only pure `??` scratch is skipped. If git is unavailable, return None so the
-    caller fails OPEN and scans everything -- the gate must never silently disable itself.
+    file is still gated; only pure `??` scratch is skipped. If git is unavailable, return None so the
+    caller fails open and scans everything -- the gate must never silently disable itself.
     """
     try:
         result = subprocess.run(
@@ -257,7 +257,7 @@ def tracked_relative_paths() -> set[Path] | None:
 def candidate_relative_paths(tracked: set[Path] | None) -> Iterator[Path]:
     """Repo-relative paths to filter, taken from the cheapest source that is complete.
 
-    When git answered, the tracked set IS the answer: every path this gate can possibly scan is a
+    When git answered, the tracked set is the answer: every path this gate can possibly scan is a
     tracked one (the untracked-scratch filter below used to discard the rest anyway), so walking the
     filesystem to rediscover them is pure waste. Measured 2026-08-31 at loadavg ~9 on 16 cores:
     `REPO_ROOT.rglob("*")` enumerates 1,117,583 entries and `source_files()` took 69.2s, against
@@ -265,7 +265,7 @@ def candidate_relative_paths(tracked: set[Path] | None) -> Iterator[Path]:
     and `target` to find 1112 files that `git ls-files` lists in 0.011s. That is the same defect
     `audit-fromsoft-candidates.py` was found to have on the same day.
 
-    When git is UNAVAILABLE, fall back to the filesystem walk so the gate fails OPEN and still scans
+    When git is unavailable, fall back to the filesystem walk so the gate fails open and still scans
     everything -- it must never silently narrow itself just because git is missing. That walk PRUNES
     the ignored directories as it descends rather than filtering their contents afterwards, which is
     what `rglob` forced. Pruning cannot change the result: an entry under an ignored directory has
@@ -298,7 +298,7 @@ def source_files() -> list[Path]:
         if any(part in IGNORED_DIRECTORIES for part in relative.parts):
             continue
         path = REPO_ROOT / relative
-        # `git ls-files` reports the INDEX, so a tracked path can be absent from the working tree
+        # `git ls-files` reports the index, so a tracked path can be absent from the working tree
         # (deleted but not yet committed); a broken symlink reaches here from either source. Both
         # were excluded by the old walk's `is_file()` and are excluded by this one.
         if not path.is_file():
@@ -340,7 +340,7 @@ def shell_timeout_duration(tokens: list[str], timeout_index: int) -> float | Non
 
 
 def shell_read_timeout(tokens: list[str], read_index: int) -> tuple[bool, float | None]:
-    """Detect a `read -t` timeout flag by TOKEN, not substring.
+    """Detect a `read -t` timeout flag by token, not substring.
 
     Returns (has_timeout_flag, duration_seconds_or_None). A bare `read -r f` has no `-t` flag, so it
     must not be flagged even when the surrounding line contains a `-t` substring (e.g. `find -type f`).

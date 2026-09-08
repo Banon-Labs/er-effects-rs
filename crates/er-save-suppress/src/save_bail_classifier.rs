@@ -1,11 +1,11 @@
-// WHICH OPERAND REFUSED THE SAVE, from one sample of the SL device's request slot.
+// Which OPERAND refused the save, from one sample of the SL device's request slot.
 //
 // `include!`d into `lib.rs` like the blocks around it, and split out of it so the classifier and
 // its labels sit together rather than in the middle of the observers that consume them.
 //
 // The submit builders (`FUN_140e6ef60`, `FUN_140e6ec70`) open on
-// `iodev+0x10 == 0 && iodev+0x20 == 0` plus four operands the CALL SITE guarantees statically, so
-// when a lane returns 0 those two fields are the only ones that can have failed -- PROVIDED the
+// `iodev+0x10 == 0 && iodev+0x20 == 0` plus four operands the call site guarantees statically, so
+// when a lane returns 0 those two fields are the only ones that can have failed -- Provided the
 // lane reached the builder at all. `dispatch_refusal_is_the_mutex` in `save_state_device.rs` is
 // the clause that decides whether it did; read that first, then this.
 
@@ -13,16 +13,16 @@
 pub const SL_BAIL_UNSAMPLED: usize = 0;
 /// The device pointer or its fields could not be read; the sample proves nothing.
 pub const SL_BAIL_IODEV_UNREADABLE: usize = 1;
-/// `iodev+0x10` still holds an `SLSaveContent`: a previous SAVE request was never released.
+/// `iodev+0x10` still holds an `SLSaveContent`: a previous save request was never released.
 pub const SL_BAIL_SAVE_CONTENT_LATCHED: usize = 2;
-/// `iodev+0x20` holds a job and `iodev+0x18` holds load content: a completed LOAD was never
+/// `iodev+0x20` holds a job and `iodev+0x18` holds load content: a completed load was never
 /// consumed, and it is occupying the shared job slot the save needs.
 pub const SL_BAIL_LOAD_JOB_LATCHED: usize = 3;
 /// `iodev+0x20` holds a job with no content on either side -- an orphaned job.
 pub const SL_BAIL_JOB_LATCHED: usize = 4;
 /// Both guard operands are populated.
 pub const SL_BAIL_SAVE_CONTENT_AND_JOB_LATCHED: usize = 5;
-/// The precondition HOLDS, so the builder got past its guard: the refusal is the
+/// The precondition holds, so the builder got past its guard: the refusal is the
 /// NetworkHeap `SLSaveContent` allocation, or the lane bailed before calling the builder.
 pub const SL_BAIL_PRECONDITION_CLEAR: usize = 6;
 
@@ -39,7 +39,7 @@ pub fn sl_bail_reason_label(code: usize) -> &'static str {
     }
 }
 
-/// Say WHICH operand of the submit builders' precondition failed, from one slot sample.
+/// Say which operand of the submit builders' precondition failed, from one slot sample.
 ///
 /// Pure and total so the mapping is unit-testable on the host with no game attached: the
 /// whole point of the instrument is that a single decline names the culprit, and a

@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
-"""Harvest MSVC RTTI vtable -> class name from BOTH de-Arxan'd ER images and JOIN them by class.
+"""Harvest MSVC RTTI vtable -> class name from both de-Arxan'd ER images and join them by class.
 
-WHY THIS EXISTS
+Why this exists
 ---------------
-A struct field offset can only be cleared PER OBJECT. Every other join -- "some function reads
-that number", "a hooked function brackets it" -- joins on a NUMBER, and `0x50`/`0x88`/`0x90` are
+A struct field offset can only be cleared per object. Every other join -- "some function reads
+that number", "a hooked function brackets it" -- joins on a number, and `0x50`/`0x88`/`0x90` are
 field offsets in dozens of unrelated structures, so such a join manufactures confidence out of a
-coincidence. RTTI is the one identity that is established INDEPENDENTLY in each image: the class
+coincidence. RTTI is the one identity that is established independently in each image: the class
 name is FromSoft's own embedded type descriptor, so finding `.?AVMoveMapStep@CS@@` in 1.16.2 and
 again in 1.17 pairs two vtables without ever consulting a content-matched function map.
 
 That matters twice over:
   * the pairing survives a function whose body changed, and
-  * vtable slot N in both images is the SAME virtual method of the SAME class, so it pairs LEAF
+  * vtable slot N in both images is the same virtual method of the same class, so it pairs leaf
     functions -- which `.pdata` omits entirely and the content map therefore cannot contain.
 
 Output (default `docs/../scratchpad`, see --out-dir):
   rtti-1162.tsv        0x<vtable_va>\t<mangled>
   rtti-1170.tsv        same, for 1.17
-  rtti-joined.tsv      <class>\t0x<vt_1162>\t0x<vt_1170>   -- only classes with EXACTLY ONE
+  rtti-joined.tsv      <class>\t0x<vt_1162>\t0x<vt_1170>   -- only classes with exactly one
                        vtable in each image, so the pairing is unambiguous by construction.
 
 A class with several vtables (multiple inheritance emits one per base) is written to
@@ -78,8 +78,8 @@ def scan_cols(data: bytes) -> dict[int, tuple[str, int]]:
 def base_classes(data: bytes, cols: dict[int, tuple[str, int]]) -> dict[str, set[str]]:
     """`{class: set(its base classes)}` from the RTTI ClassHierarchyDescriptors.
 
-    WHY THIS IS NEEDED FOR A CLEARANCE, not just for tidiness. In a virtual method of class `C`,
-    `this` points at a `C` *or at anything derived from it*. So for a LEAF class the object is
+    Why this is needed for a clearance, not just for tidiness. In a virtual method of class `C`,
+    `this` points at a `C` *or at anything derived from it*. So for a leaf class the object is
     unambiguous and a field read off `this` is that class's field -- but for a shared base like
     `DLUT::DLReferenceCountObject` or `FD4::FD4Time` the same evidence describes whichever
     derived object the caller happened to pass, which is the offset-coincidence trap wearing an
@@ -121,11 +121,11 @@ def base_classes(data: bytes, cols: dict[int, tuple[str, int]]) -> dict[str, set
 def scan_image(data: bytes) -> dict[int, str]:
     """`{vtable_va: mangled_class_name}` for one flat image (file offset == RVA)."""
     n = len(data)
-    # PASS 1 -- CompleteObjectLocators. The x64 identifier is `u32[COL+0x14] == COL_rva`
+    # Pass 1 -- CompleteObjectLocators. The x64 identifier is `u32[COL+0x14] == COL_rva`
     # (`pSelf`), which no other structure satisfies by accident at 4-byte alignment.
     col_class = {va: nm for va, (nm, _chd) in scan_cols(data).items()}
 
-    # PASS 2 -- any qword equal to a COL VA is a vtable's [-8] slot.
+    # Pass 2 -- any qword equal to a COL VA is a vtable's [-8] slot.
     quads = np.frombuffer(data[: (n // 8) * 8], dtype="<u8")
     col_vas = np.fromiter(col_class.keys(), dtype="<u8", count=len(col_class))
     col_vas.sort()

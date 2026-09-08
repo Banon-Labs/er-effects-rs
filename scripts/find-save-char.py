@@ -3,8 +3,8 @@
 character with a given name, and report that character's slot, level, runes, and
 highest weapon upgrade level.
 
-WHY THIS EXISTS (bd build-finder-tool-dont-skip-solved-problems-2026-07-20):
-the save-manager corpus dirs are labeled by the manager's OWN names, NOT the
+Why this exists (bd build-finder-tool-dont-skip-solved-problems-2026-07-20):
+the save-manager corpus dirs are labeled by the manager's own names, not the
 in-game character name, so a directory-name grep for "angrE" finds nothing even
 though the character exists. This reads the in-game name out of each save's
 plaintext BND4 body (ER PC saves are plaintext, md5-per-slot) and maps
@@ -14,12 +14,12 @@ Decode reuses the evidence-bound scripts/save-slot-oracle.py (name @ player+0x94
 level @ player+0x60), the same decoder enumerate-valid-saves.py trusts. Highest
 weapon upgrade is derived from the slot's GaItem table (see max_weapon_upgrade).
 
-CACHE (findable + clearable, self-invalidating -- see the "Decode cache" section
+Cache (findable + clearable, self-invalidating -- see the "Decode cache" section
 below): the whole-corpus scan is slow (~70 files x ~26 MB, 10 slots each). Decoded
 per-slot identity is cached on disk under the repo's gitignored target/ tree at
     target/save-char-index/index.json
 keyed by each save's absolute path + st_size + st_mtime_ns, so a changed save is
-NEVER served stale (it re-decodes). The cache path is printed to stderr on every
+never served stale (it re-decodes). The cache path is printed to stderr on every
 run. Clear it with `--clear-cache` (or `rm -rf target/save-char-index`); bypass it
 with `--no-cache`. Only the index JSON under target/ is ever written -- the save
 files themselves are strictly read-only.
@@ -44,7 +44,7 @@ HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent
 
 # --- Decode cache ----------------------------------------------------------
-# Findable, clearable, self-invalidating on save change. The ONLY thing written
+# Findable, clearable, self-invalidating on save change. The only thing written
 # is this index JSON; save files stay read-only. Location is fixed and obvious
 # (under the gitignored target/ tree) but env-overridable for reuse in other
 # layouts. Each entry keys on abspath + st_size + st_mtime_ns, so a save that is
@@ -120,11 +120,11 @@ def _load_oracle():
 
 # --- highest weapon upgrade -------------------------------------------------
 # ER weapon reinforcement is encoded in the weapon's param id (fullId = baseId +
-# reinforceLevel, reinforceLevel 0..25). The value LIVES in the slot's GaItem
-# table, but that table has NO local structural spec here (docs/bnd4-save-format.md
+# reinforceLevel, reinforceLevel 0..25). The value lives in the slot's GaItem
+# table, but that table has no local structural spec here (docs/bnd4-save-format.md
 # stops at the container; the SL2.bt internal ChrAsm/GaItem struct is not vendored).
-# A SLOT-WIDE byte scan CANNOT isolate it: empirically a fresh level-7 character
-# yields 16k+ "category-0" and 2.7k "0x8000_0000" (ash-of-war, NOT weapon) pair
+# A slot-wide byte scan cannot isolate it: empirically a fresh level-7 character
+# yields 16k+ "category-0" and 2.7k "0x8000_0000" (ash-of-war, not weapon) pair
 # matches -- pure noise -- so any %100 over them fabricates a bogus "+20". Rather
 # than emit a fabricated number, this returns None until it is backed by the real
 # GaItem-table offset+stride (or ChrAsm equipped-weapon param ids). See bd
@@ -142,7 +142,7 @@ def max_weapon_upgrade(slot_data: bytes) -> int | None:
 
 
 def decode_file_slots(oracle, path: Path, data: bytes) -> list[dict[str, Any]]:
-    """Decode every OCCUPIED slot of one save into cacheable, query-independent rows.
+    """Decode every occupied slot of one save into cacheable, query-independent rows.
 
     Mirrors the per-slot filtering scan_file used before caching existed, so the
     cached rows are exactly what a fresh scan would have produced. Query matching

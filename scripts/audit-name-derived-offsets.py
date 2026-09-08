@@ -1,72 +1,72 @@
 #!/usr/bin/env python3
 """Census: every hand-written field-offset constant, with the provenance its comment claims.
 
-THE CLASS THIS LOOKS FOR
+The class this looks for
 ------------------------
 `CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` was 0x40 for its whole life and the field is at 0x48. It
-was never measured -- it was back-solved from a member NAME in the sibling `fromsoftware-rs`
+was never measured -- it was back-solved from a member name in the sibling `fromsoftware-rs`
 crate (`unk48` sits after `requested_state`, so "current_state must be 0x40"). That member is
 itself misnamed. A wrong-but-readable offset returns a legal value of the right width forever:
 no fault, no refusal, and no 1.16.2-vs-1.17 drift for a drift check to see, because it is
 equally wrong in both builds.
 
-So this census does not ask "is the value right" -- it cannot know that. It asks WHERE THE VALUE
-CAME FROM, by reading the comment block above each definition and bucketing it:
+So this census does not ask "is the value right" -- it cannot know that. It asks where the value
+came from, by reading the comment block above each definition and bucketing it:
 
-  MEASURED   -- cites an address, an instruction, a witness function, an alignment result
-  NAME       -- cites a struct member, an `unkNN`, `offset_of!`, a sibling-crate declaration
-  NONE       -- no provenance at all (weaker than wrong provenance, not stronger)
+  Measured   -- cites an address, an instruction, a witness function, an alignment result
+  name       -- cites a struct member, an `unkNN`, `offset_of!`, a sibling-crate declaration
+  none       -- no provenance at all (weaker than wrong provenance, not stronger)
 
 Run it to re-derive the sweep; it is a report, not a gate. The gate that owns the findings is
 `scripts/check-object-field-offsets-1170.py`.
 
-BYTE COVERAGE, THE SECOND QUESTION
+Byte coverage, the second question
 ----------------------------------
-`pair-object-field-drift.py` reports the DISPLACEMENT of each memory operand, which is the right
+`pair-object-field-drift.py` reports the displacement of each memory operand, which is the right
 unit for "did the field move". It is the wrong unit for "is this byte a field at all": a
-`mov word [rbx+0xbc8],0` initialises 0xbc8 AND 0xbc9, and only 0xbc8 appears in the displacement
-set. Absence from that set is therefore not absence of a field -- unless nothing WIDE ENOUGH
+`mov word [rbx+0xbc8],0` initialises 0xbc8 and 0xbc9, and only 0xbc8 appears in the displacement
+set. Absence from that set is therefore not absence of a field -- unless nothing wide enough
 covers the byte either. `--cover` answers that: for one function extent and one list of byte
 offsets, every access whose `[disp, disp+size)` interval contains the byte.
 
 This is the distinction the `CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` finding turned on. 0x40 was not
-merely absent from the displacement set; NOTHING in the step-template constructor covered it,
+merely absent from the displacement set; Nothing in the step-template constructor covered it,
 because the slot belongs to a different constructor entirely.
 
-WHICH ROWS THE NUMBER IS ABOUT, THE THIRD QUESTION
+Which rows the number is about, the third question
 -------------------------------------------------
 Provenance is only half of an actionable number. The first census reported `NONE=654`, and that
 population contained `DLL_PROCESS_ATTACH = 1` (the name regex matched the `_AT` inside `ATTACH`),
 the whole Windows x64 `CONTEXT` register file, PE header offsets, SPIR-V enum values, and offsets
 into buffers this workspace itself defines. None of those can be wrong in the way
-`CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` was wrong -- an unmeasured displacement onto a LIVE GAME
-OBJECT, returning a legal value of the right width forever.
+`CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` was wrong -- an unmeasured displacement onto a live game
+object, returning a legal value of the right width forever.
 
-So each row also gets a KIND, and the headline number counts only `GAME`:
+So each row also gets a kind, and the headline number counts only `GAME`:
 
-  GAME          an ELDEN RING object-field offset; the population this census exists to size
+  Game          an ELDEN RING object-field offset; the population this census exists to size
   OS-ABI        Windows / MSVC-ABI / PE-COFF layout -- not FromSoftware's, cannot drift with a
                 game patch, and verified against the published structure in the kinds table
-  MACHINE-CODE  a byte offset inside an x86-64 instruction encoding
-  OUR-OWN       an offset into a structure this workspace defines
-  FORMAT        an offset into a file this workspace parses
-  NOT-AN-OFFSET an enum value, a count, a limit -- the name regex over-matched
+  machine-code  a byte offset inside an x86-64 instruction encoding
+  our-own       an offset into a structure this workspace defines
+  format        an offset into a file this workspace parses
+  not-an-offset an enum value, a count, a limit -- the name regex over-matched
 
 `GAME` is the DEFAULT: a row is only demoted by the name-shape rule (below) or by an explicit
 line in `scripts/offset-census-kinds.tsv` that says why, which is a line a reviewer can argue
 with. Widening the regex instead would shrink the number without making it truer and leave no
 trace of which rows went.
 
-AND ONE MORE PROVENANCE SOURCE
+And one more provenance source
 ------------------------------
 `scripts/check-object-field-offsets-1170.py::PINNED_CONSTANTS` is a table of constants that gate
 has already measured against both images and re-measures every run. A bare comment above such a
 constant is not missing provenance -- the provenance lives in the gate. Those rows are imported
 (not copied) and bucketed `PINNED`.
 
-USAGE
-    python3 scripts/audit-name-derived-offsets.py [--bucket NAME|NONE|MEASURED|PINNED]
-    python3 scripts/audit-name-derived-offsets.py --kind GAME     # just the counted population
+Usage
+    python3 scripts/audit-name-derived-offsets.py [--bucket name|none|measured|pinned]
+    python3 scripts/audit-name-derived-offsets.py --kind game     # just the counted population
     python3 scripts/audit-name-derived-offsets.py --show-excluded # what the shape rule dropped
     python3 scripts/audit-name-derived-offsets.py --selftest
     python3 scripts/audit-name-derived-offsets.py --cover 0x140675ea0:6895:0x140676cf0:6895 \
@@ -91,7 +91,7 @@ import function_extent  # noqa: E402 - repo-local, and the sys.path line above i
 REPO = Path(__file__).resolve().parent.parent
 EXCLUDED_DIRS = (".git", "target", "node_modules", ".worktrees", ".claude")
 
-# Crates whose "offsets" are FILE-FORMAT offsets, checked by parsing real files, not by reading
+# Crates whose "offsets" are file-format offsets, checked by parsing real files, not by reading
 # live game memory. A wrong value there fails a parse; it does not silently return a neighbour.
 FILE_FORMAT_CRATES = (
     "crates/er-save-loader/",
@@ -111,9 +111,9 @@ GATE = Path(__file__).resolve().parent / "check-object-field-offsets-1170.py"
 # `DLL_PROCESS_ATTACH`, `NO_PATCH_ATTEMPTS`, `SESSION_STATE_OFFER_RECEIVED` and `MAX_BACK_OFF_SHIFT`
 # into the population, so the test is on underscore-delimited TOKENS:
 #
-#   * a token that is exactly OFFSET / OFFSETS / OFS, anywhere in the name; or
-#   * a LAST token of OFF / AT / OFS / OFFSET -- trailing, so `SAY_AT_MOST` is not an offset; or
-#   * a token FIELD followed by a numeric token, which is how a nameless field is spelled here
+#   * a token that is exactly offset / OFFSETS / OFS, anywhere in the name; or
+#   * a last token of off / at / OFS / offset -- trailing, so `SAY_AT_MOST` is not an offset; or
+#   * a token field followed by a numeric token, which is how a nameless field is spelled here
 #     (`..._RENDER_READY_FIELD_754`), while `TEXT_FIELD_CHARACTER_ID` is not.
 OFFSET_TOKENS = ("OFFSET", "OFFSETS", "OFS")
 OFFSET_TAIL_TOKENS = ("OFF", "AT", "OFS", "OFFSET", "OFFSETS")
@@ -121,7 +121,7 @@ NUMERIC_TOKEN = re.compile(r"^(?:0X)?[0-9A-F]+$")
 
 
 def offset_shaped(name: str) -> bool:
-    """Whether the NAME claims to be a byte offset. See `OFFSET_TOKENS` for why tokens, not text."""
+    """Whether the name claims to be a byte offset. See `OFFSET_TOKENS` for why tokens, not text."""
     tokens = name.split("_")
     if any(t in OFFSET_TOKENS for t in tokens):
         return True
@@ -191,9 +191,9 @@ NAME_TELL = re.compile(
 def rust_files():
     for p in sorted(REPO.rglob("*.rs")):
         rel = p.relative_to(REPO).as_posix()
-        # RELATIVE parts, not absolute ones. `REPO` is this script's own checkout, and a
+        # Relative parts, not absolute ones. `REPO` is this script's own checkout, and a
         # `git worktree` checkout lives at `<repo>/.worktrees/<name>` -- so every absolute path
-        # under it contains `.worktrees` and the old test excluded the ENTIRE corpus. The audit
+        # under it contains `.worktrees` and the old test excluded the entire corpus. The audit
         # then found zero constants and `--selftest` failed with "kinds table names constants
         # that no longer exist", listing all 200-odd of them: a gate that is vacuous in exactly
         # the place a closure gets verified, reporting it as a mass deletion.
@@ -214,7 +214,7 @@ def comment_block(lines, idx):
             blanks = 0
             i -= 1
             continue
-        # A doc block broken by ONE blank line is still the same block. Two ends it.
+        # A doc block broken by one blank line is still the same block. Two ends it.
         if not s and blanks == 0 and out:
             blanks = 1
             i -= 1
@@ -261,9 +261,9 @@ NON_OBJECT_BASES = ("rip", "rsp", "rbp", "esp", "ebp")
 def _reg_roots(capstone):
     """`{sub-register name: 64-bit root name}` for the general-purpose file.
 
-    Writing `ebx` destroys `rbx`, so alias tracking that compares register NAMES has to fold
+    Writing `ebx` destroys `rbx`, so alias tracking that compares register names has to fold
     `ebx`/`bx`/`bl` onto `rbx` before it can decide whether an alias survived an instruction. The
-    families are spelled out here rather than guessed from the name, but every member is CHECKED
+    families are spelled out here rather than guessed from the name, but every member is checked
     against capstone's own `X86_REG_*` table -- a typo would otherwise create a register that
     simply never matches, which fails silently in the safe-looking direction (aliases that are
     never invalidated).
@@ -291,15 +291,15 @@ def _reg_roots(capstone):
 def covering_accesses(capstone, md, blob, va, end, bases, bytes_wanted):
     """Every access whose `[disp, disp + operand_size)` interval contains each wanted byte.
 
-    THE BLIND SPOT THIS FOLLOWS A `lea` TO CLOSE
+    The blind spot this follows a `lea` to close
     --------------------------------------------
     A `this`-relative displacement census sees only what is written through `this`. Where the
     compiler hands a whole embedded sub-object to a register in one `lea` and writes the interior
-    through THAT register, every interior field is invisible:
+    through that register, every interior field is invisible:
 
         lea   rbx, [rsi+0xb98]     ; the DLDateTime at GameMan+0xb98
         mov   qword [rbx], r14     ; -> 0xb98   -- visible, disp is off `this`
-        and   qword [rbx+8], r12   ; -> 0xba0   -- INVISIBLE, disp is off rbx
+        and   qword [rbx+8], r12   ; -> 0xba0   -- Invisible, disp is off rbx
 
     0xba0 was named `LOAD_HANDLE` from the shape of whatever value sat there, and 0xdf0 was named
     a "resident device" pointer the same way, because neither ever appeared in a displacement set
@@ -308,7 +308,7 @@ def covering_accesses(capstone, md, blob, va, end, bases, bytes_wanted):
 
     So `alias` maps a 64-bit register root to `(root base, displacement from it)`, established by
     a `lea` off a tracked base (or off another alias, which chains), and destroyed the moment
-    anything else writes that register. An access through an alias is reported at its EFFECTIVE
+    anything else writes that register. An access through an alias is reported at its effective
     displacement, with the `lea` that established it printed alongside so the attribution can be
     audited rather than taken on trust.
 
@@ -326,18 +326,18 @@ def covering_accesses(capstone, md, blob, va, end, bases, bytes_wanted):
         is_lea = insn.mnemonic == "lea"
         text = f"{insn.mnemonic} {insn.op_str}"
 
-        # (a) RECORD, before anything this instruction writes can invalidate the map.
+        # (a) record, before anything this instruction writes can invalidate the map.
         #     `mov rbx,[rbx+8]` both reads through an alias and destroys it, which is why
         #     recording has to happen before invalidation.
         #
-        #     A `lea` is recorded too, but TAGGED `address-of`. It is not a read or a write of
+        #     A `lea` is recorded too, but tagged `address-of`. It is not a read or a write of
         #     that memory, so it must not be read as one -- but it is still a witness that a
-        #     field is there, and usually the STRONGEST one available for an embedded object:
+        #     field is there, and usually the strongest one available for an embedded object:
         #     `lea rcx,[rbx+0x2b0]` is the PlayerGameData constructor taking the address of the
         #     `equipment` sub-object to construct it in place, which is exactly what the gate's
         #     `equipment` row at 0x2b0 rests on. Dropping `lea` entirely (the first version of
         #     this change) silently took the only covering access away from PGD 0x2b0 and 0x960
-        #     and reported a COVERAGE DROP as if it were a correction.
+        #     and reported a coverage drop as if it were a correction.
         #
         #     A `lea`'s operand size is meaningless -- capstone reports the addressed type, not a
         #     transfer width -- so an address-of witness covers exactly its own byte.
@@ -360,7 +360,7 @@ def covering_accesses(capstone, md, blob, va, end, bases, bytes_wanted):
                 if disp <= b < disp + width:
                     hits[b].append((insn.address, text, disp, width, chain, is_lea))
 
-        # (b/c) INVALIDATE every register this instruction writes, then re-establish the alias a
+        # (b/c) invalidate every register this instruction writes, then re-establish the alias a
         #       `lea` creates. The directive's order is (b) then (c); doing it the other way round
         #       is the same rule -- a `lea`'s destination is written, so (c) would otherwise undo
         #       (b) on the very instruction that establishes the alias.
@@ -380,7 +380,7 @@ def covering_accesses(capstone, md, blob, va, end, bases, bytes_wanted):
         if dest.type != capstone.x86.X86_OP_REG or memop.type != capstone.x86.X86_OP_MEM:
             continue
         dest_root = roots.get(insn.reg_name(dest.reg))
-        # An INDEXED lea (`lea rbx,[rsi+rax*4]`) has no single constant displacement from the
+        # An indexed lea (`lea rbx,[rsi+rax*4]`) has no single constant displacement from the
         # base, so it establishes nothing rather than a wrong something.
         if dest_root is None or memop.mem.base == 0 or memop.mem.index != 0:
             continue
@@ -398,9 +398,9 @@ def covering_accesses(capstone, md, blob, va, end, bases, bytes_wanted):
 
 
 def cover_one(capstone, md, blob, va, length, bases, bytes_wanted):
-    """`covering_accesses` over ONE function, bounded by its extent rather than by `length`.
+    """`covering_accesses` over one function, bounded by its extent rather than by `length`.
 
-    `length` is only a CAP on top of the extent. `body_slice_end` returning None is a refusal, not
+    `length` is only a cap on top of the extent. `body_slice_end` returning None is a refusal, not
     an invitation to substitute the byte count -- an unknown extent is exactly the case where a
     forward decode invents instructions.
     """
@@ -445,7 +445,7 @@ def collect():
 
     Precedence, strongest provenance first: a comment that cites a measurement, then the gate's
     pin table, then the kind overrides, then the name-shape rule. A row that survives all of that
-    is an unprovenanced GAME-object offset, which is the number this tool exists to report.
+    is an unprovenanced game-object offset, which is the number this tool exists to report.
     """
     overrides = load_kinds()
     pinned = load_pinned()
@@ -477,17 +477,17 @@ def collect():
     return rows, overrides
 
 
-# The known-answer test for `lea`-following, kept as a pair of REAL offsets in the GameMan
+# The known-answer test for `lea`-following, kept as a pair of real offsets in the GameMan
 # constructor rather than a synthetic byte string, because the class this closes is about what a
 # real compiler does with a real embedded sub-object.
 #
 #   0xba0  the upper half of the DLDateTime at 0xb98, written `and %r12,0x8(%rbx)` after
 #          `lea 0xb98(%rsi),%rbx`. It was called a LOAD_HANDLE until it was measured.
-#   0xdf0  the LENGTH of the DLString inside the FD4FilePathBase at 0xdd0, three `lea`s deep
-#          (rsi -> 0xdd0 -> 0xdd8 -> 0xde0), so it also proves the alias CHAINS. It was called a
+#   0xdf0  the length of the DLString inside the FD4FilePathBase at 0xdd0, three `lea`s deep
+#          (rsi -> 0xdd0 -> 0xdd8 -> 0xde0), so it also proves the alias chains. It was called a
 #          "resident device" pointer until it was measured.
 #
-# Both must be INVISIBLE to a `this`-relative reading and VISIBLE once the `lea` is followed; the
+# Both must be invisible to a `this`-relative reading and visible once the `lea` is followed; the
 # first half is what makes this a regression test rather than a tautology.
 LEA_KNOWN_ANSWER = (0xBA0, 0xDF0)
 
@@ -567,7 +567,7 @@ def selftest(rows, overrides):
             print(f"    {g}")
         return 1
 
-    # Values the OS-ABI reasons assert, so an excused row is a VERIFIED row rather than a shrug.
+    # Values the OS-ABI reasons assert, so an excused row is a verified row rather than a shrug.
     documented = {}
     for n, (k, t) in overrides.items():
         if k != "OS-ABI" or "=" not in t:
@@ -593,7 +593,7 @@ def selftest(rows, overrides):
         if offset_shaped(name):
             print(f"FAIL: the name-shape rule accepts {name}, which is not an offset")
             return 1
-    # ...and the two shapes it must NOT reject.
+    # ...and the two shapes it must not reject.
     for name in ("TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_754", "CTX_RIP_OFF",
                  "GAME_MAN_FIELD_B73_OFFSET", "PGD_AT"):
         if not offset_shaped(name):

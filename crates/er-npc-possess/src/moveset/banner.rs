@@ -1,4 +1,4 @@
-//! WHAT THE FOUR BUTTONS DO RIGHT NOW, on screen, while you are wearing something.
+//! What the four buttons do right now, on screen, while you are wearing something.
 //!
 //! # The defect this exists to close
 //!
@@ -15,13 +15,13 @@
 //! file beside the game executable and to `er-npc-possess.derived.toml`, neither of which is
 //! visible from inside a full-screen game.
 //!
-//! That is worse than a missing feature, because the page is a MODE. Being on set 7 of 17 with
+//! That is worse than a missing feature, because the page is a mode. Being on set 7 of 17 with
 //! nothing on screen saying so makes every button press a guess, and the only way back to a known
 //! state is to release and re-possess. A mode with no indicator is a mode you cannot use.
 //!
 //! # What is in here and what is not
 //!
-//! This module is the STATE and the TEXT, and both are pure: [`Banner::from_dispatcher`] reads a
+//! This module is the state and the text, and both are pure: [`Banner::from_dispatcher`] reads a
 //! [`Dispatcher`] and produces the lines, and the host tests assert them without a game. The
 //! drawing is [`crate::overlay`], which is windows-only and paints these same strings onto the
 //! process's one imgui context.
@@ -30,7 +30,7 @@
 //!
 //! The render thread runs on `Present` -- 60 to 144 times a second -- and the game thread owns the
 //! [`Dispatcher`] inside the possession engine's lock. Reaching across that lock from the renderer
-//! would put the game's frame behind the overlay's; instead the game thread PUBLISHES a [`Banner`]
+//! would put the game's frame behind the overlay's; instead the game thread publishes a [`Banner`]
 //! whenever the content changes, which is exactly three moments:
 //!
 //! * a possession starts,
@@ -53,16 +53,16 @@ use crate::moveset::dispatch::{Dispatcher, Hand, Input};
 use crate::moveset::table::Reach;
 use crate::settings::{Bucket, ButtonSettings};
 
-/// How many DRAWN FRAMES a hand's header stays highlighted after its page key turned it.
+/// How many drawn frames a hand's header stays highlighted after its page key turned it.
 ///
 /// The complaint this module answers is "I cannot see the change happen", so the highlight is the
 /// half of the feature with a deadline: long enough to be noticed by someone whose eyes were on
 /// the creature rather than on the corner, short enough that two taps in a row read as two
 /// separate events rather than as one continuous glow.
 ///
-/// FRAMES RATHER THAN A WALL-CLOCK DURATION, and not only because `scripts/check-no-timeouts.py`
+/// Frames rather than a wall-clock duration, and not only because `scripts/check-no-timeouts.py`
 /// bans `Instant::elapsed()` as a gate (it names frame counters as the replacement). A frame
-/// count is the RIGHT clock for something whose whole existence is "was this on screen long
+/// count is the right clock for something whose whole existence is "was this on screen long
 /// enough to be seen": it cannot burn down while the game is minimised, stalled on a load, or
 /// otherwise not presenting, which is exactly when a wall-clock highlight would expire unseen.
 /// The cost is that its duration tracks framerate -- 3.0 s at 60 fps, 1.25 s at 144 -- and both
@@ -71,7 +71,7 @@ pub(crate) const FLASH_FRAMES: u32 = 180;
 
 /// What one button leads with on the current page.
 ///
-/// `lead` is `None` when the bucket that button is bound to is EMPTY on this creature -- a real
+/// `lead` is `None` when the bucket that button is bound to is empty on this creature -- a real
 /// and common state (25 of the 408 creatures in the shipped table have no attack animations at
 /// all), and the reason the panel draws `--` rather than omitting the row. A button with nothing
 /// behind it is information; a missing line is a rendering bug the player then has to rule out.
@@ -100,7 +100,7 @@ impl Lead {
                 let _ = write!(out, "{fire}");
                 // Reach is why a press can do nothing at the distance you are standing at, so it
                 // earns its six characters. `Unknown` is the generator declining to measure, and
-                // such a move is offered in EVERY band -- printing "unknown" there would read as a
+                // such a move is offered in every band -- printing "unknown" there would read as a
                 // fault rather than as "no restriction", so it is left off.
                 if self.reach != Reach::Unknown {
                     let _ = write!(out, " {}", self.reach.name());
@@ -129,7 +129,7 @@ impl BannerHand {
     /// `R 2/17`, `R 1/1 (one set)`, or `R no attack sets` -- three states, three sentences.
     ///
     /// The last two are spelled out rather than left as a bare `1/1` and a blank, because a player
-    /// who presses the page key and sees no change needs to be told WHICH reason it is: the key is
+    /// who presses the page key and sees no change needs to be told which reason it is: the key is
     /// unbound, this creature has a single set, or it has no moveset at all. `1/1` alone says none
     /// of the three, and a missing line says nothing while looking like a rendering fault.
     pub(crate) fn header(&self) -> String {
@@ -156,7 +156,7 @@ pub(crate) struct Banner {
     /// The creature's name, or `""` when the catalogue does not name this id.
     pub(crate) name: &'static str,
     /// Carried so the footer can name the keys that page, live, rather than the shipped defaults.
-    /// A player who rebound them needs the panel to say what THEY bound.
+    /// A player who rebound them needs the panel to say what they bound.
     pub(crate) buttons: ButtonSettings,
     pub(crate) hands: [BannerHand; 2],
     /// The hand whose page just turned, if this publish was a page turn.
@@ -200,12 +200,12 @@ impl Banner {
         }
     }
 
-    /// The panel for a creature with NO shipped moveset: four buttons and nothing behind any of
+    /// The panel for a creature with no shipped moveset: four buttons and nothing behind any of
     /// them.
     ///
     /// Publishing this rather than publishing nothing is the whole point. `mode = "lock_on"` will
     /// happily wear a character the offline table has never heard of, and for that possession the
-    /// four attack buttons genuinely do nothing -- but an ABSENT panel is indistinguishable, from
+    /// four attack buttons genuinely do nothing -- but an absent panel is indistinguishable, from
     /// the player's chair, from a panel that failed to draw. That confusion is the defect this
     /// module exists to end, so it must not be reintroduced on the one creature where the answer
     /// is "there is nothing to show".
@@ -244,7 +244,7 @@ impl Banner {
         }
     }
 
-    /// The keys that page, as they are bound RIGHT NOW, and only for hands that HAVE a second
+    /// The keys that page, as they are bound right now, and only for hands that have a second
     /// set.
     ///
     /// `None` when neither hand can be paged on this creature. A footer naming the key that pages
@@ -291,11 +291,11 @@ static ENABLED: AtomicBool = AtomicBool::new(true);
 /// Lock-free "is there anything to draw", so a session that never possesses anything never takes
 /// [`PUBLISHED`] at all.
 ///
-/// THE ORDER AROUND IT IS THE POINT: [`publish`] stores the banner and THEN raises this, and
-/// [`clear`] lowers this and THEN drops the banner. Both put the false answer on the side that
-/// costs nothing. A false POSITIVE is therefore impossible -- this is never true while
+/// The order around it is the POINT: [`publish`] stores the banner and then raises this, and
+/// [`clear`] lowers this and then drops the banner. Both put the false answer on the side that
+/// costs nothing. A false positive is therefore impossible -- this is never true while
 /// [`PUBLISHED`] is `None`, so the renderer never takes the lock to be told there is nothing
-/// there. A false NEGATIVE can last exactly one frame, at the instant of a publish, and its whole
+/// there. A false negative can last exactly one frame, at the instant of a publish, and its whole
 /// consequence is that the panel appears 8-16 ms later than it could have.
 static SHOWING: AtomicBool = AtomicBool::new(false);
 static PUBLISHED: Mutex<Option<Published>> = Mutex::new(None);
@@ -352,9 +352,9 @@ pub(crate) fn clear() {
 /// The current panel, and whether the hand named by `Banner::flash` is still highlighted. `None`
 /// when nothing is possessed or `[hud] pages` is off.
 ///
-/// CONSUMES ONE FRAME of that highlight, which is why it is `take_` and not `get_`: exactly one
+/// Consumes one frame of that highlight, which is why it is `take_` and not `get_`: exactly one
 /// caller may call it per drawn frame, and that caller is the renderer. Counting here rather than
-/// on the game thread is deliberate -- the highlight is spent by being SEEN, so a frame the
+/// on the game thread is deliberate -- the highlight is spent by being seen, so a frame the
 /// overlay did not draw (minimised, mid-load, `[hud] pages` off for a moment) must not spend any
 /// of it. The early return above is what makes the last of those true.
 pub(crate) fn take_frame() -> Option<(Banner, bool)> {
@@ -388,7 +388,7 @@ mod tests {
         )
     }
 
-    /// The whole complaint in one assertion: the set the player is on has to be IN the text.
+    /// The whole complaint in one assertion: the set the player is on has to be in the text.
     #[test]
     fn the_header_names_the_set_and_how_many_there_are() {
         let mut engine = dispatcher();
@@ -405,7 +405,7 @@ mod tests {
         assert_eq!(turned.flash, Some(Hand::Right));
     }
 
-    /// A hand with one set must SAY so. `1/1` on its own is indistinguishable from a key that
+    /// A hand with one set must say so. `1/1` on its own is indistinguishable from a key that
     /// never fired, which is the failure mode this whole module exists to end.
     #[test]
     fn a_hand_with_one_set_says_so_rather_than_printing_a_bare_one_of_one() {
@@ -437,7 +437,7 @@ mod tests {
         assert!(light.line().contains("light"), "{}", light.line());
     }
 
-    /// The footer names the keys that are BOUND, not the shipped defaults, mentions only the
+    /// The footer names the keys that are bound, not the shipped defaults, mentions only the
     /// hands that actually have a second set, and disappears when neither does.
     #[test]
     fn the_footer_names_the_bound_page_keys_and_is_omitted_when_nothing_pages() {
@@ -494,7 +494,7 @@ mod tests {
     /// `[hud] pages = false` must hide the panel without the possession having to end, and turning
     /// it back on must restore it -- the publish is not thrown away, only withheld.
     ///
-    /// One test rather than several because all of these drive the SAME process-wide globals, and
+    /// One test rather than several because all of these drive the same process-wide globals, and
     /// `cargo test` runs test functions in parallel threads; splitting them would make them race
     /// each other for the one `PUBLISHED`.
     #[test]
@@ -522,7 +522,7 @@ mod tests {
             "and give it back without a republish"
         );
 
-        // A PAGE TURN LIGHTS THE HAND, and it stays lit for exactly FLASH_FRAMES drawn frames --
+        // A page turn lights the hand, and it stays lit for exactly FLASH_FRAMES drawn frames --
         // not one more, so two taps in a row read as two events.
         engine.turn_page(Hand::Right);
         publish(Banner::from_dispatcher(
@@ -539,7 +539,7 @@ mod tests {
         let (_, lit) = take_frame().expect("the panel outlives its highlight");
         assert!(!lit, "the highlight ends; the panel does not");
 
-        // Hiding it does not SPEND the highlight: a frame nobody drew is a frame nobody saw.
+        // Hiding it does not spend the highlight: a frame nobody drew is a frame nobody saw.
         publish(Banner::from_dispatcher(
             9001,
             "",

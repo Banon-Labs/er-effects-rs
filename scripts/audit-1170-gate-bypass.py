@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
-"""Every way a cdylib can reach an ELDEN RING game address WITHOUT the 1.17 version gate.
+"""Every way a cdylib can reach an ELDEN RING game address without the 1.17 version gate.
 
-WHY THIS EXISTS
+Why this exists
 ---------------
-Two crates were caught bypassing the gate on 2026-08-30 in two different ways, and BOTH were
+Two crates were caught bypassing the gate on 2026-08-30 in two different ways, and both were
 invisible to the audits that were already running -- which reported zero:
 
-  * `er-seamless-bugfixes` byte-checked a target prologue at a raw `base + guard.rva` BEFORE
+  * `er-seamless-bugfixes` byte-checked a target prologue at a raw `base + guard.rva` before
     anything translated it. The gate existed downstream and never ran, so on 1.17 the check
-    compared unrelated code, logged "byte mismatch", and installed 0/3 guards. An ORDERING bug.
-  * `er-reload-trace` imported the RAW `er_hook::MH_CreateHook` / `MH_EnableHook` externs, so
+    compared unrelated code, logged "byte mismatch", and installed 0/3 guards. An ordering bug.
+  * `er-reload-trace` imported the raw `er_hook::MH_CreateHook` / `MH_EnableHook` externs, so
     `MhHook::new`'s gate was simply not on the path. 19 five-byte JMPs went into the middle of
     live instructions. The log said `installed` 34 times and refused nothing.
 
-Both escaped for the SAME reason: the existing regexes assumed a SPELLING.
+Both escaped for the same reason: the existing regexes assumed a spelling.
 `HAND_BUILT` required an uppercase `RVA` identifier, so `base + spec.rva` matched 0 of 40 sites;
 `RAW_WRITE` matched only named-pointer stores, so 6 cast-and-assign writes read as zero. This
-script therefore keys on the SHAPE of the dataflow -- an address expression that reaches a use --
+script therefore keys on the shape of the dataflow -- an address expression that reaches a use --
 never on a naming convention, and every class carries a positive control in `--selftest`.
 
-THE GATE
+The gate
 --------
 `er_game_base` is the only thing that knows where a 1.16.2 address lives on the running build:
 
@@ -30,10 +30,10 @@ THE GATE
     resolve_game_address(_fmt)       -> Option<usize>   (the primitive)
     resolve_detour_address           -> Option<usize>   (the stricter detour licence)
 
-Anything else that turns a module base plus an offset into an address a CALL, a DETOUR, a READ,
-a WRITE or a COMPARE consumes is a bypass.
+Anything else that turns a module base plus an offset into an address a call, a detour, a read,
+a write or a compare consumes is a bypass.
 
-CLASSES
+Classes
 -------
   RAW_MINHOOK        MinHook externs called outside `er-hook`; `MhHook::new`'s gate is not on
                      the path at all.
@@ -41,21 +41,21 @@ CLASSES
                      inside a gate call.
   PRE_GATE_CHECK     a byte / prologue / signature comparison performed on an UNGATED address --
                      the seamless-bugfixes ordering class. Reported even when a gate runs later,
-                     because the CHECK already read the wrong bytes.
+                     because the check already read the wrong bytes.
   CACHED_ADDR        an ungated address stored into a `static` / `OnceLock` / atomic / field and
                      used later, where no reader can see where it came from.
   CONST_FOLD         `0x140000000 + rva` folded at compile time; there is no runtime moment at
                      which a gate could run.
-  FN_PTR_CAST        `transmute` / `as extern fn` on a computed address -- a CALL, the failure
+  FN_PTR_CAST        `transmute` / `as extern fn` on a computed address -- a call, the failure
                      mode with no unwind information.
   VTABLE_WRITE       a store into a vtable slot or function-pointer table. Touches no MinHook, so
                      no hook audit sees it.
   INDIRECT_HELPER    a local `fn(...) -> usize` that hides `base + rva` from every regex.
-  DOUBLE_TRANSLATE   a runtime-DERIVED address (AOB scan, vtable read, trampoline, return
-                     address) fed INTO the gate. Those are already 1.17; translating one again
+  DOUBLE_TRANSLATE   a runtime-derived address (AOB scan, vtable read, trampoline, return
+                     address) fed into the gate. Those are already 1.17; translating one again
                      moves a correct address to a wrong one.
 
-USAGE
+Usage
     python3 scripts/audit-1170-gate-bypass.py --report
     python3 scripts/audit-1170-gate-bypass.py --json OUT.json
     python3 scripts/audit-1170-gate-bypass.py --selftest
@@ -75,12 +75,12 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-# ONE DIALECT, NOT FOUR. This file used to carry its own comment/string blanker. It was the fourth
-# copy in `scripts/`, and it was the WRONG one: it did not know what a char literal is, so a
+# One dialect, not four. This file used to carry its own comment/string blanker. It was the fourth
+# copy in `scripts/`, and it was the wrong one: it did not know what a char literal is, so a
 # `'"'` opened a string as far as it was concerned and it blanked live code from there to the next
 # quote. Measured 2026-08-30: 42 files under `crates/` where the local blanker erased real code the
 # shared reader keeps -- `.replace('"', "&quot;")`, `trim_matches('"')`, `s.push('"')` and friends,
-# every one of them followed by code this scanner could then no longer see. A false NEGATIVE in a
+# every one of them followed by code this scanner could then no longer see. A false negative in a
 # bypass audit is the expensive direction.
 try:  # noqa: E402 - repo-local; the sys.path line above is what makes it work
     from rva_symbols import code_only
@@ -106,13 +106,13 @@ GATE_FNS = (
     "resolve_game_address_fmt",
     "resolve_detour_address",
     # er-hook's own entry points resolve before doing anything: `resolve_target` ->
-    # `resolve_detour_address`. Passing them `base + FOO_RVA` is CORRECT, and counting those as
+    # `resolve_detour_address`. Passing them `base + FOO_RVA` is correct, and counting those as
     # bypasses buries the ones that are.
     "register_shared_hook",
     "register_shared_hook_with_budget",
     "register_union_hook",
 )
-# `MhHook::new` gates INSIDE itself (`resolve_target` -> `resolve_detour_address`), so a
+# `MhHook::new` gates inside itself (`resolve_target` -> `resolve_detour_address`), so a
 # `base + rva` handed to it is resolved. It cannot go in GATE_FNS because the call head parses as
 # `MhHook::new` and matching a bare `new` would treat every constructor in the tree as a gate.
 GATE_METHODS = ("MhHook::new",)
@@ -120,23 +120,23 @@ GATE_TAIL = re.compile(
     r"(?:^|::)(" + "|".join(GATE_FNS) + r")$|(?:^|::)(?:" + "|".join(GATE_METHODS) + r")$"
 )
 
-# Identifiers that hold a MODULE BASE. Not a naming convention being trusted: this is the set of
+# Identifiers that hold a module base. Not a naming convention being trusted: this is the set of
 # spellings actually bound from `game_module_base()` / `GetModuleHandleA` in this tree, plus the
 # obvious synonyms. `--selftest` plants one of each.
 #
-# A `\$?` WAS PROPOSED HERE ON 2026-08-30 AND MEASURED TO BE A NO-OP -- recorded so nobody adds it
+# A `\$?` was proposed here on 2026-08-30 and measured to be a no-OP -- recorded so nobody adds it
 # again. A declarative macro that takes the module base as a metavariable spells every use `$base`,
 # and one such `$` really did hide a live 1.17 crash (`transmute($base +
 # TITLE_TOP_DIALOG_IS_IN_STATE_RVA)`, a function that moved 0x749b20 -> 0x74a970) from
 # `check-stale-rva-calls.py`. That gate anchored on `\(\s*` before the base, which the `$` blocks.
-# THIS one anchors on `\b`, and there IS a word boundary between `$` and `b` -- so `\bbase\s*\+`
+# This one anchors on `\b`, and there is a word boundary between `$` and `b` -- so `\bbase\s*\+`
 # already matches `transmute($base + FOO_RVA)`, at the `b`. One line proves it:
 #
 #     python3 -c "import re; print(re.search(r'\bbase\s*\+', 'transmute(\$base + FOO)'))"
 #
 # The `--selftest` widening control that was written for it failed as VACUOUS -- the frozen pre-fix
 # pattern caught the macro body too -- which is what a vacuity check is for. Widening the identifier
-# would have changed only where the match STARTS, never whether there is one.
+# would have changed only where the match starts, never whether there is one.
 BASE_IDENT = r"(?:base|image_base|module_base|game_base|mod_base|game_module|module_handle|img_base|exe_base|ersc_base|seamless_base|dll_base|self\.base|self\.module_base|the_base)"
 
 # `base + X`, with X anything: a literal, a CONST, a field (`spec.rva`), a call. The field form is
@@ -154,10 +154,10 @@ ARITH_BASE_CALL = re.compile(
     r"\b(?:game_module_base|GetModuleHandleA|GetModuleHandleW|game_module_handle)\s*\([^;{}]{0,80}?\+\s*"
 )
 
-# What is being ADDED to the base. `module base + RVA` is the shape that has to be gated; every
+# What is being added to the base. `module base + RVA` is the shape that has to be gated; every
 # other `x + y` in this workspace -- a save-record field offset, a vertex-buffer stride, a pixel
-# column -- is arithmetic inside a BUFFER and has nothing to do with the game image. Distinguishing
-# them by the RIGHT operand rather than by the left is what makes the difference: `base` is bound
+# column -- is arithmetic inside a buffer and has nothing to do with the game image. Distinguishing
+# them by the right operand rather than by the left is what makes the difference: `base` is bound
 # to a save-file body in `er-save-loader` and to `GetModuleHandleA(NULL)` two crates away, and no
 # amount of staring at the name `base` tells them apart.
 #
@@ -193,11 +193,11 @@ FNPTR_CAST = re.compile(
 )
 
 # ---------------------------------------------------------------- vtable / fn-pointer table writes
-# ONLY a table of function pointers. The first cut also matched `SLOT_`, which caught 30 writes to
-# `gm + GAME_MAN_SLOT_SELECT_B78_OFFSET` -- STRUCT FIELDS of a live heap object, where the version
+# only a table of function pointers. The first cut also matched `SLOT_`, which caught 30 writes to
+# `gm + GAME_MAN_SLOT_SELECT_B78_OFFSET` -- STRUCT fields of a live heap object, where the version
 # risk is field-offset drift (`scripts/detect-struct-field-drift.py`) and not the address gate.
 VTABLE_TOKENS = re.compile(r"vtable|vtbl|vftable|_vfptr|vf_ptr|vt_slot|vfunc|fnptr|fn_table|jump_table", re.I)
-# The other half of the shape: the VALUE stored is a function. `*(slot as *mut usize) =
+# The other half of the shape: the value stored is a function. `*(slot as *mut usize) =
 # own_stepper_idx6 as *const () as usize` names no vtable and is one.
 FN_VALUE_STORED = re.compile(r"as\s*\*const\s*\(\s*\)\s*as\s+usize|\bas\s+\*mut\s+c_void\b|_hook\s+as\s+usize|_detour\s+as\s+usize|_stub\s+as\s+usize|_thunk\s+as\s+usize")
 PTR_STORE = re.compile(
@@ -208,7 +208,7 @@ PTR_STORE = re.compile(
 )
 
 # ---------------------------------------------------------------- runtime-derived addresses
-# These are ALREADY 1.17. Feeding one to the gate translates a correct address into a wrong one.
+# These are already 1.17. Feeding one to the gate translates a correct address into a wrong one.
 RUNTIME_DERIVED = re.compile(
     r"\bGetProcAddress\b|\bscan_for\b|\baob\b|\bAOB\b|\bpattern_scan\b|\bfind_pattern\b|\bsigscan\b|"
     r"\btrampoline\s*\(\)|\breturn_address\b|\bret_addr\b|\bcaller_address\b|\bRtlCaptureStackBackTrace\b|"
@@ -226,7 +226,7 @@ def blank_comments_and_strings(text: str) -> str:
     doc comments quote the very code shapes being hunted (`base + rva`, `MH_CreateHook`), and a
     scanner that counts them reports its own documentation as a bypass.
 
-    DELEGATES TO `rva_symbols.code_only` SINCE 2026-08-30, and it is not a tidy-up. The local
+    Delegates to `rva_symbols.code_only` since 2026-08-30, and it is not a tidy-up. The local
     implementation this replaced had no idea what a char literal is, so `'"'` looked like the start
     of a string and it blanked everything to the next quote. Measured across `crates/`: 42 files
     where that swallowed live code -- `.replace('"', "&quot;")`, `trim_matches('"')`,
@@ -246,7 +246,7 @@ class Source:
         self._starts = [0]
         for line in raw.split("\n"):
             self._starts.append(self._starts[-1] + len(line) + 1)
-        # `#[cfg(test)]` bodies run on the HOST, where `resolve_game_address` is a passthrough and
+        # `#[cfg(test)]` bodies run on the host, where `resolve_game_address` is a passthrough and
         # there is no game to reach. A `base + 2` in a table-driven unit test is not a bypass, and
         # 6 of the first 35 PRE_GATE_CHECK hits were exactly that.
         self.test_spans = self._test_spans()
@@ -281,9 +281,9 @@ class Source:
         return self.lines[no - 1].strip() if 0 < no <= len(self.lines) else ""
 
     def enclosing_calls(self, pos: int, limit: int = 8) -> list[str]:
-        """Names of the call heads whose parentheses are still OPEN at `pos`, innermost first.
+        """Names of the call heads whose parentheses are still open at `pos`, innermost first.
 
-        This is what tells a gated site from an ungated one WITHOUT trusting the argument to be
+        This is what tells a gated site from an ungated one without trusting the argument to be
         written on the same line: `game_data_addr(\n    base,\n    FOO_RVA,\n ...)` is one call
         spanning four lines, and a line-oriented regex sees only `base,`.
         """
@@ -296,7 +296,7 @@ class Source:
             elif c == "(":
                 if depth == 0:
                     j = i - 1
-                    # `!` is part of the name on purpose: without it every MACRO call head parses
+                    # `!` is part of the name on purpose: without it every macro call head parses
                     # as the empty string, and `format_args!(...)` -- the single most common
                     # consumer of an address in this tree -- becomes invisible. That made 30-odd
                     # log lines read as calls.
@@ -325,9 +325,9 @@ class Source:
 
 
 # ---------------------------------------------------------------- benign address shapes
-# `base + 0x3c` reading `e_lfanew`, `base + nt->OptionalHeader...`: PE STRUCTURE offsets, fixed by
+# `base + 0x3c` reading `e_lfanew`, `base + nt->OptionalHeader...`: PE structure offsets, fixed by
 # the file format and identical on every patch. A gate would have nothing to translate. Kept in
-# the report at REVIEW rather than dropped, because "it looked like a header read" is exactly the
+# the report at review rather than dropped, because "it looked like a header read" is exactly the
 # excuse a real global read could hide behind.
 PE_HEADER_CTX = re.compile(
     r"e_lfanew|IMAGE_(?:DOS|NT|FILE|OPTIONAL|SECTION)|dos_header|nt_header|pe_header|SizeOfImage|"
@@ -338,7 +338,7 @@ PE_HEADER_CTX = re.compile(
 # not addresses. Translating a bound is a category error -- the same reason the coverage
 # inventory drops `*_RVA_MIN` / `*_RVA_MAX` by name.
 RANGE_BOUND_CTX = re.compile(r"[<>]=?\s*$|[<>]=?\s*[a-z_]*base|\.\.=?|\brange\b|contains\(", re.I)
-# A base that is NOT eldenring.exe. An ELDEN RING patch does not move ersc.dll's addresses, and
+# A base that is not eldenring.exe. An ELDEN RING patch does not move ersc.dll's addresses, and
 # translating one through the game map then writing to it corrupts an unrelated function.
 FOREIGN_BASE = re.compile(r"ersc|seamless|\bdll_base\b|GetModuleHandle[AW]\s*\(\s*c?\"[^\"]+\.dll", re.I)
 
@@ -349,9 +349,9 @@ FOREIGN_BASE = re.compile(r"ersc|seamless|\bdll_base\b|GetModuleHandle[AW]\s*\(\
 #         er_game_base::mem::game_rva_named(rva as u32, what).ok()
 #     }
 # -- and then every call site reads `transmute(icons_fn(FOO_RVA, "FOO_RVA")?)`, which contains no
-# gate token at all. Treating those as bypasses buries the real ones. So helper names whose BODY
+# gate token at all. Treating those as bypasses buries the real ones. So helper names whose body
 # reaches the gate are collected first and count as gates at their call sites; helpers whose body
-# does the arithmetic RAW are the INDIRECT_HELPER class instead.
+# does the arithmetic raw are the INDIRECT_HELPER class instead.
 ADDRESS_RETURNING_FN = re.compile(
     r"\bfn\s+([a-z_][a-z_0-9]*)\s*(?:<[^>]*>)?\s*\([^;{]*?\)\s*->\s*"
     r"(?:Option\s*<\s*)?(?:Result\s*<\s*)?(?:usize|u64|\*(?:const|mut)\s)",
@@ -405,9 +405,9 @@ GATED_HELPERS: set = set()
 
 
 # ---------------------------------------------------------------- which DLLs does a finding ship in?
-# Most of these crates are LIBRARIES. `er-title-flow` is not loaded by me3; it is linked into
+# Most of these crates are libraries. `er-title-flow` is not loaded by me3; it is linked into
 # `er_quickload.dll`, and a bypass in it ships in the product. `er-build-import-runtime` is linked
-# into FOUR cdylibs at once. Reporting a finding against the library it lives in, without saying
+# into four cdylibs at once. Reporting a finding against the library it lives in, without saying
 # which DLLs carry it, understates every one of them.
 def cdylib_closure(root: str) -> dict:
     manifests = {}
@@ -553,8 +553,8 @@ def detect_ungated_arith(src: Source) -> list[Finding]:
 
 # Formatting / logging sinks. An UNTRANSLATED address printed into a diagnostic line is not a
 # corruption -- but it is not harmless either. It is how a reader is told where a hook went, and
-# when the install path gates and the log line does not, the log NAMES AN ADDRESS NOTHING WAS
-# WRITTEN TO. That exact mismatch is live in `er-title-flow::apply_online_disable`, where the write
+# when the install path gates and the log line does not, the log names an address nothing was
+# written to. That exact mismatch is live in `er-title-flow::apply_online_disable`, where the write
 # goes to the raw `base + rva` and the log line prints `game_data_addr(base, rva)` -- the two
 # differ on 1.17 and the log is the one that looks authoritative.
 LOG_SINK = re.compile(
@@ -574,7 +574,7 @@ def forward_consumers(src: Source, pos: int) -> tuple[list, str] | tuple[None, N
     """If `pos` is the RHS of a `let`, the call heads that consume that binding downstream.
 
     Without this a site reads as its own worst case. `let target = base + rva;` followed by
-    `MhHook::new(target ..)` is GATED -- the resolution happens inside `MhHook::new` -- yet the
+    `MhHook::new(target ..)` is gated -- the resolution happens inside `MhHook::new` -- yet the
     arithmetic line looks identical to `er-reload-trace`'s, which was not. The difference is
     entirely in what the binding is handed to, which is two statements away and invisible to any
     line-oriented or enclosing-call test.
@@ -591,11 +591,11 @@ def forward_consumers(src: Source, pos: int) -> tuple[list, str] | tuple[None, N
             continue
         consumers.extend(src.enclosing_calls(pos + use.start()))
     if not consumers:
-        # Rust INLINE format arguments live inside the string literal -- `"... ctor=0x{fd4_ctor:x}"`
+        # Rust inline format arguments live inside the string literal -- `"... ctor=0x{fd4_ctor:x}"`
         # -- and this scanner blanks string bodies so that a doc comment quoting `base + rva`
-        # cannot be counted as code. The consequence is that a binding used ONLY by a log line has
+        # cannot be counted as code. The consequence is that a binding used only by a log line has
         # no visible use at all, and falls through to whatever the surrounding tokens suggest;
-        # `product_continue.rs:198` read as a CALL that way, next to an unrelated `transmute`.
+        # `product_continue.rs:198` read as a call that way, next to an unrelated `transmute`.
         raw_window = src.raw[pos : pos + FORWARD_USE_WINDOW]
         if re.search(r"\{" + re.escape(name) + r"[:}]", raw_window):
             return ["format_args!"], name
@@ -605,7 +605,7 @@ def forward_consumers(src: Source, pos: int) -> tuple[list, str] | tuple[None, N
 def classify_use(ctx: str, src: Source, pos: int) -> tuple[str, str]:
     """What the address feeds, and how bad that is.
 
-    ORDER MATTERS and is deliberate. Provenance and downstream consumers are asked FIRST, because
+    Order matters and is deliberate. Provenance and downstream consumers are asked first, because
     they are facts about this particular site; the token tests below them are heuristics over a
     window and will happily report `detour` for a `base + rva` whose only consumer is a log line
     two statements from a hook install. Within the heuristics, worst-first: a site that both
@@ -627,7 +627,7 @@ def classify_use(ctx: str, src: Source, pos: int) -> tuple[str, str]:
             and not LOG_SINK.match(c.split("::")[-1])
         ]
         if gated and not hard:
-            # The install resolves; only the LOG prints the raw address. Not a corruption, but the
+            # The install resolves; only the log prints the raw address. Not a corruption, but the
             # log then names an address nothing was written to, which is its own hunt.
             return "gated-downstream", "REVIEW"
         if gated and hard:
@@ -635,7 +635,7 @@ def classify_use(ctx: str, src: Source, pos: int) -> tuple[str, str]:
         if not hard and any(LOG_SINK.match(c.split("::")[-1]) for c in consumers if c):
             # Every consumer is a log sink. The binding never reaches code -- but the line it
             # prints is a 1.16.2 address presented as if it were where something happened, next to
-            # sibling lines that DO resolve. Cheap to fix, and it is the difference between a
+            # sibling lines that do resolve. Cheap to fix, and it is the difference between a
             # crash address a reader can match and one they cannot.
             return "log-only", "REVIEW"
     if any(LOG_SINK.match(name.split("::")[-1]) for name in src.enclosing_calls(pos)):
@@ -655,7 +655,7 @@ def classify_use(ctx: str, src: Source, pos: int) -> tuple[str, str]:
     line = src.line(src.lineno(pos))
     if re.search(r"[<>]=?", line) and re.search(r"0x[0-9a-fA-F_]+", line):
         return "range-bound", "REVIEW"
-    # LAST RESORT, and deliberately not a dismissal. Several install routines build a TABLE of
+    # Last resort, and deliberately not a dismissal. Several install routines build a table of
     # `(name, base + RVA, detour, slot)` tuples and then loop over it calling `MhHook::new` or
     # `register_shared_hook`, both of which resolve. The `let`-taint above cannot see that -- the
     # address has no name -- so the shape reads as ungated. Rather than drop it, say that a gating
@@ -669,10 +669,10 @@ def classify_use(ctx: str, src: Source, pos: int) -> tuple[str, str]:
 
 
 def detect_pre_gate_check(src: Source) -> list[Finding]:
-    """A byte / prologue comparison performed on an address that has NOT been translated.
+    """A byte / prologue comparison performed on an address that has not been translated.
 
     The seamless-bugfixes class. Distinct from UNGATED_ARITH because the gate may well run
-    downstream -- it did there -- and the bug is entirely in the ORDER. The check reads the wrong
+    downstream -- it did there -- and the bug is entirely in the order. The check reads the wrong
     bytes either way, and what it then reports is a byte MISMATCH: a message that sends a reader
     hunting for a hook collision when the real answer is that nothing translated the address.
     """
@@ -776,7 +776,7 @@ def detect_const_fold(src: Source) -> list[Finding]:
 
 
 def detect_fn_ptr_cast(src: Source) -> list[Finding]:
-    """A computed address materialised as a FUNCTION POINTER.
+    """A computed address materialised as a function pointer.
 
     The worst outcome of a stale address, because it transfers control rather than returning a
     wrong number: no unwind information, no exception record naming anything of ours.
@@ -785,7 +785,7 @@ def detect_fn_ptr_cast(src: Source) -> list[Finding]:
     gate_rx = re.compile(r"\b(?:" + "|".join(GATE_FNS) + r")\s*\(")
     for m in FNPTR_CAST.finditer(src.code):
         pos = m.start()
-        # The operand is what matters, so read FORWARD to the end of the cast's parentheses
+        # The operand is what matters, so read forward to the end of the cast's parentheses
         # rather than sampling a window around it. A `transmute(icons_fn(FOO_RVA)?)` whose
         # helper reaches the gate is not a bypass, and there are ~200 of those.
         depth, i, n = 0, pos, len(src.code)
@@ -893,7 +893,7 @@ def detect_indirect_helper(src: Source) -> list[Finding]:
         if re.search(r"(?:" + "|".join(GATE_FNS) + r")\s*\(", body):
             continue
         if PE_HEADER_CTX.search(body) or re.search(r"0x5a4d|0x0000_?4550", body):
-            # A DOS/NT header walk. The offsets are the file FORMAT's, identical on every patch,
+            # A DOS/NT header walk. The offsets are the file format's, identical on every patch,
             # and `pe_size_of_image` is the same twelve lines in four crates.
             continue
         ln = src.lineno(m.start())
@@ -920,11 +920,11 @@ def detect_indirect_helper(src: Source) -> list[Finding]:
 
 
 def detect_double_translate(src: Source) -> list[Finding]:
-    """A RUNTIME-derived address fed INTO the gate. Those are already 1.17.
+    """A runtime-derived address fed into the gate. Those are already 1.17.
 
     A scan hit, a vtable slot, a trampoline, a captured return address: all of them were read off
-    the RUNNING image, so they are already where they are. The map is keyed by 1.16.2 RVA, so a
-    second pass either finds no row and REFUSES a correct address, or -- worse -- finds a row
+    the running image, so they are already where they are. The map is keyed by 1.16.2 RVA, so a
+    second pass either finds no row and refuses a correct address, or -- worse -- finds a row
     because some unrelated 1.16.2 function happened to live there and moves it somewhere wrong.
 
     The argument is rarely written inline, so this carries a one-hop local taint: any `let x = ..`
@@ -973,10 +973,10 @@ def detect_double_translate(src: Source) -> list[Finding]:
 
 
 # `er_hook::patch_3byte_stub(base, rva, ..)` / `apply_xor_ret_stub(base, rva, ..)` take the base
-# and the RVA as SEPARATE arguments and add them inside er-hook, raw. There is no `base + rva`
+# and the RVA as separate arguments and add them inside er-hook, raw. There is no `base + rva`
 # text at the call site for any use-site scan to find, and the audits that look for one report
 # zero. What they then do is write three bytes of `xor eax,eax; ret` into game code -- after
-# "validating" a SINGLE expected first byte, which for these call sites is 0x48, the REX.W prefix
+# "validating" a single expected first byte, which for these call sites is 0x48, the REX.W prefix
 # that begins a large fraction of every x86-64 function in the image. That check passes by
 # coincidence far more often than it fails.
 CODE_PATCH_CALL = re.compile(r"\b(patch_3byte_stub|apply_xor_ret_stub)\s*\(")
@@ -1028,16 +1028,16 @@ def detect_raw_code_patch(src: Source) -> list[Finding]:
     return out
 
 
-# `fromsoftware-rs`'s typed singletons resolve through UPSTREAM's own RVA bundle
+# `fromsoftware-rs`'s typed singletons resolve through upstream's own RVA bundle
 # (`crates/eldenring/src/rva/rva_ww*.rs`), selected by PE version, and nothing in `er-game-base`
 # is on that path. That is fine when the pinned upstream knows the running build and fatal when it
 # does not: `rva::get()` ends in `.unwrap_or_else(|e| panic!("{e}"))`, so an unrecognised version
 # PANICS inside a game-loaded cdylib on the first singleton access.
 #
-# Verified 2026-08-30: the 1.17 bundle `rva_ww_270.rs` landed upstream in `4284a05`, which is TWO
-# commits AFTER `FROMSOFTWARE_RS_REV = 9028518` in `.github/workflows/check.yml`. At the pinned
+# Verified 2026-08-30: the 1.17 bundle `rva_ww_270.rs` landed upstream in `4284a05`, which is two
+# commits after `FROMSOFTWARE_RS_REV = 9028518` in `.github/workflows/check.yml`. At the pinned
 # revision `ERGameVersion::from_lang_version` knows only 2.6.2.0 and 2.6.2.1, so every DLL built
-# against it panics on 2.7.0.0. Two cdylibs (`er-death-persist`, `mushroom-man-runtime`) have NO
+# against it panics on 2.7.0.0. Two cdylibs (`er-death-persist`, `mushroom-man-runtime`) have no
 # other game access at all, which is why they show zero findings in every other class.
 UPSTREAM_STATIC = re.compile(
     r"\b([A-Z][A-Za-z0-9_]*)::instance(?:_ptr|_mut)?\s*\(\s*\)|\bimpl\s+FromStatic\s+for\b|\bcrate::rva::get\s*\("
@@ -1188,12 +1188,12 @@ POSITIVE_CONTROLS = {
     """,
 }
 
-# THE TWO REAL REGRESSIONS, verbatim from `git show HEAD:` before either was fixed on 2026-08-30.
-# The synthetic controls above prove each detector fires on a shape someone WROTE FOR IT; these
+# The two real REGRESSIONS, verbatim from `git show HEAD:` before either was fixed on 2026-08-30.
+# The synthetic controls above prove each detector fires on a shape someone wrote for it; these
 # prove it fires on the shapes that actually shipped and that the previous audits reported as zero.
 # Keep them even after both crates are clean -- that is the whole point of a regression control.
 REGRESSION_CONTROLS = {
-    # er-reload-trace, HEAD before the fix. The raw externs put `MhHook::new`'s gate off the path
+    # er-reload-trace, head before the fix. The raw externs put `MhHook::new`'s gate off the path
     # entirely: 34 `installed` lines, zero refusals, 19 five-byte JMPs into the middle of live
     # instructions. `HAND_BUILT` in the coverage inventory matched 0 of 40 sites because it
     # required an UPPERCASE `RVA` identifier and this says `spec.rva`.
@@ -1212,10 +1212,10 @@ REGRESSION_CONTROLS = {
             let enable_status = unsafe { MH_EnableHook(target as *mut c_void) } as i32;
         }
     """),
-    # er-seamless-bugfixes, HEAD before the fix. The gate DID exist -- inside `install_guard` --
+    # er-seamless-bugfixes, head before the fix. The gate did exist -- inside `install_guard` --
     # but the byte check ran first, on the raw address. On 1.17 it compared unrelated code, logged
     # "byte mismatch" and installed 0 of 3 guards. Nothing about the address was wrong by the time
-    # anything translated it; the ORDER was.
+    # anything translated it; the order was.
     "er-seamless-bugfixes install_guards": ("PRE_GATE_CHECK", """
         fn install_guards(base: usize) {
             let mut armed = 0_usize;
@@ -1234,7 +1234,7 @@ REGRESSION_CONTROLS = {
         }
     """),
     # er-title-flow, still live at the time of the sweep. No `base + rva` text exists at the call
-    # site at all -- the two operands are separate ARGUMENTS and er-hook adds them internally --
+    # site at all -- the two operands are separate arguments and er-hook adds them internally --
     # so a use-site regex of any spelling reports zero here.
     "er-title-flow apply_online_disable": ("RAW_CODE_PATCH", """
         pub fn apply_online_disable() {
@@ -1251,10 +1251,10 @@ REGRESSION_CONTROLS = {
 }
 
 # ---------------------------------------------------------------- the two 2026-08-30 widenings
-# THE MATCHERS THIS FILE USED, frozen as LITERALS so the controls below keep meaning what they say.
-# A control the OLD form also catches would pass on the broken scanner and prove nothing.
+# the MATCHERS this file used, frozen as LITERALS so the controls below keep meaning what they say.
+# A control the old form also catches would pass on the broken scanner and prove nothing.
 #
-# SPELLED OUT, NOT COMPOSED FROM `BASE_IDENT` / `code_only`. A frozen control assembled from the
+# Spelled out, not composed from `BASE_IDENT` / `code_only`. A frozen control assembled from the
 # live pieces is not frozen: it widens whenever they widen, so "the old form misses this" silently
 # becomes "the new form misses this", which is the opposite claim. `check-stale-rva-calls.py` was
 # very nearly caught by exactly that -- its "legacy" pattern was built from the live `BASE_EXPR`,
@@ -1319,7 +1319,7 @@ def legacy_blank_comments_and_strings(text: str) -> str:
 
 # `(class, body, legacy matcher that must MISS it)`. A shape the audit could not see before
 # 2026-08-30. It fires nowhere in this tree today -- the finding count is byte-identical across the
-# fix, 166 before and 166 after -- so this control is the ONLY evidence the new path executes at
+# fix, 166 before and 166 after -- so this control is the only evidence the new path executes at
 # all, and "no change" without it would be indistinguishable from "no effect".
 #
 # `assert bad == 0` over a filter that matches nothing is how nine instruments in this repo
@@ -1343,7 +1343,7 @@ WIDENING_CONTROLS = {
     ),
 }
 
-# A site that IS gated must not be reported. Without this the whole suite passes for a scanner
+# A site that is gated must not be reported. Without this the whole suite passes for a scanner
 # that flags every line in the tree.
 NEGATIVE_CONTROLS = {
     "gate_call": """
@@ -1403,8 +1403,8 @@ def selftest() -> int:
         else:
             print(f"  ok   negative control {name:<28} -> silent")
 
-    # THE TWO WIDENINGS OF 2026-08-30. Neither changes a count in this tree, so each is asserted
-    # BOTH ways: the current scanner must see it, and the frozen pre-fix form must not. Only the
+    # The two WIDENINGS of 2026-08-30. Neither changes a count in this tree, so each is asserted
+    # both ways: the current scanner must see it, and the frozen pre-fix form must not. Only the
     # second half makes the first half evidence of anything.
     for name, (cls, body, legacy_misses_it) in WIDENING_CONTROLS.items():
         src = Source("crates/control-widening/src/lib.rs", body)
@@ -1421,7 +1421,7 @@ def selftest() -> int:
         else:
             print(f"  ok   widening control {name:<32} -> {cls} x{len(hits)}")
 
-    # NON-VACUITY OF THE WALK, which is a different fact from non-vacuity of the findings. The
+    # Non-VACUITY of the walk, which is a different fact from non-vacuity of the findings. The
     # controls above prove the detectors work without touching the tree; these prove the tree was
     # actually read. A scan that silently walks nothing prints `0 finding(s)`, and so does a clean
     # workspace -- and only one of those is good news.
@@ -1454,7 +1454,7 @@ def selftest() -> int:
                 f"with the shared reader on {blanked} of the first 400"
             )
 
-    # THE RATCHET ITSELF, which none of the controls above touch. `_reasons` was added on
+    # The ratchet itself, which none of the controls above touch. `_reasons` was added on
     # 2026-09-01 so an adjudicated key can carry its justification in the baseline; a metadata key
     # that the arithmetic accidentally read as a count would make `check_baseline` throw, and a
     # skip rule written too wide would make the ratchet ignore real keys. Both directions are
@@ -1474,7 +1474,7 @@ def selftest() -> int:
         at = os.path.join(tmp, "baseline.json")
         with open(at, "w", encoding="utf-8") as fh:
             json.dump({key: 1, "_reasons": {key: "the control's own reason"}}, fh)
-        # Both calls are silenced: the second one is SUPPOSED to print the ratchet's failure
+        # Both calls are silenced: the second one is supposed to print the ratchet's failure
         # banner, and a passing selftest that prints "GATE-BYPASS RATCHET: new ungated ..." trains
         # the reader to scroll past the real one.
         with contextlib.redirect_stdout(io.StringIO()):
@@ -1543,7 +1543,7 @@ def report(findings: list[Finding]) -> None:
 
 # ---------------------------------------------------------------- ratchet
 # Line numbers drift on every edit (four crates moved under this scan while it was being written),
-# so the ratchet key deliberately excludes them: a finding is identified by CRATE + CLASS + FILE,
+# so the ratchet key deliberately excludes them: a finding is identified by crate + class + file,
 # and the baseline records how many of each. Moving code around cannot trip it; adding a new
 # bypass, or introducing the first one in a clean file, does.
 def ratchet_key(f) -> str:
@@ -1555,12 +1555,12 @@ def ratchet_counts(findings) -> dict:
     return dict(sorted(counts.items()))
 
 
-# WHERE THE "WHY" GOES. The failure message below tells you to "record why in the baseline", and
+# Where the "WHY" goes. The failure message below tells you to "record why in the baseline", and
 # until 2026-09-01 the baseline was a bare `{key: count}` map with nowhere to write it -- so every
 # adjudication ended up as prose in `scripts/check.sh`, detached from the number it justifies, and
 # the check.sh comment went stale within a day of being written (it named two keys that no longer
 # drift while the one that does went unmentioned). A key whose count is raised on purpose now
-# carries its reason IN THE FILE, under `_reasons`.
+# carries its reason in the file, under `_reasons`.
 #
 # Metadata keys are `_`-prefixed and skipped by the ratchet arithmetic; a bare `_` cannot collide
 # with a real key, which is always `crate|CLASS|path`. `--write-baseline` carries them forward from

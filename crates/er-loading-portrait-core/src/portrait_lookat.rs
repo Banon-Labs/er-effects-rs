@@ -1,12 +1,12 @@
 use crate::prelude::*;
 
 // ---------------------------------------------------------------------------------------------------
-// RETIRED LOOK-AT INTERNALS. The live loading portrait no longer tracks the cursor; these offsets and
+// Retired look-at INTERNALS. The live loading portrait no longer tracks the cursor; these offsets and
 // helper structures are retained only for the neutral render/publish pump and historical diagnostics.
-// ER's c0000 rig has NO eye bone: the eyes are FaceGen mesh rigidly skinned to the single "Head" bone.
+// ER's c0000 rig has no eye bone: the eyes are FaceGen mesh rigidly skinned to the single "Head" bone.
 //
-// REACH (per tick, from renderer R = CSMenuProfModelRend*): require *(R+0x778) != 0 (model built);
-// X = *(R + ANIM_LOCATION) ; importer = *(X + IMPORTER) ; poseHolder = importer + POSEHOLDER (embedded,
+// Reach (per tick, from renderer R = CSMenuProfModelRend*): require *(R+0x778) != 0 (model built);
+// X = *(R + ANIM_LOCATION) ; importer = *(X + importer) ; poseHolder = importer + POSEHOLDER (embedded,
 // not a deref). Verified at FUN_140bba7d0 + GetPosHolder (lea rax,[rcx+0x48]).
 pub const PROFILE_LOOKAT_ANIM_LOCATION_OFFSET: usize = 0x948;
 pub const PROFILE_LOOKAT_IMPORTER_OFFSET: usize = 0x20;
@@ -36,11 +36,11 @@ pub const LOOKAT_BONE_SPINE2: &str = "Spine2";
 /// Max bones we will scan/dump (a c0000 skeleton is well under this; bounds the runtime enumeration).
 pub const LOOKAT_MAX_BONES: usize = 512;
 /// Cursor -> look angle gains (radians at the window edge). Head carries the bulk (eyes are welded to
-/// it); neck/spine2 add a natural distributed turn. Yaw = horizontal, pitch = vertical. SIGN + which
-/// local bone axis each maps to need ONE runtime visual calibration (the portrait camera mirrors L/R).
-/// GAIN CALIBRATION IS BLOCKED until the model faces the camera (2026-06-30): once the posed model
-/// re-rasterizes per frame, the rendered head shows the BACK of the head at BOTH cursor extremes AND at
-/// center (look-at~0) -- so the model root/skeleton renders facing AWAY, independent of these gains
+/// it); neck/spine2 add a natural distributed turn. Yaw = horizontal, pitch = vertical. Sign + which
+/// local bone axis each maps to need one runtime visual calibration (the portrait camera mirrors L/R).
+/// Gain calibration is blocked until the model faces the camera (2026-06-30): once the posed model
+/// re-rasterizes per frame, the rendered head shows the back of the head at both cursor extremes and at
+/// center (look-at~0) -- so the model root/skeleton renders facing away, independent of these gains
 /// (cutting them 6x in calib-6 changed nothing). Until the facing is fixed (camera orbit to the model's
 /// front; cf the concurrent PROFILE_CAM_FACE_YAW effort) the face is not visible, so the look-at strength
 /// cannot be visually tuned. Keeping the original gains (they gave a clear ~23-37/px head-turn signal).
@@ -51,14 +51,14 @@ pub const LOOKAT_NECK_PITCH_GAIN: f32 = 0.10;
 pub const LOOKAT_SPINE2_YAW_GAIN: f32 = 0.08;
 pub const LOOKAT_SPINE2_PITCH_GAIN: f32 = 0.05;
 /// Per-renderer-slot cached look-at state: the resolved Head/Neck/Spine2 bone indices and the latched
-/// base (idle) local quaternions, captured ONCE so the per-tick rotation composes from an immutable
+/// base (idle) local quaternions, captured once so the per-tick rotation composes from an immutable
 /// base (drift-free). `-1` index = bone not found in this slot's skeleton.
 #[derive(Clone, Copy, Debug)]
 pub struct LookatSlot {
     pub head: i32,
     pub neck: i32,
     pub spine2: i32,
-    /// Idle (clean) LOCAL quaternions for Head/Neck/Spine2, latched ONCE from the freshly-rebuilt
+    /// Idle (clean) local quaternions for Head/Neck/Spine2, latched once from the freshly-rebuilt
     /// pose so the per-frame look-at composes `base ⊗ delta` (drift-free) instead of `current ⊗ delta`
     /// (which compounds at 60 Hz when the draw-phase task drives every frame). Re-latched on rebuild
     /// (the slot is reset to `None` each model rebuild, so this re-captures the clean pose).
@@ -84,40 +84,40 @@ pub use er_telemetry_core::counters::PROFILE_READBACK_CHECKER;
 // deferred-readback diagnostic they described was deleted, so both read 0 forever while still being
 // printed as `defer_some=`/`defer_nonblack=`. See er-telemetry-core/src/counters.rs.
 /// DIAGNOSTIC: per-frame readback outcomes -- how many readbacks returned content, and how many of those
-/// were classified as a checker/placeholder (so did NOT publish). `oracle_profile_readback_some` /
+/// were classified as a checker/placeholder (so did not publish). `oracle_profile_readback_some` /
 /// `oracle_profile_readback_checker`; `_some - _checker` == the publish count.
 pub use er_telemetry_core::counters::PROFILE_READBACK_SOME;
 /// `updateBoneModelSpace` (dump 0x141653370) -> deobf 0x141653350 (shift -0x20, content-unique). The
 /// render calls this (via `GetBoneModelSpace`) each frame to rebuild `modelSpaceBoneData` from the
-/// (anim-imported) `localSpaceBoneData` for every dirty bone. We HOOK it: before the original runs, we
-/// compose the cursor rotation onto the Head/Neck/Spine2 LOCAL quaternions and mark all bones dirty, so
+/// (anim-imported) `localSpaceBoneData` for every dirty bone. We hook it: before the original runs, we
+/// compose the cursor rotation onto the Head/Neck/Spine2 local quaternions and mark all bones dirty, so
 /// the original's recompute cascades our rotation into the final pose the render skins from. This is the
 /// only injection point that survives the per-frame anim re-import (a game-task write is clobbered).
 pub const UPDATE_BONE_MODEL_SPACE_RVA: usize = 0x1653350;
-/// Per-frame per-model PUSH task `FUN_140bba7d0` (dump) -> deobf RVA 0x140bba6e0 (content-unique, shift
+/// Per-frame per-model push task `FUN_140bba7d0` (dump) -> deobf RVA 0x140bba6e0 (content-unique, shift
 /// -0xf0). `fn(renderer, frame)`: if model_ins(+0x778) && X(+0x948) it reads importer=*(X+0x20) and calls
 /// the submodel propagation `FUN_1409e9ac0(model_ins, frame, importer)` which copies the importer's
-/// MODEL-space bones into every submodel's own poseHolder.modelSpaceBoneData (what the GPU skins from).
-/// We HOOK it: write our Head/Neck/Spine2 rotation into the importer PoseHolder + updateBoneModelSpace
-/// BEFORE the original, so the original propagates OUR pose to the submodels at 60 Hz with the correct
+/// model-space bones into every submodel's own poseHolder.modelSpaceBoneData (what the GPU skins from).
+/// We hook it: write our Head/Neck/Spine2 rotation into the importer PoseHolder + updateBoneModelSpace
+/// before the original, so the original propagates our pose to the submodels at 60 Hz with the correct
 /// `frame` arg (which we cannot synthesize -- it feeds the render-entity commit + cloth). See bd
 /// portrait-lookat-submodel-propagation-RE-2026-06-29.
 pub const PROFILE_PER_FRAME_PUSH_RVA: usize = 0xbba6e0;
 pub static PROFILE_PERFRAME_HOOK_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub use er_telemetry_core::counters::PROFILE_PERFRAME_HOOK_HITS;
 pub use er_telemetry_core::counters::PROFILE_PERFRAME_HOOK_INSTALLED;
-/// Profile-renderer UPDATE task `FUN_140bba820` (dump) -> deobf RVA 0x140bba730 (content-unique, shift
+/// Profile-renderer update task `FUN_140bba820` (dump) -> deobf RVA 0x140bba730 (content-unique, shift
 /// -0xf0). `fn(renderer, FD4TaskData*)`: runs the FD4 state-machine stepper (vtable+0xc0) then refreshes the
 /// model transform/animation (anim step with `*(td+8)` delta-time, model matrix, FaceData) for the tick.
-/// Paired with the DRAW task (== `PROFILE_PER_FRAME_PUSH_RVA`). RE-confirmed: both are `CSEzUpdateTask`s
+/// Paired with the draw task (== `PROFILE_PER_FRAME_PUSH_RVA`). RE-confirmed: both are `CSEzUpdateTask`s
 /// the renderer self-registers; post-Continue their ResMan driver under-schedules them (~4-19x/loading
 /// screen) so the model rasterizes sparsely. We drive both ourselves per render-thread frame to make the
-/// portrait re-rasterize the live look-at pose EVERY frame. See keepalive-POOL-REFUTED-readback-crossqueue.
+/// portrait re-rasterize the live look-at pose every frame. See keepalive-pool-refuted-readback-crossqueue.
 pub const PROFILE_MODEL_UPDATE_TASK_RVA: usize = 0xbba730;
 /// `FD4Singleton<CS::CSCloth>` instance pointer -- the world cloth manager. Live/dump addr 0x143d75f28
 /// (data, shift 0; disasm-verified: `FUN_1409f0250` loads `[0x143d75f28]`, `test rcx,rcx`, and DLPanics
 /// "accessed an uninitialized singleton" (FD4Singleton.h:0xb4) when null). Our profile-model update/draw
-/// drive triggers that model's cloth RELEASE; at shutdown CSCloth is freed first, so driving it then is a
+/// drive triggers that model's cloth release; at shutdown CSCloth is freed first, so driving it then is a
 /// hard CTD (DLPanic is a native abort, not a catchable Rust panic). We must skip our drive when null.
 pub const CS_CLOTH_GLOBAL_RVA: usize = 0x3d75f28;
 /// Menu-model ANIM BIND `FUN_140bba300` (dump) -> deobf RVA 0xbba210 (content-unique, shift -0xf0,
@@ -125,10 +125,10 @@ pub const CS_CLOTH_GLOBAL_RVA: usize = 0x3d75f28;
 /// current anim entry (via the handle at +0x96c), resolves + plays `anim_id` on the model's anim
 /// holder X(+0x948), and caches id/handle at +0x968/+0x96c; id -1 unbinds (handle := the null
 /// sentinel). Early-returns on an unchanged id unless `force != 0`. The update task steps the bound
-/// anim by frame-dt each call ONLY while `+0x96c != sentinel` -- see bd
+/// anim by frame-dt each call only while `+0x96c != sentinel` -- see bd
 /// `portrait-anim-bind-RE-corrects-6hz-gate-2026-07-03` (corrects the earlier "~6Hz gparam gate"
 /// reading). The native profile pipeline binds id 0 (FUN_140bbe290 <- refresh FUN_1409aa7d0), which
-/// is the STATIC menu pose -- that, not cadence, is why the loading portrait never moved.
+/// is the static menu pose -- that, not cadence, is why the loading portrait never moved.
 pub const PROFILE_ANIM_BIND_RVA: usize = 0xbba210;
 /// Null anim-handle sentinel global `DAT_143b39470` (data RVA; data addresses do not shift between
 /// the dump and the live binary -- same convention as `GX_DRAW_CONTEXT_RVA`). The CSMenuAsmModelRend
@@ -137,7 +137,7 @@ pub const PROFILE_ANIM_NULL_HANDLE_RVA: usize = 0x3b39470;
 /// The bound-anim handle cache on the renderer (low16 = anim-entry index, high16 = generation).
 pub const PROFILE_ANIM_HANDLE_OFFSET: usize = 0x96c;
 /// Idle anim ids to bind on the loading portrait, in order. The menu model's anim holder is built
-/// from the FULL c0000 ANIBND (`FUN_140bbb4a0`: `AnibndRepositoryImp::GetResCap(L"c0000")` ->
+/// from the full c0000 ANIBND (`FUN_140bbb4a0`: `AnibndRepositoryImp::GetResCap(L"c0000")` ->
 /// `FUN_1401ac2f0` -> renderer+0x948), so base c0000 anim ids resolve -- not just menu poses.
 /// 3000000 = the in-world standing idle (grounded: our own in-world telemetry reports
 /// `current_animation_id = 3000000`; visibly more movement than the menu idles, per user request
@@ -151,34 +151,34 @@ pub use crate::portrait_equip_restore::{
 };
 pub use er_telemetry_core::counters::PORTRAIT_ANIM_BOUND_LOC;
 /// The (renderer, anim-holder X) pair the idle anim was last bound on. The loading window's model
-/// is rebuilt several times (content-RT pin moves) and a rebuild either ctor's a NEW renderer
+/// is rebuilt several times (content-RT pin moves) and a rebuild either ctor's a new renderer
 /// (+0x968 = -1 -> static pose) or recreates X under the same renderer -- a one-shot bind latch
-/// left the DISPLAYED model static after churn (run anim-bind-noteardown-20260703-074216). Rebind
+/// left the displayed model static after churn (run anim-bind-noteardown-20260703-074216). Rebind
 /// whenever either pointer changes. (The engine helps once +0x968 survives: the model build fn
 /// re-binds `*(+0x968)` force=1 itself -- but a fresh renderer starts at -1, so we must track.)
 pub use er_telemetry_core::counters::PORTRAIT_ANIM_BOUND_RENDERER;
 pub use er_telemetry_core::counters::PORTRAIT_DRIVE_TICKS;
-/// REBUILD-DRIVER tripwire (2026-07-03): the portrait model is torn down + rebuilt ~1/s even with
+/// Rebuild-driver tripwire (2026-07-03): the portrait model is torn down + rebuilt ~1/s even with
 /// the kick live-model guard (runs #2/#3: 85-94 rebinds, native anim-0 rebound each time), which is
 /// why nothing ever visibly animated. Per drive frame we sample the renderer's request/teardown
 /// latches (+0x754/+0x755/+0x756) and re-run `STEP_Wait_Play`'s own FaceData compare
 /// (`GetFaceDataBuffer(renderer_FaceData@+0x788, true)` vs the staged buffer at +0x218, 0x120
-/// bytes): a mismatch makes the step invalidate the model (`FUN_1409ecb40`) EVERY tick -- and we
+/// bytes): a mismatch makes the step invalidate the model (`FUN_1409ecb40`) every tick -- and we
 /// drive that step at 60Hz. `NEQ_TICKS`/`DRIVE_TICKS` ~= 1.0 convicts the FaceData loop; latch
 /// bytes != 0 at rebind time convict a latch raiser instead.
 pub use er_telemetry_core::counters::PORTRAIT_FACEDATA_NEQ_TICKS;
 /// The renderer the kick was issued on. Run #10 measured the async build at 94ms (kick +16.19s ->
-/// model-LIVE +16.28s), refuting the streaming-contention theory -- the model dies at ~+17s because
-/// the CONTINUE TEARDOWN frees the menu-era renderer we kicked, and our post-teardown table rebuild
-/// creates NEW renderer objects the slot-only latch refused to re-kick. Re-kick when the table's
+/// model-live +16.28s), refuting the streaming-contention theory -- the model dies at ~+17s because
+/// the continue TEARDOWN frees the menu-era renderer we kicked, and our post-teardown table rebuild
+/// creates new renderer objects the slot-only latch refused to re-kick. Re-kick when the table's
 /// renderer identity changes; the 755-landmine fix makes a re-kick on the fresh modelless renderer
 /// safe (754-only).
 pub use er_telemetry_core::counters::PORTRAIT_KICK_RENDERER;
-/// SLOT-KEYED KICK LATCH (rebuild-storm root fix, run #4 tripwire `latches=0/1/0`; slot-keyed per
+/// Slot-KEYED kick latch (rebuild-storm root fix, run #4 tripwire `latches=0/1/0`; slot-keyed per
 /// user eyewitness 2026-07-03 "wrong character rendered the whole load, no swap"). The engine's
-/// global refresh (dump FUN_1409aa7d0) raises the +0x754/+0x755 request latches once per PROFILE
-/// DATA CHANGE, gated on both reading 0. Our cadence re-kick hit the mid-pipeline phase where the
-/// model is dead AND the latches are already consumed, re-raising them -- so `STEP_Wait_Play` saw
+/// global refresh (dump FUN_1409aa7d0) raises the +0x754/+0x755 request latches once per profile
+/// data change, gated on both reading 0. Our cadence re-kick hit the mid-pipeline phase where the
+/// model is dead and the latches are already consumed, re-raising them -- so `STEP_Wait_Play` saw
 /// +0x755 != 0 on every pass and re-entered the rebuild state (7) forever: ~1 rebuild/second, anim
 /// reset to pose 0 each time, lighting reset = the user-visible shadow flicker, portrait never
 /// animated. A blanket one-shot is wrong the other way: ac0 (`portrait_loaded_slot`) can still be
@@ -189,13 +189,13 @@ pub use er_telemetry_core::counters::PORTRAIT_KICK_RENDERER;
 pub use er_telemetry_core::counters::PORTRAIT_KICK_SLOT_KEY;
 /// Last confirmed loaded slot + 1 seen by the display tick (0 = none yet). User directive
 /// 2026-07-03: never show the previous character's head between selecting a character and the
-/// load-commit -- ac0 flips at deserialize, and pixels published before the flip belong to the OLD
+/// load-commit -- ac0 flips at deserialize, and pixels published before the flip belong to the old
 /// slot's model. On a flip the displayed snapshot is wiped instantly (hidden) and the corrective
 /// kick republished the right head when ready. Residual gap: the stale-slot pixels can still show
 /// for the ac0-flip latency (~1s) on a cross-character manual reload; the proper future source for
 /// "what was clicked" is the load dialog's selected row, not ac0.
 pub use er_telemetry_core::counters::PORTRAIT_LAST_CONFIRMED_SLOT;
-/// ac0 FLAPS transiently mid-load (run #16: 5->3->5->3 within 1.3s -- load-time code touches other
+/// ac0 flaps transiently mid-load (run #16: 5->3->5->3 within 1.3s -- load-time code touches other
 /// slots), so a raw slot change must persist for `PORTRAIT_SLOT_FLIP_ACCEPT_TICKS` consecutive
 /// present ticks (~1s) before the pipeline believes it. Candidate = the differing value + 1;
 /// streak = consecutive ticks it has held.
@@ -214,8 +214,8 @@ pub const PORTRAIT_WINDOW_TARGET_PICK_NO: usize = 0;
 /// nothing may replace it for the life of the window.
 pub const PORTRAIT_WINDOW_TARGET_PICK_YES: usize = 1;
 pub const PORTRAIT_SLOT_FLIP_ACCEPT_TICKS: usize = 60;
-/// DEPTH-KEY branch attribution (the black-background-on-reload bug): every key call ends in
-/// exactly one of applied-fresh / applied-cached / NO-MASK (fail-open, the black frames); the
+/// Depth-key branch attribution (the black-background-on-reload bug): every key call ends in
+/// exactly one of applied-fresh / applied-cached / no-mask (fail-open, the black frames); the
 /// readback-side counters split the no-mask cause (async in-flight skip vs depth resource find
 /// failure vs dims mismatch vs no-gap). The old one-shot logs burned in window 1 and hid all
 /// window-2+ behavior.
@@ -232,7 +232,7 @@ pub use er_telemetry_core::counters::PORTRAIT_PUMP_BLOCK_OFF;
 /// Windows crash 2026-07-14 hit `FUN_141e90290` with rcx=0x20 because `FUN_141a02de0` passed a null
 /// wrapper+0x40 into the GX resource-state classifier; skip the drive until all four wrappers are ready.
 pub use er_telemetry_core::counters::PORTRAIT_PUMP_BLOCK_OFF_RESOURCE;
-/// PUMP-BLOCK REASON counters (run #7: modeldraws froze at 250 ~10s before the load-completed
+/// Pump-block reason counters (run #7: modeldraws froze at 250 ~10s before the load-completed
 /// window reset, cause unattributed). One per gate in the pump's path: renderer table entry
 /// invalid, vtable mismatch (renderer freed/replaced), offscreen pointer invalid, multi-model
 /// (menu churn). Exported as oracles + printed in the sweep line so a stall names its gate.
@@ -252,24 +252,24 @@ pub use er_telemetry_core::counters::PORTRAIT_ANIM_BOUND_ID;
 /// renderer+0x96c after the last bind attempt. `oracle_portrait_anim_handle`.
 pub use er_telemetry_core::counters::PORTRAIT_ANIM_HANDLE;
 /// renderer+0x96c read just before the first bind attempt; a value != sentinel proves the native
-/// anim-0 (static pose) bind resolved on this model, i.e. anim resources ARE loaded for it.
+/// anim-0 (static pose) bind resolved on this model, i.e. anim resources are loaded for it.
 pub use er_telemetry_core::counters::PORTRAIT_ANIM_HANDLE_BEFORE;
 /// Runtime value of the null-handle sentinel global (validates the sentinel RE at runtime; also
 /// settles whether it ever changes mid-run -- the old "~6Hz gparam word" theory predicts changes,
 /// the corrected sentinel reading predicts a constant).
 pub use er_telemetry_core::counters::PORTRAIT_ANIM_SENTINEL;
 /// Companion LUMA-delta gauge on the same downsample grid (same units): measures the per-frame
-/// LIGHTING FLICKER (plus any luma-visible motion). Comparing luma vs alpha metrics separates "the
+/// lighting flicker (plus any luma-visible motion). Comparing luma vs alpha metrics separates "the
 /// lighting changed" from "the body moved"; this also finally quantifies the reported flicker.
 pub use er_telemetry_core::counters::PORTRAIT_LUMA_FLICKER_LAST;
 pub use er_telemetry_core::counters::PORTRAIT_LUMA_FLICKER_MAX;
-/// PIXEL-MOTION oracle (the AGENTS.md rendered-output proof gate for "the portrait animates"),
-/// LIGHTING-IMMUNE by construction: the scene's lighting visibly changes every frame (user report
+/// Pixel-motion oracle (the AGENTS.md rendered-output proof gate for "the portrait animates"),
+/// lighting-immune by construction: the scene's lighting visibly changes every frame (user report
 /// 2026-07-03), so raw luma diffs cannot be the motion oracle. Instead this diffs the depth-keyed
-/// ALPHA SILHOUETTE (mean abs alpha delta x1000 between successive published frames on a 32x32
+/// alpha silhouette (mean abs alpha delta x1000 between successive published frames on a 32x32
 /// downsample): alpha comes from the depth buffer via `apply_depth_alpha_key` (applied to the pixels
-/// BEFORE publish), and depth does not respond to lighting -- only actual body/silhouette motion
-/// moves it. Updated ONLY when both the current and previous frame carry a real cutout (some
+/// before publish), and depth does not respond to lighting -- only actual body/silhouette motion
+/// moves it. Updated only when both the current and previous frame carry a real cutout (some
 /// transparent cells), so fail-open unkeyed frames cannot fake a spike. `_last` per publish, `_max`
 /// per run: an idle anim must push `_max` clearly above ~0 while lighting flicker alone cannot.
 pub use er_telemetry_core::counters::PORTRAIT_MOTION_METRIC_LAST;
@@ -285,9 +285,9 @@ pub use er_telemetry_core::counters::PROFILE_COLOR_FROM_BUNDLE_WINDOW_MARK;
 pub use er_telemetry_core::counters::PROFILE_COLOR_FROM_SCAN_WINDOW_MARK;
 pub use er_telemetry_core::counters::PROFILE_DEPTH_FROM_BFS_WINDOW_MARK;
 pub use er_telemetry_core::counters::PROFILE_DEPTH_FROM_CHAIN_WINDOW_MARK;
-/// The live `FD4TaskData*` (`param_2`/`frame` arg) the ENGINE passes to the profile DRAW task on its own
+/// The live `FD4TaskData*` (`param_2`/`frame` arg) the engine passes to the profile draw task on its own
 /// (sparse) calls -- captured in `per_frame_push_hook`. The GX enqueue routes the model into the correct
-/// OFFSCREEN render pass via this context, so driving the draw with OUR draw-phase task_data renders to the
+/// OFFSCREEN render pass via this context, so driving the draw with our draw-phase task_data renders to the
 /// wrong pass (nothing lands in the portrait RT). We reuse the most-recently-captured engine context for our
 /// per-frame drive instead. RE note: prior agents found this `frame` arg cannot be synthesized.
 pub use er_telemetry_core::counters::PROFILE_DRAW_TASK_CTX;
@@ -298,9 +298,9 @@ pub use er_telemetry_core::counters::PROFILE_DRIVE_CLOTH_SKIPS;
 /// Render-thread pump invocations skipped because the teardown fence was up (expect a handful per switch).
 pub use er_telemetry_core::counters::PROFILE_DRIVE_FENCE_SKIPS;
 pub use er_telemetry_core::counters::PROFILE_DRIVE_FENCE_SKIPS_WINDOW_MARK;
-/// Guard so `per_frame_push_hook` does NOT re-capture the context while WE are driving it (only the engine's
-/// own natural calls should seed `PROFILE_DRAW_TASK_CTX`). Doubles as the render-thread BUSY flag of the
-/// teardown fence protocol (see `PROFILE_RENDERER_TEARDOWN_FENCE`): it is set BEFORE the fence check on the
+/// Guard so `per_frame_push_hook` does not re-capture the context while we are driving it (only the engine's
+/// own natural calls should seed `PROFILE_DRAW_TASK_CTX`). Doubles as the render-thread busy flag of the
+/// teardown fence protocol (see `PROFILE_RENDERER_TEARDOWN_FENCE`): it is set before the fence check on the
 /// pump side, so the game-thread teardown can wait it out instead of freeing a renderer mid-drive.
 pub use er_telemetry_core::counters::PROFILE_IN_OUR_DRIVE;
 pub use er_telemetry_core::counters::PROFILE_MULTI_MODEL_PUBLISH_SKIPS_WINDOW_MARK;
@@ -312,7 +312,7 @@ pub use er_telemetry_core::counters::PROFILE_PUBLISH_SKIPPED_TORN_WINDOW_MARK;
 pub use er_telemetry_core::counters::PROFILE_PUBLISH_SKIPPED_UNKEYED_WINDOW_MARK;
 pub use er_telemetry_core::counters::PROFILE_PUBLISH_SKIPPED_UNPAIRED_WINDOW_MARK;
 /// Cross-thread teardown fence (freeze-after-capture relaxation, er-effects-rs-l1x 2026-07-03). The
-/// game-thread profile-renderer teardown (`profile_renderer_teardown_spare_hook`) raises this BEFORE any
+/// game-thread profile-renderer teardown (`profile_renderer_teardown_spare_hook`) raises this before any
 /// delete-enqueue runs (orphan reclaim + native table teardown) and lowers it after the native original
 /// returns; the render-thread pump sets `PROFILE_IN_OUR_DRIVE` first and then skips its drive while the
 /// fence is up. Both sides are SeqCst, so either the pump sees the fence and skips, or the teardown sees
@@ -321,7 +321,7 @@ pub use er_telemetry_core::counters::PROFILE_PUBLISH_SKIPPED_UNPAIRED_WINDOW_MAR
 /// captured frame.
 pub use er_telemetry_core::counters::PROFILE_RENDERER_TEARDOWN_FENCE;
 pub use er_telemetry_core::counters::PROFILE_RT_PIN_SWITCHES_WINDOW_MARK;
-/// Teardown fence waits that hit the bounded 10ms cap and proceeded anyway. MUST stay 0 -- nonzero means
+/// Teardown fence waits that hit the bounded 10ms cap and proceeded anyway. Must stay 0 -- nonzero means
 /// one frame of the old TOCTOU exposure leaked through (still strictly better than every frame).
 pub use er_telemetry_core::counters::PROFILE_TEARDOWN_FENCE_TIMEOUTS;
 /// Teardowns that found the pump mid-drive and waited for it to exit (any value is fine; proves the fence
@@ -331,7 +331,7 @@ pub use er_telemetry_core::counters::PROFILE_TEARDOWN_FENCE_WAITS;
 // half's publish floor: the compositor now applies the same floor before it draws, and this module
 // is `#[cfg(windows)]` while `portrait_overlay` is not, so the shared number had to live somewhere
 // both can see. It still arrives here through the crate prelude, so the uses below are unchanged.
-/// Frames whose mask cut SOMETHING but under the floor (the partial-mask band) -- held, counted.
+/// Frames whose mask cut something but under the floor (the partial-mask band) -- held, counted.
 pub use er_telemetry_core::counters::PROFILE_PUBLISH_SKIPPED_LOWMASK;
 pub use er_telemetry_core::counters::PROFILE_PUBLISH_SKIPPED_LOWMASK_WINDOW_MARK;
 /// Window mark for checker-classified readback frames (run 6 window 9: 266 frames vanished from the
@@ -339,19 +339,19 @@ pub use er_telemetry_core::counters::PROFILE_PUBLISH_SKIPPED_LOWMASK_WINDOW_MARK
 pub use er_telemetry_core::counters::PROFILE_READBACK_CHECKER_WINDOW_MARK;
 /// One-shot latch for the per-run ProfileSummary slot->character-name dump (hi2 attribution).
 pub use er_telemetry_core::counters::PROFILE_SLOT_NAMES_DUMPED;
-/// Per-window EMA of ACCEPTED tear scores (adaptive baseline for textured characters whose honest
+/// Per-window EMA of accepted tear scores (adaptive baseline for textured characters whose honest
 /// frames score high on the vertical-luma metric). 0 = window fresh; reset at each window reset.
 pub use er_telemetry_core::counters::PROFILE_TEAR_EMA;
-/// Display-frame index of the window's FIRST clean publish (usize::MAX = none yet this window):
+/// Display-frame index of the window's first clean publish (usize::MAX = none yet this window):
 /// how long the make-before-break bridge held the prior head. Snapshot + reset per window.
 pub use er_telemetry_core::counters::PROFILE_WINDOW_FIRST_KEYED_DISPLAY;
 pub use er_telemetry_core::counters::PROFILE_WINDOW_FIRST_KEYED_DISPLAY_LAST;
-// NATIVE SCENE-ALPHA KEYING (strategy pivot 2026-07-03). Deobf RVAs read directly from the deobf
+// Native scene-alpha KEYING (strategy pivot 2026-07-03). Deobf RVAs read directly from the deobf
 // disassembly of the engine's own offscreen clear (dump FUN_140bb73a0 -> deobf 0x140bb72b0,
 // shift -0xf0, scripts/dump-deobf-shift.py content-unique): pop a GX frame context from
 // g_GxDrawContext (pointer global at GX_DRAW_CONTEXT_RVA), clear the scene bundle's RTV
 // (bundle+0x30) through the frame's subcontext (+0x25c8), release the frame context. We replicate
-// that body with clear color {0,0,0,0} (the engine uses the SHARED opaque-black FloatVector4 at
+// that body with clear color {0,0,0,0} (the engine uses the shared opaque-black FloatVector4 at
 // dump 0x14329e9b0 -- 136 xrefs, not patchable), so the RT's alpha channel becomes the native
 // subject mask once the pump redraws only the model each frame.
 /// Deobf RVA of the GX frame-context pop (deobf 0x1419e5830; dump FUN_1419e5850).
@@ -368,17 +368,17 @@ pub const GX_FRAME_SUBCTX_OFFSET: usize = 0x25c8;
 pub use er_telemetry_core::counters::PROFILE_DRAW_TASK_CTX_LOGGED;
 /// One-shot latch for the model node-array enumerator (backdrop-part identification).
 pub use er_telemetry_core::counters::PROFILE_MODEL_PARTS_DUMPED;
-/// Count of per-frame model DRAW-task drives we issue (the enqueue/rasterize). Pairs with
+/// Count of per-frame model draw-task drives we issue (the enqueue/rasterize). Pairs with
 /// `oracle_loading_bg_portrait_rgba_version`: once this is ~per-frame, the version should climb past the
 /// old stuck ~4 if the per-frame rasterize lands.
 pub use er_telemetry_core::counters::PROFILE_PERFRAME_MODEL_DRAWS;
-/// Oracle of whether the POST-Continue SPARED renderer still has a live model post-Continue -- the
+/// Oracle of whether the post-Continue spared renderer still has a live model post-Continue -- the
 /// persistent-model path the cycling menu can't give. (Its companion PROFILE_PERFRAME_SPARED_DRAWS was
 /// removed 2026-08-31: no writer, printed as `spared[... draws=]` forever at 0.)
 pub use er_telemetry_core::counters::PROFILE_SPARED_MODEL_OK;
 /// Q4 keepalive oracle: g_GxDrawContext global (gamebase + this RVA). The offscreen draw rasterizes only
 /// when FUN_1419e5850(ctx) returns non-zero, i.e. the GX render-pass queue is non-empty: *(ctx+0xf8) !=
-/// *(ctx+0x100). We READ those two qwords non-destructively each draw frame (NO pop) to detect whether a
+/// *(ctx+0x100). We read those two qwords non-destructively each draw frame (no pop) to detect whether a
 /// GX pass is queued -- the decisive runtime question for whether a post-Continue / now-loading offscreen
 /// render can produce pixels at all. Counters: total samples vs frames the queue was non-empty.
 pub const GX_DRAW_CONTEXT_RVA: usize = 0x47ef360;
@@ -386,13 +386,13 @@ pub const GX_DRAW_CONTEXT_QUEUE_HEAD_OFFSET: usize = 0xf8;
 pub const GX_DRAW_CONTEXT_QUEUE_TAIL_OFFSET: usize = 0x100;
 pub use er_telemetry_core::counters::PROFILE_GX_QUEUE_NONEMPTY;
 pub use er_telemetry_core::counters::PROFILE_GX_QUEUE_SAMPLES;
-/// GX SUBCONTEXT POOL stat offsets (RE-confirmed via Ghidra Initilize@0x1419e7d10 + pop FUN_1419e5850):
+/// GX SUBCONTEXT pool stat offsets (RE-confirmed via Ghidra Initilize@0x1419e7d10 + pop FUN_1419e5850):
 /// the `+0xf0` member is a `Vector<subctx*>` whose floor pointer is at `+0xf8` and movable stack-top at
-/// `+0x100` (the pop checks `*(ctx+0xf8) == *(ctx+0x100)` for EMPTY, else pops `*(top-8)`, `top -= 8`). So
-/// the number of FREE (poppable) subcontexts this frame == `(*(ctx+0x100) - *(ctx+0xf8)) / 8`. The
-/// `+0x110` field is a 32-bit lazy-init USED-MASK indexed by `subctx+0x2580 & 0x1f`; once the pool has been
+/// `+0x100` (the pop checks `*(ctx+0xf8) == *(ctx+0x100)` for empty, else pops `*(top-8)`, `top -= 8`). So
+/// the number of free (poppable) subcontexts this frame == `(*(ctx+0x100) - *(ctx+0xf8)) / 8`. The
+/// `+0x110` field is a 32-bit lazy-init used-mask indexed by `subctx+0x2580 & 0x1f`; once the pool has been
 /// fully exercised its popcount == N (the allocated subcontext count = `min(config + clamp(threads,2,16),
-/// 32)`). DECISIVE OBSERVABLE: if free-depth stays > 0 across the loading screen, the pool is NOT the cause
+/// 32)`). Decisive OBSERVABLE: if free-depth stays > 0 across the loading screen, the pool is not the cause
 /// of the ~4x head refresh (pop never fails) -> the black readback is a cross-queue rasterize/sync issue.
 pub const GX_DRAW_CONTEXT_POOL_FLOOR_OFFSET: usize = 0xf8;
 pub const GX_DRAW_CONTEXT_POOL_TOP_OFFSET: usize = 0x100;
@@ -416,8 +416,8 @@ pub use er_telemetry_core::counters::PROFILE_LOOKAT_YAW_BITS;
 pub static PROFILE_LOOKAT_HOOK_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub use er_telemetry_core::counters::PROFILE_LOOKAT_HOOK_HITS;
 pub use er_telemetry_core::counters::PROFILE_LOOKAT_HOOK_INSTALLED;
-/// Set true once the DRAW-PHASE realtime task (`profile_lookat_realtime_draw_tick`) is live. While set,
-/// the `updateBoneModelSpace` detour SKIPS its own look-at write (passthrough only): the draw-phase task
+/// Set true once the draw-phase realtime task (`profile_lookat_realtime_draw_tick`) is live. While set,
+/// the `updateBoneModelSpace` detour skips its own look-at write (passthrough only): the draw-phase task
 /// owns the write+recompute+draw each frame via the trampoline, so the detour must not also post-multiply
 /// (that would double-apply / drift). The detour stays installed only to provide the clean recompute
 /// trampoline and to passthrough the engine's own natural recompute calls.
@@ -426,12 +426,12 @@ pub use er_telemetry_core::counters::PROFILE_LOOKAT_REALTIME;
 /// re-renders at the ~4s model-rebuild cadence, so the head appears to track the cursor with seconds of
 /// lag; driving the offscreen render each tick (menu phase only -- valid GxDrawContext) makes it smooth.
 pub use er_telemetry_core::counters::PROFILE_LOOKAT_RENDER_DRIVES;
-/// DRAW-PHASE SWEEP (diagnostic): the realtime draw task is registered in EACH of these candidate CS
+/// Draw-phase sweep (diagnostic): the realtime draw task is registered in each of these candidate CS
 /// task-group phases; every registration bumps its own `PROFILE_LOOKAT_PHASE_TICKS[i]` each frame, but
 /// only the phase whose index == `PROFILE_LOOKAT_SELECTED_PHASE` actually drives the draw. This lets one
-/// run measure which phases tick per-frame at the menu (vs GameSceneDraw, world-gated ~11%) AND switch
+/// run measure which phases tick per-frame at the menu (vs GameSceneDraw, world-gated ~11%) and switch
 /// the active draw phase live (write the index to `er-quickload-lookat-phase.txt`) without recompiling,
-/// until one renders the portrait smoothly every frame. Order MUST match `LOOKAT_DRAW_PHASE_NAMES` and
+/// until one renders the portrait smoothly every frame. Order must match `LOOKAT_DRAW_PHASE_NAMES` and
 /// the registration array in `spawn_game_task`. Default = AdhocDraw (index 5): adjacent to GameSceneDraw
 /// (same draw region -> live GX pool) but not world-scene-gated, so the best first bet for per-frame.
 pub const LOOKAT_DRAW_PHASE_COUNT: usize = 8;
@@ -452,7 +452,7 @@ pub static PROFILE_LOOKAT_SELECTED_PHASE: AtomicUsize = AtomicUsize::new(LOOKAT_
 /// FrameBegin-paced throttle counter for `profile_lookat_phase_diag_tick` (selector re-read + sweep log).
 pub use er_telemetry_core::counters::PROFILE_LOOKAT_PHASE_DIAG_COUNTER;
 /// Per-stage validity counters for the look-at resolution chain on a fixed probe slot (slot 0), bumped
-/// every FrameBegin frame so the sweep log shows EXACTLY where the ~89% drop is (vs guessing). Stages:
+/// every FrameBegin frame so the sweep log shows exactly where the ~89% drop is (vs guessing). Stages:
 /// [0]=renderer table-valid, [1]=model_ins(+0x778), [2]=anim-holder X(+0x948), [3]=importer(*(X+0x20)),
 /// [4]=skeleton, [5]=local-bone-data, [6]=bone-count-sane, [7]=frames-probed (denominator).
 pub const PROFILE_LOOKAT_STAGE_COUNT: usize = 8;
@@ -468,33 +468,33 @@ pub const PROFILE_LOOKAT_STAGE_NAMES: [&str; PROFILE_LOOKAT_STAGE_COUNT] = [
 ];
 pub static PROFILE_LOOKAT_STAGE_OK: [AtomicUsize; PROFILE_LOOKAT_STAGE_COUNT] =
     [const { AtomicUsize::new(0) }; PROFILE_LOOKAT_STAGE_COUNT];
-/// PORTRAIT PIPELINE GENERATION (worker-offload switch-safety primitive, 2026-07-06). Bumped at the top
+/// Portrait pipeline generation (worker-offload switch-safety primitive, 2026-07-06). Bumped at the top
 /// of `loading_portrait_window_reset` so any portrait consume job still in flight on the worker thread can
-/// detect that a window reset happened WHILE it was being processed: the consume re-reads this before it
+/// detect that a window reset happened while it was being processed: the consume re-reads this before it
 /// pins/publishes and DISCARDS if the value moved, so a stale head captured for the previous window can
 /// never be pinned/published into the next one. The render thread snapshots it into each job's `gen`.
 pub use er_telemetry_core::counters::PORTRAIT_PIPELINE_GEN;
-/// READBACK STALL SPLIT (diagnostic, 2026-07-06): microsecond accumulators for the three per-frame
+/// READBACK stall split (diagnostic, 2026-07-06): microsecond accumulators for the three per-frame
 /// render-thread costs of the coherent portrait readback, so we can see how much of the load-time stall
-/// an ASYNC ring buffer could remove (it hides only the GPU-WAIT) vs what stays on the render thread
+/// an ASYNC ring buffer could remove (it hides only the GPU-wait) vs what stays on the render thread
 /// (the CPU de-swizzle + the mask/key pass). `_COUNT` counts coherent readbacks; avg_us = sum/count.
-///   WAIT      = ExecuteCommandLists + Signal + WaitForSingleObject (removable by async).
+///   Wait      = ExecuteCommandLists + Signal + WaitForSingleObject (removable by async).
 ///   DESWIZZLE = Map + color un-swizzle + depth f32-reinterpret (stays on the render thread).
-///   MASK      = apply_depth_alpha_key histogram/IoU in the caller (stays on the render thread).
+///   Mask      = apply_depth_alpha_key histogram/IoU in the caller (stays on the render thread).
 pub use er_telemetry_core::counters::PORTRAIT_RB_COUNT;
 pub use er_telemetry_core::counters::PORTRAIT_RB_DESWIZZLE_US_SUM;
 pub use er_telemetry_core::counters::PORTRAIT_RB_MASK_COUNT;
 pub use er_telemetry_core::counters::PORTRAIT_RB_MASK_US_SUM;
 pub use er_telemetry_core::counters::PORTRAIT_RB_WAIT_US_SUM;
-/// DRIVE-FREEZE latch: set once a good capture publishes THIS load window, gating off the per-frame
-/// renderer drive (the freeze-after-capture UAF fix). Cleared at the window reset AND at a confirm
+/// Drive-freeze latch: set once a good capture publishes this load window, gating off the per-frame
+/// renderer drive (the freeze-after-capture UAF fix). Cleared at the window reset and at a confirm
 /// retarget, so the drive re-engages to render the newly-selected character. Distinct from
 /// `PROFILE_HAVE_KEYED_FRAME` below: this is per-window (freeze), that one is persistent (display).
 pub use er_telemetry_core::counters::PROFILE_BAKE_RGBA_CAPTURED;
 /// One-shot guard for dumping the excluding-SRV content texture (slot 102) for visual inspection.
 pub use er_telemetry_core::counters::PROFILE_CONTENT_EXCL_DUMPED;
-/// DISPLAY-AVAILABILITY signal: set the FIRST time a real depth-KEYED (masked) portrait is published
-/// and NOT cleared at the window reset/retarget, so the last good masked head keeps displaying while
+/// Display-availability signal: set the first time a real depth-KEYED (masked) portrait is published
+/// and not cleared at the window reset/retarget, so the last good masked head keeps displaying while
 /// the drive re-renders the next character. This is the make-before-break bridge: the composite shows
 /// this persisted frame until the new model produces its own keyed frame, which replaces it. Split
 /// from the drive-freeze latch so "re-engage the drive" and "keep showing the old head" are
@@ -505,13 +505,13 @@ pub use er_telemetry_core::counters::PROFILE_LOOKAT_DRAW_FRAME;
 pub use er_telemetry_core::counters::PROFILE_LOOKAT_RT_ALPHA_MAX;
 pub use er_telemetry_core::counters::PROFILE_LOOKAT_RT_CHANGED;
 pub use er_telemetry_core::counters::PROFILE_LOOKAT_RT_NONBLACK;
-/// Last RT center-region max RGB and max ALPHA (0..255) from the readback. The nonblack oracle only
-/// checks RGB, so a portrait that renders RGB content but with ALPHA=0 reads "nonblack" yet GFx
+/// Last RT center-region max RGB and max alpha (0..255) from the readback. The nonblack oracle only
+/// checks RGB, so a portrait that renders RGB content but with alpha=0 reads "nonblack" yet GFx
 /// alpha-composites it to fully transparent (black shows through). rgb_max>0 with alpha_max==0 is the
 /// signature of "renders black despite content" via a zero/premultiplied alpha channel.
 pub use er_telemetry_core::counters::PROFILE_LOOKAT_RT_RGB_MAX;
-/// IN-PROCESS PIXEL ORACLE (replaces the human-eyeball check). Each sample reads back the probe slot's
-/// offscreen RT AFTER the draw step and records: rt_samples (readbacks taken), rt_nonblack (head rendered,
+/// In-process pixel oracle (replaces the human-eyeball check). Each sample reads back the probe slot's
+/// offscreen RT after the draw step and records: rt_samples (readbacks taken), rt_nonblack (head rendered,
 /// not black -> no flicker), rt_changed (hash != previous -> RT content moved with the driven angle ->
 /// publish), rt_lasthash. These counters measure live portrait refresh/nonblack behavior.
 pub use er_telemetry_core::counters::PROFILE_LOOKAT_RT_SAMPLES;
@@ -522,59 +522,59 @@ pub use er_telemetry_core::counters::PROFILE_PORTRAIT_RETARGETS;
 /// the newly-selected character at the button press). Exposed as oracles.
 pub use er_telemetry_core::counters::PROFILE_PUBLISH_SKIPPED_UNKEYED;
 /// One-shot guards for dumping the content RT and the bound SRV to disk for visual inspection (0 = not
-/// yet dumped). Lets the agent SEE whether the readback "content" texture is actually the portrait vs a
+/// yet dumped). Lets the agent see whether the readback "content" texture is actually the portrait vs a
 /// scratch/world RT, and what the SRV holds, before choosing the fix.
 pub use er_telemetry_core::counters::PROFILE_RT_CONTENT_DUMPED;
 /// Count of forced D3D12 RT->SRV CopyResource calls (so the sampleable SRV the forge binds gets the
 /// rendered head every frame instead of the engine's rarely-fired resolve). >0 = the copy path runs.
 pub use er_telemetry_core::counters::PROFILE_RT_SRV_COPIES;
-/// Per-window successful RT->SRV copies (reset each window). The FAST-FAIL anchors on this, not on
+/// Per-window successful RT->SRV copies (reset each window). The fast-fail anchors on this, not on
 /// driven frames: the copy runs synchronously in the drive tick, so a healthy window's copy succeeds
 /// the same frame it drives (copies_window > 0 immediately), while a never-renders window (the copy
-/// resolve fails / RT stays black -- Da BEAST) keeps copies_window == 0 forever. Anchoring here makes
-/// the fast-fail frame-exact WITHOUT a grace fudge and without false-tripping the boot window (which
+/// resolve fails / RT stays black -- Da beast) keeps copies_window == 0 forever. Anchoring here makes
+/// the fast-fail frame-exact without a grace fudge and without false-tripping the boot window (which
 /// publishes one GPU-pipeline frame after its copy succeeds).
 pub use er_telemetry_core::counters::PROFILE_RT_SRV_COPIES_WINDOW;
 /// One-shot guard for the RT/SRV resource-identity diagnostic log.
 pub use er_telemetry_core::counters::PROFILE_RT_SRV_COPY_DIAGGED;
 pub use er_telemetry_core::counters::PROFILE_SRV_DUMPED;
-/// TORN-READBACK detector (pixel semaphore for the scanline-corruption the user saw 2026-07-03). The
+/// Torn-READBACK detector (pixel semaphore for the scanline-corruption the user saw 2026-07-03). The
 /// offscreen RT readback has no cross-queue sync against the game's render of that RT, so when the
 /// per-frame drive is active our copy reads rows mid-write -> horizontal scanline tearing. The score
-/// is the average absolute VERTICAL luma step across the masked (head) region: a clean face render is
+/// is the average absolute vertical luma step across the masked (head) region: a clean face render is
 /// smooth vertically (low), a torn readback has random per-row jumps (high). Publishing gates on
 /// score <= threshold so a torn frame is never displayed -- the make-before-break bridge keeps the
-/// last CLEAN masked head instead. Score range 0..255; the threshold is deliberately sensitive
+/// last clean masked head instead. Score range 0..255; the threshold is deliberately sensitive
 /// (better to hold the prior clean head than flash garbage). `_last`/`_max` are oracles; the skip
-/// counter proves the gate fires; a bimodal last-distribution in the log says clean frames DO land
+/// counter proves the gate fires; a bimodal last-distribution in the log says clean frames do land
 /// (gate suffices) vs unimodal-high (all torn -> the readback needs real GPU sync).
 // Clean face frames score 1-7 (runs 10m/10n); torn frames 16 (mild, run 10n) to 80 (severe, run
 // 10m). 34 let the mild-16 tear through and -- because the freeze-after-capture latches the first
 // published frame -- it froze on that garbage for the whole window. Tightened to 10: just above the
-// clean band, below even mild tearing. Rejection is SAFE (the bridge holds the prior clean head and
+// clean band, below even mild tearing. Rejection is safe (the bridge holds the prior clean head and
 // the drive keeps animating until a clean frame lands), so err tight.
 pub const PROFILE_TEAR_SCORE_THRESHOLD: usize = 10;
-/// The skip class of the MOST RECENT rejected frame (1=torn 2=unkeyed 3=badiou 4=lowmask, 0=none).
+/// The skip class of the most recent rejected frame (1=torn 2=unkeyed 3=badiou 4=lowmask, 0=none).
 /// Set in the publish block; read by the fast-fail so the immediate failure log names this exact
 /// frame's cause (the fast-fail runs the same tick, right after the publish attempt).
 pub use er_telemetry_core::counters::PORTRAIT_LAST_SKIP_CLASS;
 /// The dominant skip-cause of the most recent publish-failure window (for the oracle/log): 1=torn,
 /// 2=unkeyed, 3=badiou, 4=lowmask, 5=checker, 6=multi-model, 7=unpaired provenance,
-/// 8=no RT->SRV copy, 9=no color/depth provenance, 0=none/other. Lets the harness report WHY
+/// 8=no RT->SRV copy, 9=no color/depth provenance, 0=none/other. Lets the harness report why
 /// without parsing the log.
 pub use er_telemetry_core::counters::PORTRAIT_WINDOW_PUBLISH_FAIL_CAUSE;
 /// Per-window one-shot latch so the fast-fail trips PORTRAIT_WINDOW_PUBLISH_FAILURES exactly once.
 pub use er_telemetry_core::counters::PORTRAIT_WINDOW_PUBLISH_FAIL_LATCHED;
-/// HARNESS-FAILURE semaphore (user directive 2026-07-06): the publish gates (torn/unkeyed/badiou/
-/// lowmask) must NOT silently degrade the product by skip-and-continue -- when a real loading window
-/// renders frames but publishes ZERO clean portraits, the feature is broken for that character and the
-/// research harness must FAIL and tear down so the root render is fixed, rather than papering over it
+/// Harness-failure semaphore (user directive 2026-07-06): the publish gates (torn/unkeyed/badiou/
+/// lowmask) must not silently degrade the product by skip-and-continue -- when a real loading window
+/// renders frames but publishes zero clean portraits, the feature is broken for that character and the
+/// research harness must fail and tear down so the root render is fixed, rather than papering over it
 /// with a blank/held frame. Bumped once per such window at reset; a per-cause breakdown stays in the
 /// window-reset log + the cumulative torn/unkeyed oracles. The readiness watcher fails the run when
 /// this is non-zero. Drive it to 0 (portrait renders for every character) to "get the feature right".
 pub use er_telemetry_core::counters::PORTRAIT_WINDOW_PUBLISH_FAILURES;
 pub use er_telemetry_core::counters::PROFILE_PUBLISH_CLEAN;
-/// Clean portraits published in the CURRENT window (reset each window). Read by the FAST-FAIL check so
+/// Clean portraits published in the current window (reset each window). Read by the fast-fail check so
 /// the failure trips mid-window instead of at window close (user 2026-07-06: a broken window must fail
 /// immediately, not after driving the whole ~24s load).
 pub use er_telemetry_core::counters::PROFILE_PUBLISH_CLEAN_WINDOW;
@@ -582,12 +582,12 @@ pub use er_telemetry_core::counters::PROFILE_PUBLISH_SKIPPED_TORN;
 pub use er_telemetry_core::counters::PROFILE_TEAR_SCORE_CLEAN_MIN;
 pub use er_telemetry_core::counters::PROFILE_TEAR_SCORE_LAST;
 pub use er_telemetry_core::counters::PROFILE_TEAR_SCORE_MAX;
-/// FAST-FAIL threshold: driven frames of a LIVE model with ZERO rendered frames before the window is
-/// declared broken. ZERO (user directive 2026-07-06): no margin. The semaphore is a BUG-FINDER, not a
-/// display-quality tolerance -- it exposed that our feature cannot render a VALID save (Da BEAST). Do
+/// Fast-fail threshold: driven frames of a live model with zero rendered frames before the window is
+/// declared broken. Zero (user directive 2026-07-06): no margin. The semaphore is a bug-finder, not a
+/// display-quality tolerance -- it exposed that our feature cannot render a valid save (Da beast). Do
 /// not loosen it to stop it firing; fix the render so every valid save produces frames. If a save trips
 /// it, that save has a real, previously-hidden bug (the stale-bridge used to mask it with the prior
-/// character). Drive the failures to 0 by FIXING the render, never by widening this.
+/// character). Drive the failures to 0 by fixing the render, never by widening this.
 pub const PORTRAIT_PUBLISH_FAIL_GRACE_DRIVES: usize = 0;
 // (Removed the testing tear fail-fast: run autostep10m confirmed the detector separates cleanly
 // -- clean frames score 1-7, the torn frame scored 80 -- and torn frames are rare, so the skip gate
@@ -595,35 +595,35 @@ pub const PORTRAIT_PUBLISH_FAIL_GRACE_DRIVES: usize = 0;
 
 pub use er_telemetry_core::counters::PROFILE_DISPLAY_FRAMES_WINDOW;
 pub use er_telemetry_core::counters::PROFILE_DISPLAY_FRAMES_WINDOW_LAST;
-/// ANIMATION-STALL semaphore (user 2026-07-03: the portrait "stops animating" and stays frozen the
+/// Animation-stall semaphore (user 2026-07-03: the portrait "stops animating" and stays frozen the
 /// whole post-continue loading screen on some loads). freeze-after-capture stops the per-frame drive
-/// once the first keyed frame is captured, so the head goes static early. These count, PER loading
+/// once the first keyed frame is captured, so the head goes static early. These count, per loading
 /// window: drive frames actually rendered (animated) vs present frames the head was displayed. A low
 /// drive/display ratio == froze early (the user's complaint); ~1.0 == animated throughout. Snapshotted
 /// to `_LAST` at the window reset for the oracle, then zeroed for the next window.
 pub use er_telemetry_core::counters::PROFILE_DRIVE_FRAMES_WINDOW;
 pub use er_telemetry_core::counters::PROFILE_DRIVE_FRAMES_WINDOW_LAST;
 // PROFILE_BOUND_GX_RGB_MAX / _ALPHA_MAX removed 2026-08-31. They were meant to carry RGB/alpha-max
-// stats from a readback of the texture actually BOUND into the now-loading container, but no readback
+// stats from a readback of the texture actually bound into the now-loading container, but no readback
 // ever wrote them. Worse than a plain dead counter: both are sentinel-initialised to 0xffff, so the
 // `loading-portrait-chain: ... boundtex[rgb_max= alpha_max=]` log line printed a plausible-looking
-// 65535 rather than an obviously-absent 0. Re-add WITH the readback that fills them.
+// 65535 rather than an obviously-absent 0. Re-add with the readback that fills them.
 pub use er_telemetry_core::counters::PROFILE_LOOKAT_RT_LASTHASH;
 /// Last slot the oracle sampled (the present-model slot cycles), so "changed" is only counted when two
-/// consecutive samples are the SAME slot -- otherwise a slot switch (different character) would look like
+/// consecutive samples are the same slot -- otherwise a slot switch (different character) would look like
 /// motion. usize::MAX = none yet.
 pub use er_telemetry_core::counters::PROFILE_LOOKAT_RT_LASTSLOT;
 /// RT-readback oracle throttle: sample every N draw-frames (readback is a GPU->CPU stall; don't do it
 /// every frame). 8 -> ~7 samples/s, plenty to measure nonblack% and hash-change%.
 pub const LOOKAT_RT_SAMPLE_INTERVAL: usize = 8;
-/// DEFAULT-OFF gate for the ProfileSelect load flow (see `profile_select_load_flow_enabled`). When
-/// false (default) `product_core_autoload_tick` takes the PROVEN native Continue commit, byte-for-byte
+/// Default-off gate for the ProfileSelect load flow (see `profile_select_load_flow_enabled`). When
+/// false (default) `product_core_autoload_tick` takes the proven native Continue commit, byte-for-byte
 /// unchanged; the human flips this on only to probe-test the portrait-rendering ProfileSelect path
 /// (fire the Load-Game row -> live ProfileLoadDialog -> hold for the portrait render -> STAGE2 commit).
 pub const PROFILE_SELECT_LOAD_FLOW_ENABLED: bool = false; // proven Continue char-load is the default; ProfileSelect flow is blocked by the accept-byte open+drain coupling (the only reliable menu-open commits Continue), so it can't get a window to navigate Load-Game -- left gated-off for the record
 /// `MarkProfileIndexAsUsed` (deobf 0x140262250): sets `ProfileSummary->saveSlotsStates[slot] = true`
 /// (the `bool[10]` at `ProfileSummary+0x8` that the refresh `FUN_1409aa680` gates each slot's portrait
-/// render on). `fn(summary, slot)`. NOT called by the ProfileSelect flow by default -- the live
+/// render on). `fn(summary, slot)`. Not called by the ProfileSelect flow by default -- the live
 /// ProfileLoadDialog's own header-read marks the slots; wire a call only if a runtime probe shows the
 /// target slot stays unmarked (`saveSlotsStates[slot]==0`) inside the open dialog.
 pub const PROFILE_MARK_SLOT_USED_RVA: usize = 0x262250;

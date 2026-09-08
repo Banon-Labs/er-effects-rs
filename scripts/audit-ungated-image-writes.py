@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
-"""SWEEP 2 detector: writes derived from a game-image RVA that no HOOK audit can see.
+"""Sweep 2 detector: writes derived from a game-image RVA that no hook audit can see.
 
 MinHook-shaped audits look at detour installs. These four classes never touch MinHook,
 so nothing had ever checked them:
 
-  SLOT     a store into a function-pointer table / vtable slot (`*(slot as *mut usize) = ...`)
-  RVA_ARG  a byte-patch primitive that takes `(base, rva)` as SEPARATE ARGUMENTS -- invisible
+  Slot     a store into a function-pointer table / vtable slot (`*(slot as *mut usize) = ...`)
+  RVA_ARG  a byte-patch primitive that takes `(base, rva)` as separate arguments -- invisible
            to any regex looking for the text `base + SOMETHING_RVA`
-  SENTINEL `game_data_addr(..) + offset`, which destroys the `0`-means-refused sentinel:
+  sentinel `game_data_addr(..) + offset`, which destroys the `0`-means-refused sentinel:
            a refusal on row 3 yields the address 24, and `if addr != 0` waves it through
-  RAW      a raw store whose address expression contains `base + *_rva` in any casing
+  raw      a raw store whose address expression contains `base + *_rva` in any casing
 
-Every class has a POSITIVE CONTROL in `--selftest`, because a detector that reports zero
+Every class has a positive control in `--selftest`, because a detector that reports zero
 is indistinguishable from a detector that matches nothing: `audit-1170-readiness.py`
-reported ZERO ungated writes while six existed, and its `HAND_BUILT` pattern required an
+reported zero ungated writes while six existed, and its `HAND_BUILT` pattern required an
 uppercase `RVA` so `base + spec.rva` matched 0 of 40 real sites.
 
 Exits 1 on any finding (since 2026-08-31). It used to only report, and it reported six
 findings that were every one of them false: two were the primitives' own `fn` declarations
-and four were call sites of primitives that gate INTERNALLY. With those two matcher faults
+and four were call sites of primitives that gate internally. With those two matcher faults
 fixed the true count is zero, so the class can be held at zero instead of narrated.
 The complementary ratchet is `scripts/audit-1170-readiness.py`.
 """
@@ -42,7 +42,7 @@ STORE = re.compile(
     r"|\)\s*\.\s*write(?:_volatile|_unaligned)?\s*\("
     r"|\bcopy_nonoverlapping\s*\("
 )
-# `base + FOO_RVA` / `base + spec.rva` / `module_base + rva` -- lowercase included ON PURPOSE.
+# `base + FOO_RVA` / `base + spec.rva` / `module_base + rva` -- lowercase included on purpose.
 IMAGE_ADDR = re.compile(
     r"\b(?:base|image_base|module_base|game_base|module)\s*\+\s*"
     r"((?:[A-Za-z_][A-Za-z0-9_]*(?:::|\.))*"
@@ -51,21 +51,21 @@ IMAGE_ADDR = re.compile(
 # The byte-patch primitives, which take `(base, rva)` as arguments and so carry no `base + rva`
 # text for IMAGE_ADDR to find.
 RVA_ARG_CALL = re.compile(r"\b(patch_3byte_stub|apply_xor_ret_stub)\s*\(")
-# `fn patch_3byte_stub(` is the DEFINITION, not a call. It matched RVA_ARG until 2026-08-31 and
+# `fn patch_3byte_stub(` is the definition, not a call. It matched RVA_ARG until 2026-08-31 and
 # accounted for 2 of the 6 findings -- the same self-match that put four er-hook wrappers on
 # audit-installer-partial-failure's list.
 RVA_ARG_DEF = re.compile(r"\bfn\s+$")
-# WHERE THE GATE ACTUALLY LIVES (2026-08-31). The other four RVA_ARG findings were the four real
+# Where the gate actually lives (2026-08-31). The other four RVA_ARG findings were the four real
 # call sites in `er-title-flow`, and every one of them was already safe: `patch_3byte_stub` and
 # `apply_xor_ret_stub` each open by resolving `base + rva` through
 # `er_game_base::game_build::resolve_game_address`, refuse on `None`, then audit the site with
-# `detour_site::write_site_is_sound` and confirm the expected first byte. The gate is INSIDE the
+# `detour_site::write_site_is_sound` and confirm the expected first byte. The gate is inside the
 # primitive, which is the right place for it -- a per-call-site gate would be four copies of one
 # rule, and the class as originally written could not distinguish "ungated" from "gated somewhere
 # this regex cannot see", so it reported all six as findings and gated nothing.
 #
 # The invariant that is actually worth failing a build over is therefore not "does this call site
-# gate" but "does the PRIMITIVE still gate". Delete that `resolve_game_address` line and all four
+# gate" but "does the primitive still gate". Delete that `resolve_game_address` line and all four
 # call sites silently become raw writes into a 1.17 image at 1.16.2 offsets, with no other check in
 # the tree noticing. So: a call site is reported only when the primitive it calls has lost its
 # gate, and a primitive whose definition is not in the scanned set is treated as ungated
@@ -144,7 +144,7 @@ def scan_text(path: str, src: str, gating: dict[str, bool] | None = None) -> lis
     mlines = mask.splitlines()
     gating = {} if gating is None else gating
 
-    # RVA_ARG: a call to a primitive that takes (base, rva) separately AND has lost its own
+    # RVA_ARG: a call to a primitive that takes (base, rva) separately and has lost its own
     # internal version gate. A gated primitive is the correct design, not a finding -- see the
     # comment on PRIMITIVE_GATE.
     for m in RVA_ARG_CALL.finditer(mask):
@@ -162,12 +162,12 @@ def scan_text(path: str, src: str, gating: dict[str, bool] | None = None) -> lis
         end = close_paren(mask, m.end() - 1)
         tail = mask[end : end + 40]
         # `-` only when it is not the `->` of a return type: `game_data_addr(..) -> usize {` is the
-        # DEFINITION, not a call, and it matched here until 2026-08-30.
+        # definition, not a call, and it matched here until 2026-08-30.
         if re.match(r"\s*(?:\+|-(?!>))\s*[^=]", tail):
             line = src[: m.start()].count("\n") + 1
             out.append(("SENTINEL", line, "game_data_addr(..)+offset", lines[line - 1].strip()[:120]))
 
-    # SLOT and RAW: per store, look back WINDOW lines for how the address was built.
+    # Slot and RAW: per store, look back window lines for how the address was built.
     for i, mline in enumerate(mlines, 1):
         if not STORE.search(mline):
             continue
@@ -178,8 +178,8 @@ def scan_text(path: str, src: str, gating: dict[str, bool] | None = None) -> lis
         gated = GATED.search(window_mask)
         sm = SLOT_LHS.search(mline)
         name = (sm.group(1) or sm.group(2)) if sm else None
-        # SLOT is tested FIRST: it is the more specific class, and every SLOT store is also a
-        # RAW store, so testing RAW first would swallow it and the SLOT control would never fire.
+        # Slot is tested FIRST: it is the more specific class, and every slot store is also a
+        # raw store, so testing raw first would swallow it and the slot control would never fire.
         if name and SLOT_NAME.search(name) and not gated:
             if IMAGE_ADDR.search(window_mask) or re.search(
                 rf"\b{re.escape(name)}\s*=\s*[^;]*(?:RVA|rva)", window_src
@@ -237,7 +237,7 @@ fn control_gated(base: usize, idx: usize) {
 '''
 
 
-# The RVA_ARG class keys on the PRIMITIVE's gate, so it needs its own red/green pair: the same
+# The RVA_ARG class keys on the primitive's gate, so it needs its own red/green pair: the same
 # call site must fire when the primitive has lost `resolve_game_address` and stay silent when it
 # has not. Without the green half, restoring the gate could not be told from breaking the matcher.
 PRIMITIVE_GATED = '''

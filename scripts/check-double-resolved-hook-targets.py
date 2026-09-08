@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
-"""Fail when an address that a RESOLVER produced is handed to a hook API that RESOLVES AGAIN.
+"""Fail when an address that a RESOLVER produced is handed to a hook API that resolves again.
 
-WHAT THIS GATE FORBIDS, IN ONE LINE
+What this gate forbids, in one line
 -----------------------------------
 A value passed to a resolving hook API must not itself be the output of a resolver.
 
-WHY -- THE FAILURE IS SILENT AND IT LANDS ON A THIRD FUNCTION
+Why -- The failure is silent and it lands on a third function
 -------------------------------------------------------------
-`er_hook::MhHook::new` and `er_hook::register_union_hook` resolve 1.16.2 -> 1.17 INTERNALLY, via
+`er_hook::MhHook::new` and `er_hook::register_union_hook` resolve 1.16.2 -> 1.17 internally, via
 `resolve_target`. A caller that calls `er_game_base::mem::game_rva(RVA)` first and hands them the
-RESULT therefore resolves twice.
+result therefore resolves twice.
 
 Normally the second resolve is a no-op: the address is a 1.17 destination, `already_translated_in`
 recognises it and hands it back. That is exactly why this survived for so long. But an address can
-be BOTH a 1.17 destination of one row and the 1.16.2 SOURCE of a different row -- which happens
+be both a 1.17 destination of one row and the 1.16.2 source of a different row -- which happens
 whenever the region shift equals the local inter-function spacing, so `B - A == C - B`. On such an
 address translation wins over the shortcut (it must; see `already_translated_in`), and the second
 resolve silently returns C. No error, no refusal, no log line, and the feature's own log still
-prints the address it MEANT.
+prints the address it meant.
 
-MEASURED, 2026-08-30 18:42 run, three real detours installed on the wrong function:
+Measured, 2026-08-30 18:42 run, three real detours installed on the wrong function:
 
     game_rva @ own_load/drive.rs:373        0x140614870 -> 0x1406156c0
     MhHook::new 0x1406156c0                 0x1406156c0 -> 0x140616510   <-- detour landed here
@@ -32,16 +32,16 @@ MEASURED, 2026-08-30 18:42 run, three real detours installed on the wrong functi
 callers. Byte controls comparing 1.16.2@X against 1.17@X score 5/92, 0/46 and 7/72 -- genuinely
 unrelated code.
 
-The fix at every site is the same and it is structural: pass the UNRESOLVED `base + RVA` and let the
+The fix at every site is the same and it is structural: pass the unresolved `base + RVA` and let the
 hook API own the single resolve.
 
-WHY THE API LIST IS DERIVED AND NOT TRANSCRIBED
+Why the API list is derived and not transcribed
 -----------------------------------------------
 A transcribed list goes stale the moment someone adds a fourth entry point, and a gate that silently
 stops covering a function is worse than no gate. So the resolving entry points are computed by
-CALL-GRAPH CLOSURE over `resolve_target` / `resolve_detour_address` inside
+call-graph closure over `resolve_target` / `resolve_detour_address` inside
 `crates/er-hook/src/lib.rs`: any function whose body reaches one of those is resolving, and every
-public one of those is an API a caller can double-resolve through. The resolver PRODUCERS are
+public one of those is an API a caller can double-resolve through. The resolver producers are
 derived the same way, by closure over `resolve_game_address*` / `resolve_detour_address` inside
 `crates/er-game-base/src/{game_build,mem}.rs` -- which is how `game_rva` and `game_rva_named` get
 into the list without anyone typing them.
@@ -50,21 +50,21 @@ into the list without anyone typing them.
 `resolve_target` at all (they audit the running image's `.pdata` instead), so the closure never
 admits them.
 
-A NAME IS NOT ONLY BOUND BY A `let`
+A name is not only bound by a `let`
 -----------------------------------
 The first cut of this gate seeded its taint from `let` bindings alone, and on 2026-08-31 that let a
-real defect through in `er-refill-all::install`: the hook target was an element of an ARRAY LITERAL
+real defect through in `er-refill-all::install`: the hook target was an element of an array literal
 destructured by a `for` pattern, so nothing seeded, and the `register_shared_hook(target, ..)` call
 scored clean while one of its two rows resolved twice. `for <pattern> in [ .. ]` is therefore a
-binding site too -- decomposed COLUMN BY COLUMN so that a table which resolves one column for a read
+binding site too -- decomposed column by column so that a table which resolves one column for a read
 and passes a different, raw column to the hook API stays clean. See the block comment above
 `for_pattern_bindings`.
 
-NON-VACUITY
+Non-VACUITY
 -----------
-`--selftest` asserts the matcher on frozen controls: the pre-fix shape of `drive.rs:373` MUST be
-flagged, the post-fix shape MUST NOT be, the pre-fix `for`-pattern table from `er-refill-all` MUST
-be flagged while its read-only and mixed-column lookalikes MUST NOT, a blinded API list MUST
+`--selftest` asserts the matcher on frozen controls: the pre-fix shape of `drive.rs:373` must be
+flagged, the post-fix shape must not be, the pre-fix `for`-pattern table from `er-refill-all` must
+be flagged while its read-only and mixed-column lookalikes must not, a blinded API list must
 collapse the site count and trip the frozen minimum, and the derived lists must still contain the
 entry points the runtime evidence names. A gate that cannot fail is a gate that proves nothing.
 """
@@ -89,7 +89,7 @@ RESOLVER_SEED_FILES = [
 # The two functions in `er-hook` that perform a 1.16.2 -> 1.17 detour translation. Anything that
 # reaches either of them resolves.
 HOOK_RESOLVE_SEEDS = {"resolve_target", "resolve_detour_address"}
-# The functions in `er-game-base` that PRODUCE a resolved address.
+# The functions in `er-game-base` that produce a resolved address.
 RESOLVER_SEEDS = {
     "resolve_game_address",
     "resolve_game_address_fmt",
@@ -97,9 +97,9 @@ RESOLVER_SEEDS = {
     "resolve_on_running_build",
 }
 
-# FROZEN MINIMUM. The number of call sites of a resolving hook API that this repo is known to
+# Frozen minimum. The number of call sites of a resolving hook API that this repo is known to
 # contain (140 on 2026-08-30). A matcher that goes blind -- a renamed API, a broken closure, a
-# regex that stops matching -- reports FEWER sites and trips this, instead of passing on an empty
+# regex that stops matching -- reports fewer sites and trips this, instead of passing on an empty
 # set and reporting "0 violations" as a success, which is the failure mode a green gate cannot
 # distinguish from a clean tree. Set just under the real count so ordinary churn does not trip it
 # and a collapse does. Raise it when the real count grows; never lower it to make a run green.
@@ -112,7 +112,7 @@ FROZEN_MIN_RESOLVERS = 5
 MAX_FIXPOINT_ROUNDS = 12
 
 # Names bound from a resolver that are allowed to reach a resolving hook API anyway, keyed by
-# `path:line` of the CALL. Empty on purpose: every occurrence found so far was a real bug, and an
+# `path:line` of the call. Empty on purpose: every occurrence found so far was a real bug, and an
 # allowlist entry here should be an argued exception, not a convenience.
 ALLOWLIST: set[str] = set()
 
@@ -250,11 +250,11 @@ class FnSpan:
 
 
 FN_DEF = re.compile(r"\bfn\s+([A-Za-z_]\w*)\s*(?:<[^{;]*?>)?\s*\(")
-# `impl Foo {`, `impl<T> Foo<T> {`, `impl Trait for Foo {` -- the SELF type is what a method belongs
+# `impl Foo {`, `impl<T> Foo<T> {`, `impl Trait for Foo {` -- the self type is what a method belongs
 # to, so the name after `for` wins when there is one.
 IMPL_DEF = re.compile(r"\bimpl\b(?:\s*<[^>]*>)?\s+(?P<a>[A-Za-z_][\w:]*)(?:\s*<[^>]*>)?"
                       r"(?:\s+for\s+(?P<b>[A-Za-z_][\w:]*))?")
-# A call, with the qualifier that precedes it. `AtomicUsize::new` and `MhHook::new` are DIFFERENT
+# A call, with the qualifier that precedes it. `AtomicUsize::new` and `MhHook::new` are different
 # functions, and conflating them is what made the first cut of this closure claim that
 # `MhHook::new_runtime_derived` resolves -- it reaches `dll_base`, which calls `OnceLock::new`.
 CALL = re.compile(r"(?P<dot>\.\s*)?(?:(?P<qual>[A-Za-z_]\w*)\s*::\s*)?(?P<name>[A-Za-z_]\w*)\s*\(")
@@ -371,9 +371,9 @@ def closure_over(paths: list[Path], seeds: set[str]) -> tuple[set[str], dict[str
 # INTERPROCEDURAL, and it has to be. Two functions in this workspace launder the taint across a
 # call boundary, and an intraprocedural matcher scores both of them clean:
 #
-#   * `mh_install_hook_once(..., addr, ...)` takes the address as a PARAMETER and passes it to
+#   * `mh_install_hook_once(..., addr, ...)` takes the address as a parameter and passes it to
 #     `register_union_hook`. Three of its seven callers hand it a `game_rva` result.
-#   * `save_flow_verify_rva(rva, ...) -> Option<usize>` RETURNS a `game_rva` result, and four call
+#   * `save_flow_verify_rva(rva, ...) -> Option<usize>` returns a `game_rva` result, and four call
 #     sites feed that straight into `mh_install_hook_once`.
 #
 # So both directions are closed by the same fixpoint that derives the API list: a function that
@@ -392,7 +392,7 @@ NAME_IN_PATTERN = re.compile(r"([A-Za-z_]\w*)\s*\)?\s*$")
 RETURNS = re.compile(r"\b(?:Some|Ok)\s*\(\s*([A-Za-z_]\w*)\s*\)|\breturn\s+([A-Za-z_]\w*)\s*;")
 
 # ---------------------------------------------------------------------------
-# `for <pattern> in [ ... ]` -- the OTHER binding site, and the one that hid a real defect.
+# `for <pattern> in [ ... ]` -- the other binding site, and the one that hid a real defect.
 #
 # A `let` is not the only way a name comes to hold a resolver's output. `er-refill-all`'s installer
 # registered its two hooks from a table:
@@ -404,20 +404,20 @@ RETURNS = re.compile(r"\b(?:Some|Ok)\s*\(\s*([A-Za-z_]\w*)\s*\)|\breturn\s+([A-Z
 #         register_shared_hook(target, handler, slot)
 #     }
 #
-# `target` is bound by the `for` PATTERN, never by a `let`, so the taint fixpoint seeded nothing and
+# `target` is bound by the `for` pattern, never by a `let`, so the taint fixpoint seeded nothing and
 # the `register_shared_hook(target, ..)` site scored clean while one of its two rows was resolving
 # twice. Measured before this was added: that shape reported `bindings=0`, `violations=0`.
 #
-# COLUMN-ALIGNED, NOT WHOLE-PATTERN, and that is the precision this gate is required to keep. The
+# Column-aligned, not whole-pattern, and that is the precision this gate is required to keep. The
 # obvious cheap version -- "if the iterable mentions a resolver anywhere, taint every name in the
-# pattern" -- falsely flags a table that resolves one column for a READ and passes a different,
+# pattern" -- falsely flags a table that resolves one column for a read and passes a different,
 # raw column to the hook API. So the array literal is decomposed positionally: element `i` of every
-# row lines up with name `i` of the pattern, and a name is tainted only when ITS OWN column
-# contains a resolver call. Resolving in order to READ an address is correct; only the hook APIs
+# row lines up with name `i` of the pattern, and a name is tainted only when its own column
+# contains a resolver call. Resolving in order to read an address is correct; only the hook APIs
 # double-resolve.
 #
 # When the shape cannot be decomposed with certainty -- a non-literal iterable, rows that are not
-# tuples of the pattern's arity -- NOTHING is tainted. That is exactly the behaviour before this
+# tuples of the pattern's arity -- Nothing is tainted. That is exactly the behaviour before this
 # block existed, so an undecodable shape can never manufacture a false positive; it only declines
 # to add reach. Precision over reach, per the header.
 # ---------------------------------------------------------------------------
@@ -510,7 +510,7 @@ def for_pattern_bindings(body: str) -> list[tuple[str, int, str]]:
         k = pattern_end + 2
         while k < len(body) and body[k].isspace():
             k += 1
-        # Only an array/slice LITERAL is decomposed. `impl Trait for Foo {` inside a body lands
+        # Only an array/slice literal is decomposed. `impl Trait for Foo {` inside a body lands
         # here too and is discarded by the same test, since it is followed by `{`, not `[`.
         if k >= len(body) or body[k] != "[":
             continue
@@ -642,12 +642,12 @@ def index_functions(root: Path) -> list[Fn]:
 def taint_in(fn: Fn, resolver_re: re.Pattern[str]) -> dict[str, list[int]]:
     """Names in `fn` bound from a resolver's output, each with every binding line.
 
-    A LIST PER NAME, not one line per name. `install_profile_row_hooks` rebinds `addr` from
+    A list per name, not one line per name. `install_profile_row_hooks` rebinds `addr` from
     `game_rva` six times in one function, once per hook it installs; keeping only the last binding
     made every call before it invisible and under-reported that file by three real violations. Each
-    call is matched against the NEAREST binding that precedes it, which is what shadowing means.
+    call is matched against the nearest binding that precedes it, which is what shadowing means.
 
-    TWO BINDING FORMS, not one: a `let`, and a `for <pattern> in [..]` whose matching COLUMN holds
+    Two binding forms, not one: a `let`, and a `for <pattern> in [..]` whose matching column holds
     a resolver call. See the block comment above [`for_pattern_bindings`] for why the second one is
     here and why it is column-aligned.
     """
@@ -682,8 +682,8 @@ def returns_taint(fn: Fn, tainted: dict[str, list[int]]) -> bool:
     * the return type must mention `usize`. An address producer returns `usize`, `Option<usize>`
       or `Result<usize, _>`; the `install_*` family returns `bool` and is not one.
     * only a real return is counted -- a `return` statement or the body's tail expression. The
-      first cut matched any `Ok(x)` / `Some(x)` in the body, which also matches every match-ARM
-      PATTERN, so a function that merely destructured a resolver's `Result` looked like it was
+      first cut matched any `Ok(x)` / `Some(x)` in the body, which also matches every match-arm
+      pattern, so a function that merely destructured a resolver's `Result` looked like it was
       returning one.
     """
     if "usize" not in fn.ret:
@@ -721,7 +721,7 @@ def build_regexes(
 def scan(seed_apis: set[str], seed_resolvers: set[str], root: Path | None = None) -> ScanResult:
     """Fixpoint over the indexed functions, then report.
 
-    Derived entries are CRATE-LOCAL. The seeds are workspace-wide because `er-hook` and
+    Derived entries are crate-local. The seeds are workspace-wide because `er-hook` and
     `er-game-base` are dependencies of everything, but a `fn install(...)` discovered to forward an
     address in one crate says nothing about a `fn install(...)` in another -- and treating it as if
     it did is how a single generic name cascades until the taint set is meaningless.
@@ -824,8 +824,8 @@ def derive_lists() -> tuple[set[str], set[str], dict[str, str]]:
     added, and says nothing when it does.
     """
     hook_reaching, hook_vis = closure_over([HOOK_LIB], HOOK_RESOLVE_SEEDS)
-    # An API is what a CALLER can reach: public, and not one of the internal seeds. The
-    # `*_runtime_derived` entry points are excluded BY CONSTRUCTION rather than by name -- they do
+    # An API is what a caller can reach: public, and not one of the internal seeds. The
+    # `*_runtime_derived` entry points are excluded by construction rather than by name -- they do
     # not reach `resolve_target`, so the closure never admits them.
     apis = {
         name
@@ -926,9 +926,9 @@ pub(crate) fn install_emit_result_hook() {
 }
 """
 
-# VERBATIM the pre-fix `er-refill-all::install` (git HEAD, 2026-08-31), trimmed to the loop. This is
-# a real defect that COMPILED and shipped, and the gate scored it clean: `target` is bound by the
-# `for` PATTERN, so nothing seeded the taint and the `register_shared_hook(target, ..)` call looked
+# Verbatim the pre-fix `er-refill-all::install` (git head, 2026-08-31), trimmed to the loop. This is
+# a real defect that compiled and shipped, and the gate scored it clean: `target` is bound by the
+# `for` pattern, so nothing seeded the taint and the `register_shared_hook(target, ..)` call looked
 # like every other correct one. Measured before the fix: bindings=0, violations=0.
 CONTROL_FOR_PATTERN_BAD = """
 pub(crate) fn install(base: usize) {
@@ -961,7 +961,7 @@ pub(crate) fn install(base: usize) {
 }
 """
 
-# The shipped fix: the same table with the dtor row handing over a RAW `base + RVA`.
+# The shipped fix: the same table with the dtor row handing over a raw `base + RVA`.
 CONTROL_FOR_PATTERN_GOOD = CONTROL_FOR_PATTERN_BAD.replace(
     """er_game_base::mem::game_data_addr(
                 base,
@@ -971,7 +971,7 @@ CONTROL_FOR_PATTERN_GOOD = CONTROL_FOR_PATTERN_BAD.replace(
     "base + DEPOSITORY_DIALOG_DTOR_RVA",
 )
 
-# THE LOOKALIKE THAT MUST NOT FIRE. Resolving in order to READ an address is correct -- only the
+# The LOOKALIKE that must not fire. Resolving in order to read an address is correct -- only the
 # hook APIs resolve a second time. A `for` table that resolves its column and then only reads it is
 # not a violation, and a matcher that flags it has stopped being about double-resolution.
 CONTROL_FOR_PATTERN_READ_ONLY = """
@@ -986,7 +986,7 @@ pub(crate) fn probe(base: usize) {
 }
 """
 
-# THE LOOKALIKE THAT FORCES COLUMN ALIGNMENT. One column is resolved for a read, a DIFFERENT column
+# The LOOKALIKE that forces column alignment. One column is resolved for a read, a different column
 # is passed raw to the hook API. The cheap "resolver anywhere in the iterable taints the whole
 # pattern" rule flags this; the column-aligned rule must not. Deleting the alignment and keeping
 # only this control is the fastest way to see the difference.
@@ -1047,7 +1047,7 @@ def selftest() -> int:
     for expected in ("game_rva", "game_rva_named"):
         if expected not in resolvers:
             problems.append(f"derived resolver list is missing {expected}: {sorted(resolvers)}")
-    # ...and must NOT have admitted the runtime-derived entry points, which resolve nothing. This
+    # ...and must not have admitted the runtime-derived entry points, which resolve nothing. This
     # is a consequence of the closure, not a name filter -- asserting it here is what would catch
     # someone reintroducing one by hand.
     for forbidden in ("new_runtime_derived", "register_union_hook_runtime_derived"):
@@ -1058,7 +1058,7 @@ def selftest() -> int:
         tmp = Path(raw)
         problems.extend(run_controls(apis, resolvers, tmp))
 
-        # 2. NON-VACUITY, the regression half. Blind each half of the matcher in turn; the frozen
+        # 2. Non-VACUITY, the regression half. Blind each half of the matcher in turn; the frozen
         #    controls must stop being flagged, and the whole-repo site count must collapse below
         #    the frozen minimum. A matcher that cannot be broken this way is not measuring
         #    anything, and a frozen minimum that a blind matcher still clears protects nothing.

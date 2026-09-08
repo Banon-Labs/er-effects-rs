@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Decompose the post-outro-skip build/settle to pin the init-gated menu_open floor.
 Reads the newest onscreen-capture log (or argv[1]) and prints, in ms from process start:
-  pab_dismiss, outro-skip fire, SetState(2/3/10), BUILD-done (dialog SM first != None),
-  SETTLE-done/menu_open (title-accept-byte), plus the build and settle sub-durations."""
+  pab_dismiss, outro-skip fire, SetState(2/3/10), build-done (dialog SM first != None),
+  settle-done/menu_open (title-accept-byte), plus the build and settle sub-durations."""
 import sys, glob, os, re
 
 log = sys.argv[1] if len(sys.argv) > 1 else sorted(
@@ -27,7 +27,7 @@ ss3, _ = first("SetState(owner", lambda l: "state=3)" in l)
 ss10b, _ = first("SetState(owner", lambda l: "state=10)" in l and "committed_was=3" in l)
 mo, _ = first("title-accept-byte: set")
 
-# BUILD-done = first build-floor frame whose SM is Some(...) (dialog became TitleTopDialog)
+# Build-done = first build-floor frame whose SM is Some(...) (dialog became TitleTopDialog)
 build_done = None
 for l in lines:
     if "build-floor:" in l and "sm(" in l and "=Some(" in l:

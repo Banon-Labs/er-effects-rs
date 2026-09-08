@@ -35,11 +35,11 @@ const TELEMETRY_FILE_NAME: &str = "er-save-disable-telemetry.json";
 /// Where this run's census semaphore goes: the launcher's redirect, else beside the game.
 ///
 /// This one matters more than the text log, because it is the run-stopping oracle. In the game
-/// directory it keeps ZERO previous generations -- [`write_snapshot`] publishes with a
+/// directory it keeps zero previous generations -- [`write_snapshot`] publishes with a
 /// write-tmp-then-rename, so the previous run's verdict is gone the instant this run installs,
 /// with no `.prev` behind it. A harness reading the fixed game-directory path during a
 /// concurrent session therefore scores somebody else's census as its own. Redirecting the
-/// WRITER at launch is the only fix that survives a killed run: a copy at teardown never
+/// writer at launch is the only fix that survives a killed run: a copy at teardown never
 /// happens for the run whose evidence matters most, and by teardown this run has already
 /// overwritten the last one's file anyway.
 fn telemetry_path() -> PathBuf {

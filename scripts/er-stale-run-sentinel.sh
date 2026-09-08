@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Tear down a live Elden Ring run the moment an edited file CONTRIBUTES TO A DLL THAT RUN LOADED.
+# Tear down a live Elden Ring run the moment an edited file contributes to a DLL that run loaded.
 #
-# WHY
+# Why
 # ---
 # A live run has DLLs loaded from a particular state of this tree. The instant a file that feeds one
 # of those DLLs changes, that run is STALE: its loaded code no longer matches the source, so anything
 # observed in it is evidence about a build that no longer exists. Two concrete ways that bit us:
 #
 #   * a newly built DLL "validated" inside a process that had loaded the previous one;
-#   * two live processes appending to the SAME log files next to the game exe, so one run's
+#   * two live processes appending to the same log files next to the game exe, so one run's
 #     lines land in the other's evidence -- and a per-process counter reading "#2" gets
 #     misread as one process doing something twice.
 #
@@ -17,72 +17,72 @@
 # moment. This sentinel does not rely on anyone remembering: it runs from the PostToolUse hook
 # that already fires on Edit/MultiEdit/Write, and kills the stale run automatically.
 #
-# WHY "GIT-TRACKED" WAS THE WRONG TEST
+# Why "GIT-TRACKED" was the wrong test
 # ------------------------------------
 # The first version tore down whenever the edited path was inside the repo and not gitignored. The
 # invariant it enforced is right; the test was far too broad, because "the repo cares about this
 # file" is not "this file is compiled into a DLL this run loaded". Every one of these killed a run
-# mid-measurement on 2026-08-04, each costing a user-driven invasion, and NONE of them changes a
+# mid-measurement on 2026-08-04, each costing a user-driven invasion, and none of them changes a
 # single byte of any loaded DLL:
 #
-#   * scripts/frida-trace-ersc.py, scripts/frida-steam-matchmaking-trace.py -- HOST-side frida
+#   * scripts/frida-trace-ersc.py, scripts/frida-steam-matchmaking-trace.py -- Host-side frida
 #     scripts, never linked into anything;
-#   * scripts/er-launch-gate.py -- a host-side gate that runs BEFORE a launch, not inside one;
+#   * scripts/er-launch-gate.py -- a host-side gate that runs before a launch, not inside one;
 #   * .cupcake/policies/claude/*.rego -- agent policy, not code at all (and a background subagent
 #     writing one tore down a run the main agent had just launched, after which the teardown was
 #     misattributed to the subagent).
 #
-# THE TEST NOW
+# The test now
 # ------------
-# Tear down only if the edited file plausibly contributes to a DLL the CURRENTLY RUNNING profile
+# Tear down only if the edited file plausibly contributes to a DLL the currently running profile
 # loads. In order:
 #
-#   1. outside the repo, or gitignored inside it   -> SKIP (build output and logs never make a run
+#   1. outside the repo, or gitignored inside it   -> skip (build output and logs never make a run
 #      stale; that is what stops a log line killing a run)
-#   2. nothing live                                -> SKIP (nothing at stake, and no cargo run)
-#   3. the loaded-DLL set cannot be determined     -> FALLBACK: tear down (see FAIL SAFE below)
+#   2. nothing live                                -> skip (nothing at stake, and no cargo run)
+#   3. the loaded-DLL set cannot be determined     -> FALLBACK: tear down (see fail safe below)
 #   4. inside a workspace crate                    -> tear down IFF that package is in the
-#      dependency closure of the loaded cdylibs, else SKIP
-#   5. under an inert top-level directory          -> SKIP
+#      dependency closure of the loaded cdylibs, else skip
+#   5. under an inert top-level directory          -> skip
 #   6. anything else                               -> FALLBACK: tear down
 #
 # The loaded-DLL set is ground truth, not a guess: the live `me3` process's command line carries
 # `-p <profile>`, the profile is TOML whose `[[natives]]` entries name the exact DLLs loaded, and
 # `cargo metadata` maps each of those DLL filenames back to the package that emits it. Deriving the
-# filename from the package name would be WRONG -- four crates override `[lib] name`
+# filename from the package name would be wrong -- four crates override `[lib] name`
 # (er-ags-stub -> amd_ags_x64.dll, er-inventory-sort -> er_inventory_sort.dll, ...), which is
-# the same trap scripts/check-me3-shell-coverage.py exists to catch -- so the cdylib TARGET name
+# the same trap scripts/check-me3-shell-coverage.py exists to catch -- so the cdylib target name
 # from cargo metadata is used instead. Nothing here is hardcoded.
 #
-# DEPENDENCY CLOSURE IS THE LOAD-BEARING PART. Editing crates/er-invasion-warp-core/src/*.rs changes
+# Dependency closure is the load-bearing part. Editing crates/er-invasion-warp-core/src/*.rs changes
 # er_invasion_warp.dll even though the crate names differ, and crates/er-game-base changes both
-# product DLLs. The closure is walked over cargo metadata's path-dependency edges, ALL kinds
+# product DLLs. The closure is walked over cargo metadata's path-dependency edges, all kinds
 # included (normal, build and dev): a dev-dependency cannot really reach the cdylib, but counting it
 # only over-triggers, and over-triggering is the safe direction.
 #
-# COST, MEASURED NOT GUESSED
+# Cost, measured not guessed
 # --------------------------
-# This runs on EVERY edit, so the added latency was measured rather than assumed (15 runs each,
+# This runs on every edit, so the added latency was measured rather than assumed (15 runs each,
 # this machine, 2026-08-04):
 #
 #   gate 1 short-circuit (outside repo / gitignored)   ~25 ms   -- unchanged from the old sentinel
 #   full classify, nothing else running                ~57 ms   -- +~32 ms
 #   full classify, game running and eating CPU        ~125 ms   -- +~95 ms
 #
-# `cargo metadata --no-deps` is 22 ms of that. Crucially the classify step runs ONLY when a run is
+# `cargo metadata --no-deps` is 22 ms of that. Crucially the classify step runs only when a run is
 # actually live: with nothing running the hook short-circuits before cargo is ever invoked, which is
-# the overwhelmingly common case. So no cache. A cached crate map would also fail in the WRONG
+# the overwhelmingly common case. So no cache. A cached crate map would also fail in the wrong
 # direction -- a map stale by one Cargo.toml edit reports "not in the closure" for a crate that now
 # is, i.e. it fails open, silently, which is the exact failure mode this whole file exists to avoid.
 #
-# FAIL SAFE, NOT OPEN
+# Fail safe, not open
 # -------------------
 # If the profile cannot be read, the crate map cannot be built, or the path cannot be classified,
-# fall back to the ORIGINAL behaviour and tear down. A sentinel that silently stops protecting is
+# fall back to the original behaviour and tear down. A sentinel that silently stops protecting is
 # worse than one that is occasionally too eager, because its failure mode is contaminated evidence
 # that nobody notices. Every decision is logged with the branch that produced it.
 #
-# THE LOG
+# The log
 # -------
 # Twice on 2026-08-04 "what tore this run down?" could not be answered after the fact -- the reason
 # went to the hook's stdout and nowhere else -- and both guesses were wrong (frida-gadget once, a
@@ -91,7 +91,7 @@
 # timestamp, verdict, branch, edited path, reason, live profiles, killed pids. "Which edit killed
 # the run" is now a lookup.
 #
-# USAGE
+# Usage
 #   scripts/er-stale-run-sentinel.sh check <path>              # tear down if <path> feeds a loaded DLL
 #   scripts/er-stale-run-sentinel.sh classify <path> [prof...] # print the verdict, kill nothing
 #   scripts/er-stale-run-sentinel.sh teardown                  # unconditional teardown + verify
@@ -113,10 +113,10 @@ REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 # literals (AGENTS.md "Reusable Tooling / Hard-Coded Path Corrections").
 SENTINEL_LOG="${ER_SENTINEL_LOG:-${XDG_STATE_HOME:-$HOME/.local/state}/er-mods-rs/stale-run-sentinel.log}"
 
-# Matched EXACTLY against /proc/<pid>/comm -- never a substring match on the full command line,
+# Matched exactly against /proc/<pid>/comm -- never a substring match on the full command line,
 # which is how `rsi`-matches-`version` style false positives happen.
 #
-# The kernel caps comm at TASK_COMM_LEN-1 = 15 characters, so a longer executable name NEVER
+# The kernel caps comm at TASK_COMM_LEN-1 = 15 characters, so a longer executable name never
 # appears in full. `start_protected_game.exe` is 24 characters: comparing it verbatim could not
 # match any process that has ever existed, so that entry silently protected nothing. Each name is
 # therefore compared against its 15-character truncation as well.
@@ -164,7 +164,7 @@ log_event() {
     "${profiles:--}" "${killed:--}" >>"$SENTINEL_LOG" 2>/dev/null || true
 }
 
-# Escalating teardown, then VERIFY. "I sent a signal" is not "it is gone", and every
+# Escalating teardown, then verify. "I sent a signal" is not "it is gone", and every
 # contamination so far came from assuming it was.
 teardown() {
   local pids
@@ -191,10 +191,10 @@ teardown() {
 }
 
 # Is this a path the repo cares about at all? Unchanged from the original sentinel, and still the
-# FIRST gate -- it is what keeps build output and logs from killing a run.
+# first gate -- it is what keeps build output and logs from killing a run.
 #
-# It deliberately does NOT use `git ls-files --error-unmatch` alone. That only matches files already
-# committed, so CREATING a new source file -- which invalidates a loaded DLL exactly as much as
+# It deliberately does not use `git ls-files --error-unmatch` alone. That only matches files already
+# committed, so creating a new source file -- which invalidates a loaded DLL exactly as much as
 # editing an existing one -- slipped straight through: a new `.rs` is untracked until it is `git
 # add`ed, the check returned false, and a live run was left running against a tree that had already
 # changed. Observed 2026-08-04, on the very first edit after the sentinel was written.
@@ -214,9 +214,9 @@ is_repo_source() {
   if git -C "$REPO_ROOT" ls-files --error-unmatch -- "$abs" >/dev/null 2>&1; then
     return 0
   fi
-  # Not committed yet. A BRAND NEW source file is still source. The discriminator is whether git
-  # ignores it: `check-ignore` exits 0 when the path IS ignored (target/, logs, scratch), which is
-  # exactly the set that must NOT trigger a teardown.
+  # Not committed yet. A brand new source file is still source. The discriminator is whether git
+  # ignores it: `check-ignore` exits 0 when the path is ignored (target/, logs, scratch), which is
+  # exactly the set that must not trigger a teardown.
   if git -C "$REPO_ROOT" check-ignore -q -- "$abs" 2>/dev/null; then
     return 1
   fi
@@ -225,10 +225,10 @@ is_repo_source() {
 
 # Does <path> feed a DLL the live run loaded? Prints one tab-separated line:
 #
-#   VERDICT \t BRANCH \t DETAIL \t PROFILES
+#   Verdict \t branch \t detail \t profiles
 #
-# VERDICT is TEARDOWN or SKIP. Any failure to answer prints TEARDOWN with a `fallback-*` branch --
-# never SKIP, because a wrong SKIP silently contaminates evidence.
+# Verdict is TEARDOWN or skip. Any failure to answer prints TEARDOWN with a `fallback-*` branch --
+# never skip, because a wrong skip silently contaminates evidence.
 #
 # With no profile arguments the live profiles are discovered from /proc. Explicit profile paths make
 # the classification testable (and debuggable) without a game running.
@@ -262,7 +262,7 @@ GAME_COMMS = ("eldenring.exe", "start_protected_game.exe")
 
 # Top-level directories that cannot contribute to any DLL. Each is host-side tooling, agent
 # configuration or prose -- nothing under them is compiled, linked or embedded. This list is
-# CROSS-CHECKED below against cargo metadata: if a workspace crate ever appears under one of these,
+# cross-checked below against cargo metadata: if a workspace crate ever appears under one of these,
 # the directory stops being treated as inert and the path falls through to the fail-safe branch.
 INERT_TOP_LEVEL = {
     "scripts",        # host-side helpers: frida scripts, launch gates, probe drivers, checks
@@ -297,7 +297,7 @@ def proc_ppid(pid):
             raw = fh.read()
     except OSError:
         return None
-    # The comm field is parenthesised and may itself contain spaces/parens, so split after the LAST
+    # The comm field is parenthesised and may itself contain spaces/parens, so split after the last
     # ')' rather than on whitespace from the left.
     try:
         tail = raw[raw.rindex(")") + 2:].split()
@@ -500,7 +500,7 @@ def main():
                 edges.add(owner)
         deps[pkg["name"]] = edges
 
-    # Packages whose cdylib the live profiles actually load. The cdylib TARGET name is used, not the
+    # Packages whose cdylib the live profiles actually load. The cdylib target name is used, not the
     # package name: four crates override `[lib] name`, so deriving the filename would silently miss
     # them (the trap scripts/check-me3-shell-coverage.py exists to catch).
     loaded_pkgs = {name for name, libs in cdylibs.items() if libs & stems}
@@ -513,7 +513,7 @@ def main():
         )
 
     # Forward closure over path-dependency edges: everything a loaded cdylib compiles in. Kept
-    # PER loaded cdylib as well as unioned, so the logged reason can name the DLL a given crate
+    # per loaded cdylib as well as unioned, so the logged reason can name the DLL a given crate
     # actually reaches instead of listing every DLL in the profile.
     def forward(seed):
         seen = set(seed)
@@ -657,7 +657,7 @@ for key in ("file_path", "notebook_path", "path"):
 
 # SC2317 ("command appears unreachable") fires for everything after the `cmd_hook` probe below.
 # The analysis reasons that `cmd_hook` always `exit`s -- which it does -- and concludes the rest
-# of this function is dead. It is not: `cmd_hook` is invoked on the right-hand side of a PIPELINE,
+# of this function is dead. It is not: `cmd_hook` is invoked on the right-hand side of a pipeline,
 # so it runs in a subshell and its exit terminates only that subshell. The checker does not model
 # that, so the finding is a false positive on every line here.
 # shellcheck disable=SC2317
@@ -669,7 +669,7 @@ selftest() {
   # ---- gate 1: is this a path the repo cares about at all -------------------------------------
   if is_repo_source "$REPO_ROOT/AGENTS.md"; then echo "  ok   tracked file recognised as repo source"; else
     echo "  FAIL tracked file not recognised"; fails=$((fails + 1)); fi
-  # A BRAND NEW source file counts, even though git has never heard of it. This is the case that
+  # A brand new source file counts, even though git has never heard of it. This is the case that
   # actually escaped on 2026-08-04: the first file created after the sentinel was written was a
   # new `.rs`, `ls-files --error-unmatch` said no, and a live run survived an edit it should not
   # have. Creating source invalidates a loaded DLL exactly as much as editing source.
@@ -678,7 +678,7 @@ selftest() {
   if is_repo_source "$newsrc"; then echo "  ok   brand-new untracked source file counts as repo source";
   else echo "  FAIL new source file not recognised (the 2026-08-04 escape)"; fails=$((fails + 1)); fi
   rm -f "$newsrc"
-  # A gitignored path does NOT count -- this is what keeps a log line or a build artefact from
+  # A gitignored path does not count -- this is what keeps a log line or a build artefact from
   # killing a run. `target/` is ignored in this repo.
   local ignored="$REPO_ROOT/target/.er-sentinel-selftest-ignored"
   mkdir -p "$REPO_ROOT/target" 2>/dev/null || true
@@ -693,7 +693,7 @@ selftest() {
   if is_repo_source ""; then echo "  FAIL empty path treated as repo source"; fails=$((fails + 1));
   else echo "  ok   empty path ignored"; fi
 
-  # ---- gate 2: does the edit feed a DLL THIS run loaded ---------------------------------------
+  # ---- gate 2: does the edit feed a DLL this run loaded ---------------------------------------
   # A synthetic profile stands in for a live run, so both directions are provable with no game
   # running and nothing killed. The natives need not exist on disk -- only their filenames are read.
   local prof="$tmpdir/selftest.me3"
@@ -723,7 +723,7 @@ TOML
     fi
   }
 
-  # The logged reason is the whole point of the log, so it has to be TRUE, not merely present.
+  # The logged reason is the whole point of the log, so it has to be true, not merely present.
   expect_detail() {
     local vpath="$1" want="$2" label="$3"
     vt_out="$(classify_path "$vpath" "$prof")"
@@ -740,7 +740,7 @@ TOML
   # The crate that directly builds a loaded DLL.
   expect_verdict "$REPO_ROOT/crates/er-invasion-warp/src/lib.rs" TEARDOWN "crate builds a loaded DLL"
   expect_verdict "$REPO_ROOT/crates/er-quickload/src/lib.rs" TEARDOWN "product crate builds a loaded DLL"
-  # A DIRECT dependency whose crate name does not resemble the DLL's. This is the case a
+  # A direct dependency whose crate name does not resemble the DLL's. This is the case a
   # filename-shaped rule gets wrong: er-invasion-warp-core is not er_invasion_warp.
   expect_verdict "$REPO_ROOT/crates/er-invasion-warp-core/src/lib.rs" TEARDOWN "direct dependency crate of a loaded DLL"
   # A TRANSITIVE dependency, several edges away from either loaded cdylib.
@@ -748,14 +748,14 @@ TOML
   expect_verdict "$REPO_ROOT/crates/er-tpf/src/lib.rs" TEARDOWN "deep transitive dependency crate"
   # A crate manifest, not just its sources.
   expect_verdict "$REPO_ROOT/crates/er-gfx/Cargo.toml" TEARDOWN "manifest of a crate in the closure"
-  # The logged reason must name the DLL the crate ACTUALLY reaches. er-invasion-warp-core is a
-  # dependency of er_invasion_warp ONLY -- er-quickload does not depend on it -- so a reason
+  # The logged reason must name the DLL the crate actually reaches. er-invasion-warp-core is a
+  # dependency of er_invasion_warp only -- er-quickload does not depend on it -- so a reason
   # that also blamed er_quickload.dll would send the next reader hunting the wrong DLL.
   expect_detail "$REPO_ROOT/crates/er-invasion-warp-core/src/lib.rs" \
     "pkg=er-invasion-warp-core feeds er_invasion_warp.dll" "reason names only the DLL it reaches"
-  # ORDER IS DERIVED, NOT AUTHORED: the reason joins the DLL list in sorted order, so this
+  # Order is derived, not AUTHORED: the reason joins the DLL list in sorted order, so this
   # literal has to follow the artifact names rather than the other way round. It flipped in the
-  # 2026-08-26 rename -- er_effects_rs.dll sorted BEFORE er_invasion_warp.dll, er_quickload.dll
+  # 2026-08-26 rename -- er_effects_rs.dll sorted before er_invasion_warp.dll, er_quickload.dll
   # sorts after it -- and a token-wise rename cannot know that.
   expect_detail "$REPO_ROOT/crates/er-game-base/src/lib.rs" \
     "feeds er_invasion_warp.dll,er_quickload.dll" "reason names BOTH DLLs a shared crate feeds"
@@ -790,9 +790,9 @@ TOML
   expect_verdict "$REPO_ROOT/.github/workflows/ci.yml" SKIP ".github/ workflow file"
   expect_verdict "$REPO_ROOT/.claude/settings.json" SKIP ".claude/ settings"
   expect_verdict "$REPO_ROOT/tests/pi-continuation-guard.test.ts" SKIP "tests/ (builds no DLL)"
-  # A crate that builds a DLL the live profile does NOT load. This is the discrimination the
+  # A crate that builds a DLL the live profile does not load. This is the discrimination the
   # whole change exists for: er_armament_icons.dll and er_input_harness.dll are real, buildable,
-  # me3-loadable DLLs -- they are simply not in THIS run.
+  # me3-loadable DLLs -- they are simply not in this run.
   expect_verdict "$REPO_ROOT/crates/er-armament-icons/src/lib.rs" SKIP "crate builds an UNLOADED DLL"
   expect_verdict "$REPO_ROOT/crates/er-input-harness/src/lib.rs" SKIP "input-harness crate not in this profile"
   expect_verdict "$REPO_ROOT/crates/er-telemetry/src/lib.rs" SKIP "telemetry shell not in this profile"
@@ -805,7 +805,7 @@ TOML
   if printf 'not json' | cmd_hook >/dev/null 2>&1; then echo "  ok   hook tolerates non-JSON stdin";
   else echo "  FAIL hook errored on non-JSON stdin"; fails=$((fails + 1)); fi
   # A name longer than the kernel's 15-char comm cap is still matched. Proven end to end against a
-  # REAL process rather than by re-deriving the truncation in the test: a copy of /bin/sleep named
+  # real process rather than by re-deriving the truncation in the test: a copy of /bin/sleep named
   # `start_protected_game.exe` gets comm `start_protected`, which the verbatim comparison this
   # replaced could never have matched. Detection only -- the process is killed by pid, never by
   # calling teardown, so this case cannot touch a live game.

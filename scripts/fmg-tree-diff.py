@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Diff two WitchyBND-extracted FMG XML trees id-by-id (e.g. 1.16.2 vs 1.17 msg/engus).
 
-Companion to `fmg-id-lookup.py`, which reads ONE tree. This one answers the
+Companion to `fmg-id-lookup.py`, which reads one tree. This one answers the
 version-drift question: which text ids were added, removed, or re-worded between
 two extractions of `msg/<lang>/*.msgbnd.dcx`.
 
 Both trees are produced by WitchyBND (`--passive --recursive --unpack --location <dir>`)
 and hold one `*.fmg.xml` per FMG with `<text id="N">string</text>` entries.
-Extracted game assets live OUTSIDE this repo; pass their paths in.
+Extracted game assets live outside this repo; pass their paths in.
 
 Usage:
   fmg-tree-diff.py <old_root> <new_root> [--only SUBSTR] [--ids-only] [--quiet-text]

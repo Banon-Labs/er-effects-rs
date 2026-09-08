@@ -1,45 +1,45 @@
 #!/usr/bin/env python3
-"""Fold a Rust integer constant whose value is an EXPRESSION, or say why it could not be.
+"""Fold a Rust integer constant whose value is an expression, or say why it could not be.
 
-WHY THIS EXISTS. Every tool in this repo that audits addresses or field offsets finds its
+Why this exists. Every tool in this repo that audits addresses or field offsets finds its
 population with a regex of the shape `const NAME: usize = (0x[0-9a-fA-F_]+)`. That regex answers
 "does the initialiser BEGIN with a hex literal", and two separate audits on 2026-08-31 hit the same
 wall from opposite ends because it is not the question either of them was asking:
 
-  * ADDRESS SIDE. `ADD_DEFAULT_FILE_LOAD_PROCESS_RVA: usize = 0x142658c60 - 0x140000000` is a real
+  * Address side. `ADD_DEFAULT_FILE_LOAD_PROCESS_RVA: usize = 0x142658c60 - 0x140000000` is a real
     `.text` function. The capture stops at the MINUEND, so the harvester recorded the absolute VA
     0x142658c60 -- 1.1 GB past the end of a 0x140000000-based image -- which matches nothing in an
     RVA-keyed map and lands in `missing`. The address is neither checked nor reported as unchecked.
-  * OFFSET SIDE. `scripts/detect-struct-field-drift.py --inventory` files an initialiser it cannot
+  * Offset side. `scripts/detect-struct-field-drift.py --inventory` files an initialiser it cannot
     read under `kind="expr"` with `resolved=None`, and every downstream census then skips the row
     for want of a number. 41 of 813 live game-struct-field offsets were in that state: excluded
     from the population without appearing in the unattributed ratchet either.
 
-Both are the same defect: a constant whose value is an expression is INVISIBLE, and invisible reads
+Both are the same defect: a constant whose value is an expression is invisible, and invisible reads
 exactly like checked. On a version-migration branch that is the worst state a constant can be in.
 
-WHAT THIS REFUSES, AND WHY REFUSAL IS THE POINT. The grammar below is deliberately small: integer
+What this refuses, and why refusal is the point. The grammar below is deliberately small: integer
 literals, `+ - * / % << >> & | ^`, parentheses, unary minus, `as <int>` casts, `size_of::<T>()` over
 primitives, references to other constants, and enum variants. Anything else -- `offset_of!`, a block
 expression, a function call, a `size_of` over a game type this cannot lay out, a name declared twice
-with different values -- returns `None` WITH A REASON. The reason is the deliverable: a caller must
-put those in a bucket it PRINTS. `fold()` never guesses and never half-reads, because a half-read is
+with different values -- returns `None` with a reason. The reason is the deliverable: a caller must
+put those in a bucket it prints. `fold()` never guesses and never half-reads, because a half-read is
 what turned a subtrahend into an address.
 
-WHAT THIS DELIBERATELY DOES NOT SEE. Declarations under `#[cfg(test)]`, whether the attribute is on
+What this deliberately does not see. Declarations under `#[cfg(test)]`, whether the attribute is on
 a `mod` or directly on the item. `er-seamless-bugfixes` writes
 
     #[cfg(test)]
     pub(crate) const FREELIST_SHUTDOWN_ASSERT_RVA: usize =
         FREELIST_SHUTDOWN_ASSERT_FN_RVA + FREELIST_SHUTDOWN_ASSERT_WINDOW_OFFSET;
 
-and its own doc comment says it is spelled as a SUM precisely so that the `= 0x...` scanner cannot
-select it: the value 0xc57670 is 0x90 bytes INSIDE a live function, and a ledger row for it would
+and its own doc comment says it is spelled as a sum precisely so that the `= 0x...` scanner cannot
+select it: the value 0xc57670 is 0x90 bytes inside a live function, and a ledger row for it would
 license MinHook to write five bytes into a function body. Teaching a tool to fold sums without
 teaching it to skip `#[cfg(test)]` items would have converted that documented safety property into
 a detour licence -- the folder making things worse than the regex it replaced.
 
-USED BY: scripts/select-needed-1170-rows.py (function RVAs), scripts/detect-struct-field-drift.py
+Used BY: scripts/select-needed-1170-rows.py (function RVAs), scripts/detect-struct-field-drift.py
 (field offsets), scripts/check-expression-constants.py (the gate).
 """
 
@@ -49,13 +49,13 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# Width names are irrelevant to the VALUE; they are listed only so the declaration scanner can tell
+# Width names are irrelevant to the value; they are listed only so the declaration scanner can tell
 # an integer constant from a `&str` or a struct. `isize` is included and negatives are permitted:
 # `GX_CMD_QUEUE_WRAPPER_BAND_START_OFFSET` is a signed distance between two RVAs and folding it to a
 # negative number is the correct answer, not an error.
 INT_TYPES = ("usize", "isize", "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128")
 INT_TYPE_RE = "(?:" + "|".join(INT_TYPES) + ")"
-# Bit widths, needed only by `!` (bitwise NOT), which is meaningless without one.
+# Bit widths, needed only by `!` (bitwise not), which is meaningless without one.
 _WIDTHS = {"u8": 8, "i8": 8, "u16": 16, "i16": 16, "u32": 32, "i32": 32,
            "u64": 64, "i64": 64, "usize": 64, "isize": 64, "u128": 128, "i128": 128}
 
@@ -102,7 +102,7 @@ for _t, _w in (("i8", 8), ("i16", 16), ("i32", 32), ("i64", 64), ("i128", 128), 
     PRIMITIVE_CONSTS[(_t, "MAX")] = (1 << (_w - 1)) - 1
     PRIMITIVE_CONSTS[(_t, "BITS")] = _w
 # Rust lets a literal carry its own width (`1usize << 47`, `1u64 << 32`). The suffix says nothing
-# about the VALUE, so it is matched and discarded -- without this the tokeniser split `1usize` into
+# about the value, so it is matched and discarded -- without this the tokeniser split `1usize` into
 # `1` and the identifier `usize` and the parser reported a "trailing" token, which reads like a
 # malformed expression rather than a spelling it does not know.
 NUMBER = re.compile(
@@ -118,7 +118,7 @@ UPPER_SNAKE = re.compile(r"\A[A-Z][A-Z0-9_]*\Z")
 
 
 class Unfoldable(Exception):
-    """Raised inside the evaluator; every caller converts it into a REPORTED reason, never a skip."""
+    """Raised inside the evaluator; every caller converts it into a reported reason, never a skip."""
 
 
 @dataclass(frozen=True)
@@ -138,11 +138,11 @@ class Decl:
 class Folded:
     """`value is None` iff `reason` is non-empty. There is no third state and no silent skip.
 
-    `hex_literals` / `other_literals` count the integer literals the evaluation actually READ, all
+    `hex_literals` / `other_literals` count the integer literals the evaluation actually read, all
     the way down through named constants and enum variants. They exist because the address
     harvesters need a rule where they previously had an accident.
 
-    THE ACCIDENT, AND WHY IT HAS TO BECOME A RULE. `select-needed-1170-rows.py` selects on a NAME
+    The accident, and why it has to become a rule. `select-needed-1170-rows.py` selects on a name
     substring, and "INTERVAL" contains "RVA" -- all 35 `*INTERVAL*` constants in this workspace pass
     the name test. They stayed out of the ledgers for one reason: the old regex demanded `= 0x...`
     and they are written in decimal. Folding removes that accident, so 30-odd tick counters would
@@ -152,8 +152,8 @@ class Folded:
 
     So the harvester now admits on "every literal this expression read was written in HEX, and it
     read at least one". That is still a spelling test and this docstring says so rather than
-    dressing it up -- but it is an EXPLICIT one, applied to the whole expression instead of its
-    first token, and everything it turns away is PRINTED. `usize::MIN` reads no literal at all and
+    dressing it up -- but it is an explicit one, applied to the whole expression instead of its
+    first token, and everything it turns away is printed. `usize::MIN` reads no literal at all and
     is refused by the same rule, which is right: 0 is not an address.
     """
 
@@ -215,7 +215,7 @@ def _enum_bodies(text: str) -> list[tuple[str, str]]:
 class Constants:
     """Every integer constant and enum variant under a source root, foldable on demand.
 
-    Declarations are kept as a LIST per name, not a single winner. Twelve names in this workspace
+    Declarations are kept as a list per name, not a single winner. Twelve names in this workspace
     are declared more than once (`DIALOG_FACTORY_RVA` three times, in three different modules), and
     a `setdefault`-style first-wins would hand the caller one file's number for another file's
     constant. When the duplicates agree the answer is unambiguous; when they disagree this refuses
@@ -224,7 +224,7 @@ class Constants:
     """
 
     root: Path
-    # Values this module cannot derive but the CALLER can, seeded rather than guessed. The field
+    # Values this module cannot derive but the caller can, seeded rather than guessed. The field
     # offset inventory models `repr(C)` layouts for the game structs and passes its `offset_of!`
     # answers in here, which is what lets a chain like
     #     CHR_ASM_UNKD4_OFFSET = CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET + N * size_of::<i32>()
@@ -233,7 +233,7 @@ class Constants:
     overrides: dict[str, int] = field(default_factory=dict)
     type_sizes: dict[str, int] = field(default_factory=dict)
     # `(type, field) -> byte offset`, seeded the same way and for the same reason. Without it an
-    # expression that MIXES an `offset_of!` with named terms cannot be folded at all -- and the
+    # expression that mixes an `offset_of!` with named terms cannot be folded at all -- and the
     # partial reader it replaces got those wrong rather than refusing them:
     # `GAME_MAN_FLAG_B73_PROBE_OFFSET = GAME_MAN_ARM_FLAG_B72_OFFSET + offset_of!(cluster, probe_b73)`
     # resolved to 1, dropping the 0xb72 base entirely, and was filed as `offset_of(resolved)` --
@@ -256,7 +256,7 @@ class Constants:
             tests = _cfg_test_spans(text)
             for match in CONST_DECL.finditer(text):
                 line = text.count("\n", 0, match.start("name")) + 1
-                # BOTH cfg(test) spellings. The module span is the common one; the ITEM attribute is
+                # Both cfg(test) spellings. The module span is the common one; the item attribute is
                 # the one that guards `FREELIST_SHUTDOWN_ASSERT_RVA`, a mid-function address whose
                 # doc comment explains it is written as a sum so no scanner selects it.
                 cfg_test = _in_span(match.start(), tests) or "cfg(test)" in (
@@ -276,7 +276,7 @@ class Constants:
                 # Rust numbers a fieldless enum implicitly: the first variant is 0 and each one
                 # after is the previous plus one, unless it carries an `=`. Reading only the
                 # explicit ones left every `OwnStepperPhase::Menu as u8` unresolvable -- 15
-                # constants whose value the compiler assigns by POSITION, which is not a spelling a
+                # constants whose value the compiler assigns by position, which is not a spelling a
                 # literal scan can ever see. Variants that carry a payload are skipped entirely:
                 # they have no integer value, and pretending otherwise would number the rest wrong.
                 nxt = 0
@@ -308,16 +308,16 @@ class Constants:
     def resolve(self, name: str, scope: str = "", crate: str = "") -> Folded:
         """The value of a named constant.
 
-        `scope` is the file doing the asking and `crate` is the crate a QUALIFIED path named. The
+        `scope` is the file doing the asking and `crate` is the crate a qualified path named. The
         two are mutually exclusive on purpose. Half the expression-valued RVA constants in this
         workspace are re-exports of the shape
 
             pub const GAME_MAN_SINGLETON_RVA: usize = er_game_base::rva::GAME_MAN_SINGLETON_RVA;
 
-        -- the alias and its target share a NAME. Preferring the asking file's own declaration
+        -- the alias and its target share a name. Preferring the asking file's own declaration
         resolves that to itself, so a name-level cycle guard reported 39 real addresses as
         "not declared". Following the crate the path actually names is what makes them resolve, and
-        the cycle guard is keyed on the DECLARATION SITE so a legitimate re-export is not mistaken
+        the cycle guard is keyed on the declaration site so a legitimate re-export is not mistaken
         for a loop.
         """
         if name in self.overrides:
@@ -341,7 +341,7 @@ class Constants:
         # crate, and this module does not follow `use` items. When the crate filter leaves nothing
         # but the asking declaration itself, widening to the workspace is what finds the real one --
         # `er-quickload` reaches four GameMan flag offsets that way, all declared in `er-title-flow`.
-        # Widening is safe because a name with two DIFFERENT values still refuses below.
+        # Widening is safe because a name with two different values still refuses below.
         if all((d.file, d.line) in self._active for d in chosen):
             chosen = [d for d in candidates if (d.file, d.line) not in self._active] or chosen
         values, reasons = [], []
@@ -406,13 +406,13 @@ class _Eval:
         if "if " in text or "match " in text:
             raise Unfoldable("conditional expression")
         # `!` is either a macro (refused above once `offset_of!` is out of the way, and below for
-        # anything else) or Rust's bitwise NOT. NOT needs a WIDTH to mean anything -- `!0usize` is
+        # anything else) or Rust's bitwise not. Not needs a width to mean anything -- `!0usize` is
         # 0xffff_ffff_ffff_ffff and `!0u8` is 0xff -- so it is folded only when the declared type
         # supplies one. Guessing 64 for a `u8` constant would produce a confident wrong number.
         if re.search(r"[A-Za-z0-9_]\s*!", re.sub(r"!=", "", text)):
             raise Unfoldable("macro invocation")
-        # `size_of::<T>()` is folded to a literal BEFORE tokenising, so the tokeniser never has to
-        # know about turbofish or call syntax and any REMAINING `(`-after-identifier is a call.
+        # `size_of::<T>()` is folded to a literal before tokenising, so the tokeniser never has to
+        # know about turbofish or call syntax and any remaining `(`-after-identifier is a call.
         text = SIZE_OF.sub(self._size_of, text)
         text = ALIGN_OF.sub(self._align_of, text)
         text = CHAR_LITERAL.sub(self._char, text)
@@ -425,7 +425,7 @@ class _Eval:
             raise Unfoldable(f"trailing {self.tokens[self.pos][1]!r}")
         return value
 
-    # A size or an alignment is a fact about a TYPE, not a number anyone wrote, so it is fed back
+    # A size or an alignment is a fact about a type, not a number anyone wrote, so it is fed back
     # in on a channel that counts as neither hex nor decimal. Emitting it as plain text would make
     # `X + size_of::<u32>()` look decimal-rooted and turn a real address away.
     def _size_of(self, match: re.Match) -> str:
@@ -577,7 +577,7 @@ class _Eval:
         else:
             raise Unfoldable(f"unexpected {token[1]!r}")
         # `X as usize` -- width-preserving in this domain, so the cast is a no-op on the value. A
-        # cast to a NON-integer type is not something this grammar can mean, so it refuses.
+        # cast to a non-integer type is not something this grammar can mean, so it refuses.
         while self._peek() is not None and self._peek()[0] == "as":
             self.pos += 1
             target = self._peek()

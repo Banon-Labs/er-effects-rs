@@ -149,7 +149,7 @@ pub fn install_loading_bar_present_compositor() {
 ///
 /// # Safety
 ///
-/// `swapchain_raw` must be a live `IDXGISwapChain` pointer whose current backbuffer is in PRESENT
+/// `swapchain_raw` must be a live `IDXGISwapChain` pointer whose current backbuffer is in present
 /// state, and the caller must ensure no other command list is simultaneously transitioning that
 /// backbuffer.
 pub unsafe fn copy_rgba_frame_to_swapchain(

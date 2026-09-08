@@ -52,11 +52,11 @@ pub(crate) unsafe fn open_picker_for_intent(request: PickerOpenRequest) -> Picke
     }
 }
 
-/// Where a save-DESTINATION browser starts, the leaf a new file there is given, and which file is
+/// Where a save-destination browser starts, the leaf a new file there is given, and which file is
 /// the loaded one. `None` (with a logged reason) when the loaded save cannot be resolved or no
 /// readable folder exists.
 ///
-/// BOTH surfaces call this, so they cannot drift. This remains root-owned because it reads the
+/// Both surfaces call this, so they cannot drift. This remains root-owned because it reads the
 /// active save path from the product runtime and logs through the product diagnostics.
 pub(crate) fn save_dest_start_dir() -> Option<SaveDestOrigin> {
     let save_path = match system_quit_env_save_path() {

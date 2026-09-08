@@ -11,15 +11,15 @@ static GM_SNAP_LAST_SESSION: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// The in-game menu job qword at CSMenuMan+0x798 (the STEP_RequestWait liveness gate).
 static GM_SNAP_LAST_MENU_JOB: AtomicUsize = AtomicUsize::new(usize::MAX);
 
-/// Diagnostic: log GameMan's key save/load fields (typed, via `GameManTelemetry` -- NO hardcoded
-/// offsets) whenever ANY of them CHANGES. Called each game-task frame; change-detection turns it into
-/// a compact transition trace so the STABLE boot-load trajectory (Patches) and the BOUNCE switch-load
+/// Diagnostic: log GameMan's key save/load fields (typed, via `GameManTelemetry` -- No hardcoded
+/// offsets) whenever any of them changes. Called each game-task frame; change-detection turns it into
+/// a compact transition trace so the stable boot-load trajectory (Patches) and the bounce switch-load
 /// trajectory (Speed Bean) can be diffed side by side to find which GameMan field re-triggers the
 /// title. `save_requested`/`new_game_plus_requested`/`warp_requested` are the prime suspects for a
 /// post-load revert. c30 (saved map) uses our own RE offset const (not a fromsoftware field).
 pub(crate) fn snapshot_game_man_on_change() {
     // GameMan resolves only once the boot is far along; the session-liveness words below matter
-    // EARLIER (the boot load), so sample with a default GameMan view instead of returning.
+    // earlier (the boot load), so sample with a default GameMan view instead of returning.
     let t = unsafe { GameMan::instance() }
         .map(GameManTelemetry::from_game_man)
         .unwrap_or_default();
@@ -29,7 +29,7 @@ pub(crate) fn snapshot_game_man_on_change() {
             unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }.unwrap_or(-1),
             unsafe { safe_read_i32(gm + GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET) }
                 .unwrap_or(-1),
-            // field_0xb73 (unnamed in fromsoftware-rs); set to 1 by the return-title REQUEST.
+            // field_0xb73 (unnamed in fromsoftware-rs); set to 1 by the return-title request.
             unsafe { safe_read_i32(gm + 0xb73) }.unwrap_or(-1) & 0xff,
         )
     } else {
@@ -74,24 +74,24 @@ pub(crate) fn snapshot_game_man_on_change() {
         usize::MAX
     };
     let session = (ig_d8 as u32 as usize) | ((committed as u32 as usize) << 32);
-    // WORLD-LOST SEMAPHORE -- the black screen, as an assertion rather than an opinion.
+    // World-lost SEMAPHORE -- the black screen, as an assertion rather than an opinion.
     //
     // The defect has one signature and it does not care how the switch was driven: a world that was
-    // GENUINELY LOADED (real map id, not the m10 default) reverts to the title map. Latching it here,
+    // genuinely loaded (real map id, not the m10 default) reverts to the title map. Latching it here,
     // in the sampler that already reads c30, makes it independent of the menu path, the programmatic
     // control file and the harness alike -- which matters because a fix validated only through the
     // menu-free direct arm is not validated at all (AGENTS.md: a direct-arm shortcut "skips the exact
     // user path being validated"), and a run driven through the real ProfileSelect rows must be able
-    // to FAIL on the same counter a diagnostic run passes.
+    // to fail on the same counter a diagnostic run passes.
     //
     // `FULLREAD_C30_M10_DEFAULT` (0xa010000) is the title/new-game default, so the transition
     // "real map -> m10 default" is exactly `SetMapId(0xff,0xff,0xff,0xff)` in STEP_GameStepWait's
-    // teardown arm reaching GameMan. Counting the TRANSITION, not the value: c30 sits at the default
+    // teardown arm reaching GameMan. Counting the transition, not the value: c30 sits at the default
     // for the whole of every boot before a save mounts, and a level-triggered check would fire there
     // on every launch and mean nothing.
     //
     // A counter nothing reads is decoration, so this one is published and gated (see
-    // `scripts/check-world-lost.py`): non-zero after a switch is a FAILED run.
+    // `scripts/check-world-lost.py`): non-zero after a switch is a failed run.
     let previous_c30 = GM_SNAP_LAST_C30.load(Ordering::SeqCst) as i32;
     let was_real_world = previous_c30 != FULLREAD_C30_M10_DEFAULT
         && previous_c30 != 0
@@ -103,7 +103,7 @@ pub(crate) fn snapshot_game_man_on_change() {
             "WORLD LOST #{n}: c30 0x{previous_c30:x} -> 0x{c30:x} (the m10/title default) -- a LOADED world reverted to the title map. This is the black screen as a semaphore: STEP_GameStepWait's teardown arm does SetMapId(0xff,0xff,0xff,0xff) when InGameStep+0xd8 drains to 0 with GameMan+0xb7c/+0xb7d clear. committed={committed} ig_d8={ig_d8} b73={b73} bc4={bc4}"
         ));
     }
-    // Swap every field's stored last-value unconditionally (so none is missed), OR the per-field
+    // Swap every field's stored last-value unconditionally (so none is missed), or the per-field
     // change flags. `|` (not `||`) so all swaps always run.
     let changed = (GM_SNAP_LAST_SLOT.swap(slot, Ordering::SeqCst) != slot)
         | (GM_SNAP_LAST_REQ.swap(req, Ordering::SeqCst) != req)
@@ -127,8 +127,8 @@ pub(crate) fn snapshot_game_man_on_change() {
 
 pub(crate) fn write_game_man_telemetry(body: &mut String) {
     // `loadgame_build_ctx_ready`: the "engine filled enough to drive our own load" gate -- GameDataMan
-    // -> menuSystemSaveLoad -> a PLAUSIBLE TitleFlowContext at mss+0xa38. This is the gate the bypass
-    // arms on. It is DISTINCT from `game_man_instance_resolved` below, which only means the GameMan
+    // -> menuSystemSaveLoad -> a plausible TitleFlowContext at mss+0xa38. This is the gate the bypass
+    // arms on. It is distinct from `game_man_instance_resolved` below, which only means the GameMan
     // pointer is non-null (true from BootPhase4, long before the LoadGame job can be built without an AV).
     // Computed independently of GameMan::instance() so it is always emitted (both branches below).
     let loadgame_build_ctx_ready = crate::experiments::game_module_base()

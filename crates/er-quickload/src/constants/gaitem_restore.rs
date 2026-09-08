@@ -1,6 +1,6 @@
 // ---- CSGaitemImp pristine-restore (post-switch reload gaitem free-queue exhaustion fix) ----
-// `GLOBAL_CSGaitem` is a PROCESS-LIFETIME FD4 singleton (constructed once at boot by the giant
-// repository-init FUN_140cd6d40 behind `if (GLOBAL_CSGaitem==0)`; NOT rebuilt per world-load). Its
+// `GLOBAL_CSGaitem` is a process-lifetime FD4 singleton (constructed once at boot by the giant
+// repository-init FUN_140cd6d40 behind `if (GLOBAL_CSGaitem==0)`; Not rebuilt per world-load). Its
 // pointer lives at dump 0x143d69890 (data RVA, stable across deobf; the unmodified
 // PlayerGameData::Deserialize reads this same global and boot loads work through it). On a normal
 // quit-to-title the world/inventory teardown releases the player's gaitems back to the free-queue
@@ -8,7 +8,7 @@
 // items stay resident, char#2's reload deserialize exhausts freeTableIdxQueue (head==end ->
 // GetUnindexedGaItemHandle returns 0 -> gaitemInsTable[-1] OOB dispatch = the AV at live 0x67141a).
 // We restore pristine at clean title before the reload by sweeping occupied gaitemInsTable slots
-// and calling the native per-item release RemoveCSGaitemIns (which frees the ins AND returns its
+// and calling the native per-item release RemoveCSGaitemIns (which frees the ins and returns its
 // index to the free-queue) -- the exact primitive the native teardown would use, no hand-rebuilt
 // queue. See bd system-quit-postswitch-crash-gaitem-freequeue-exhaustion-2026-07-02.
 pub(crate) const GLOBAL_CSGAITEM_SINGLETON_RVA: usize = er_game_base::rva::GLOBAL_CSGAITEM_RVA;
@@ -31,7 +31,7 @@ pub(crate) const CSGAITEM_TABLE_CAPACITY: usize = 0x1400;
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_GAITEM_RESET_RELEASED_COUNT;
 /// Count of pristine-restore invocations (should be 1 per switch).
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_GAITEM_RESET_INVOCATIONS;
-/// Free-queue slack (0x13ff - free_count) observed at the LAST reset, before/after the sweep. A
+/// Free-queue slack (0x13ff - free_count) observed at the last reset, before/after the sweep. A
 /// healthy result is before>0 (char#1 items resident) and after==0 (queue full again).
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_BEFORE;
 pub(crate) static SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_AFTER: AtomicUsize =
@@ -39,10 +39,10 @@ pub(crate) static SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_AFTER: AtomicUsize =
 /// The save-data subsystem gate the c30-writer 0x67bd70 checks before it writes
 /// GameMan+0xc30: `[0x143d68078]` (RVA 0x3d68078). Ghidra names it `GLOBAL_CSEventState`.
 ///
-/// CORRECTED 2026-08-01: it is NOT "a 0x270-byte heap object". The allocation is
+/// Corrected 2026-08-01: it is not "a 0x270-byte heap object". The allocation is
 /// `MOV EDX,0x1` / `LEA ECX,[RDX+0x2]` -> `HeapAlloc(size = 3, align = 1)`, which is consistent
 /// with `IsAliveMotion` reading it as `MOVZX EAX, byte [RAX]` at offset 0. The 0x270-byte object
-/// allocated in the same function belongs to a DIFFERENT global (`MOV ECX,0x270` ...
+/// allocated in the same function belongs to a different global (`MOV ECX,0x270` ...
 /// `MOV [0x143d68448],RAX`). The gate role below is unaffected -- only the size claim was wrong.
 /// World-resource streaming lever (worldres-loadstate-creator-and-streaming-enable-
 /// gate-2026). Gap 1: the block-load request is built from the InGameStep target
@@ -57,8 +57,8 @@ pub(crate) const INGAMESTEP_RESMGR_250_OFFSET: usize = 0x250;
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const REQUEST_SUBMIT_RVA: usize = 0xaed820;
 /// `InGameStep::RequestMoveMap` (deobf 0x140aebdc0). Builds the world-res loadlist virtual path via
-/// `DlFixedString::FormatV` -- but ONLY when its `param_2` target BlockId (`*rdx`) is valid
-/// (`!= -1` AND `IsNonDebugArea(area) == area < 0x59`). On our in-memory redirect load the caller
+/// `DlFixedString::FormatV` -- but only when its `param_2` target BlockId (`*rdx`) is valid
+/// (`!= -1` and `IsNonDebugArea(area) == area < 0x59`). On our in-memory redirect load the caller
 /// captured a stale/`-1` BlockId (GameMan+0xc30 was set too late), so FormatV is skipped, the loadlist
 /// path stays empty, `STEP_MoveMap_LoadlistInit` builds nothing, `ProcessMsbLoadLists` is a no-op, the
 /// dest `WorldBlockRes` is never created, and `STEP_WorldResWait` (mms_step 3) stalls forever -> the
@@ -78,8 +78,8 @@ pub(crate) const SESSION_SINGLETON_A_RVA: usize = TitleSessionRva::SessionA as u
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const SESSION_SINGLETON_B_RVA: usize = TitleSessionRva::SessionB as usize;
 /// Corrected streaming-enable (worldres-enable-0x14066e2e4-decoded-receiver-and-
-/// driver-singleton-2026): the CORRECT resmgr is deref(deref(MoveMapStep+0xf0)+0x10)
-/// with vtable 0x142a7e030 (NOT InGameStep+0x250, which is the WorldRes-owner, vtable
+/// driver-singleton-2026): the correct resmgr is deref(deref(MoveMapStep+0xf0)+0x10)
+/// with vtable 0x142a7e030 (not InGameStep+0x250, which is the WorldRes-owner, vtable
 /// 0x142a7de60 -- the wrong object that crashed). The hard floor is the streaming/
 /// session driver singleton 0x143d7c088 (job machine asserts if null); build it via
 /// the lazy getter 0x140cd6c50 before calling enable 0x14066e2e4(resmgr).
@@ -89,20 +89,20 @@ pub(crate) const RESMGR_EXPECTED_VTABLE_RVA: usize = 0x2a7e030;
 /// `[this+0x48] >= 7` arm constructs the world-stream worker 0x144842d40 (ctor
 /// 0x141eceb10) and registers it with the FD4 scheduler (key 0x59682f01 via
 /// 0x142656b00) -- the piece our forced path skips (b80-initiate-advances-mms-but-
-/// async-io-stalls). The arm uses ONLY globals/stack after the +0x48 check, so calling
+/// async-io-stalls). The arm uses only globals/stack after the +0x48 check, so calling
 /// it with a synthetic `this` (a zeroed buffer with +0x48=7) replicates the build
 /// without needing the real 0x143d71340 step object.
 pub(crate) const WORLD_WORKER_BUILD_RVA: usize = 0xb0a980;
 pub(crate) const SYNTHETIC_STEP_THIS_SIZE: usize = 0x60;
 pub(crate) const SYNTHETIC_STEP_STATE_OFFSET: usize = 0x48;
 pub(crate) const WORLD_WORKER_BUILD_STATE: i32 = 7;
-/// MISIDENTIFIED-CORRECTED (autoresearch 2026-06-18): 0x4842d40 is upstream `eldenring`'s
+/// MISIDENTIFIED-corrected (autoresearch 2026-06-18): 0x4842d40 is upstream `eldenring`'s
 /// `runtime_heap_allocator` (the `DLAllocator` singleton, `rva::get().runtime_heap_allocator`),
 /// confirmed by static RE -- it has 4057 RIP-relative refs (allocator footprint, not a task) and
-/// the cached-singleton getter at 0x140078ed5. It is built at startup and is ALWAYS non-null, so
-/// reading it non-null is NOT evidence that any "world-stream worker"/FD4 stream task was built.
-/// The save-IO/worldres "worker present" levers below that relied on that inference are FALSE
-/// POSITIVES and need the real stream-task RVA. Name kept generic and accurate; see bd
+/// the cached-singleton getter at 0x140078ed5. It is built at startup and is always non-null, so
+/// reading it non-null is not evidence that any "world-stream worker"/FD4 stream task was built.
+/// The save-IO/worldres "worker present" levers below that relied on that inference are false
+/// positives and need the real stream-task RVA. Name kept generic and accurate; see bd
 /// `rva-4842d40-is-heap-allocator-not-stream-task`.
 pub(crate) fn runtime_heap_allocator_ptr_or_null() -> usize {
     DLAllocator::runtime_heap_allocator() as *const DLAllocator as usize
@@ -120,7 +120,7 @@ pub(crate) use er_title_flow::WORLDRES_RESMGR_10_OFFSET;
 pub(crate) const DIAG_NULL_CHAIN: i32 = -2;
 /// The block coord/map-id the MoveMapStep requests in STEP_WorldResWait: at
 /// [[MoveMapStep+0xf0]+0x2c] (0x140624bd0 reads byte3 as the target area). byte3 ==
-/// 0x0a means slot 9's m10 IS being requested (loader/streaming issue); 0 means the
+/// 0x0a means slot 9's m10 is being requested (loader/streaming issue); 0 means the
 /// saved world position never loaded (coord issue).
 pub(crate) const WORLDRES_COORD_2C_OFFSET: usize = 0x2c;
 /// Resource-manager block array scan (mirrors 0x14066d3e0): entries at
@@ -135,11 +135,11 @@ pub(crate) const BLOCK_AREAOBJ_AREA_C_OFFSET: usize = 0xc;
 /// aliases so the offsets live in exactly one place (no duplicated magic numbers). The recurring
 /// observer scans base_arr = resmgr + RESMGR_BLOCK_ARRAY_B3030_OFFSET, stride 8, and for each
 /// non-null block reads inner = *(block + BLOCK_INNER_8_OFFSET) then areaId = *(inner +
-/// BLOCK_AREA_C_OFFSET) as u8 -- PURE READS, NO block->vtable call this round.
+/// BLOCK_AREA_C_OFFSET) as u8 -- Pure reads, no block->vtable call this round.
 pub(crate) const RESMGR_BLOCK_ARRAY_B3030_OFFSET: usize = WORLDRES_BLOCK_ARRAY_B3030_OFFSET;
 pub(crate) const BLOCK_INNER_8_OFFSET: usize = BLOCK_ENTRY_AREAOBJ_8_OFFSET;
 pub(crate) const BLOCK_AREA_C_OFFSET: usize = BLOCK_AREAOBJ_AREA_C_OFFSET;
-/// The target areaId is DERIVED from the requested block coord (wrm+0x2c / req_coord), not
+/// The target areaId is derived from the requested block coord (wrm+0x2c / req_coord), not
 /// hardcoded: areaId = (block_coord >> TARGET_AREA_FROM_COORD_SHIFT) & TARGET_AREA_FROM_COORD_MASK.
 /// For the m28 save the low dword is 0x1c000000 so this yields 0x1c, but the value is data-driven.
 pub(crate) const TARGET_AREA_FROM_COORD_SHIFT: u32 = 24;
@@ -161,43 +161,43 @@ pub(crate) const BLOCK_AREA_BYTE_MASK: u32 = 0xff;
 pub(crate) const BLOCK_SAMPLE_SHIFT: u32 = 8;
 // `FD4_FILECAP_STATUS_88_OFFSET`, `FD4_FILECAP_BYTES_90_OFFSET` and
 // `FD4_FILECAP_LOADPROCESS_78_OFFSET` were re-exported here for the msb-parse trace, which was
-// their ONLY reader in this crate. The trace moved into `crates/er-diag-harness/` on 2026-08-25 and
+// their only reader in this crate. The trace moved into `crates/er-diag-harness/` on 2026-08-25 and
 // took them with it -- the layout now lives once, in `er_game_base::filecap`, which both images
 // read. The compiler found this: with the trace gone, all three went unused-import.
 /// Poison `~MsbFileCap` writes over `msbResCap` after releasing it; see above.
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const MSB_FILECAP_DESTROYED_SENTINEL: usize = 0xdead_beef;
 
-/// OWN-LOAD m28 direct-enqueue lever (adddefaultfileloadprocess-lever-viable-2026-06-22).
+/// Own-load m28 direct-enqueue lever (adddefaultfileloadprocess-lever-viable-2026-06-22).
 /// `FD4::FD4FileCap::AddDefaultFileLoadProcess` deobf VA 0x142658c60 (prologue-grounded
 /// `40 55 56 57 41 56 41 57`; dump 0x142658c50 is +0x10). Stored as an RVA offset from the
 /// 0x140000000 image base, resolved at runtime as `module_base + RVA` like the other native-call
 /// RVAs in this file (e.g. `CONTINUE_CONFIRM_RVA`). Signature (Win64 fastcall):
 /// `bool AddDefaultFileLoadProcess(FD4FileCap* cap /*rcx*/, FD4FileLoadProcess* loadProcess /*rdx*/)`.
 /// It builds the FD4FileLoadProcessor internally + self-enqueues IO to the already-live FD4 workers
-/// (RequestDCX -> RSResourceFileRequest -> GLOBAL_LoadManager). PushTask / AssignFileCap are NOT
-/// needed. Reaches ONLY world-asset file-load streaming -- no save IO, cannot autosave.
+/// (RequestDCX -> RSResourceFileRequest -> GLOBAL_LoadManager). PushTask / AssignFileCap are not
+/// needed. Reaches only world-asset file-load streaming -- no save IO, cannot autosave.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const ADD_DEFAULT_FILE_LOAD_PROCESS_RVA: usize = 0x142658c60 - 0x140000000;
-/// FD4FileCap layout (struct len 0x90): the cap's EXISTING `FD4FileLoadProcess*` lives at +0x78 --
-/// READ it for arg2, we never construct one. `loadState` at +0x88 == 4 means the cap is already
+/// FD4FileCap layout (struct len 0x90): the cap's existing `FD4FileLoadProcess*` lives at +0x78 --
+/// Read it for arg2, we never construct one. `loadState` at +0x88 == 4 means the cap is already
 /// resident (skip). Both grounded in the Ghidra dump decomp of the lever.
 pub(crate) const FILECAP_LOAD_PROCESS_78_OFFSET: usize = 0x78;
 pub(crate) const FILECAP_LOADSTATE_88_OFFSET: usize = 0x88;
 /// `loadState` sentinel meaning the FD4FileCap finished loading (already resident -> do not dispatch).
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const FILECAP_LOADSTATE_COMPLETE: i32 = 4;
-/// WorldBlockRes holds the m28 area's FD4FileCap(s): the primary at +0x40 and an OPTIONAL second at
-/// +0x48 (the IsNonDebugArea branch; m28/0x1c populates both, and phase-2 gates on BOTH). Dispatch
-/// each non-null cap. These are off the SAME WorldBlockRes entry the recurring observer block-walk
+/// WorldBlockRes holds the m28 area's FD4FileCap(s): the primary at +0x40 and an optional second at
+/// +0x48 (the IsNonDebugArea branch; m28/0x1c populates both, and phase-2 gates on both). Dispatch
+/// each non-null cap. These are off the same WorldBlockRes entry the recurring observer block-walk
 /// already finds for the player area.
 pub(crate) const WORLDBLOCKRES_FILECAP_40_OFFSET: usize = 0x40;
 pub(crate) const WORLDBLOCKRES_FILECAP2_48_OFFSET: usize = 0x48;
-/// The resmgr 0xb3030 array entry `block` is a CONTAINER (WorldBlockData): the WorldBlockRes elements
+/// The resmgr 0xb3030 array entry `block` is a container (WorldBlockData): the WorldBlockRes elements
 /// live in an inline array at `*(block+0xce0)`, count `*(block+0xcd8)` (i32), stride 0xb98 -- decoded
 /// from the keyed getter vt+0x8 (deobf 0x14062f470): `movslq 0xcd8(rcx); mov 0xce0(rcx),r11;
 /// elem=r11+i*0xb98`. Each element is a WorldBlockRes (phase byte +0x35, caps +0x40/+0x48). We iterate
-/// this array DIRECTLY (plain reads) instead of calling the getter -- the getter takes a second `key`
+/// this array directly (plain reads) instead of calling the getter -- the getter takes a second `key`
 /// arg in rdx and AV-crashes if called without it.
 pub(crate) const WORLDBLOCK_CONTAINER_COUNT_CD8_OFFSET: usize = 0xcd8;
 pub(crate) const WORLDBLOCK_CONTAINER_ARRAY_CE0_OFFSET: usize = 0xce0;
@@ -223,43 +223,43 @@ pub(crate) use er_title_flow::GAME_MAN_SAVE_STATE_B80_OFFSET;
 /// pass; the one runtime unknown is whether the slot-record container
 /// [slotmgr+0x8] is populated at the pre-bootstrap title. These RVAs/offsets let
 /// us read those preconditions without touching state.
-/// Alias for the GameDataMan singleton RVA: the "slot manager" the save-snapshot probe reads IS
+/// Alias for the GameDataMan singleton RVA: the "slot manager" the save-snapshot probe reads is
 /// GameDataMan. Reference the canonical const so the RVA is decoded in exactly one place.
 pub(crate) fn game_data_man_ptr_or_null() -> usize {
     GameDataMan::instance_ptr().map_or(NULL_MODULE_BASE, |ptr| ptr as usize)
 }
-/// OWN-THE-STEPPER (own-stepper-control-verified-and-driver-call-2026): the
+/// Own-the-STEPPER (own-stepper-control-verified-and-driver-call-2026): the
 /// SimpleTitleStep step-fn table (base abs 0x143d71580, owner+0x10) is in WRITABLE
 /// .data. idx10 = STEP_MenuJobWait func slot = base + 10*0x10 = abs 0x143d71620
 /// (RVA 0x3d71620) is dispatched every frame at the press-any-button title. We patch
-/// it to our own handler so the FD4 scheduler runs OUR code IN-CONTEXT (rcx=owner,
+/// it to our own handler so the FD4 scheduler runs our code in-context (rcx=owner,
 /// rdx=FD4Time), instead of trampolining from an external CSTask.
 pub(crate) const TITLE_STEP_IDX10_SLOT_RVA: usize = 0x3d71620;
 /// Native Continue/Load confirm handler (reads owner=[rcx+8]; slot-select + child
 /// request + SetState(5)). Invoked via a {[+8]=owner} shim.
 pub(crate) const CONTINUE_CONFIRM_RVA: usize = 0xb0e180;
-/// Continue/Load MANAGER object global (.data abs 0x143d5df38; ==0 at rest in the deobf
+/// Continue/Load manager object global (.data abs 0x143d5df38; ==0 at rest in the deobf
 /// image, built at runtime). `[mgr]` = the manager vtable, `[mgr + 8]` = the recipe's
-/// literal "owner" used by the native-fullread COMMIT recipe. Used READ-ONLY here for the
-/// OWN-LOAD owner diagnostic; the continue_confirm owner is the threaded SetState-able
-/// title owner (see `own_load_continue_fire`), NOT this literal.
-/// This IS `GameDataMan` (1.16.2 Ghidra: 734 xrefs, readers `AddInventoryEquip` /
+/// literal "owner" used by the native-fullread commit recipe. Used read-only here for the
+/// own-load owner diagnostic; the continue_confirm owner is the threaded SetState-able
+/// title owner (see `own_load_continue_fire`), not this literal.
+/// This is `GameDataMan` (1.16.2 Ghidra: 734 xrefs, readers `AddInventoryEquip` /
 /// `Deserialize` / `CanBeVisitor`) -- "continue manager" is a role name, not a distinct
 /// object. Derived from `er-game-base` so the value has one definition (2026-08-01 dedupe).
 pub(crate) const CONTINUE_MANAGER_GLOBAL_RVA: usize = er_game_base::rva::GAME_DATA_MAN_GLOBAL_RVA;
 
-/// LoadGame-JOB BUILD factory (`FUN_140826510` live; the 1.16.2 shift is 0, so the live VA IS `0x140826510`; the old
+/// LoadGame-job build factory (`FUN_140826510` live; the 1.16.2 shift is 0, so the live VA is `0x140826510`; the old
 /// "dump VA 0x140826600 lands +0xF0 mid-instr" note was a 1.16.1 dump-deobf-shift.py artifact). Builds
 /// the LoadGame `CS::MenuJobWithContext<LoadJobContext>` via the menu-heap factory and returns it in
 /// `*out` with refcount 1. Win64 fastcall `(out: *DLRefCountPtr<MenuJob>, ctx_parent, save_slot:i32,
 /// owner_ctx)`. Only `out` (our local) and `save_slot` (the int slot) are required by the deser/map
-/// self-build path; `ctx_parent`/`owner_ctx` are the OUTER profile-selection UI context (stored as
+/// self-build path; `ctx_parent`/`owner_ctx` are the outer profile-selection UI context (stored as
 /// lambda captures, every build-path deref null-guarded) -- passed as 0 here (see `own_load_install_job`).
 pub(crate) const LOADGAME_JOB_BUILD_RVA: usize = 0x826510;
 /// `DLUT::DLReferenceCountPointer<MenuJob>` ASSIGN/INSTALL helper (`FUN_1407a9560` live; dump entry
 /// `0x1407a9650` is the same fn, prologue-grounded vs `eldenring-deobf.bin`). Win64 fastcall
 /// `(slot: *MenuJob*, src: *MenuJob* (longlong*))`: writes `*slot = *src`, `AtomicIncrement`s the new
-/// occupant, then `AtomicDecrement`s/releases the PRIOR occupant and zeroes `*src` (move-assign).
+/// occupant, then `AtomicDecrement`s/releases the prior occupant and zeroes `*src` (move-assign).
 /// Installs the built job into `owner+0x130`, releasing the idle `IfElseJob` it replaces.
 pub(crate) const MENUJOB_ASSIGN_RVA: usize = 0x7a9560;
 /// MenuJobQueue field offsets (for diagnostics): the queued-job ring count at +0x178 grows by 1 on a
@@ -269,18 +269,18 @@ pub(crate) const MENUJOB_QUEUE_COUNT_178_OFFSET: usize = 0x178;
 /// `ExecuteMenuJob((MenuJob**)&owner->field85_0x130, &time)`. Installing the LoadGame job here makes
 /// the per-frame title step drive it (self-build -> deser -> world stream). Owner-relative byte offset.
 pub(crate) const TITLE_OWNER_MENUJOB_SLOT_130_OFFSET: usize = 0x130;
-/// LoadGame `MenuJobWithContext<LoadJobContext>` vtable (dump VA `0x142ac71e0`). DIAGNOSTIC ONLY: the
+/// LoadGame `MenuJobWithContext<LoadJobContext>` vtable (dump VA `0x142ac71e0`). Diagnostic ONLY: the
 /// installed job's vtable should read back as this (modulo the dump->live `.rdata` shift) -- logged,
 /// never used to gate the call. The IfElseJob it replaces reads vtable dump `0x142aa2958`.
 pub(crate) const MENUJOB_LOADGAME_VTABLE_DUMP_VA: usize = 0x142ac71e0;
 /// Idle title `CS::MenuJobSequence::IfElseJob` vtable (dump VA `0x142aa2958`) that occupies
-/// `owner+0x130` before install. DIAGNOSTIC ONLY (logged for the before/after vtable-flip evidence).
+/// `owner+0x130` before install. Diagnostic only (logged for the before/after vtable-flip evidence).
 pub(crate) const MENUJOB_IFELSE_VTABLE_DUMP_VA: usize = 0x142aa2958;
 /// MenuJob `+0x68` built-flag byte (0 before first Run tick, 1 after self-build) and `+0x70` inner
-/// FixOrderJobSequence ptr (0 -> built). DIAGNOSTIC ONLY: dumped before/after to witness self-build.
+/// FixOrderJobSequence ptr (0 -> built). Diagnostic ONLY: dumped before/after to witness self-build.
 pub(crate) const MENUJOB_BUILT_FLAG_68_OFFSET: usize = 0x68;
 pub(crate) const MENUJOB_INNER_SEQ_70_OFFSET: usize = 0x70;
 /// `CS::FixOrderJobSequence::currentJobIndex` (`+0x10`) on the IfElseJob/inner seq -- advances as the
-/// job sequence steps. DIAGNOSTIC ONLY (dumped before/after install).
+/// job sequence steps. Diagnostic only (dumped before/after install).
 pub(crate) const MENUJOB_CURRENT_JOB_INDEX_10_OFFSET: usize = 0x10;
 

@@ -3,11 +3,11 @@ use crate::prelude::*;
 // === Loading-screen portrait bug SEMAPHORES (2026-07-04) ==========================================
 // Two user-reported bugs on the loading transition, resolved to RAM/pixel oracles derived from the
 // captured `LOADING_BG_PORTRAIT_RGBA` (the content that feeds the loading-screen portrait display):
-//   Bug A -- historically, the portrait rendered TOO SMALL unintentionally (correct content, ~256px
+//   Bug A -- historically, the portrait rendered too small unintentionally (correct content, ~256px
 //            square). Root suspect: the `find_d3d12_resource_ex` "largest TEXTURE2D" scan picked a
 //            small RT instead of the intended target RT (deterministic-pointer fix pending). Current
 //            low-res experiments may intentionally trip the same size semaphore.
-//   Bug B -- our NEUTRAL stats-panel texture (RGB 30,28,26) leaked onto the loading screen. Root
+//   Bug B -- our neutral stats-panel texture (RGB 30,28,26) leaked onto the loading screen. Root
 //            suspect: the same scan grabbed one of our 256x256 neutral CreateTpfResCap textures.
 // These oracles let a monitor detect each condition live without reading the screenshot: they carry the
 // captured dims, the neutral-color fraction, and once-seen latches stamped with the capture version.
@@ -21,7 +21,7 @@ pub use er_telemetry_core::counters::LOADING_BG_PORTRAIT_DIMS;
 /// The DXGI_FORMAT value of the read-back offscreen render target. 0 until captured. Exposed as
 /// `oracle_loading_bg_portrait_gx_format`.
 pub use er_telemetry_core::counters::LOADING_BG_PORTRAIT_FORMAT;
-/// 1 if the read-back portrait looks like a SOLID-COLOR-CHECKER PLACEHOLDER (magenta/white|yellow cover or
+/// 1 if the read-back portrait looks like a solid-color-checker PLACEHOLDER (magenta/white|yellow cover or
 /// an unrendered RT) rather than a real shaded 3D head -- see `portrait_looks_like_checker`. The
 /// `..._gx_nonblack` flag alone is a FALSE POSITIVE (a bright checker passes max(R,G,B)>24), so REAL-face
 /// proof = `nonblack && !is_checker`. Exposed as `oracle_loading_bg_portrait_is_checker`.
@@ -40,8 +40,8 @@ pub use er_telemetry_core::counters::LS_PORTRAIT_NEUTRAL_LEAK_SEEN_VERSION;
 /// `oracle_ls_portrait_slot` / `oracle_ls_portrait_name_hash`.
 pub use er_telemetry_core::counters::LS_PORTRAIT_PUBLISHED_NAME_HASH;
 pub use er_telemetry_core::counters::LS_PORTRAIT_PUBLISHED_SLOT;
-/// Count of portrait captures REJECTED by the readiness gate (neutral or too-small) -- i.e. transient
-/// wrong-source frames that were kept OFF the loading screen. >0 with both seen-versions set means the
+/// Count of portrait captures rejected by the readiness gate (neutral or too-small) -- i.e. transient
+/// wrong-source frames that were kept off the loading screen. >0 with both seen-versions set means the
 /// gate is actively suppressing the two bugs.
 pub use er_telemetry_core::counters::LS_PORTRAIT_REJECTED_PUBLISHES;
 /// Once-seen latch: a capture with correct (non-neutral) content but too-small dims (Bug A). Stores the
@@ -58,7 +58,7 @@ pub use er_telemetry_core::counters::PORTRAIT_BRIDGE_SAME_IDENTITY_HOLDS;
 /// Confirm (RETARGET) timestamp + measured confirm->publish latency (bd er-effects-rs-dpf6 Phase 1).
 pub use er_telemetry_core::counters::PORTRAIT_CONFIRM_MS;
 pub use er_telemetry_core::counters::PORTRAIT_CONFIRM_TO_PUBLISH_MS_LAST;
-/// Name-hash of the pipeline's current TARGET slot, stamped at the game-thread build kick.
+/// Name-hash of the pipeline's current target slot, stamped at the game-thread build kick.
 pub use er_telemetry_core::counters::PORTRAIT_TARGET_NAME_HASH;
 /// CSMenuProfModelRend "marked-for-delete" byte (renderer+0x756) and the CSChrAsmModelIns* pointer
 /// (renderer+0x778) that is non-null only once the character model has finished async-loading -- the
@@ -80,9 +80,9 @@ pub use er_telemetry_core::counters::PROFILE_CAM_FACE_YAW_LATCHED_MASK;
 pub const GX_TEXTURE_GPU_RESOURCE_OFFSET: usize = 0x10;
 pub const GX_TEXTURE_REFCOUNT_OFFSET: usize = 0x8;
 /// The GPU child of a profile-portrait `CSGxTexture` (gx+0x10) may be a `CSOffscreenGxTexture` C++
-/// WRAPPER rather than a raw `ID3D12Resource`. Its C++ vtable lives at `game_base + this RVA`; when
+/// wrapper rather than a raw `ID3D12Resource`. Its C++ vtable lives at `game_base + this RVA`; when
 /// `*(gpu_child)` equals that absolute address the gpu_child is a wrapper and the real
-/// `ID3D12Resource` lives at one of the offsets below. The underlying COM resource MUST be resolved
+/// `ID3D12Resource` lives at one of the offsets below. The underlying COM resource must be resolved
 /// before any D3D12 call -- invoking a COM vtable method on a non-COM pointer crashes. See
 /// `experiments::gpu_readback::readback_offscreen_rgba8`.
 pub const PROFILE_GX_GPU_WRAPPER_VTABLE_RVA: usize = 0x2b80278;
@@ -109,8 +109,8 @@ pub const GX_RES_CHAIN_RESOURCE_OFFSET: usize = 0x20;
 pub const TPF_RESCAP_CONTAINER_COUNT_OFFSET: usize = 0x78;
 pub const TPF_RESCAP_CONTAINER_ARRAY_OFFSET: usize = 0x80;
 /// No-delay portrait render: the ProfileSelect portrait is a live per-frame 3D model render that the
-/// fast autoload never finishes before the Continue teardown. To get it WITHOUT delaying boot we
-/// SPARE slot-0's renderer from the teardown and keep driving its offscreen render into the (free,
+/// fast autoload never finishes before the Continue teardown. To get it without delaying boot we
+/// spare slot-0's renderer from the teardown and keep driving its offscreen render into the (free,
 /// multi-second) now-loading screen until the character model latches, then capture it.
 /// Teardown-all `FUN_1409b2f00` (deobf 0x1409b2db0): unconditional 10-slot loop of
 /// `FUN_140e77540(GLOBAL_CSDelayDeleteMan, table[i]); table[i]=0`. The enqueue is null-guarded, so we
@@ -129,16 +129,16 @@ pub use er_telemetry_core::counters::PROFILE_RENDER_DRIVE_HITS;
 /// -0x150, ground-truthed via dump-deobf-shift). No-arg: loops the 10-slot renderer title table at
 /// base+0x3d6d8d0 and, for each non-null slot, calls the offscreen-draw thunk (PROFILE_OFFSCREEN_DRIVE_RVA)
 /// to rasterize that portrait into its offscreen RT. The engine only invokes it on profile data-change
-/// (e.g. the reset/save menu action `FUN_14082bb20`), NOT per frame -- so the thumbnails are static. We
-/// call it ourselves every frame from a DRAW-PHASE recurring task (CSTaskGroupIndex::GameSceneDraw),
+/// (e.g. the reset/save menu action `FUN_14082bb20`), not per frame -- so the thumbnails are static. We
+/// call it ourselves every frame from a draw-phase recurring task (CSTaskGroupIndex::GameSceneDraw),
 /// where a GX frame is actively recording so the GX subcontext pool pop succeeds (it returns 0 -> a black
 /// no-op at FrameBegin, before the frame records -- the real reason a game-task-thread drive went black).
 pub const PROFILE_DRAW_STEP_RVA: usize = 0x9aa290;
-/// Profile-renderer table BUILDER `FUN_1409af4f0` (dump) -> deobf RVA 0x1409af3a0 (content-unique, shift
+/// Profile-renderer table builder `FUN_1409af4f0` (dump) -> deobf RVA 0x1409af3a0 (content-unique, shift
 /// -0x150). No-arg: tears down the existing 10 (FUN_1409b2f00, no-op on an already-null table) then
 /// HeapAllocs (0xa30, align 0x10, GLOBAL_GfxHeapAllocator) + ctor's a fresh CSMenuProfModelRend into each
 /// of the 10 title-table slots (base+0x3d6d8d0), each self-registering its build/draw tasks with ResMan.
-/// We call it ONCE post-Continue (now-loading, table torn down) to repopulate the table so the existing
+/// We call it once post-Continue (now-loading, table torn down) to repopulate the table so the existing
 /// mark+refresh feed + per-frame draw + oracle re-engage on the loading screen. RE-confirmed the
 /// ctor is self-contained off process-lifetime singletons (no TitleTopDialog dependency).
 pub const PROFILE_TABLE_BUILDER_RVA: usize = 0x9af3a0;
@@ -151,13 +151,13 @@ pub use er_telemetry_core::counters::PROFILE_LOADSCREEN_TABLE_BUILDS;
 /// not the ProfileSelect/menu table. Product portrait consumers must key on this ownership bit so the
 /// early/menu static renderer is ignored instead of becoming a visible or source dependency.
 pub use er_telemetry_core::counters::PROFILE_LOADSCREEN_TABLE_OWNED;
-// PER-SLOT PROFILE BUILD KICK (replaces the engine's GLOBAL refresh in OUR post-Continue feed). The
+// Per-slot profile build kick (replaces the engine's global refresh in our post-Continue feed). The
 // global refresh FUN_1409aa7d0 iterates all 10 slots and kicks every real+marked one -- on a multi-
-// character save that built ALL the save's characters mid-load, and the readback scan flipped onto a
+// character save that built all the save's characters mid-load, and the readback scan flipped onto a
 // foreign slot's RT (the cross-slot portrait swap, run strip-default-drive-20260702-194018). Writing the
-// +0x754/+0x755 latches on unconfigured renderers to suppress those kicks CRASHED (GX command-queue
+// +0x754/+0x755 latches on unconfigured renderers to suppress those kicks crashed (GX command-queue
 // overflow -> null slot write at deobf 0x141aeaf05, run portrait-swap-fix-noteardown-20260702-212024), so
-// instead we never call the global refresh post-Continue and replicate its per-slot body for ONLY the
+// instead we never call the global refresh post-Continue and replicate its per-slot body for only the
 // loaded slot. All RVAs below are the refresh body's callees (dump FUN_1409aa7d0), dump->deobf mapped
 // content-unique via scripts/dump-deobf-shift.py on 2026-07-02.
 /// `FUN_140261c30(summary, slot) -> record*` (dump 0x140261c30): the slot's ProfileSummary record.
@@ -199,7 +199,7 @@ pub use er_telemetry_core::counters::PORTRAIT_EQUIP_RESTORE_RECORD_ID;
 pub use er_telemetry_core::counters::PORTRAIT_EQUIP_RESTORE_WEAPON_SLOTS;
 pub use er_telemetry_core::counters::PORTRAIT_MODEL_ARM_STYLE_READBACK;
 pub use er_telemetry_core::counters::PORTRAIT_MODEL_ARM_STYLE_WRITES;
-/// RAM oracle tripwire: max count of NON-target renderers observed holding a live model (+0x778 != 0)
+/// RAM oracle tripwire: max count of non-target renderers observed holding a live model (+0x778 != 0)
 /// during our feed window (`oracle_portrait_foreign_models`). >0 = another character was built on the
 /// loading screen -- the swap-bug precondition returned.
 pub use er_telemetry_core::counters::PROFILE_FOREIGN_MODELS_MAX;
@@ -207,11 +207,11 @@ pub use er_telemetry_core::counters::PROFILE_FOREIGN_MODELS_MAX;
 /// than one profile model was live (the game's Load Profile 10-thumbnail window). >0 confirms the
 /// only-target-live gate engaged and kept the cascade of other characters off the loading screen.
 pub use er_telemetry_core::counters::PROFILE_MULTI_MODEL_PUBLISH_SKIPS;
-/// Consecutive ticks the profile-renderer title table has been observed EMPTY. The menu's own
+/// Consecutive ticks the profile-renderer title table has been observed empty. The menu's own
 /// teardown+rebuild is synchronous (FUN_1409af3a0 tears down then re-ctors in one call), so the table is
-/// never seen empty across our async ticks during menu cycling -- only a real Continue (teardown with NO
+/// never seen empty across our async ticks during menu cycling -- only a real Continue (teardown with no
 /// rebuild) leaves it sustained-empty. A short streak therefore fires the post-Continue own-renderer build
-/// EARLY (right after teardown, ~17s) instead of waiting for the now-loading flag (~21s on a fast load,
+/// early (right after teardown, ~17s) instead of waiting for the now-loading flag (~21s on a fast load,
 /// too late for ResMan to build the model). Reset to 0 whenever a populated table is observed.
 pub use er_telemetry_core::counters::PROFILE_TABLE_EMPTY_STREAK;
 /// RAM oracle: target-slot build kicks fired via the per-slot replica (`oracle_portrait_target_kicks`).
@@ -224,32 +224,32 @@ pub const PROFILE_TABLE_EMPTY_STREAK_BUILD_THRESHOLD: usize = 3;
 /// global ResMan model-update task keeps loading/animating the model while the object lives.
 pub use er_telemetry_core::counters::LOADING_BG_PORTRAIT_SPARED_RENDERER;
 /// Pre-recorded spare CANDIDATE: the target slot's renderer pointer, captured by force_profile_render at
-/// the MENU on a frame where its model is actually built (+0x778 valid). Because the menu cycles model_ins
+/// the menu on a frame where its model is actually built (+0x778 valid). Because the menu cycles model_ins
 /// (~4-11% of frames), capturing the candidate during the long menu dwell is robust; the teardown-spare
-/// hook then protects THIS exact renderer (nulls its table entry) regardless of whether model_ins happens
+/// hook then protects this exact renderer (nulls its table entry) regardless of whether model_ins happens
 /// to be valid at the single teardown instant. 0 = none recorded yet.
 pub use er_telemetry_core::counters::PROFILE_SPARE_CANDIDATE;
 /// The model_ins (renderer+0x778) captured at the instant the spare candidate is recorded -- when the
 /// model is still built. By spare-time the renderer's own +0x778 field is already zeroed, so this holds
-/// the only reference to the model object; used to probe whether the model OBJECT survives Continue (vs
+/// the only reference to the model object; used to probe whether the model object survives Continue (vs
 /// just the renderer's pointer being cleared) and, if it does, to re-attach it post-Continue.
 pub use er_telemetry_core::counters::PROFILE_SPARE_CANDIDATE_MODEL;
-/// Set once we've observed a POPULATED profile table (the menu built it -> the engine/ResMan are up and we
-/// are past the title screen). The early empty-streak build MUST require this: at boot the table is empty
+/// Set once we've observed a populated profile table (the menu built it -> the engine/ResMan are up and we
+/// are past the title screen). The early empty-streak build must require this: at boot the table is empty
 /// too, and calling the builder before the engine is ready crashes inside FUN_1409af3a0 (observed
 /// 2026-06-29: access-violation in the builder at title, game_man unresolved). A later empty table after
 /// this latch is set therefore means a genuine Continue teardown, when the builder is safe to call.
 pub use er_telemetry_core::counters::PROFILE_TABLE_WAS_POPULATED;
 pub static PROFILE_RENDERER_TEARDOWN_HOOK_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub use er_telemetry_core::counters::PROFILE_RENDERER_TEARDOWN_HOOK_INSTALLED;
-/// Diagnostic + REPAIR hook on the native profile-portrait builder (`PROFILE_RENDERER_REFRESH_RVA`
+/// Diagnostic + repair hook on the native profile-portrait builder (`PROFILE_RENDERER_REFRESH_RVA`
 /// = `FUN_1409aa7d0`). The builder walks all 10 `DAT_143d6d8d0` entries and derefs
-/// `table[slot]+0x754` with NO null check for every slot whose profile record exists -- the
-/// er-effects-rs-j3r AV. Its table setup (`PROFILE_TABLE_BUILDER_RVA`) is called from exactly ONE
+/// `table[slot]+0x754` with no null check for every slot whose profile record exists -- the
+/// er-effects-rs-j3r AV. Its table setup (`PROFILE_TABLE_BUILDER_RVA`) is called from exactly one
 /// native site, the TitleTopDialog constructor (Ghidra xref), so our cloned in-world ProfileSelect
 /// reopens run the builder against whatever the last teardown left; by the 3rd in-session open the
 /// table is fully empty. The detour logs degraded tables, REBUILDS a fully-empty one via the native
-/// setup, and fail-soft SKIPS the builder when a slot would still null-deref. `LAST` is the
+/// setup, and fail-soft skips the builder when a slot would still null-deref. `LAST` is the
 /// per-episode latch (distinct valid/null mask + caller) so the degraded log does not fire per frame.
 pub static PROFILE_SELECT_TABLE_DIAG_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub use er_telemetry_core::counters::PROFILE_SELECT_TABLE_DIAG_INSTALLED;
@@ -263,7 +263,7 @@ pub const PROFILE_TABLE_ALL_SLOTS_MASK: u32 = (1 << TITLE_PROFILE_SLOT_COUNT) - 
 /// ticks elapse, then proceeds. ~60 ticks/s, so 240 ≈ a ~4s cap on the added delay.
 pub use er_telemetry_core::counters::PORTRAIT_HOLD_WAIT_TICKS;
 pub use er_telemetry_core::counters::PROFILE_RENDERER_SPARE_HITS;
-/// Count of fail-soft SKIPS of the native profile-portrait builder: after the (possible) repair a
+/// Count of fail-soft skips of the native profile-portrait builder: after the (possible) repair a
 /// slot still had a null/invalid renderer entry, so chaining the original would AV at
 /// `[entry+0x754]`; the detour dropped that one call instead (the per-frame builder retries).
 /// Exposed as `oracle_profileselect_table_guard_skips`.
@@ -279,13 +279,13 @@ pub const PORTRAIT_HOLD_MAX_TICKS: usize = 240;
 /// Profile-render refresh `FUN_1409aa7d0` (deobf 0x1409aa680): no-arg; gets GameDataMan ProfileSummary
 /// and, per enabled slot with a profile + `+0x754/+0x755 == 0`, equips ChrAsm + copies FaceData +
 /// kicks the async character-model build. The Continue autoload never runs it for our slot (req754=0),
-/// so we call it ourselves once the renderer table is populated to REQUEST the portrait model render.
+/// so we call it ourselves once the renderer table is populated to request the portrait model render.
 pub const PROFILE_RENDERER_REFRESH_RVA: usize = 0x9aa680;
 /// One-shot log latch so the semaphore's crash-log/debug line prints exactly once before the fault.
 pub use er_telemetry_core::counters::PORTRAIT_RENDER_SEMAPHORE_LOGGED;
-/// Loading-screen portrait FAIL-FAST SEMAPHORE (er-effects-rs-j3r; user directive 2026-07-02: "it
+/// Loading-screen portrait fail-fast SEMAPHORE (er-effects-rs-j3r; user directive 2026-07-02: "it
 /// should crash, with our harness so we know early if we introduce a regression"). Our portrait
-/// renderer must build the SAME slot the game actually loaded (`GameMan.save_slot`/ac0 -- the load
+/// renderer must build the same slot the game actually loaded (`GameMan.save_slot`/ac0 -- the load
 /// itself is correct; only our custom renderer picks the wrong slot). Packed state on a violation:
 /// `(loaded_slot<<16) | (render_target_slot<<8) | cond`, `cond` bit0 = wrong-slot (render target !=
 /// loaded), bit1 = null loaded-slot renderer while the table is live (the 3rd-open null-deref class).
@@ -294,19 +294,19 @@ pub use er_telemetry_core::counters::PORTRAIT_RENDER_SEMAPHORE_STATE;
 pub use er_telemetry_core::counters::PROFILE_REFRESH_KICKED;
 /// Null-page address the semaphore deliberately writes to force a clean, VEH-captured fail-fast crash
 /// on diagnostic runs (guaranteed unmapped -> AV -> `crash_vectored_handler` logs -> CONTINUE_SEARCH
-/// -> terminate). Distinctive `fault_addr=0xdead` marks the crash log as OUR semaphore, not a native AV.
+/// -> terminate). Distinctive `fault_addr=0xdead` marks the crash log as our semaphore, not a native AV.
 pub const PORTRAIT_RENDER_SEMAPHORE_FAULT_ADDR: usize = 0xDEAD;
 /// Per-call tick counter for `force_profile_render_tick`, used to re-fire the model build on a timer
-/// (the timing test: a LATER rebuild, after LOAD GAME has loaded each slot's FaceData, should render
+/// (the timing test: a later rebuild, after load game has loaded each slot's FaceData, should render
 /// the real character instead of the default).
 pub use er_telemetry_core::counters::PROFILE_FORCE_TICK_COUNTER;
 /// Post-Continue feed window: ticks remaining during which the mark+refresh feed runs frequently (not just
-/// every 240 ticks) to DRIVE the freshly-built renderers' async ResMan model build to completion and keep
+/// every 240 ticks) to drive the freshly-built renderers' async ResMan model build to completion and keep
 /// it latched. Set when we build our own table post-Continue; decremented each force_profile_render_tick.
 /// The menu kept its models live by feeding across a long dwell; the brief now-loading window needs the
 /// feed driven continuously or the build is kicked once and decays (observed 2026-06-29: built[m] 10->0).
 pub use er_telemetry_core::counters::PROFILE_LOADSCREEN_FEED_TICKS;
-/// One-shot log latch for the IMMEDIATE build-kick (edge-triggered when the autoload target slot's
+/// One-shot log latch for the immediate build-kick (edge-triggered when the autoload target slot's
 /// fingerprint first goes real and its renderer's +0x754 build-request latch is still 0). The kick
 /// itself is idempotent via +0x754, but the debug line should print once.
 pub use er_telemetry_core::counters::PROFILE_REAL_SLOT_KICK_LOGGED;
@@ -317,37 +317,37 @@ pub use er_telemetry_core::counters::PROFILE_SLOT_DUMP_MASK;
 /// can't churn forever). Generous enough to outlast a real load; the refresh is idempotent so extra feeds
 /// no-op once the model is built.
 pub const PROFILE_LOADSCREEN_FEED_WINDOW_TICKS: usize = 1800;
-/// HIGHER-RES. Per-slot offscreen base-size table read by `CSMenuProfModelRend` ctor (0x140bbe010):
+/// Higher-RES. Per-slot offscreen base-size table read by `CSMenuProfModelRend` ctor (0x140bbe010):
 /// `width = *(u32*)(base+0x3b39848 + slot*0x20)`, `height = *(u32*)(...+0x4)` -> packed u64
 /// `(height<<32)|width`. Static init `FUN_1400a7bb0` writes every slot `0x8000000080` (base 128x128;
 /// the menu's x2 supersample makes the observed 256x256 RT). Patch each entry that still holds the
-/// init value to a larger base BEFORE the renderers are constructed (TitleTopDialog ctor) so the
+/// init value to a larger base before the renderers are constructed (TitleTopDialog ctor) so the
 /// offscreen render targets are bigger; the D3D12 readback reads desc.Width/Height dynamically.
 pub const PROFILE_OFFSCREEN_SIZE_TABLE_RVA: usize = 0x3b39848;
 pub const PROFILE_OFFSCREEN_SIZE_TABLE_STRIDE: usize = 0x20;
 /// The value `FUN_1400a7bb0` writes (base 128x128 = `(128<<32)|128`); self-validate before patching.
 pub const PROFILE_OFFSCREEN_SIZE_INIT: usize = 0x8000000080;
-/// Target base 1542x1542 = `(1542<<32)|1542`, with the native per-slot supersample flag OFF (2026-07-06:
+/// Target base 1542x1542 = `(1542<<32)|1542`, with the native per-slot supersample flag off (2026-07-06:
 /// 1028 -> 1542 = 150% per user, keeping the composite upscale but recovering quality vs the half-res
 /// 1028). `0x606` = 1542. This forces the engine's env-dependent path (`FUN_140bbeee0`: `base*2` iff
 /// global flag && `size_struct[+0x8]`) to stay x1, producing a 1542x1542 portrait RT that the
 /// full-backbuffer GPU composite then scales up. The stats font auto-tracks this (em_px = rt_dim*48/2056),
 /// so on-screen text size is unchanged.
-/// WIDENED 2026-09-07 (user: a long weapon is "cut off in the viewport, width wise"). The square RT
+/// Widened 2026-09-07 (user: a long weapon is "cut off in the viewport, width wise"). The square RT
 /// was the reason: `Bean Smith` came out `box=(300,615)-(1539,1539)` -- the alpha runs to the render's
-/// last usable column, so the weapon was clipped by the RENDER and no compositing change could bring
+/// last usable column, so the weapon was clipped by the render and no compositing change could bring
 /// it back. Width 0x808 = 2056, height unchanged at 0x606 = 1542 (4:3).
 ///
-/// WHICH HALF IS WIDTH IS MEASURED, NOT ASSUMED. `CS::CSMenuProfModelRend::CSMenuProfModelRend`
+/// Which half is width is measured, not assumed. `CS::CSMenuProfModelRend::CSMenuProfModelRend`
 /// (1.16.2 dump, 0x140bbdf20) sets the camera aspect at `+0xa24` to
 /// `(float)*(int *)(&DAT_143b39848 + row) / (float)*(int *)(&DAT_143b3984c + row)` -- numerator at
-/// row+0x00, denominator at row+0x04 -- so the LOW dword is width and the high dword is height, and
+/// row+0x00, denominator at row+0x04 -- so the low dword is width and the high dword is height, and
 /// the engine derives the render aspect from them rather than stretching a square.
-/// REVERTED TO SQUARE 2026-09-07. Widening the low dword to 0x808 (2056x1542) to give a long weapon
-/// horizontal room was built and launched, and that run DIED at the title with a C++/Rust throw
+/// Reverted to square 2026-09-07. Widening the low dword to 0x808 (2056x1542) to give a long weapon
+/// horizontal room was built and launched, and that run died at the title with a C++/Rust throw
 /// before a portrait was ever rendered (run br-20260907-201055-59a5, +35938ms, `exception
-/// code=0xe06d7363`). The same throw address appears in an earlier run on a build WITHOUT this
-/// change, so this is CORRELATION, not proof -- but a non-square portrait RT is unproven and the
+/// code=0xe06d7363`). The same throw address appears in an earlier run on a build without this
+/// change, so this is correlation, not proof -- but a non-square portrait RT is unproven and the
 /// crash is real, so it does not stay in while it is both. The weapon's side cut is handled instead
 /// where it costs nothing: `portrait_dst_left` anchors a cut side to the matching display edge.
 pub const PROFILE_OFFSCREEN_SIZE_TARGET: usize = 0x0000_0606_0000_0606;
@@ -356,9 +356,9 @@ pub const PROFILE_OFFSCREEN_SIZE_TARGET: usize = 0x0000_0606_0000_0606;
 pub const PROFILE_OFFSCREEN_SIZE_SUPERSAMPLE_FLAG_OFFSET: usize = 0x8;
 /// Bitmask of save slots whose profile offscreen base-size table row has been patched to the target size.
 pub use er_telemetry_core::counters::PROFILE_SIZE_PATCHED;
-/// LIGHTING. Renderer field holding the IBL env-map-region object (`param_1[0xec]`, allocated by
+/// Lighting. Renderer field holding the IBL env-map-region object (`param_1[0xec]`, allocated by
 /// FUN_140b399e0, filled by the IBL build FUN_140b39a30). The IBL build stores the registered
-/// env-region id into `*envObj` ONLY when the `GILM####_rem` env map is resident; if it was skipped
+/// env-region id into `*envObj` only when the `GILM####_rem` env map is resident; if it was skipped
 /// (GILM not resident at construction) `*envObj` stays 0 -> head is unlit/dark. So
 /// `*(renderer+0x760)` then deref again = the residency oracle (non-zero = IBL built).
 pub const PROFILE_RENDERER_ENV_REGION_OFFSET: usize = 0x760;

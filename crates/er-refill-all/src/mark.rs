@@ -3,7 +3,7 @@
 //! # Why this does not call the function the storage box calls
 //!
 //! `SetItemReplenishState` (1.16.2 `0x140786430`) is what the storage-box UI invokes, and it is a
-//! TOGGLE, not a setter:
+//! toggle, not a setter:
 //!
 //! ```c
 //! bVar2 = ShouldReplenishItem(tracker, itemId);
@@ -15,14 +15,14 @@
 //! like the feature half-working. It also `DLPanic`s when `GLOBAL_CSMenuMan` is null.
 //!
 //! One level down, `CS::ItemReplenishStateTracker::SetState` (`0x14023dd80`) is the absolute
-//! setter. It is idempotent, and it SELF-FILTERS: its first act is `GetEquipParamReplenishType`
+//! setter. It is idempotent, and it self-FILTERS: its first act is `GetEquipParamReplenishType`
 //! with an early return on `None`, so passing an ineligible id is a safe no-op and this module
 //! needs no eligibility table of its own. It also skips the `CSMenuMan` check, which is why the
 //! null checks below are ours to do.
 //!
 //! # The ceiling that makes this dangerous
 //!
-//! The tracker is a `DLFixedVector` of 2048 entries. BOTH insertion paths -- `InsertSorted`
+//! The tracker is a `DLFixedVector` of 2048 entries. Both insertion paths -- `InsertSorted`
 //! (`0x14023df20`) and the append path (`0x14023e270`) -- carry the same guard:
 //!
 //! ```c
@@ -38,7 +38,7 @@
 //! says so in the log rather than letting the game die.
 
 // Every item below is consumed by `runtime`, which is windows-only, plus the tests. Scoped
-// to this module and to `dead_code` alone -- NOT a crate-level blanket that would also
+// to this module and to `dead_code` alone -- Not a crate-level blanket that would also
 // swallow `unused_imports` and hide a real lint (bd
 // host-build-cfg-gate-allow-pattern-hides-real-lints).
 #![cfg_attr(not(windows), allow(dead_code))]
@@ -60,7 +60,7 @@ pub(crate) const INSERT_CEILING: u64 = TRACKER_CAPACITY - INSERT_MARGIN;
 const STOCK_ELIGIBLE_ROWS: u64 = 449;
 
 // Compile-time, deliberately not a unit test. A ceiling at or above the vector's capacity is a
-// DLPanic -- the game dying, not a wrong answer -- so it must fail the BUILD rather than wait for
+// DLPanic -- the game dying, not a wrong answer -- so it must fail the build rather than wait for
 // someone to run the suite.
 const _: () = assert!(
     INSERT_CEILING < TRACKER_CAPACITY,
@@ -125,7 +125,7 @@ mod tests {
         assert!(next_target_state(449, 0));
     }
 
-    /// The self-correcting half: any mixture goes ON first, not "whatever is the majority".
+    /// The self-correcting half: any mixture goes on first, not "whatever is the majority".
     #[test]
     fn a_mixed_tracker_turns_everything_on_first() {
         assert!(next_target_state(449, 1));
@@ -133,7 +133,7 @@ mod tests {
         assert!(next_target_state(449, 224));
     }
 
-    /// Two presses from a mixed state must land on ON then OFF -- a real cycle, not a stall.
+    /// Two presses from a mixed state must land on on then off -- a real cycle, not a stall.
     #[test]
     fn pressing_twice_from_a_mixed_state_cycles() {
         let first = next_target_state(449, 200);

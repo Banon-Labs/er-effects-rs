@@ -1,4 +1,4 @@
-//! Make a PICKED save's `CS::ProfileSummary` real at the title, so the native Continue row can
+//! Make a picked save's `CS::ProfileSummary` real at the title, so the native Continue row can
 //! load it the same way it loads the default save.
 //!
 //! # Why a picked save had no summary
@@ -9,27 +9,27 @@
 //! `0x2a0` from `summary+0x18` via `0x140261cf0`). The game runs that exactly once, inside the boot
 //! common-data load (`0x1402570c0`, reached from the save-data `ShowProgressJob`'s delegate).
 //!
-//! At a BOOT picker that read comes free: the DLL holds the save-data job in `Continue` until the
-//! user picks, then passes it through, and the delegate reads the redirected container. A LATE pick
+//! At a boot picker that read comes free: the DLL holds the save-data job in `Continue` until the
+//! user picks, then passes it through, and the delegate reads the redirected container. A late pick
 //! -- the boot check accepted a save, the autoload could not load it, and the picker armed
 //! afterwards -- has no such job left to run, so the summary keeps describing the save that was
 //! rejected, or nothing at all.
 //!
 //! # What this does instead
 //!
-//! `MarkProfileIndexAsUsed` (`0x140262250`) is NOT the answer and was checked before this was
+//! `MarkProfileIndexAsUsed` (`0x140262250`) is not the answer and was checked before this was
 //! written: its entire body is `if (slot < 10) { saveSlotsStates[slot] = true; return true; }`. It
-//! sets an occupancy FLAG and touches no record field, so a slot it marks still fingerprints empty
+//! sets an occupancy flag and touches no record field, so a slot it marks still fingerprints empty
 //! and the native Continue row still has nothing to load.
 //!
 //! Rather than re-enter the boot job (an async container read plus a full common-data parse that
 //! would also re-deserialize GameSettings, the key config and the net-penalty state at the title),
-//! this rebuilds the records directly from the staged container's own bytes, through the SAME
+//! this rebuilds the records directly from the staged container's own bytes, through the same
 //! writer the System>Quit foreign-save preview already uses -- name, level, play time, rune memory,
 //! map, `PlaceName`, `FaceData` and `ChrAsm` per slot, occupancy included. It builds them from each
-//! slot's BODY, which is what deserializes into the character.
+//! slot's body, which is what deserializes into the character.
 //!
-//! # The records and the bodies do NOT "agree by construction"
+//! # The records and the bodies do not "agree by construction"
 //!
 //! This doc used to claim they did, on the grounds that both come from the staged container. A
 //! container holds two independent descriptions of a slot -- the `USER_DATA010` table the game's
@@ -38,14 +38,14 @@
 //! 'Hero' lvl 7` vs `USER_DATA010 'Vagabond' lvl 9`). Two things follow, and both are implemented
 //! below rather than assumed:
 //!
-//! * a record that fingerprints REAL is not evidence that the summary is CORRECT, so the native
+//! * a record that fingerprints real is not evidence that the summary is correct, so the native
 //!   fast path verifies against the body instead of accepting realness as final;
 //! * our rewrite is not necessarily the last write. The game's boot ProfileSummary read landed
 //!   617ms after ours in run br-20260903-204517-82d2 and replaced every record, and the loading
 //!   screen then showed `Vagabond`'s face, name and level under `Hero`'s load. See
 //!   [`crate::reassert_policy`] for the bounded drift watch that answers it (bd er-effects-rs-ccud).
 //!
-//! It deliberately does NOT call the profile-renderer refresh: that AVs when the renderer table has
+//! It deliberately does not call the profile-renderer refresh: that AVs when the renderer table has
 //! not been built yet (`0x9aa6d4`, observed), and at the boot title it has not.
 
 use core::sync::atomic::Ordering;
@@ -84,10 +84,10 @@ pub use er_telemetry_core::counters::PICKED_SUMMARY_REFRESH_STATE;
 pub use er_telemetry_core::counters::PICKED_SUMMARY_REFRESH_TICKS;
 pub use er_telemetry_core::counters::PICKED_SUMMARY_WATCH_ARMED_TICK;
 
-/// Does the slot a direct-file (picked / loose `save_file`) source will load hold a REAL character
+/// Does the slot a direct-file (picked / loose `save_file`) source will load hold a real character
 /// in the live `CS::ProfileSummary`?
 ///
-/// This is [`profile_slot_fingerprint`] -- level >= 1 and a non-empty name in the RECORD -- and
+/// This is [`profile_slot_fingerprint`] -- level >= 1 and a non-empty name in the record -- and
 /// deliberately not `saveSlotsStates[slot]`, which says only that something once marked the slot.
 /// The slot is resolved with [`native_fullread_slot`] so the predicate and the full-read fallback
 /// can never disagree about which slot is being talked about.
@@ -98,7 +98,7 @@ pub fn direct_source_slot_summary_real() -> bool {
     unsafe { profile_slot_fingerprint(native_fullread_slot()).0 }
 }
 
-/// Does the slot the BOOT autoload will load fingerprint as a real character in the live
+/// Does the slot the boot autoload will load fingerprint as a real character in the live
 /// `CS::ProfileSummary`?
 ///
 /// [`direct_source_slot_summary_real`] answers this only for a picked/loose source; the default
@@ -123,10 +123,10 @@ pub fn refresh_direct_source_profile_summary() -> bool {
     refresh_active_container_profile_summary()
 }
 
-/// The same re-read for the DEFAULT boot container -- the save the game opens when nothing was
+/// The same re-read for the default boot container -- the save the game opens when nothing was
 /// picked and no loose `save_file` is configured.
 ///
-/// The game fills `CS::ProfileSummary` exactly ONCE per boot, in `CS::ProfileSummary::Deserialize`
+/// The game fills `CS::ProfileSummary` exactly once per boot, in `CS::ProfileSummary::Deserialize`
 /// reached from the save-data `ShowProgressJob`'s delegate. When that read completes with no data
 /// the summary stays zeroed for the rest of the boot and nothing retries it: measured run
 /// 2026-09-05 20:58:51, the wait step `0x140af2d40` polled `0x140679fd0` four times, got `1` then
@@ -136,8 +136,8 @@ pub fn refresh_direct_source_profile_summary() -> bool {
 /// The container itself was fine: 28,967,888 bytes of BND4 with all ten characters readable.
 ///
 /// So this is the same repair the picked path already ships, pointed at the same container the
-/// runtime opens. It is NOT a second filler racing the native one: `attempt_profile_summary_reread`
-/// compares the live record against the container BODY first and skips the rewrite entirely when
+/// runtime opens. It is not a second filler racing the native one: `attempt_profile_summary_reread`
+/// compares the live record against the container body first and skips the rewrite entirely when
 /// they agree, so a boot whose native read worked is left untouched, and the drift watch still
 /// defends the records if the native read lands afterwards and disagrees.
 pub fn refresh_boot_default_profile_summary() -> bool {
@@ -146,11 +146,11 @@ pub fn refresh_boot_default_profile_summary() -> bool {
         // authoritative for it. Running both would double the attempt budget for one boot.
         return false;
     }
-    // SPEND NO BUDGET BEFORE THE TABLE EXISTS. This entry is called from the boot game task, which
+    // Spend no budget before the table exists. This entry is called from the boot game task, which
     // starts ticking long before `GameDataMan -> ProfileSummary` is allocated -- and every tick
     // through the throttle costs one of the forty attempts whether or not there was anything to
     // read. Eleven seconds of pre-summary boot at 60 fps is ~22 of them. The check is one guarded
-    // pointer read, and it makes the first REAL attempt attempt 1.
+    // pointer read, and it makes the first real attempt attempt 1.
     if unsafe { system_quit_profile_summary_ptr() } == NULL_SUMMARY {
         return false;
     }
@@ -161,7 +161,7 @@ pub fn refresh_boot_default_profile_summary() -> bool {
 fn refresh_active_container_profile_summary() -> bool {
     let state = PICKED_SUMMARY_REFRESH_STATE.load(Ordering::SeqCst);
     if state != 0 {
-        // NOT DONE -- WATCHING. The refresh used to return here and never look again, which is
+        // Not done -- Watching. The refresh used to return here and never look again, which is
         // what let the game's own boot ProfileSummary read overwrite our body-derived records
         // 617ms later and put another character's face and stats on the loading screen (run
         // br-20260903-204517-82d2, bd er-effects-rs-ccud).
@@ -169,11 +169,11 @@ fn refresh_active_container_profile_summary() -> bool {
         return true;
     }
     // The old fast path accepted `direct_source_slot_summary_real()` as final: a record that
-    // fingerprints REAL was taken to mean the game's own read had populated the summary correctly.
+    // fingerprints real was taken to mean the game's own read had populated the summary correctly.
     // It means no such thing. `USER_DATA010` -- the table that read deserializes -- and the slot
-    // BODY that actually loads are two independent descriptions of a slot, and a container can
+    // body that actually loads are two independent descriptions of a slot, and a container can
     // disagree with itself (measured: 6 of 10 slots). So the container is read either way, and the
-    // rewrite is skipped only once the BODY and the record have been compared and agree.
+    // rewrite is skipped only once the body and the record have been compared and agree.
     let tick = PICKED_SUMMARY_REFRESH_TICKS.fetch_add(1, Ordering::SeqCst);
     let attempts = PICKED_SUMMARY_REFRESH_ATTEMPTS.load(Ordering::SeqCst);
     let RefreshStep::Attempt(attempt) = refresh_step(tick, attempts) else {
@@ -200,7 +200,7 @@ unsafe fn attempt_profile_summary_reread(attempt: usize) -> bool {
         ));
         return false;
     }
-    // The STAGED native save, never the user's source file: the staged copy is what the game's own
+    // The staged native save, never the user's source file: the staged copy is what the game's own
     // reads resolve to, so the records this builds and the bodies the game will deserialize come
     // from the same container. `active_save_file_for_system_quit` returns exactly that for a direct
     // source (it never hands back `SAVE_DIRECT_SOURCE_FILE`, which is read-only).
@@ -229,7 +229,7 @@ unsafe fn attempt_profile_summary_reread(attempt: usize) -> bool {
         return false;
     }
     let slot = native_fullread_slot();
-    // THE IDENTITY THE BODY GIVES THIS SLOT -- captured before anything is written, and kept, because
+    // The identity the body gives this slot -- captured before anything is written, and kept, because
     // it is what the drift watch defends for the rest of the boot. The body is the truth about what
     // will load; `USER_DATA010` is only what the game's own summary read believes.
     let body = body_identity(&bytes, slot);
@@ -278,7 +278,7 @@ unsafe fn attempt_profile_summary_reread(attempt: usize) -> bool {
     true
 }
 
-/// The name+level a container's slot BODY gives, or `None` when the slot holds no readable
+/// The name+level a container's slot body gives, or `None` when the slot holds no readable
 /// character. This is the same pair `record_identity` reads out of the live record, hashed the same
 /// way, so the two are directly comparable.
 fn body_identity(bytes: &[u8], slot: i32) -> Option<RecordIdentity> {
@@ -324,14 +324,14 @@ fn watched_body_identity() -> Option<RecordIdentity> {
 ///
 /// # Safety
 ///
-/// `summary` must be the LIVE `CS::ProfileSummary` allocation and `base` the running game module
+/// `summary` must be the live `CS::ProfileSummary` allocation and `base` the running game module
 /// base: this zeroes and rewrites ten records through raw pointers. Game thread only.
 unsafe fn rewrite_records_from_bytes(
     base: usize,
     summary: usize,
     bytes: &[u8],
 ) -> Option<(usize, usize)> {
-    // Captured BEFORE the rewrite: the writer uses it as a structural template for any slot whose
+    // Captured before the rewrite: the writer uses it as a structural template for any slot whose
     // visual blocks it cannot locate in the container.
     let snapshot =
         unsafe { core::slice::from_raw_parts(summary as *const u8, PROFILE_SUMMARY_TOTAL_BYTES) }
@@ -350,7 +350,7 @@ unsafe fn rewrite_records_from_bytes(
 /// Has something overwritten the target slot's record with a different character since the refresh?
 ///
 /// Called on every autoload tick once the refresh has resolved. The check itself is two guarded
-/// reads and a hash of at most seventeen UTF-16 units -- cheap enough per frame; the CORRECTION is
+/// reads and a hash of at most seventeen UTF-16 units -- cheap enough per frame; the correction is
 /// the expensive part and is capped by `REASSERT_MAX_REWRITES`.
 ///
 /// # Safety

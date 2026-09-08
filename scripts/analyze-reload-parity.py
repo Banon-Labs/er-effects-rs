@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Score a same-char reload run for FRAMERATE PARITY (goal AC-2/AC-3): is the switch
+"""Score a same-char reload run for FRAMERATE parity (goal AC-2/AC-3): is the switch
 reload's settled in-world framerate the same as the first load's?
 
 Reads a runtime-probe artifact dir's telemetry-timeseries.jsonl (or a jsonl path directly),
-segments rows by load epoch (fresh_deser_count), keeps only SETTLED in-world rows
+segments rows by load epoch (fresh_deser_count), keeps only settled in-world rows
 (player_present), and reports per-epoch median refresh_per_present / qpc_delta / fps plus the
-WITHIN-RUN delta load2-minus-load1 -- the confound-free AC-2 metric (same run, same env, so the
-env baseline cancels). Verdict PARITY iff |load2 - load1| refresh_per_present <= NOISE_VBLANK.
+within-run delta load2-minus-load1 -- the confound-free AC-2 metric (same run, same env, so the
+env baseline cancels). Verdict parity iff |load2 - load1| refresh_per_present <= NOISE_VBLANK.
 
 Usage:
     python3 scripts/analyze-reload-parity.py <artifact-dir-or-timeseries.jsonl>
 
-Why within-run delta: absolute fps is env/scene-bound (angrE renders ~20-30fps on BOTH loads);
-the reload BUG is load2 rendering HEAVIER than load1 (the in-place reload left render globals
+Why within-run delta: absolute fps is env/scene-bound (angrE renders ~20-30fps on both loads);
+the reload bug is load2 rendering heavier than load1 (the in-place reload left render globals
 un-reset). Parity = load2 settled == load1 settled. bd
 user-clue-angre-load2-dip-sustained-at-idle-persistent-render-state-not-transient-2026-07-23.
 """

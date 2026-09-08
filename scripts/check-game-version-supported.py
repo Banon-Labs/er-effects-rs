@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail when the installed game is a version the RVA bundle does not support.
 
-WHY THIS EXISTS
+Why this exists
 ---------------
 On 2026-08-29 every product DLL died within a second of loading and it took
 eight game launches to learn why.  The cause was one line of data:
@@ -96,7 +96,7 @@ def _walk_resources(data: bytes, sections, res_rva: int, base_off: int, depth: i
         e = off + 16 + i * 8
         name = _u32(data, e)
         entry = _u32(data, e + 4)
-        # At depth 0 the id IS the resource type; 16 == RT_VERSION.
+        # At depth 0 the id is the resource type; 16 == RT_VERSION.
         if depth == 0 and not (name & 0x80000000) and name != 16:
             continue
         if entry & 0x80000000:
@@ -174,7 +174,7 @@ def selftest() -> int:
 
     # The PE reader, against this machine's own game if it is here.  A parser
     # that returns a plausible-looking string for the wrong reason is the
-    # failure mode worth catching, so assert the SHAPE, not a fixed value.
+    # failure mode worth catching, so assert the shape, not a fixed value.
     exe = Path(os.environ.get("ER_GAME_EXE", DEFAULT_GAME))
     if exe.is_file():
         try:

@@ -2,16 +2,16 @@
 """Find every instruction in a flat deobf ELDEN RING image that touches `[reg + DISP]`.
 
 Motivation: Ghidra's xref database answers "who calls this function" and "who reads this
-global", but a STRUCT FIELD accessed through a `this` pointer has no xref at all -- the
+global", but a STRUCT field accessed through a `this` pointer has no xref at all -- the
 only trace it leaves is a 4-byte displacement inside a ModRM/SIB encoding. When the
 question is "what READS the field I am about to force" (the difference between forcing a
 predicate and forcing a value nothing consumes), that displacement is the whole evidence.
 
 Strategy: locate the raw little-endian displacement bytes, then re-decode a short window
-ENDING at each candidate instruction start so capstone confirms the bytes really are the
+ending at each candidate instruction start so capstone confirms the bytes really are the
 memory displacement of a real instruction rather than an immediate, a pointer, or padding.
 
-The image is FLAT (file offset == RVA), so `VA = 0x140000000 + offset` -- see AGENTS.md,
+The image is flat (file offset == RVA), so `VA = 0x140000000 + offset` -- see AGENTS.md,
 "`.rdata` IS shift-0 too".
 
 Run under uv so capstone is provisioned ephemerally:

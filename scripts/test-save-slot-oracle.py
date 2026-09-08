@@ -110,7 +110,7 @@ def main() -> int:
 
 
 # Regression for the inverted MaxHealth/BaseMaxHealth constraint and the
-# FACE-coupled PGD scan that mis-read the 150-Banon save (slot 0 reported EMPTY;
+# face-coupled PGD scan that mis-read the 150-Banon save (slot 0 reported empty;
 # slot 1 "Dark Moon Bean" missed because its FaceData size field is not 288).
 # Ground truth is the per-slot CharacterName UTF-16 bytes in each USER_DATA00N,
 # cross-checked against the user's Elden Ring Save Manager (slot 0 = Banon L150).

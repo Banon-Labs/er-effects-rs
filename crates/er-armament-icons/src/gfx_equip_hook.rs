@@ -1,10 +1,10 @@
 //! Runtime GFX ArtsBadge edit for every item-tile menu, reaching the parse of the
-//! BOOT-PRELOADED movies (bd armament-icons-reach-fix-hook-parse-fn-1411cf180).
+//! boot-PRELOADED movies (bd armament-icons-reach-fix-hook-parse-fn-1411cf180).
 //!
 //! The movies are `er_gfx::arts_badge::TARGETS` -- the equip menu, the inventory and the
-//! sort chest. Each is preloaded+parsed ONCE at boot into a cached MovieDataDef, so
-//! the file-open MemoryFile swap that works for ON-DEMAND menus (title/options, which
-//! reparse on display) never reaches it -- at equip display CreateMovie is a cache HIT
+//! sort chest. Each is preloaded+parsed once at boot into a cached MovieDataDef, so
+//! the file-open MemoryFile swap that works for on-demand menus (title/options, which
+//! reparse on display) never reaches it -- at equip display CreateMovie is a cache hit
 //! with no reopen, so a post-open field swap has no read to intercept (proven: an
 //! injected existing-char sibling stayed unbound; bd
 //! armament-icons-boot-preload-swap-not-reach-createmovie-name-empty).
@@ -15,12 +15,12 @@
 //! consumes via the MemoryFile vtable Read (which memcpy's from File+0x18 using the
 //! +0x24 cursor, clamped to +0x20 len). When that File fingerprints as one of the vanilla
 //! target movies we derive the ArtsBadge-edited movie and swap the File's
-//! data/len/cursor, so the parser builds the EDITED MovieDataDef that the menu then
+//! data/len/cursor, so the parser builds the edited MovieDataDef that the menu then
 //! binds. Since our hooks install before the boot preload, this catches each movie's
 //! boot parse -- no forced reparse needed.
 //!
-//! The parse fn is located by a UNIQUE `.text` AOB scan (version-agnostic; hardcoded
-//! RVAs drift between patches). A non-unique scan disables the hook FAIL-CLOSED (badge
+//! The parse fn is located by a unique `.text` AOB scan (version-agnostic; hardcoded
+//! RVAs drift between patches). A non-unique scan disables the hook fail-closed (badge
 //! simply not reached) rather than crash-hooking.
 
 #![cfg(windows)]
@@ -46,12 +46,12 @@ const MEMORY_FILE_CURSOR_OFFSET: usize = 0x24;
 const PARSE_SIG: &str =
     "40 53 48 83 EC 40 48 8B 41 18 48 8B D9 C6 44 24 30 01 48 83 C1 50 4C 8B 50 20 4C 8B 58 48";
 
-/// File-open observer (logs the `.gfx` open sequence AND provides a live loader to resolve
+/// File-open observer (logs the `.gfx` open sequence and provides a live loader to resolve
 /// FileOpener::OpenFile from). Known-good hardcoded 1.16.2 RVA.
 ///
-/// SHARED WITH THE PRODUCT DLL. `er-quickload` detours this same prologue for its title / stats /
+/// Shared with the product DLL. `er-quickload` detours this same prologue for its title / stats /
 /// System>Quit / text-input GFx swaps. Because a statically linked crate's statics are per-DLL,
-/// each of us owns a SEPARATE MinHook instance, and two instances on one prologue overwrite each
+/// each of us owns a separate MinHook instance, and two instances on one prologue overwrite each
 /// other's trampolines: the loser reports installed, never fires, and its whole feature looks
 /// unimplemented. Measured 2026-08-23 -- in an eleven-native profile the product logged
 /// `file_open_hits = 0` for a full session (113 when loaded alone). So this hook is registered
@@ -62,8 +62,8 @@ const FILE_OPEN_RVA: usize = er_game_base::rva::TITLE_SCALEFORM_FILE_OPEN_RVA;
 /// Which badge movie does this open URL name, if any?
 ///
 /// The FILENAME is the identity, deliberately: a user running another menu mod through ME3
-/// has `02_020_inventory.gfx` with different BYTES, and byte identity would lock every one of
-/// them out of the feature. Fingerprints still gate WHICH derivation path runs (see
+/// has `02_020_inventory.gfx` with different bytes, and byte identity would lock every one of
+/// them out of the feature. Fingerprints still gate which derivation path runs (see
 /// [`maybe_swap_equip_file`]), not whether the movie is ours.
 unsafe fn badge_movie_slot(url: usize) -> Option<usize> {
     er_gfx::arts_badge::TARGETS
@@ -79,10 +79,10 @@ static PARSE_ORIG: AtomicUsize = AtomicUsize::new(ORIG_UNSET);
 static FILE_OPEN_ORIG: AtomicUsize = AtomicUsize::new(ORIG_UNSET);
 static HOOK_ACTIVE: AtomicUsize = AtomicUsize::new(0);
 
-// --- FileOpener::OpenFile hook (the SINGLE point both the header open and the async
+// --- FileOpener::OpenFile hook (the single point both the header open and the async
 // tag-dict re-open flow through -- bd armament-icons-reach-root-async-reopen-hook-fileopener-openfile).
 // The loader's FileOpener lives at `*(*(loader+0x10)+0x10)`; OpenFile is its vtable+0x18.
-// Resolved at RUNTIME from a live loader (obtained in the file-open observer) and hooked
+// Resolved at runtime from a live loader (obtained in the file-open observer) and hooked
 // once. `OpenFile(this, url /*rdx*/, log, 0x21, 0x1b6) -> File*`.
 const LOADER_FILEOPENER_HOLDER_OFFSET: usize = 0x10; // loader+0x10 -> holder
 const HOLDER_FILEOPENER_OFFSET: usize = 0x10; // holder+0x10 -> FileOpener
@@ -100,7 +100,7 @@ static GFX_OPEN_TOTAL: AtomicU64 = AtomicU64::new(0);
 /// How many `.gfx` open URLs to log before going quiet.
 const DIAG_LOG_LIMIT: u64 = 80;
 
-/// One derived movie, tagged with the EXACT input it was derived from.
+/// One derived movie, tagged with the exact input it was derived from.
 ///
 /// The tag is the whole point: a cache keyed only by slot served one movie's bytes under
 /// another movie's identity with no failure line (run 20260727-231706), and the length-based
@@ -124,7 +124,7 @@ const _: () = assert!(
 );
 
 /// Bounded budget for raw File-object dumps (layout attribution: run 20260727-201851 had
-/// 112 parses with ZERO vanilla-length candidates, so the File reaching these hooks may
+/// 112 parses with zero vanilla-length candidates, so the File reaching these hooks may
 /// not have the assumed MemoryFile layout under the native-Linux me3 asset layer).
 static DIAG_FILE_DUMPS: AtomicU64 = AtomicU64::new(0);
 
@@ -179,8 +179,8 @@ fn parse_sig(sig: &str) -> Option<(Vec<u8>, Vec<bool>)> {
     Some((bytes, mask))
 }
 
-/// Find the UNIQUE address in `text` (mapped at `text_start`) matching `sig`. None if the
-/// signature is empty/invalid, has zero matches, or has MORE THAN ONE match (ambiguous ->
+/// Find the unique address in `text` (mapped at `text_start`) matching `sig`. None if the
+/// signature is empty/invalid, has zero matches, or has more than one match (ambiguous ->
 /// fail closed so a drifted/duplicated pattern never hooks the wrong function).
 fn scan_unique(text: &[u8], text_start: usize, sig: &str) -> Option<usize> {
     let (bytes, mask) = parse_sig(sig)?;
@@ -272,7 +272,7 @@ unsafe fn maybe_swap_equip_file(base: usize, file: usize, via: &str, url_slot: O
         return;
     }
     let vtable = unsafe { safe_read_usize(file) }.unwrap_or(0);
-    // RESOLVED, and never satisfied by zero. The Scaleform `MemoryFile` vtable moved on 1.17
+    // Resolved, and never satisfied by zero. The Scaleform `MemoryFile` vtable moved on 1.17
     // (0x2ba4c80 -> 0x2ba7d70), so a raw `base + RVA` matched nothing and every badge swap on the
     // parse path was declined without a word -- no refusal line, no counter, the feature simply
     // absent. The zero screen closes the other direction: `game_data_addr` answers 0 for a
@@ -299,7 +299,7 @@ unsafe fn maybe_swap_equip_file(base: usize, file: usize, via: &str, url_slot: O
     if !magic_ok {
         return;
     }
-    // The File's +0x20 length is the ALLOCATION size, which the loader rounds UP (32-byte
+    // The File's +0x20 length is the allocation size, which the loader rounds up (32-byte
     // aligned: the equip movie's 18393 bytes live in an 0x47e0 = 18400 buffer). Gating on
     // `buf_len == VANILLA_LEN` therefore rejected every real candidate and the swap never
     // fired (parse_swaps=0 across runs 20260727-201106/201851/211251). Use the movie's own
@@ -331,11 +331,11 @@ unsafe fn maybe_swap_equip_file(base: usize, file: usize, via: &str, url_slot: O
 
     // Derive once per movie (cached for the process lifetime), then swap the File to it.
     // `slot` comes from the lookup itself: keying this cache on anything derived from the
-    // target's ADDRESS collapsed all three movies onto one entry (see `TARGETS`).
+    // target's address collapsed all three movies onto one entry (see `TARGETS`).
     let edited = match EDITED[slot].get() {
         Some(cached) => cached,
         None => {
-            // Vanilla bytes take the PROVEN path: derive and require the exact baked output
+            // Vanilla bytes take the proven path: derive and require the exact baked output
             // fingerprint. Anything else is a movie some other mod supplied through ME3 --
             // very common, and explicitly supported -- so it takes the structural path, which
             // brackets the same derivation with a byte-exact input-reproducibility gate and an
@@ -347,7 +347,7 @@ unsafe fn maybe_swap_equip_file(base: usize, file: usize, via: &str, url_slot: O
             let derived = if known_vanilla {
                 er_gfx::arts_badge::derive(target, &input)
             } else {
-                // Scoping and the hidden-by-default flag are per-MOVIE properties, so a
+                // Scoping and the hidden-by-default flag are per-movie properties, so a
                 // user's modded movie must get the same treatment as vanilla -- otherwise a
                 // modded HUD would be edited unscoped and visible.
                 er_gfx::arts_badge::derive_unknown_scoped(
@@ -383,9 +383,9 @@ unsafe fn maybe_swap_equip_file(base: usize, file: usize, via: &str, url_slot: O
         }
     };
     // Cross-check the buffer we are about to serve against the bytes actually in this File.
-    // The derive path validates its own output, but the CACHE path bypasses that -- which is
+    // The derive path validates its own output, but the cache path bypasses that -- which is
     // precisely how a mis-keyed cache served one movie's bytes under another movie's identity
-    // without a single failure line (run 20260727-231706). Matching the INPUT fingerprint is
+    // without a single failure line (run 20260727-231706). Matching the input fingerprint is
     // exact for a modded movie too, where there is no expected output length to check.
     if edited.input_len != len || edited.input_fnv1a64 != input_fnv {
         EQUIP_SWAP_FAILURES.fetch_add(1, Ordering::SeqCst);
@@ -426,11 +426,11 @@ unsafe extern "system" fn parse_hook(load_process: usize, file: usize) -> usize 
         if pn <= 3 {
             unsafe { dump_file_object(base, file, "parse") };
         }
-        // No URL here, so this path can only recognise a movie by its VANILLA fingerprint --
+        // No URL here, so this path can only recognise a movie by its vanilla fingerprint --
         // i.e. it never fires for a user's modded movie. That is correct rather than a gap:
         // both the header open and the async tag-dict re-open funnel through
         // `FileOpener::OpenFile` (bd armament-icons-reach-root-async-reopen-hook-fileopener-openfile),
-        // which does have the URL, so a modded movie is swapped consistently on BOTH opens and
+        // which does have the URL, so a modded movie is swapped consistently on both opens and
         // this hook simply sees the already-swapped File and no-ops. A File that somehow
         // reached parse without passing OpenFile is left untouched -- no badge, no mismatch.
         unsafe { maybe_swap_equip_file(base, file, "parse", None) };
@@ -446,7 +446,7 @@ unsafe extern "system" fn parse_hook(load_process: usize, file: usize) -> usize 
 }
 
 /// `FileOpener::OpenFile(this, url /*rdx*/, log, flags1, flags2) -> File*` hook. This is the
-/// single point BOTH the header open and the async tag-dictionary re-open flow through, so
+/// single point both the header open and the async tag-dictionary re-open flow through, so
 /// swapping the returned File here reaches the parsed dictionary (not just the header).
 unsafe extern "system" fn openfile_hook(
     this: usize,
@@ -516,7 +516,7 @@ unsafe fn try_install_openfile_hook(loader: usize) {
         ));
         return;
     }
-    // RUNTIME-DERIVED, like the parse hook: `openfile` was just read out of the LIVE
+    // Runtime-derived, like the parse hook: `openfile` was just read out of the live
     // `FileOpener` vtable a few lines up, so it is this build's address by construction and the
     // 1.16.2 -> 1.17 table has no key for it. `MhHook::new` refused it for that reason, which cost
     // this DLL its async tag-dict swap on 1.17 with a log line that blamed the address map.
@@ -556,10 +556,10 @@ unsafe fn try_install_openfile_hook(loader: usize) {
     }
 }
 
-/// File-open observer: logs the `.gfx` open sequence AND, on first fire, resolves+hooks the
+/// File-open observer: logs the `.gfx` open sequence and, on first fire, resolves+hooks the
 /// loader's `FileOpener::OpenFile` (the single point covering header + async tag opens).
 ///
-/// UNION-SHAPED, not game-shaped: this prologue is shared with the product DLL (see
+/// Union-shaped, not game-shaped: this prologue is shared with the product DLL (see
 /// [`FILE_OPEN_RVA`]) and the union's handler ABI is four `usize` args. The game passes three, so
 /// the fourth register is ignored, and `flags` is narrowed straight back to the `u32` the game
 /// really passed rather than carrying a register whose high half is undefined.
@@ -577,9 +577,9 @@ unsafe extern "system" fn file_open_hook(
     }
     let orig = FILE_OPEN_ORIG.load(Ordering::SeqCst);
     let native = if orig != ORIG_UNSET {
-        // Called through the UNION signature on purpose: this slot holds either the game
-        // trampoline (3 args -- the extra register is harmlessly ignored) or the NEXT handler in
-        // the chain, which IS 4-arg. Calling a chained handler with the game's narrower signature
+        // Called through the union signature on purpose: this slot holds either the game
+        // trampoline (3 args -- the extra register is harmlessly ignored) or the next handler in
+        // the chain, which is 4-arg. Calling a chained handler with the game's narrower signature
         // would leave its fourth register undefined.
         let f: er_hook::UnionFn = unsafe { std::mem::transmute(orig) };
         unsafe { f(loader, url, flags as usize, 0) }
@@ -601,7 +601,7 @@ unsafe extern "system" fn file_open_hook(
 }
 
 /// Install the parse hook (AOB-scanned, fail-closed) plus the diagnostic file-open
-/// observer. Idempotent. If the parse signature does not resolve UNIQUELY the reach hook
+/// observer. Idempotent. If the parse signature does not resolve uniquely the reach hook
 /// is skipped (badge not reached) rather than crash-hooking a wrong address.
 pub(crate) fn install(base: usize) {
     use std::ffi::c_void;
@@ -620,10 +620,10 @@ pub(crate) fn install(base: usize) {
     }
     GAME_BASE.store(base, Ordering::SeqCst);
 
-    // Queue a detour on a RUNTIME-DERIVED absolute `target`, storing its trampoline into `orig`.
+    // Queue a detour on a runtime-derived absolute `target`, storing its trampoline into `orig`.
     //
     // `new_runtime_derived`, not `new`: the one caller below passes the hit from the `.text` AOB
-    // scan of the RUNNING image, so the address is already correct for whatever build is loaded
+    // scan of the running image, so the address is already correct for whatever build is loaded
     // and there is nothing to translate. Sending it through the translating entry point is what
     // turned this feature off on 1.17 -- the scan found the right address (`0x1411cf1a0` ->
     // `0x1411d0fa0`, byte-identical body) and the version gate refused it, because a 1.17 address
@@ -658,7 +658,7 @@ pub(crate) fn install(base: usize) {
     // Reach hook FIRST: locate the GFx parse fn by unique AOB in the live .text, fail-closed. It
     // is the load-bearing hook (it performs the badge swap), it sits on an address no other DLL
     // claims, and it must reach the boot preload's first parse -- so it is never made to wait
-    // behind the SHARED file-open registration below, which may briefly poll for the product DLL.
+    // behind the shared file-open registration below, which may briefly poll for the product DLL.
     let parse_armed = 'parse: {
         let (start, len) = match er_game_base::mem::module_text_range() {
             Some((s, l)) if (0x1000..=0x0800_0000).contains(&l) => (s, l),
@@ -705,7 +705,7 @@ pub(crate) fn install(base: usize) {
         status => log_message(format_args!("gfx-equip: MH_ApplyQueued failed: {status:?}")),
     }
 
-    // SHARED prologue -- never a bare MhHook here. `register_shared_hook` chains us into the
+    // Shared prologue -- never a bare MhHook here. `register_shared_hook` chains us into the
     // product DLL's single MinHook instance when `er_quickload.dll` is co-loaded, and falls back
     // to our own union when it is not, so a standalone run of this DLL is unchanged. Which route
     // it took is logged, because "LOCAL while the product is present" is precisely the state that

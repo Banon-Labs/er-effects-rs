@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Replay REAL past turns through the one-paragraph rule and show what each counting scheme costs.
+"""Replay real past turns through the one-paragraph rule and show what each counting scheme costs.
 
 The wall-of-text guard is only worth having if it fires on walls of text and stays silent on ordinary
-work. Unit tests prove the shapes the author thought of; this proves the shapes the author did NOT,
+work. Unit tests prove the shapes the author thought of; this proves the shapes the author did not,
 by counting paragraphs the way production does over the session transcripts the agent actually wrote.
 
 It scores every turn three ways so the difference between them is a measured number rather than an
 argument:
 
     whole-turn   every text block in the turn summed together (what the guard did until 2026-08-22)
-    max-run      the longest CONTIGUOUS run of prose -- text blocks with no tool call between them
+    max-run      the longest contiguous run of prose -- text blocks with no tool call between them
                  (what it does now: the unit a reader actually experiences as one message)
     closing      only the prose after the last tool call (the final answer alone)
 
@@ -20,7 +20,7 @@ guard meant for walls of text ended up firing on ordinary work.
 Usage:
     python3 scripts/audit-wall-of-text-false-positives.py [--limit=N] [transcript.jsonl ...]
 
-With no arguments it audits the newest transcripts for THIS repo under ~/.claude/projects/.
+With no arguments it audits the newest transcripts for this repo under ~/.claude/projects/.
 Read-only: it opens transcripts and writes nothing.
 """
 from __future__ import annotations

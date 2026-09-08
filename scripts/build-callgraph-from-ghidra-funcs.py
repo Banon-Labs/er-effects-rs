@@ -1,29 +1,29 @@
 #!/usr/bin/env python3
-"""Build a whole-image CALL GRAPH from a Ghidra function list plus the flat de-Arxan'd image.
+"""Build a whole-image call graph from a Ghidra function list plus the flat de-Arxan'd image.
 
 Ghidra's analysis found ~366k functions per image -- a node set `.pdata` cannot supply (it
 declares nothing for 5.55 MB of `.text`). This turns that node set into a directed graph by
-decoding each function's own bytes out of the flat image and resolving every DIRECT branch that
+decoding each function's own bytes out of the flat image and resolving every direct branch that
 leaves the function onto another node.
 
-Deliberate choices, because a graph is only comparable across two images if the SAME rule built
+Deliberate choices, because a graph is only comparable across two images if the same rule built
 both sides:
 
 * Decode window is `[entry, min(entry + ghidra_size, next_entry))`. Ghidra's `size` is the body's
   address-set cardinality, so for a chunked function it exceeds the contiguous span; capping at
   the next entry stops the decode running into a neighbour and inventing its callees.
-* `call rel32` and `call rel16` are edges. A `jmp` is an edge only when its target lands OUTSIDE
+* `call rel32` and `call rel16` are edges. A `jmp` is an edge only when its target lands outside
   the decode window -- an intra-function `jmp` is a basic block, not a callee, and counting them
   once inflated a leaf census by 2.2x (see agent-w4-leaves.md).
 * Conditional jumps are never edges.
 * Indirect calls are counted, never resolved.
 * A branch to an address that is not a Ghidra function entry is counted as `out_of_graph`, not
   silently dropped, so the caller can see how much of the body the graph does not model.
-* Each node also gets a BODY HASH: a 64-bit digest of the whole body's instruction sequence with
+* Each node also gets a body HASH: a 64-bit digest of the whole body's instruction sequence with
   every numeric literal blanked. Displacements and immediates are exactly what a version bump
   moves, so they must not be in the digest; what is left is the body's shape, over its whole
   declared length rather than a fixed-length prefix. That length anchor is the point -- a
-  fixed-length masked prefix is how an impostor at 0xaec480 came back IDENTICAL over 56
+  fixed-length masked prefix is how an impostor at 0xaec480 came back identical over 56
   instructions while the correct pair matched over 9.
 
 Output is a pickle:

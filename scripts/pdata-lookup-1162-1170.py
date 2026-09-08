@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Answer, for one or more RVAs, whether each image's `.pdata` calls it a FUNCTION START.
+"""Answer, for one or more RVAs, whether each image's `.pdata` calls it a function start.
 
-`er-hook` installs a DETOUR by overwriting the first bytes of a function, and MinHook needs a
+`er-hook` installs a detour by overwriting the first bytes of a function, and MinHook needs a
 real function entry to build a trampoline from. A `.pdata` RUNTIME_FUNCTION entry whose
 `begin` equals the address is the image's own statement that the address is a function start;
-an address that only falls INSIDE an entry is mid-function, and a detour there corrupts the
+an address that only falls inside an entry is mid-function, and a detour there corrupts the
 game. This prints both facts for both builds so a candidate row can be judged without
 re-deriving the section table each time.
 
-USAGE
+Usage
     python3 scripts/pdata-lookup-1162-1170.py 0x758a10 0x4f9940
     python3 scripts/pdata-lookup-1162-1170.py --new 0x7598c0        # look the RVA up in 1.17
 """
@@ -39,7 +39,7 @@ def sections(data):
 
 
 def pdata_entries(path):
-    """[(begin, end, unwind)] from the image's `.pdata`, sorted by begin. Images are FLAT
+    """[(begin, end, unwind)] from the image's `.pdata`, sorted by begin. Images are flat
     (file offset == RVA), so the section's VA is also where it sits in the file."""
     data = open(path, "rb").read()
     for name, va, vsz in sections(data):

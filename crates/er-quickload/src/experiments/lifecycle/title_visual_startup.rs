@@ -41,7 +41,7 @@ pub(crate) fn install_title_visual_startup_hooks() {
     }
     // Title-cover masquerade Part A: install the BeginTitle `05_000_Title` hook as early as
     // splash/foreground patches, before STEP_BeginTitle can build the native title Scaleform. This
-    // does NOT touch STEP_Wait or CSMenuMan+0x21; it preserves the native MenuWindowJob and hides
+    // does not touch STEP_Wait or CSMenuMan+0x21; it preserves the native MenuWindowJob and hides
     // only its draw bit from the MenuWindowJob::Run/FadeIn path.
     if title_native_menu_visual_suppression_enabled() {
         START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS.call_once(|| {
@@ -126,7 +126,7 @@ pub(crate) fn install_title_visual_startup_hooks() {
     }
 
     // er-effects-rs-jsm PIVOT: suppress the native loading tips (our overlay renders player-stats text
-    // instead). Install at ATTACH -- BEFORE the KnowledgeLoadingScreen ctor's one-shot initial tip (~15s),
+    // instead). Install at attach -- Before the KnowledgeLoadingScreen ctor's one-shot initial tip (~15s),
     // else the first tip is already set and only later cycles are suppressed. Live portrait overlay path only.
     if portrait_overlay_enabled() {
         START_TIP_SUPPRESSION.call_once(|| {
@@ -135,23 +135,23 @@ pub(crate) fn install_title_visual_startup_hooks() {
                 .spawn(install_tip_suppression_hook);
         });
     }
-    // er-effects-rs-y22i: ALWAYS-ON Scaleform descriptor-heap null guard (native-Windows crash
-    // 0xec95d1). NOT feature-gated -- it is a crash guard, a transparent passthrough when the null
+    // er-effects-rs-y22i: Always-on Scaleform descriptor-heap null guard (native-Windows crash
+    // 0xec95d1). Not feature-gated -- it is a crash guard, a transparent passthrough when the null
     // never occurs. Installed at attach so it is live before the first loading-screen composite.
     START_SCALEFORM_GUARD.call_once(|| {
         let _ = std::thread::Builder::new()
             .name("er-quickload-scaleform-guard".to_owned())
             .spawn(install_scaleform_descriptor_guard);
     });
-    // D3D12 PRESENT OVERLAY: the deterministic display path -- draw the captured portrait directly onto the
+    // D3D12 present OVERLAY: the deterministic display path -- draw the captured portrait directly onto the
     // swapchain backbuffer when the now-loading screen is up (the in-pipeline forge/Scaleform routes cannot
     // drive the displayed image). Install only on the portrait path (diagnostic), via the dummy-swapchain
     // vtable technique. Phase 1 is log-only (proves the hook fires) before any backbuffer write.
-    // Also install under telemetry-only for CADENCE MEASUREMENT: the present detour records the present-
+    // Also install under telemetry-only for cadence MEASUREMENT: the present detour records the present-
     // cadence + GX semaphores read-only (the flow-modifying composite is separately gated off when the
     // overlay is not a product feature this run). Lets a flow-faithful vanilla baseline capture the
     // render-bound fingerprint (bd present-cadence-gx-instrumentation-coupled-to-overlay-install-gate;
-    // VANILLA-run2-forcedrive-WORKS-...cadence-decouple-insufficient).
+    // Vanilla-run2-forcedrive-works-...cadence-decouple-insufficient).
     if portrait_overlay_enabled()
         || save_override_telemetry_only()
         || crate::experiments::measure_no_composite()
@@ -162,14 +162,14 @@ pub(crate) fn install_title_visual_startup_hooks() {
                 .spawn(install_present_overlay_hook);
         });
     }
-    // NATIVE-WINDOWS LOADING OVERLAY (bd er-effects-rs-8jz): a SEPARATE topmost window with our OWN D3D12
-    // device/swapchain that OWNS the screen during boot + every loading screen. On native Windows we
+    // Native-Windows loading overlay (bd er-effects-rs-8jz): a separate topmost window with our own D3D12
+    // device/swapchain that owns the screen during boot + every loading screen. On native Windows we
     // cannot composite on the game's shared device (it crashes the strict driver), so this is the only
     // safe display path there. Wine/vkd3d keeps the in-swapchain composite above. Install is idempotent.
     if is_native_windows() {
         install_native_overlay();
     }
-    // OS-PICKER DIM: stand the cover's window up NOW, while nothing is waiting on it. The dialog it
+    // OS-PICKER DIM: stand the cover's window up now, while nothing is waiting on it. The dialog it
     // covers blocks the menu thread, so the moment it opens is the moment we can no longer afford to
     // be creating a window and a full-screen DIB. Self-gated to sessions that actually run the OS
     // picker (`os_native_save_picker = true`); the in-game browser needs no cover.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Move the forcing er-quickload-*.txt trigger files aside (off) or back (on), so a save-trace probe can
-# run with the DLL doing ONLY the env-gated diagnostics (no pab-advance / native-continue / offline /
+# run with the DLL doing only the env-gated diagnostics (no pab-advance / native-continue / offline /
 # diagnostics forcing the boot). Usage: toggle-er-triggers.sh off|on
 set -uo pipefail
 MODE="${1:?usage: toggle-er-triggers.sh off|on}"

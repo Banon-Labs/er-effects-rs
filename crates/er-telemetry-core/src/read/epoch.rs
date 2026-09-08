@@ -1,10 +1,10 @@
 //! Product-independent load-epoch counter shared by the read-side oracles.
 //!
 //! Every emitted oracle line is tagged with `{epoch, play_time_ms}` so a
-//! load1-vs-load2 / armed-vs-disarmed diff is unambiguous WITHOUT reading the
+//! load1-vs-load2 / armed-vs-disarmed diff is unambiguous without reading the
 //! product's hook-fed `fresh_deser` counter (which would re-couple the decoupled
 //! read module to the product). The epoch is derived purely from `play_time_ms`
-//! (GameDataMan+0xa0, already sampled by `standalone_tick`), mirroring the FLAT /
+//! (GameDataMan+0xa0, already sampled by `standalone_tick`), mirroring the flat /
 //! re-arm load-boundary logic in `maybe_trigger_renderdoc` (lib.rs ~305-330): a
 //! sustained flat-`play_time` window is a load boundary, and the epoch increments
 //! when the world resumes simulating after such a window.
@@ -27,7 +27,7 @@ static IN_LOAD: AtomicBool = AtomicBool::new(false);
 static EPOCH: AtomicU64 = AtomicU64::new(0);
 
 /// Advance the epoch state for this write-tick and return the current epoch.
-/// MUST be called exactly once per write-tick (from `read::tick`) so the flat
+/// Must be called exactly once per write-tick (from `read::tick`) so the flat
 /// window is measured consistently regardless of how many oracles are enabled.
 pub fn advance(play_time_ms: i64) -> u64 {
     let prev = PREV_PT.swap(play_time_ms, Ordering::SeqCst);

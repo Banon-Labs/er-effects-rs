@@ -1,12 +1,12 @@
 use super::*;
 
-/// Drive the NATIVE MenuWindowJob::Update 0x1407ad1c0(rcx=item, rdx=&out, r8=framectx) once to
-/// BUILD the item's dialog the way the game does. Unlike a bare functor invoke, the native Update
-/// WIRES the ctx (item+0x10) from the descriptor (item+0x58 -> resolved window item+0x68 via
-/// 0x140d6a8e0 + window-mgr 0x143d83148) BEFORE firing the functor -- so it needs NO synthetic ctx
+/// Drive the native MenuWindowJob::Update 0x1407ad1c0(rcx=item, rdx=&out, r8=framectx) once to
+/// build the item's dialog the way the game does. Unlike a bare functor invoke, the native Update
+/// wires the ctx (item+0x10) from the descriptor (item+0x58 -> resolved window item+0x68 via
+/// 0x140d6a8e0 + window-mgr 0x143d83148) before firing the functor -- so it needs no synthetic ctx
 /// (the prior wall). It is idempotent (returns early if item+0x130 already holds a dialog) and the
-/// Load-Game item only builds a ProfileLoadDialog -> BUILD-ONLY, no save write. Guarded by the
-/// native BUILD precondition (mirrors 0x1407ad1ec/1fa/208): [item+0x130]==0 && [item+0xa8]!=0 &&
+/// Load-Game item only builds a ProfileLoadDialog -> build-only, no save write. Guarded by the
+/// native build precondition (mirrors 0x1407ad1ec/1fa/208): [item+0x130]==0 && [item+0xa8]!=0 &&
 /// [item+0x10]==0. `framectx` is the live FD4Time passed to our idx10 step (the same ctx the native
 /// pump feeds the leaf). Returns the built dialog at [item+0x130], if any.
 pub(crate) unsafe fn drive_menu_item_update(
@@ -22,7 +22,7 @@ pub(crate) unsafe fn drive_menu_item_update(
     let functor = unsafe { safe_read_usize(item + ITEM_FUNCTOR_A8) }?;
     let ctx = unsafe { safe_read_usize(item + ITEM_CTX_10) }?;
     let pre130 = unsafe { safe_read_usize(item + ITEM_RESULT_130) }?;
-    // Native BUILD precondition: dialog not yet built, functor present, ctx not yet wired.
+    // Native build precondition: dialog not yet built, functor present, ctx not yet wired.
     if functor == null || ctx != null || pre130 != null {
         return None;
     }
@@ -42,7 +42,7 @@ pub(crate) unsafe fn drive_menu_item_update(
 /// prologue. Every decorator in the owner+0x130 menu chain forwards Update to one wrapped
 /// child via `mov rcx,[node+disp]; mov rax,[rcx]; call [rax+0x10]`, but the child offset
 /// varies per type (0x48, 0x40, ...). Rather than tabulate each, we read the Update fn's
-/// first bytes and return the disp of the FIRST `mov rcx,[rcx+disp]`:
+/// first bytes and return the disp of the first `mov rcx,[rcx+disp]`:
 ///   `48 8b 49 <disp8>`              -> disp8
 ///   `48 8b 89 <disp32 le>`          -> disp32
 /// Returns None if no such load appears in the scanned prologue (not a forwarding decorator).
@@ -89,14 +89,14 @@ pub(crate) unsafe fn decorator_child_offset(update_fn: usize) -> Option<usize> {
     }
     None
 }
-/// STAGE 1b (strictly NO-WRITE): recursive bounded walk of the title menu JOB tree rooted
+/// Stage 1b (strictly no-write): recursive bounded walk of the title menu job tree rooted
 /// at `[owner+0xe0]` (the FD4 multicast/job holder -- runtime proved the real menu lives
-/// here, NOT the empty `owner+0x138`). Classifies each node by its Update slot
+/// here, not the empty `owner+0x138`). Classifies each node by its Update slot
 /// `[vtable+0x10]`: 0x1407aa1f0 = Sequence/IfElse container (children at `[node+0x18]` base,
 /// count `[node+0x60]`, stride 8), 0x1407ad1c0 = MenuWindowJob leaf (action functor
 /// `[node+0xa8]`). Logs the structure and returns the Load-Game leaf (functor -> dialog
 /// factory). Both child-pointer interpretations (base-deref and inline) are enqueued; a
-/// visited-set + node/depth caps bound it; fault-tolerant reads never AV. NO writes/calls.
+/// visited-set + node/depth caps bound it; fault-tolerant reads never AV. No writes/calls.
 pub(crate) unsafe fn diagnostic_job_tree_walk(
     owner: usize,
     module_base: usize,
@@ -110,12 +110,12 @@ pub(crate) unsafe fn diagnostic_job_tree_walk(
     const NODE_HOLDER_ROOT_18: usize = 0x18;
     const SEQ_UPDATE_RVA: usize = SEQUENCE_ITER_RVA as usize;
     const LEAF_UPDATE_RVA: usize = 0x07ad1c0;
-    // IfElseJob combiner (vt 0x142aa2c38). Its child jobs are NOT at the sequence
+    // IfElseJob combiner (vt 0x142aa2c38). Its child jobs are not at the sequence
     // [+0x18]/[+0x60] layout; that mis-read is the "garbage count" the generic walk hit.
     // Decoded from selector 0x140793390: inline entry array at [node+0x18], stride 0x10,
     // each entry = {predicate@+0, child_job@+0x8}; entry count at [node+0xa0]; default/else
     // child at [node+0xa8]; runtime-active child at [node+0xb0]. Entry + default child jobs
-    // are pre-built/retained at BUILD time, so reading them needs no pump.
+    // are pre-built/retained at build time, so reading them needs no pump.
     const IFELSE_UPDATE_RVA: usize = 0x07931e0;
     // Single-child wrapper (vt 0x142a93af8, update 0x140745510): `mov rcx,[node+0x48];
     // call [rcx]->vt[+0x10]` -- forwards Update to one wrapped child at [node+0x48]. The
@@ -140,7 +140,7 @@ pub(crate) unsafe fn diagnostic_job_tree_walk(
     // single-child FD4 job decorators (vt 0x142a93af8 child@+0x48, vt 0x142a93d18 child@+0x40,
     // ...) with per-type child offsets. Rather than decode each, for any node that is none of
     // the known container/leaf kinds we scan a bounded field window and enqueue every qword
-    // that points at an in-module job object (its vtable AND that vtable's Update slot both
+    // that points at an in-module job object (its vtable and that vtable's Update slot both
     // land inside the game image). Fault-tolerant reads; visited-set + node budget bound it.
     const GEN_SCAN_LO: usize = 0x10;
     const GEN_SCAN_HI: usize = 0xc0;
@@ -153,7 +153,7 @@ pub(crate) unsafe fn diagnostic_job_tree_walk(
     const MODULE_MIN_OFFSET: usize = 0x1000;
 
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    // RESOLVED like its three siblings. `SEQUENCE_ITER_RVA` moved on 1.17 (0x7aa1f0 -> 0x7ab070),
+    // Resolved like its three siblings. `SEQUENCE_ITER_RVA` moved on 1.17 (0x7aa1f0 -> 0x7ab070),
     // so the raw form matched no node, container nodes went unclassified, the walk never
     // descended, and the Load-Game leaf could not be found down this path.
     let seq_update_abs =
@@ -216,7 +216,7 @@ pub(crate) unsafe fn diagnostic_job_tree_walk(
         };
         let count = unsafe { safe_read_usize(node + NODE_COUNT_60) }.unwrap_or(null);
         let base = unsafe { safe_read_usize(node + NODE_CHILDREN_BASE_18) }.unwrap_or(null);
-        // `update` is 0 for a vtable-less node and a REFUSED RVA is 0 too, so one unmapped
+        // `update` is 0 for a vtable-less node and a refused RVA is 0 too, so one unmapped
         // constant would make every such node answer to the classification it refused.
         let classified = |want: usize| update != null && want != null && update == want;
         let is_leaf = classified(leaf_update_abs);
@@ -251,9 +251,9 @@ pub(crate) unsafe fn diagnostic_job_tree_walk(
         } else if depth < MAX_DEPTH && is_ifelse {
             // IfElseJob (selector 0x140793390): a case vector at [node+0x18], stride 0x10, each
             // case = {predicate@+0, child_job@+0x8}; the main-menu branch (holding d180) binds its
-            // child to [node+0xb0] ONLY when its input-gated predicate flips (so headless d180 is
-            // present-but-unbound). The case COUNT offset is ambiguous across memos (+0xa0 vs +0x88
-            // = capacity vs size), so rather than trust a count we do a bounded LAYOUT-AGNOSTIC
+            // child to [node+0xb0] only when its input-gated predicate flips (so headless d180 is
+            // present-but-unbound). The case count offset is ambiguous across memos (+0xa0 vs +0x88
+            // = capacity vs size), so rather than trust a count we do a bounded layout-agnostic
             // scan of the case slots and enqueue every child_job (and predicate slot) that points
             // at an in-module job object -- this reaches d180's case child whether or not its
             // branch is bound, with no pump. Pure reads; visited-set + node budget bound it.
@@ -299,7 +299,7 @@ pub(crate) unsafe fn diagnostic_job_tree_walk(
             }
         } else if depth < MAX_DEPTH && !is_leaf && in_module(vtable) && in_module(update) {
             // Unknown FD4 decorator: decode the single forwarded-child offset from its Update
-            // prologue (`mov rcx,[node+disp]`) and descend into [node+disp] ONLY -- a precise
+            // prologue (`mov rcx,[node+disp]`) and descend into [node+disp] only -- a precise
             // single-child follow, never a field scan (which wandered into the GUI graph).
             if let Some(off) = unsafe { decorator_child_offset(update) }
                 && (GEN_SCAN_LO..=GEN_SCAN_HI).contains(&off)
@@ -323,16 +323,16 @@ pub(crate) unsafe fn diagnostic_job_tree_walk(
     }
     load_game
 }
-/// STAGE 2 in-context load drive (see the lib.rs STAGE-2 const block). Runs each frame while
+/// Stage 2 in-context load drive (see the lib.rs stage-2 const block). Runs each frame while
 /// `OWN_STEPPER_PHASE` is one of the four S2 phases, sequencing:
-///   INVOKE  -> hand-fire d180's `+0xa8` functor to build the ProfileLoadDialog
-///   ACTIVATE-> write slot cursor `[dialog+0xb0c]=N`, call vtable-slot-20 `load_activate(dialog)`
+///   Invoke  -> hand-fire d180's `+0xa8` functor to build the ProfileLoadDialog
+///   activate-> write slot cursor `[dialog+0xb0c]=N`, call vtable-slot-20 `load_activate(dialog)`
 ///   MOUNT_POLL -> let the native pump tick the selector; detect the mount (`ac0==N` + io
 ///               request set->cleared); latch the real `c30`
-///   CONFIRM -> guard (`ac0==N && c30==latched`) then `continue_confirm` -> SetState(5)
-/// Every cross-into-game call is gated by read-only preconditions; the ONLY save-write risk is
-/// the CONFIRM SetState(5), gated entirely by a verified real mount (fail-closed otherwise:
-/// stay at the menu, NO SetState(5), NO save write).
+///   confirm -> guard (`ac0==N && c30==latched`) then `continue_confirm` -> SetState(5)
+/// Every cross-into-game call is gated by read-only preconditions; the only save-write risk is
+/// the confirm SetState(5), gated entirely by a verified real mount (fail-closed otherwise:
+/// stay at the menu, no SetState(5), no save write).
 pub(crate) unsafe fn own_stepper_stage2(
     owner: usize,
     base: usize,
@@ -434,12 +434,12 @@ pub(crate) unsafe fn own_stepper_stage2(
             own_stepper_enter_s2_phase(OWN_STEPPER_PHASE_S2_ACTIVATE);
             return;
         }
-        // Drive d180's NATIVE Update once as soon as the item exists and its native build
+        // Drive d180's native Update once as soon as the item exists and its native build
         // preconditions are true. d180 lives at owner+0x130 under an input-gated IfElseJob branch
         // (its case child is never bound headless), so the native pump never ticks it -- but the
         // item is fully built, so calling its own MenuWindowJob::Update 0x1407ad1c0 (which wires
         // the ctx item+0x10 from the descriptor item+0x58 before firing the functor) builds the
-        // ProfileLoadDialog with a NATIVE ctx (no synthesis) and zero input. Build-only;
+        // ProfileLoadDialog with a native ctx (no synthesis) and zero input. Build-only;
         // idempotent; no save write.
         if OWN_STEPPER_INVOKED.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS {
             let ret = unsafe { drive_menu_item_update(item, base, framectx) }.unwrap_or(null);
@@ -518,10 +518,10 @@ pub(crate) unsafe fn own_stepper_stage2(
         let expected_slot = ready.expected_slot;
         let cursor_target = ready.cursor_target;
         let lav = ready.load_activate;
-        // For a fixed slot, put the dialog row cursor on that slot's ROW (UI state, not a save
+        // For a fixed slot, put the dialog row cursor on that slot's row (UI state, not a save
         // write); for most-recent, leave the dialog's own highlight untouched.
         //
-        // NATIVE FIRST, because the cursor indexes ROWS and `want_slot` is a SLOT.
+        // Native first, because the cursor indexes rows and `want_slot` is a slot.
         // `05_010_ProfileSelect` lists only the slots that exist, so writing a slot number into the
         // cursor selects the wrong character for any container whose characters are not dense from
         // slot 0 -- `cursor_target`'s `bound == 1 -> row 0` special case is that same bug with one
@@ -564,7 +564,7 @@ pub(crate) unsafe fn own_stepper_stage2(
             "own_stepper: STAGE2-ACTIVATE profile_load_dialog_ready opened want={want_slot} expected={expected_slot} cursor_target={cursor_target} cursor_now={cursor_now} bound={bound} dvt=0x{dvt:x} lav=0x{lav:x} ret={r} dialog=0x{dialog:x} ctx=0x{:x} ctx_vt=0x{:x} pgd=0x{:x} io18=0x{io18:x} io20=0x{io20:x} -- MOUNT via live selector tick plus direct submit+drain+deser",
             ready.load_job_ctx, ready.load_job_ctx_vt, ready.player_game_data
         ));
-        // Reset the shared mount latches so the MOUNT phase's delegate (cold_char_mount_drive) and
+        // Reset the shared mount latches so the mount phase's delegate (cold_char_mount_drive) and
         // the mount-done gate observe a clean slate for this drive.
         OWN_STEPPER_DESER_FIRED.store(OWN_STEPPER_DESER_NOT_FIRED, Ordering::SeqCst);
         OWN_STEPPER_MOUNT_C30.store(GAME_MAN_C30_UNSET, Ordering::SeqCst);
@@ -625,7 +625,7 @@ pub(crate) unsafe fn own_stepper_stage2(
         let io_was_set =
             OWN_STEPPER_IO_WAS_SET.load(Ordering::SeqCst) == OWN_STEPPER_IO_WAS_SET_YES;
         let io_consumed = io18 == null && io20 == null;
-        // Mount signal = the deserialize 0x67b290 SUCCEEDED (ret==1), which proves it wrote c30 from
+        // Mount signal = the deserialize 0x67b290 succeeded (ret==1), which proves it wrote c30 from
         // the save header + applied the real char. c30 itself is ambiguous (the char's real early map
         // 0xa010000 collides with the new-game default), so the reliable signal is deser-success +
         // a SANE latched c30 (not the unset sentinel, not zero). (setstate5-is-save-safe-c30-from-save)
@@ -665,8 +665,8 @@ pub(crate) unsafe fn own_stepper_stage2(
                 "own_stepper: STAGE2-MOUNT-POLL waits={waits} ac0={ac0} expected={expected} c30=0x{c30:x} latched=0x{latched_c30:x} deser_ok={deser_ok} c30_sane={c30_sane} b80={b80} io18=0x{io18:x} io20=0x{io20:x}"
             ));
         }
-        // Default VERIFY-ONLY: stop at deserialize. With the explicit fullread commit gate enabled,
-        // a verified mount advances to CONFIRM, whose independent guard re-checks deser_ok,
+        // Default verify-ONLY: stop at deserialize. With the explicit fullread commit gate enabled,
+        // a verified mount advances to confirm, whose independent guard re-checks deser_ok,
         // fp_real, expected slot, and c30 latch before continue_confirm/SetState5.
         if deser_done {
             let (fp_real, fp_level, fp_name_len) = unsafe { char_fingerprint(base) };
@@ -699,7 +699,7 @@ pub(crate) unsafe fn own_stepper_stage2(
     if phase == OWN_STEPPER_PHASE_S2_CONFIRM {
         let latched = OWN_STEPPER_MOUNT_C30.load(Ordering::SeqCst);
         let expected = OWN_STEPPER_EXPECTED_SLOT.load(Ordering::SeqCst);
-        // HARD save-write guard: only SetState(5) when the real char is still mounted. Require the
+        // Hard save-write guard: only SetState(5) when the real char is still mounted. Require the
         // mount latch, c30 unchanged since the mount and present, the slot match, and the decisive
         // PlayerGameData character fingerprint. c30 may legitimately equal the m10_01 default for
         // saves parked there, and the UTF-16 name field can be empty/unknown, so neither is a hard
@@ -707,7 +707,7 @@ pub(crate) unsafe fn own_stepper_stage2(
         const DESER_FIRED_OK_CONFIRM: usize = 2;
         const C30_ZERO_CONFIRM: i32 = 0;
         let deser_ok = OWN_STEPPER_DESER_FIRED.load(Ordering::SeqCst) == DESER_FIRED_OK_CONFIRM;
-        // CHAR-FINGERPRINT gate (MODEL B): SetState(5) ONLY when a REAL character is mounted in
+        // CHAR-fingerprint gate (model B): SetState(5) only when a real character is mounted in
         // PlayerGameData (level>=1). Runtime direct-build evidence showed the mounted target slot
         // has real stats/level while the name field remains empty/unknown, so name is diagnostic
         // only. The new-game default remains level 0, so level>=1 still fail-closes safely.
@@ -781,16 +781,16 @@ pub(crate) unsafe fn own_stepper_patch_once(module_base: usize) {
             }
         }
     }
-    // RESOLVED, NOT ADDED (2026-08-30). These two are `.data` function-pointer slots in the inner
-    // title state table, and this is the only write in the product that stores OUR code address
-    // into the GAME's dispatch table. A stale one is the worst case the 1.17 gate exists for: no
+    // Resolved, not added (2026-08-30). These two are `.data` function-pointer slots in the inner
+    // title state table, and this is the only write in the product that stores our code address
+    // into the game's dispatch table. A stale one is the worst case the 1.17 gate exists for: no
     // refusal, no fault at write time, no log -- the qword that now lives at the 1.16.2 offset is
     // silently replaced with a pointer to our handler, and the detonation happens later, in
     // whatever native code owned that slot. `native_continue_enabled()` is true in the default
     // product path, so this runs on every boot.
     //
-    // The table's own base IS mapped (`INNER_TITLE_STATE_TABLE_RVA` 0x3d71580 -> 0x3d755f0, +0x4070)
-    // but these two slots at +0x60 and +0xa0 are not rows of their own, so they REFUSE on 1.17
+    // The table's own base is mapped (`INNER_TITLE_STATE_TABLE_RVA` 0x3d71580 -> 0x3d755f0, +0x4070)
+    // but these two slots at +0x60 and +0xa0 are not rows of their own, so they refuse on 1.17
     // until the data map carries them. Refusing costs own-stepper; guessing corrupts the table.
     let slot = er_game_base::mem::game_data_addr(
         module_base,

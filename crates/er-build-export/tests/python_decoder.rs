@@ -61,7 +61,7 @@ fn decoder_script() -> Result<PathBuf, String> {
     }
 }
 
-/// Whether a usable `python3` is on PATH.
+/// Whether a usable `python3` is on path.
 fn python_available() -> bool {
     Command::new("python3")
         .arg("--version")

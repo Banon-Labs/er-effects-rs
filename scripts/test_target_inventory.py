@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Shared inventory: every workspace member's `#[test]` functions, classified by the
-TARGET that is able to execute them.
+target that is able to execute them.
 
 This is the data layer under `scripts/check-test-target-coverage.py`. It is a separate
 module because the gate, its selftest and its `--report` mode all need it.
 
-WHY THE CLASSIFICATION MATTERS. `cargo test -p X` reporting "ok. 43 passed" is not a
+Why the classification matters. `cargo test -p X` reporting "ok. 43 passed" is not a
 statement about the 73 `#[test]` functions in X's source. A test whose module is reached
 only through `#[cfg(windows)] mod native;` does not exist on the host: it is not compiled,
 not counted, not listed, and not failed. The gate above this file exists because two
@@ -13,10 +13,10 @@ crates were found by accident whose tests had never run once, and this is the pa
 can tell "runs and passes" apart from "was never built".
 
 So a `#[test]` is classified by the whole `cfg` chain that reaches it, which means walking
-the MODULE TREE from each crate root rather than reading files independently:
+the module tree from each crate root rather than reading files independently:
 
   * `#![cfg(...)]` inner attributes at the top of a file,
-  * the `#[cfg(...)]` on every `mod name;` DECLARATION on the path from the crate root to
+  * the `#[cfg(...)]` on every `mod name;` declaration on the path from the crate root to
     that file -- this is the dominant mechanism in this workspace and the one a per-file
     scan is blind to (er-quickload's 91 tests live under `#[cfg(windows)] mod experiments;`
     in lib.rs, and every file below it is bare),
@@ -26,7 +26,7 @@ the MODULE TREE from each crate root rather than reading files independently:
 Files not reachable from a crate root are not compiled by cargo at all; their tests are
 reported separately as UNREACHABLE rather than silently counted.
 
-CALIBRATION. The counts here are checked against real `cargo test -- --list` output by
+Calibration. The counts here are checked against real `cargo test -- --list` output by
 `check-test-target-coverage.py --selftest`, on crates that exercise every branch: a crate
 whose tests are all windows-only behind a `mod` declaration (er-quickload, 91/0), one with
 a mixed tree (er-quit-menu-core, 73 declared / 43 on the host), one with file-level
@@ -83,7 +83,7 @@ class TestCounts:
     feature_gated: int = 0
     unreachable: int = 0
     # Which non-default cargo features gate the `feature_gated` tests. The coverage gate
-    # needs the NAMES, not just a count: "some runner passes --features" is not the same
+    # needs the names, not just a count: "some runner passes --features" is not the same
     # claim as "a runner passes the feature this test is actually behind".
     feature_names: set[str] = field(default_factory=set)
 
@@ -201,7 +201,7 @@ class _CrateWalker:
             if inc:
                 target = path.parent / inc.group(1)
                 if target.is_file():
-                    # An `include!` splices text into THIS module: same cfg chain, same
+                    # An `include!` splices text into this module: same cfg chain, same
                     # brace scope, so carry the current chain rather than starting fresh.
                     included_chain = file_chain + [c for _, c in mod_stack if c]
                     if pending_cfg:
@@ -339,7 +339,7 @@ def crate_tests(crate_dir: Path) -> CrateTests:
 
     tests_dir = crate_dir / "tests"
     if tests_dir.is_dir():
-        # Only top-level tests/*.rs are test TARGETS; tests/common/mod.rs etc. are
+        # Only top-level tests/*.rs are test targets; tests/common/mod.rs etc. are
         # submodules reached through them.
         int_walker = _CrateWalker(defaults)
         for f in sorted(tests_dir.glob("*.rs")):

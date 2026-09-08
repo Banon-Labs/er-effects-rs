@@ -13,9 +13,9 @@ LOG="$RUN_DIR/launch.log"
 EDITOR_DIR="${ER_PROFILE_05_010_EDITOR_DIR:-$REPO_ROOT/target/pi-local/profile-editor}"
 DRY_RUN=0
 
-# The DLL runs under Proton and takes ER_PROFILE_05_010_EDITOR_DIR VERBATIM into Windows file APIs
+# The DLL runs under Proton and takes ER_PROFILE_05_010_EDITOR_DIR verbatim into Windows file APIs
 # (profile_05_010_editor_runtime.rs `editor_dir()` -> PathBuf -> std::fs), with no translation. A
-# unix path is rooted on the CURRENT DRIVE there, and the game's cwd is the install dir on S:, so
+# unix path is rooted on the current drive there, and the game's cwd is the install dir on S:, so
 # "/home/..." resolves to "S:\home\..." and every control-file read misses -- the editor then sits at
 # "live runtime requested but disconnected/no ack" with no error anywhere, because a missing control
 # file is a legal "nothing to do". The prefix maps z: -> /, so hand the DLL the Z: form of the very

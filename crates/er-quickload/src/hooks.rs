@@ -249,7 +249,7 @@ pub(crate) fn own_window() -> Option<HWND> {
 
 /// Total synthesized-input presses the DLL has injected anywhere (DInput device-state fill,
 /// GetAsyncKeyState/GetKeyState override, PostMessage confirm pulse). The zero-input autoload
-/// path must NEVER trigger any of these, so the proof oracle asserts this counter == 0 for the
+/// path must never trigger any of these, so the proof oracle asserts this counter == 0 for the
 /// whole run. Every injection site increments it; it is exported in telemetry as
 /// `simulated_button_presses_total`.
 pub(crate) use er_telemetry_core::counters::SIMULATED_INPUT_PRESSES_TOTAL;

@@ -1,10 +1,10 @@
 use std::sync::atomic::Ordering;
 
 // ===========================================================================
-// SAVE-REDIRECT DETOUR RE-ENTRANCY GUARD
+// save-redirect detour RE-ENTRANCY guard
 // ===========================================================================
 //
-// Every save-redirect detour in this module runs on the CALLER's thread, and several of them do
+// Every save-redirect detour in this module runs on the caller's thread, and several of them do
 // real filesystem work as a side effect (`fs::read` of the configured save for the SteamID
 // normalize, `fs::read`/`fs::write` for direct-file staging). That work reaches the OS through
 // `kernel32!CreateFileW` -- i.e. straight back into the very detour that started it.
@@ -12,19 +12,19 @@ use std::sync::atomic::Ordering;
 // Without a guard that is unbounded recursion, not a retry loop:
 // `save_redirect_createfilew_hook` -> `normalize_env_save_file_to_active_steam_id_once` ->
 // `fs::read(configured .sl2)` -> `CreateFileW` -> the detour again, with the one-shot latch still
-// unset because it was only stored AFTER the read returned. Observed live 2026-07-30:
+// unset because it was only stored after the read returned. Observed live 2026-07-30:
 // `SAVE_CREATEFILEW_DIAG_HITS` climbed 3 -> 512 in ~4ms on the game's 1 MiB main thread (~1168
-// bytes of stack per frame) and 1024 -> 2048 on a spawned 2 MiB Rust thread -- the 2x ratio IS the
+// bytes of stack per frame) and 1024 -> 2048 on a spawned 2 MiB Rust thread -- the 2x ratio is the
 // stack bound. The thread died of guard-page exhaustion mid-descent, which is why nothing was ever
 // logged from the error arm and the crash log stayed empty.
 //
 // Same shape, same fix as `AutoloadDebugReentryGuard` in `telemetry/save_policy_logs.rs`: the guard
-// is per-THREAD because the nesting is always a synchronous same-thread call chain, and a
+// is per-thread because the nesting is always a synchronous same-thread call chain, and a
 // process-wide flag would wrongly mute a legitimate concurrent open on another thread.
 //
 // # Why two counters and not one
 //
-// `ntdll!NtCreateFile` is not a peer of the Win32 detours, it is BENEATH them: kernel32's own
+// `ntdll!NtCreateFile` is not a peer of the Win32 detours, it is beneath them: kernel32's own
 // `CreateFileW` calls it, so the ntdll detour fires once for every Win32 open that already went
 // through a detour above it. Counting it in the same depth would make a perfectly healthy open read
 // as depth 2, and a healthy normalize-triggering open read as depth 3 -- so a single-counter
@@ -32,7 +32,7 @@ use std::sync::atomic::Ordering;
 // with how much the logger happens to nest. A semaphore that false-positives gets ignored, which is
 // worse than not having one.
 //
-// So the reported DEPTH counts only the Win32 file detours -- the layer where our own `fs::` calls
+// So the reported depth counts only the Win32 file detours -- the layer where our own `fs::` calls
 // actually land and where runaway recursion happens -- and the ntdll diagnostic contributes a plain
 // "I am inside a detour" flag. Both suppress disk I/O; only the first is a depth. That makes the
 // alarm exact:
@@ -51,15 +51,15 @@ use er_telemetry_core::counters::{
 const SAVE_DETOUR_DEPTH_UNKNOWN: usize = usize::MAX;
 
 std::thread_local! {
-    /// How many WIN32 save-redirect file detours THIS thread is currently inside. This is the
+    /// How many WIN32 save-redirect file detours this thread is currently inside. This is the
     /// number the max-depth oracle reports; see the module comment for why ntdll is not in it.
     static SAVE_DETOUR_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    /// True while THIS thread is inside the ntdll `NtCreateFile` diagnostic detour.
+    /// True while this thread is inside the ntdll `NtCreateFile` diagnostic detour.
     static SAVE_NTCREATE_DETOUR_ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// RAII depth token for a WIN32 save-redirect file detour (`CreateFileW`, `CopyFileW`,
-/// `GetFileAttributes(Ex)W`, `FindFirstFileW`). Take one at the TOP of the detour body and hold it
+/// `GetFileAttributes(Ex)W`, `FindFirstFileW`). Take one at the top of the detour body and hold it
 /// for the whole call; `is_reentrant()` then says whether this entry is nested inside any
 /// save-redirect detour on the same thread.
 ///
@@ -74,7 +74,7 @@ pub struct SaveDetourDepth {
 
 impl SaveDetourDepth {
     pub fn enter() -> Self {
-        // Read BEFORE incrementing: an ntdll detour already active above us makes this entry
+        // Read before incrementing: an ntdll detour already active above us makes this entry
         // nested even though it is the first Win32 one on the stack.
         let below_a_detour = !save_detour_disk_io_allowed();
         let depth = SAVE_DETOUR_DEPTH
@@ -144,7 +144,7 @@ impl Drop for SaveNtCreateDetourGuard {
     }
 }
 
-/// False while this thread is inside ANY save-redirect detour, Win32 or ntdll.
+/// False while this thread is inside any save-redirect detour, Win32 or ntdll.
 ///
 /// Every helper that touches the disk on behalf of a detour checks this before opening anything.
 /// The detour-level tokens above already refuse nested entries, so this is the second line: it
@@ -200,7 +200,7 @@ mod save_detour_reentry_tests {
         );
     }
 
-    /// The ntdll leg fires under every Win32 open, so counting it as depth would put a HEALTHY
+    /// The ntdll leg fires under every Win32 open, so counting it as depth would put a healthy
     /// open at 2 and a healthy normalize-triggering open at 3 -- and the `> 2` alarm would fire on
     /// a working game. It must suppress disk I/O without adding depth.
     #[test]
@@ -223,7 +223,7 @@ mod save_detour_reentry_tests {
         assert!(save_detour_disk_io_allowed());
     }
 
-    /// A genuine ntdll-only open (one that bypassed Win32) is NOT nested and does its work -- but
+    /// A genuine ntdll-only open (one that bypassed Win32) is not nested and does its work -- but
     /// the `fs::read` that work performs re-enters through Win32, and that entry must pass through.
     #[test]
     fn a_win32_entry_under_the_ntdll_leg_is_reentrant() {

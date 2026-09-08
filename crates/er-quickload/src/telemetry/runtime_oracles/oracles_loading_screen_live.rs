@@ -1,4 +1,4 @@
-// Live loading-screen oracles: the gauge reported as its LIVE state rather than its stale
+// Live loading-screen oracles: the gauge reported as its live state rather than its stale
 // during-load latch, the five observer install states, the knowledge-tip and Scaleform-descriptor
 // guards, and the native-profile capture field.
 //
@@ -13,10 +13,10 @@ fn write_loading_screen_live_oracles(
     play_time_live: bool,
     title_custom_cover_profile_source_ready: bool,
 ) {
-    // LIVE-STATE (bd STEP4-loadingbar-divergences-are-STALE-LATCH): the loading-screen gauge is a STALE
-    // LATCH -- sample_loading_screen_bar stores it DURING the load and never fires post-load to clear it.
-    // When the world is genuinely LIVE (play_time advancing = steady gameplay) the loading screen is
-    // logically CLOSED, so report the gauge as 0 (the live state), not the stale during-load latch. This
+    // Live-state (bd STEP4-loadingbar-divergences-are-stale-latch): the loading-screen gauge is a stale
+    // latch -- sample_loading_screen_bar stores it during the load and never fires post-load to clear it.
+    // When the world is genuinely live (play_time advancing = steady gameplay) the loading screen is
+    // logically closed, so report the gauge as 0 (the live state), not the stale during-load latch. This
     // makes vanilla (telemetry-only) and mod (armed) comparable instead of diverging on a leftover latch.
     let loading_bar_enabled = if play_time_live {
         0
@@ -67,7 +67,7 @@ fn write_loading_screen_live_oracles(
         "oracle_loading_screen_close_sent_hits",
         LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst),
     );
-    // FIVE OBSERVER INSTALL STATES, one field each: 0 = not attempted, 1 = installed,
+    // Five observer install states, one field each: 0 = not attempted, 1 = installed,
     // 2 = permanently refused, 3 = queued awaiting MH_ApplyQueued. They are separate fields
     // because a shared one is what hid the defect: four detours were created and never
     // applied, and every hit counter downstream read 0 -- indistinguishable from a hook that
@@ -132,7 +132,7 @@ fn write_loading_screen_live_oracles(
         "oracle_loading_screen_close_sent_first_ms",
         LOADING_SCREEN_CLOSE_SENT_FIRST_MS.load(Ordering::SeqCst),
     );
-    // PIVOT (er-effects-rs-jsm): player-stats loading text. `stats_text_built` = cumulative count of
+    // Pivot (er-effects-rs-jsm): player-stats loading text. `stats_text_built` = cumulative count of
     // stats bitmaps rendered from the game font (content-keyed rebuilds: a character switch or the
     // record->live upgrade bumps it); `tip_suppressed_hits` = native tip-refresh calls we no-op'd.
     push_json_usize(
@@ -140,10 +140,10 @@ fn write_loading_screen_live_oracles(
         "oracle_stats_text_built",
         STATS_TEXT_BUILT.load(Ordering::SeqCst),
     );
-    // `stats_record_not_a_character` = stats reads REFUSED because the loading slot's live
+    // `stats_record_not_a_character` = stats reads refused because the loading slot's live
     // `CS::ProfileSummary` record is not a character (empty name, level 0, a save-picker browse-row
     // label such as `[..] EldenRing` / `[ new ]`, or a populated-but-implausible map). Read it
-    // WITH `stats_text_built`: a refused panel and a disabled feature both draw nothing, and this
+    // with `stats_text_built`: a refused panel and a disabled feature both draw nothing, and this
     // is the only field that tells them apart. Non-zero means something wrote non-character bytes
     // into the records -- the picker-restore defect that made this invisible (2026-08-30).
     push_json_usize(

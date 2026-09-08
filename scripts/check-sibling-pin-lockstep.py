@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Every workflow that checks out `fromsoftware-rs` must agree on BOTH halves of the pin.
+"""Every workflow that checks out `fromsoftware-rs` must agree on both halves of the pin.
 
-WHY THIS EXISTS. Three workflows clone the upstream sibling and check out a fixed revision.
+Why this exists. Three workflows clone the upstream sibling and check out a fixed revision.
 Two of them carried the comment "Keep in lockstep with .github/workflows/check.yml" and then
-copied only HALF of what check.yml says: the `FROMSOFTWARE_RS_REV`, but not the
+copied only half of what check.yml says: the `FROMSOFTWARE_RS_REV`, but not the
 `FROMSOFTWARE_RS_REMOTE` that names the remote the rev actually exists on. The pinned
-`1027d24` (the Elden Ring 2.7.0.0 / patch 1.17 RVA bundle) lives ONLY on the fork -- upstream
+`1027d24` (the Elden Ring 2.7.0.0 / patch 1.17 RVA bundle) lives only on the fork -- upstream
 advertises 325 refs and neither it nor its parent is reachable from any of them -- so
 `git clone vswarte/... && git checkout 1027d24` dies with `fatal: unable to read tree`.
 
@@ -15,12 +15,12 @@ last time (two commits reached origin that do not compile). It cost it again on 
 when `release` went red on main at `b9109a30` for exactly this reason while `check` -- the one
 workflow that had been fixed -- ran fine beside it.
 
-"Keep in lockstep" was a COMMENT. A comment cannot fail. This is the same claim as an
+"Keep in lockstep" was a comment. A comment cannot fail. This is the same claim as an
 executable rule, so the next workflow that clones the sibling cannot inherit half a pin.
 
-RULES
-  R1  every workflow that names FROMSOFTWARE_RS_REV names the SAME rev
-  R2  every workflow that CLONES the sibling defines FROMSOFTWARE_RS_REMOTE, and all of them
+Rules
+  R1  every workflow that names FROMSOFTWARE_RS_REV names the same rev
+  R2  every workflow that clones the sibling defines FROMSOFTWARE_RS_REMOTE, and all of them
       name the same remote
   R3  no clone line hard-codes a fromsoftware-rs URL -- it must go through the variable, or
       R2 is satisfied by a variable nothing reads
@@ -145,7 +145,7 @@ def selftest() -> int:
         _write(root, "release.yml", GOOD)
         case("matching pins are green", audit(root) == [])
 
-        # RED R3: the 2026-09-01 break -- same rev, hard-coded upstream clone URL.
+        # Red R3: the 2026-09-01 break -- same rev, hard-coded upstream clone URL.
         broken = GOOD.replace(
             '          git clone "$FROMSOFTWARE_RS_REMOTE" "$GITHUB_WORKSPACE/../fromsoftware-rs"\n',
             "          git clone https://github.com/vswarte/fromsoftware-rs.git"
@@ -161,11 +161,11 @@ def selftest() -> int:
             any(p.startswith("R2 release.yml") for p in problems),
         )
 
-        # RED R1: revs disagree.
+        # Red R1: revs disagree.
         _write(root, "release.yml", GOOD.replace("1027d249", "dead0000"))
         case("divergent revs are red", any(p.startswith("R1") for p in audit(root)))
 
-        # RED R2: remotes disagree while both clone through the variable.
+        # Red R2: remotes disagree while both clone through the variable.
         _write(
             root,
             "release.yml",
@@ -176,7 +176,7 @@ def selftest() -> int:
         )
         case("divergent remotes are red", any(p.startswith("R2 FROM") for p in audit(root)))
 
-        # GREEN: a workflow that merely MENTIONS the sibling in prose is not a cloner.
+        # GREEN: a workflow that merely mentions the sibling in prose is not a cloner.
         _write(root, "release.yml", GOOD)
         _write(root, "docs.yml", "# a note about fromsoftware-rs and nothing else\n")
         case("a prose-only mention is not a cloner", audit(root) == [])

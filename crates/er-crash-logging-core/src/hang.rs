@@ -5,9 +5,9 @@
 //!
 //! | detector | question it answers | what it watches |
 //! |---|---|---|
-//! | stall | did the main loop STOP? | the per-frame counter not advancing |
-//! | frame drop | did the main loop MISS a lot of frames without stopping? | frames owed vs delivered in a sliding window |
-//! | loading screen | did a LOAD stop progressing while the game stayed healthy? | `CS::LoadingScreenData` target frozen while its own clock runs |
+//! | stall | did the main loop stop? | the per-frame counter not advancing |
+//! | frame drop | did the main loop miss a lot of frames without stopping? | frames owed vs delivered in a sliding window |
+//! | loading screen | did a load stop progressing while the game stayed healthy? | `CS::LoadingScreenData` target frozen while its own clock runs |
 //!
 //! The three are genuinely independent, and each exists because the others are blind to its case.
 //! The frame counter keeps ticking through a stuck load, so the stall watchdog cannot see one. A
@@ -78,11 +78,11 @@ const STARTUP_DELAY_MS: u32 = 5_000;
 ///
 /// 50ms, not 1s, and the reason is the frame-drop detector rather than the stall one. A hitch
 /// worth reporting is ~1 second of lost frames, so a 1-second sampler would notice only after
-/// it ended -- and a stack captured then shows the RECOVERY, not the cause. Polling 20x faster
+/// it ended -- and a stack captured then shows the recovery, not the cause. Polling 20x faster
 /// than the threshold means the capture lands while the hitch is still in progress.
 ///
 /// The cost is one `u32` read per tick. The stall and loading-screen detectors are unaffected
-/// because both measure elapsed TIME, not tick counts.
+/// because both measure elapsed time, not tick counts.
 #[cfg(windows)]
 const SAMPLE_INTERVAL_MS: u32 = 50;
 
@@ -164,20 +164,20 @@ const CONTEXT_AMD64_CONTROL_INTEGER: u32 = 0x0010_0000 | 0x0000_0001 | 0x0000_00
 /// the main loop miss a lot of frames without stopping" -- which is the one behind every report
 /// of a hitch, a stutter, or a second-long freeze that resolves itself.
 ///
-/// The measure is frames owed WITHIN A SLIDING WINDOW, not since the session began.
+/// The measure is frames owed within a sliding window, not since the session began.
 ///
 /// A running total was the first attempt and it is wrong: delivering exactly the baseline rate
 /// repays nothing, so every isolated stutter is remembered forever and a long healthy session
 /// eventually crosses any threshold. "60 frames dropped" means 60 lost in a burst -- a hitch --
 /// so old deficits have to leave the measurement entirely.
 ///
-/// `expected` comes from a frame rate MEASURED at arming rather than an assumed 60: a 30fps cap
+/// `expected` comes from a frame rate measured at arming rather than an assumed 60: a 30fps cap
 /// would otherwise read as a permanent 50% deficit, and an uncapped build would never trip.
 // Pure logic driven by the windows-only watchdog thread, and by the test module.
 #[cfg(any(windows, test))]
 pub mod framedrop {
     /// Samples retained. At the module's 50ms tick this covers well over the window; the window
-    /// is enforced by accumulated TIME, so a caller ticking at a different rate is still correct.
+    /// is enforced by accumulated time, so a caller ticking at a different rate is still correct.
     const CAPACITY: usize = 128;
 
     /// How recent a deficit has to be to count toward a hitch.
@@ -232,7 +232,7 @@ pub mod framedrop {
 
         /// Feed one observation. Returns a `Hitch` when the windowed deficit crosses the threshold.
         ///
-        /// A surplus tick is recorded as a NEGATIVE deficit so a burst that is partly recovered
+        /// A surplus tick is recorded as a negative deficit so a burst that is partly recovered
         /// inside the window reads as the net loss -- but the reported total floors at zero, since
         /// "owed -12 frames" is not a thing.
         pub fn observe(&mut self, frames_advanced: u32, window_seconds: f64) -> Option<Hitch> {
@@ -299,32 +299,32 @@ pub mod framedrop {
 // CS::LoadingScreenData -- the oracle a frame counter cannot be
 // ---------------------------------------------------------------------------
 //
-// The frame-counter watchdog above cannot see a stuck LOAD. Frames keep advancing through a
+// The frame-counter watchdog above cannot see a stuck load. Frames keep advancing through a
 // loading screen -- the screen animates, the update runs at ~59/s -- so a load that will never
 // finish looks identical to a healthy one. Measured on a live Seamless invasion-load softlock
-// (2026-08-15): the game sat at 12% for eleven minutes with three threads RUNNING and the
+// (2026-08-15): the game sat at 12% for eleven minutes with three threads running and the
 // frame counter ticking the whole time. The watchdog never fired, correctly, because nothing
 // it watches was stalled.
 //
-// What IS stalled is visible one level down, in `CS::LoadingScreenData` (class name read from
+// What is stalled is visible one level down, in `CS::LoadingScreenData` (class name read from
 // live MSVC RTTI; vtable 0x142a9be10 in 1.16.2):
 //
 //     +0x0c  u32   already-closed latch
-//     +0x11  u8    CLOSE GATE -- the update refuses to finish while this is 0
+//     +0x11  u8    close gate -- the update refuses to finish while this is 0
 //     +0x14  i32   active; -1 means reset/inactive
-//     +0x18  f32   lerp START
-//     +0x1c  f32   lerp TARGET      <- what everyone calls "progress"
-//     +0x20  f32   lerp DURATION (seconds)
+//     +0x18  f32   lerp start
+//     +0x1c  f32   lerp target      <- what everyone calls "progress"
+//     +0x20  f32   lerp duration (seconds)
 //     +0x24  f32   ELAPSED (seconds), advances 1.0/s
 //
-// The subtlety that makes this oracle correct where a naive one is wrong: `+0x1c` is NOT a
-// progress counter, it is the TARGET of an interpolation. The game's getter (0x140860d40)
+// The subtlety that makes this oracle correct where a naive one is wrong: `+0x1c` is not a
+// progress counter, it is the target of an interpolation. The game's getter (0x140860d40)
 // returns lerp(start, target, elapsed/duration), clamped to the target once elapsed exceeds
 // duration. So a bar frozen at 12% does not mean an animation is stuck mid-flight -- it means
-// the last animation COMPLETED and no producer ever supplied a new target. In the captured
+// the last animation completed and no producer ever supplied a new target. In the captured
 // softlock the animation had finished 685 seconds earlier.
 //
-// Hence the stall condition: the TARGET is unchanged while the screen's own ELAPSED clock keeps
+// Hence the stall condition: the target is unchanged while the screen's own ELAPSED clock keeps
 // advancing, and the screen has neither been finalized (+0x11) nor closed (+0x0c). A live clock
 // beside a dead target is a frozen substep; both frozen together just means the process died,
 // which the frame counter already catches.
@@ -335,7 +335,7 @@ pub mod loading_screen {
     pub const ALREADY_CLOSED_OFFSET: usize = 0x0c;
     pub const CLOSE_GATE_OFFSET: usize = 0x11;
     pub const ACTIVE_OFFSET: usize = 0x14;
-    /// Measured, but not read: the witness compares TARGET against ELAPSED, not the start value.
+    /// Measured, but not read: the witness compares target against ELAPSED, not the start value.
     #[allow(dead_code)]
     pub const LERP_START_OFFSET: usize = 0x18;
     pub const LERP_TARGET_OFFSET: usize = 0x1c;
@@ -364,7 +364,7 @@ pub mod loading_screen {
         /// this oracle (2026-08-15) was a FALSE POSITIVE at `target 1.0000 unchanged for 30.9s`
         /// during ordinary boot. A screen that has animated all the way to 100% and is sitting
         /// there waiting to be dismissed is finished, not frozen -- the interesting failure is a
-        /// load that stopped PART WAY, which is what the captured softlock (0.12) looked like.
+        /// load that stopped part way, which is what the captured softlock (0.12) looked like.
         /// Reporting the completed case cost a needless 128-thread suspension and one of three
         /// report slots.
         #[must_use]
@@ -380,7 +380,7 @@ pub mod loading_screen {
     #[derive(Debug, Default)]
     pub struct Witness {
         last: Option<Sample>,
-        /// Seconds of the screen's OWN clock elapsed since the target last changed. Using the
+        /// Seconds of the screen's own clock elapsed since the target last changed. Using the
         /// game's clock rather than wall time means a paused or slowed process cannot be
         /// misreported as a stall -- if its clock stops too, the frame-counter watchdog owns it.
         frozen_for: f32,
@@ -437,7 +437,7 @@ pub mod loading_screen {
 
 /// Live `CS::LoadingScreenData` pointer, published by whoever already has it.
 ///
-/// This DLL deliberately does NOT hook the loading-screen update to obtain it. That prologue
+/// This DLL deliberately does not hook the loading-screen update to obtain it. That prologue
 /// (`LOADING_SCREEN_UPDATE_RVA` = 0x90a6b0) is already detoured by `er-loading-portrait-core`, which
 /// the product links, and a second MinHook instance on one prologue is the documented
 /// trampoline-corruption conflict this repo tracks in `scripts/me3-dll-conflicts.toml`. So the
@@ -665,14 +665,14 @@ unsafe extern "system" fn watchdog_thread(_parameter: *mut c_void) -> u32 {
     let mut framedrop_reports = 0usize;
     let mut last_framedrop_report: Option<std::time::Instant> = None;
     let mut last_tick = std::time::Instant::now();
-    // Re-read here so the counter delta below starts from the value AFTER calibration, not the
+    // Re-read here so the counter delta below starts from the value after calibration, not the
     // pre-calibration one -- otherwise the first tick would see two seconds of frames at once.
     last_value = unsafe { safe_read_u32(counter) }.unwrap_or(last_value);
 
     loop {
         unsafe { Sleep(SAMPLE_INTERVAL_MS) };
 
-        // Checked every tick, INDEPENDENTLY of the frame counter. The whole point is that this
+        // Checked every tick, independently of the frame counter. The whole point is that this
         // fires while frames are advancing normally -- gating it on the frame-counter stall
         // would reproduce the blind spot it exists to cover.
         if !loading_reported
@@ -690,7 +690,7 @@ unsafe extern "system" fn watchdog_thread(_parameter: *mut c_void) -> u32 {
             return 0;
         };
 
-        // Frame-drop accounting runs on EVERY tick, before the stall logic, because a hitch is
+        // Frame-drop accounting runs on every tick, before the stall logic, because a hitch is
         // defined by frames arriving too slowly rather than not at all.
         let window_seconds = last_tick.elapsed().as_secs_f64();
         last_tick = std::time::Instant::now();
@@ -776,7 +776,7 @@ fn read_loading_screen_sample() -> Option<loading_screen::Sample> {
 /// Total CPU (kernel + user) each thread has consumed, in 100ns units.
 ///
 /// Cheap enough to call twice around a hitch: it opens a handle per thread and reads a counter,
-/// suspending nothing. This is deliberately NOT the stack-capture path -- attribution has to be
+/// suspending nothing. This is deliberately not the stack-capture path -- attribution has to be
 /// affordable during a hitch, and suspending 128 threads to answer "who is busy" would deepen
 /// the very stall being measured.
 #[cfg(windows)]
@@ -823,7 +823,7 @@ fn rank_cpu_consumers(before: &[(u32, u64)], after: &[(u32, u64)]) -> Vec<(u32, 
 
 /// Report a hitch, naming the threads that actually consumed the time.
 ///
-/// Attribution happens HERE rather than from a background sampler: the two CPU snapshots
+/// Attribution happens here rather than from a background sampler: the two CPU snapshots
 /// straddle a short window taken at detection, so what they measure is who is busy *while the
 /// hitch is still happening*. Only the busiest few get their stacks captured, because that
 /// capture suspends threads and doing it to everything would make the hitch worse.
@@ -995,10 +995,10 @@ fn report_stall(counter_addr: usize, frame_counter: u32, stalled_seconds: u64) {
             .saturating_sub(1)
     );
 
-    // WHO IS ACTUALLY RUNNING, measured rather than guessed. Two CPU snapshots straddling a short
+    // Who is actually running, measured rather than guessed. Two CPU snapshots straddling a short
     // window, exactly as the framedrop path does: a thread that burned no CPU across it is parked,
     // and one that burned a lot while frames stopped arriving is the one worth reading. Taken
-    // BEFORE the stacks so the window is not lengthened by 100+ suspend/resume pairs.
+    // before the stacks so the window is not lengthened by 100+ suspend/resume pairs.
     let cpu_before = thread_cpu_times();
     unsafe { Sleep(FRAMEDROP_ATTRIBUTION_MS) };
     let cpu_after = thread_cpu_times();
@@ -1008,12 +1008,12 @@ fn report_stall(counter_addr: usize, frame_counter: u32, stalled_seconds: u64) {
     let threads = enumerate_threads();
     let _ = writeln!(out, "thread_count={}", threads.len());
 
-    // THE FIRST THREAD IS NOT "THE MAIN THREAD", AND SAYING SO SENT TWO INVESTIGATIONS THE WRONG
-    // WAY. This used to print `main_thread=true` for whichever thread had the earliest creation
+    // The first thread is not "THE MAIN THREAD", and saying so sent two investigations the wrong
+    // way. This used to print `main_thread=true` for whichever thread had the earliest creation
     // time, on the reasoning that the process's first thread is the one that stalled. Under me3
     // that is false by construction: the loader hijacks the first thread at attach and parks it
     // inside `me3_mod_host::on_attach` (`crates/mod-host/src/executable.rs`) waiting on its host
-    // IPC for the LIFE OF THE PROCESS -- identified 2026-09-04 by resolving the frame at
+    // IPC for the life of the process -- identified 2026-09-04 by resolving the frame at
     // `me3_mod_host+0x33cf8` through the DLL's own `.pdata` to the function at `+0x33c50`, whose
     // string references are `me3_mod_host::on_attach::{{closure}}`, "failed to receive message"
     // and "failed to fulfill request". That thread is parked correctly and permanently, and it is
@@ -1293,7 +1293,7 @@ mod tests {
             peak = peak.max(detector.deficit());
         }
         // The window holds the three or four stutters that genuinely happened in the last 2s --
-        // that is the point of a window, not a defect. What must NOT happen is unbounded creep:
+        // that is the point of a window, not a defect. What must not happen is unbounded creep:
         // a running total would have reached 1500 here and fired 25 times.
         assert!(
             peak < 20.0,
@@ -1498,7 +1498,7 @@ mod tests {
             .is_pending(),
             "already closed is a completed load"
         );
-        // Regression for the oracle's FIRST live firing, which was a false positive: it reported
+        // Regression for the oracle's first live firing, which was a false positive: it reported
         // "target 1.0000 unchanged for 30.9s" during ordinary boot. A screen that animated all
         // the way to 100% and is waiting to be dismissed is finished, not frozen.
         assert!(
@@ -1593,7 +1593,7 @@ mod tests {
     fn arming_requires_more_than_one_observed_advance() {
         // A single advance could be noise in an unrelated dword; the point of the gate is that a
         // wrong address cannot arm the watchdog. Both operands are constants, so these are
-        // compile-time assertions: an offending edit fails the BUILD, not this test run.
+        // compile-time assertions: an offending edit fails the build, not this test run.
         const _: () = assert!(ARM_ADVANCES_REQUIRED > 1);
         const _: () = assert!(ARM_TIMEOUT_SAMPLES > ARM_ADVANCES_REQUIRED);
     }

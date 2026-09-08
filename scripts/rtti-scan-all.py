@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Harvest EVERY MSVC RTTI vtable -> class name from the deobfuscated ER mapped image,
+"""Harvest every MSVC RTTI vtable -> class name from the deobfuscated ER mapped image,
 for later Ghidra symbol sync. Mapped image: file offset == RVA, base 0x140000000.
 
 MSVC x64 RTTI CompleteObjectLocator (COL) layout (all RVAs):
@@ -13,11 +13,11 @@ A vtable's [base-8] qword holds the absolute VA of its COL.
 
 Output: lines "0x<vtable_va>\t<class_name>" sorted by VA, plus a count header.
 
-Usage: rtti-scan-all.py [out_file] [--image PATH]
+Usage: rtti-scan-all.py [out_file] [--image path]
 
-WHY --image EXISTS. The image was hard-coded to the 1.16.2 `eldenring-deobf.bin`, which
+Why --image exists. The image was hard-coded to the 1.16.2 `eldenring-deobf.bin`, which
 made this tool unable to answer the one question it is uniquely good at during the
-1.16.2 -> 1.17 migration: does the vtable a data-map row points at in 1.17 carry the SAME
+1.16.2 -> 1.17 migration: does the vtable a data-map row points at in 1.17 carry the same
 mangled class name as the source did in 1.16.2? That is an identity check, not an
 inference, and it needs the 1.17 image. Defaults are unchanged.
 """
@@ -43,7 +43,7 @@ def main():
         end = data.find(b"\x00", off)
         return data[off:end].decode("latin1", "replace")
 
-    # PASS 1: find all COLs (u32[O+0x14] == O, signature==1, valid TD name).
+    # Pass 1: find all COLs (u32[O+0x14] == O, signature==1, valid TD name).
     col_class = {}  # col_va -> class_name
     O = 0
     while O + 0x18 <= n:
@@ -58,7 +58,7 @@ def main():
                     col_class[BASE + O] = name
         O += 4
 
-    # PASS 2: linear scan qwords; if value is a known COL VA, vtable = pos+8.
+    # Pass 2: linear scan qwords; if value is a known COL VA, vtable = pos+8.
     vtables = {}  # vtable_va -> class_name
     col_set = col_class
     pos = 0

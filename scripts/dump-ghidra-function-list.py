@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dump the COMPLETE function list (entry, size, name) from a headless Ghidra MCP daemon.
+"""Dump the complete function list (entry, size, name) from a headless Ghidra MCP daemon.
 
 The daemon caps getAllFunctions at 10,000 items per call, so this pages through
 totalCount in chunks and checkpoints to disk so an interrupted run resumes.

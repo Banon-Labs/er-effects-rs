@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 GAME_DIR="${GAME_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game}"
-# me3 is the ONLY loader (LazyLoader dinput8 proxy/chainload removed 2026-07-04): the DLL is
+# me3 is the only loader (LazyLoader dinput8 proxy/chainload removed 2026-07-04): the DLL is
 # delivered as an me3 [[natives]] profile entry; me3 launches Game/eldenring.exe directly through
 # the Steam compat tool (waitforexitandrun verb), never a Steam AppID/URL form or the EAC launcher.
 # shellcheck source=scripts/me3-launch-lib.sh
@@ -15,14 +15,14 @@ PID_FILE="${PID_FILE:-$ARTIFACT_DIR/me3-launch.pid}"
 TELEMETRY_PATH="${TELEMETRY_PATH:-$ARTIFACT_DIR/er-quickload-telemetry.json}"
 BOOTSTRAP_PATH="${BOOTSTRAP_PATH:-$ARTIFACT_DIR/bootstrap.jsonl}"
 BOOTSTRAP_STATE_PATH="${BOOTSTRAP_STATE_PATH:-$ARTIFACT_DIR/bootstrap-state.json}"
-# CONSOLIDATED per-run DLL log outputs: keep the crash log + autoload debug log in the SAME
+# Consolidated per-run DLL log outputs: keep the crash log + autoload debug log in the same
 # timestamped artifact dir as telemetry/bootstrap, instead of accumulating across runs in the game
 # dir under divergent names. The DLL honors ER_QUICKLOAD_CRASH_LOG_PATH / ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH.
 #
-# "Instead of accumulating" understates it. A GAME_DIR log does not accumulate -- it is SINGLE-SLOT:
+# "Instead of accumulating" understates it. A GAME_DIR log does not accumulate -- it is single-SLOT:
 # the DLL rotates `<name>` to `<name>.prev` on its first write, so run N-2 is already gone, and a
 # harness that pre-deletes the log drops the surviving `.prev` with it. Measured 2026-08-31: two
-# launches destroyed a 5.4 MB continue trace nobody had read. Add a line here (and to BOTH launch
+# launches destroyed a 5.4 MB continue trace nobody had read. Add a line here (and to both launch
 # env blocks below) for any future log rather than copying it out at teardown -- a copy after the
 # run cannot recover a file this run clobbered at launch, and a crashed run never reaches it.
 CRASH_LOG_PATH="${CRASH_LOG_PATH:-$ARTIFACT_DIR/er-quickload-crash-log.txt}"
@@ -49,7 +49,7 @@ VISUAL_RESOURCE_MUTATION_ENVS=(
   ER_QUICKLOAD_TITLE_05_000_MEMORY_GFX
 )
 
-# SAVE-SOURCE SELECTION. Default mode still stages a configured gold save for older probes.
+# Save-source selection. Default mode still stages a configured gold save for older probes.
 # Default to the same save source as the user/product launcher: no ER_QUICKLOAD_SAVE_FILE, no staged
 # gold save, and no appdata wipe. The older staged-save/explicit-save_file probe path is deprecated
 # for release/autoload validation because it exercises different DLL internals and has produced
@@ -65,13 +65,13 @@ RUNTIME_USE_DEFAULT_SAVE="${RUNTIME_USE_DEFAULT_SAVE:-1}"
 ALLOW_DEPRECATED_STAGED_SAVE_PROBE="${ER_QUICKLOAD_ALLOW_DEPRECATED_STAGED_SAVE_PROBE:-0}"
 # A real fixed-slot ER0000.sl2 BND4 is ~28MB even with empty slots; reject anything implausibly small.
 GOLD_SAVE_MIN_BYTES="${GOLD_SAVE_MIN_BYTES:-1048576}"
-# Root of the per-account default save dirs. Their SAVE FILES are wiped before launch AND on teardown
-# so the game can never read a default character -- a successful load can ONLY come from our override.
-# NEVER back these up: the user holds their own backups (never-backup-user-saves-2026-06-23).
+# Root of the per-account default save dirs. Their save files are wiped before launch and on teardown
+# so the game can never read a default character -- a successful load can only come from our override.
+# Never back these up: the user holds their own backups (never-backup-user-saves-2026-06-23).
 APPDATA_ER_ROOT="${APPDATA_ER_ROOT:-$HOME/.local/share/Steam/steamapps/compatdata/1245620/pfx/drive_c/users/steamuser/AppData/Roaming/EldenRing}"
 
 # Wipe (delete, no backup) every save artifact under the default appdata save dirs. Idempotent.
-# Skipped when RUNTIME_SKIP_APPDATA_WIPE=1 (the vanilla save-read TRACE needs a char-present save to
+# Skipped when RUNTIME_SKIP_APPDATA_WIPE=1 (the vanilla save-read trace needs a char-present save to
 # survive in the real appdata so we can observe how the working case opens ER0000.sl2).
 wipe_appdata_saves() {
   [[ "${RUNTIME_SKIP_APPDATA_WIPE:-0}" == "1" ]] && return 0
@@ -84,17 +84,17 @@ wipe_appdata_saves() {
 # Path to the freshly-built DLL that the me3 mod host loads as the run's sole native.
 BUILT_DLL="${BUILT_DLL:-$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_quickload.dll}"
 
-# DEPLOY HYGIENE (setup): copy the freshly-built DLL into the per-run artifact dir and write the
-# me3 profile referencing it, so EVERY launch through this script runs the just-built DLL from an
+# Deploy hygiene (setup): copy the freshly-built DLL into the per-run artifact dir and write the
+# me3 profile referencing it, so every launch through this script runs the just-built DLL from an
 # immutable per-run payload (a stale-DLL run silently missing new debug lines was observed under
 # the old game-dir deploy). Fails closed if the build is missing.
 stage_me3_payload() {
   [[ -f "$BUILT_DLL" ]] || fatal "built DLL not found: $BUILT_DLL -- run 'cargo xwin build --release --target x86_64-pc-windows-msvc' first (refusing to run a stale DLL)"
   cp -f "$BUILT_DLL" "$ARTIFACT_DIR/er_quickload.dll"
-  # SEAMLESS MODE: load the user's installed Seamless Co-op alongside our DLL, referenced IN PLACE by
+  # Seamless MODE: load the user's installed Seamless Co-op alongside our DLL, referenced in place by
   # absolute path from the per-run profile (never copied/staged -- the Do-not-bundle rule). Fails
   # closed when the install is missing so a "seamless" run can never silently be vanilla (the exact
-  # miss of run seamless-save-smoke-20260706-144801: Seamless-authored SAVE, vanilla RUNTIME).
+  # miss of run seamless-save-smoke-20260706-144801: Seamless-authored save, vanilla runtime).
   local seamless_native=""
   if [[ "$RUNTIME_EXPECTED_MODE" == "seamless" ]]; then
     seamless_native="${SEAMLESS_ERSC_DLL:-$GAME_DIR/SeamlessCoop/ersc.dll}"
@@ -200,11 +200,11 @@ preflight() {
     fi
   fi
 
-  # Steam MUST be running: the offline eldenring.exe Proton launch reuses Steam's environment
+  # Steam must be running: the offline eldenring.exe Proton launch reuses Steam's environment
   # (wineprefix, CWD, Steam account/save-dir id). With Steam down the game still boots but in a
-  # DIFFERENT environment -- the DLL's debug log lands elsewhere and Steam-dependent state degrades,
+  # different environment -- the DLL's debug log lands elsewhere and Steam-dependent state degrades,
   # producing a non-representative run (observed 2026-06-21). Fail closed rather than burn a launch.
-  # WSL-aware Steam check: on a WSL2 + Windows-Steam box Steam is the WINDOWS process steam.exe, so a
+  # WSL-aware Steam check: on a WSL2 + Windows-Steam box Steam is the Windows process steam.exe, so a
   # bare `pgrep -x steam` false-negatives and refuses to launch when Steam is actually up (that false
   # negative once cost an entire overnight session). See scripts/steam-running.sh and bd
   # steam-detection-wsl-false-negative-2026-07-18.
@@ -240,7 +240,7 @@ preflight() {
   me3_require_no_lazyloader "$GAME_DIR" || fatal "leftover LazyLoader proxy in $GAME_DIR"
   require_file "$GAME_DIR/eldenring.exe"
   require_file "$REPO_ROOT/.auto/runtime_probe.sh"
-  # Validate the probe harness OFFLINE before spending a launch: py_compile + bash -n the probe
+  # Validate the probe harness offline before spending a launch: py_compile + bash -n the probe
   # scripts and exercise the watcher's early-exit telemetry predicates against None/empty/oracle
   # states. A runtime launch must never be burned to discover a pure-Python harness bug.
   if [[ -f "$REPO_ROOT/scripts/preflight-runtime-watcher.py" ]]; then
@@ -251,7 +251,7 @@ preflight() {
   if [[ -n "$(runtime_pids)" ]]; then
     fatal "eldenring.exe is already running; refusing to mix probe ownership"
   fi
-  # SAVE-PRESENCE CHECK: telemetry-only needs no save; default-save mode reports (but tolerates)
+  # Save-presence CHECK: telemetry-only needs no save; default-save mode reports (but tolerates)
   # a missing default save because the DLL's missing-save picker covers it; staged mode still
   # fails closed on a missing/implausible configured gold save.
   if [[ "$RUNTIME_YK0J_UNRESOLVABLE_PROBE" == "1" ]]; then
@@ -367,7 +367,7 @@ cleanup() {
     fi
   fi
   terminate_runtime_pids
-  # Teardown wipe: leave the default appdata save dirs with NO save files, every time.
+  # Teardown wipe: leave the default appdata save dirs with no save files, every time.
   wipe_appdata_saves
 }
 trap cleanup EXIT INT TERM HUP
@@ -404,26 +404,26 @@ EOF
   exit 0
 fi
 
-# Reset stale per-run evidence BEFORE launch so the readiness watcher cannot read a PRIOR run's
+# Reset stale per-run evidence before launch so the readiness watcher cannot read a prior run's
 # completion and tear the new game down instantly. Observed 2026-06-21: a reused ARTIFACT_DIR left
 # an old er-quickload-telemetry.json at cold_char_mount_phase=5, so every rerun false-positived
 # "cold_char_mount_complete" within ~1s (brief white window) before the new process executed
 # anything. Deleting these reproduces first-run-in-a-fresh-dir behavior; the DLL re-creates them
 # once it boots, and the watcher already tolerates their absence while waiting for fresh telemetry.
 rm -f "$TELEMETRY_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH" "$CRASH_LOG_PATH" "$AUTOLOAD_DEBUG_PATH" "$PROFILE_PATH"
-# Wipe any prior loading-screen-portrait screenshot BEFORE the run so a fail-closed/absent capture this run
-# is OBVIOUS (no file) instead of a STALE image we might mis-read as current. The readiness watcher
+# Wipe any prior loading-screen-portrait screenshot before the run so a fail-closed/absent capture this run
+# is obvious (no file) instead of a stale image we might mis-read as current. The readiness watcher
 # writes it at the exact portrait-cover/loading-screen-portrait oracle transition, not at teardown.
 rm -f "$ARTIFACT_DIR/loading-screen-portrait-screenshot.jpg" "$ARTIFACT_DIR/loading-screen-portrait-screenshot.png" "$ARTIFACT_DIR/loading-screen-portrait-screenshot.txt"
 write_autoload_request
 write_yk0j_probe_contract
 
-# STAGE THE FRESH me3 PAYLOAD BEFORE any launch branch (after the auth gates so --dry-run/-h stay
-# read-only, before both the RUNTIME_NO_TEARDOWN exec path and the gamescope/watcher path) so EVERY
+# Stage the fresh me3 payload before any launch branch (after the auth gates so --dry-run/-h stay
+# read-only, before both the RUNTIME_NO_TEARDOWN exec path and the gamescope/watcher path) so every
 # real launch through this script runs the just-built DLL. Fails closed if the build is missing.
 stage_me3_payload
 
-# SAVE SOURCE: telemetry-only loads nothing; default-save mode intentionally uses the real/default
+# Save SOURCE: telemetry-only loads nothing; default-save mode intentionally uses the real/default
 # Steam-user save; otherwise stage an isolated configured save copy and point the DLL at it.
 if [[ "$RUNTIME_TELEMETRY_ONLY" == "1" ]]; then
   export ER_QUICKLOAD_TELEMETRY_ONLY=1
@@ -439,18 +439,18 @@ elif [[ "$RUNTIME_USE_DEFAULT_SAVE" == "1" ]]; then
 else
   # Stage into an EldenRing/<steamid>/ subtree: the DLL redirects the whole
   # %APPDATA%\Roaming\EldenRing directory handle (the game decides "save present?" by enumerating it,
-  # never opening ER0000.sl2 by path), so the staged tree must mirror that structure with the ACTIVE
+  # never opening ER0000.sl2 by path), so the staged tree must mirror that structure with the active
   # account's SteamID so the game's <steamid> path resolves into our copy.
   ACTIVE_STEAMID="${ER_QUICKLOAD_ACTIVE_STEAMID:-76561197986456766}"
   STAGED_ROOT="$ARTIFACT_DIR/save"
   # Stage matching the game's own case (EldenRing/<steamid>/ER0000.sl2, as the vanilla-created file).
-  # The DLL redirects the %APPDATA% ROOT via SHGetFolderPathW, so the game builds these exact paths
+  # The DLL redirects the %APPDATA% root via SHGetFolderPathW, so the game builds these exact paths
   # under our tree and opens them natively -- an exact-case match is the safest under Wine.
   STAGED_SAVE_DIR="$STAGED_ROOT/EldenRing/$ACTIVE_STEAMID"
   STAGED_SAVE="$STAGED_SAVE_DIR/ER0000.sl2"
   mkdir -p "$STAGED_SAVE_DIR"
   cp -f "$GOLD_SAVE" "$STAGED_SAVE"
-  # SEAMLESS MODE: ersc redirects the game's save IO to ER0000.co2, so stage the same bytes under the
+  # Seamless MODE: ersc redirects the game's save IO to ER0000.co2, so stage the same bytes under the
   # co2 name too (identical BND4 container; only the extension differs). The .sl2 copy stays for the
   # pre-redirect boot reads covered by the DllMain .sl2/.co2 fallback gate.
   if [[ "$RUNTIME_EXPECTED_MODE" == "seamless" ]]; then
@@ -461,16 +461,16 @@ else
   # A real user's save is WRITABLE; our gold sources are deliberately read-only to protect them, and
   # `cp` inherits that bit. The title-flow "Updating save data" step writes the save (autosave/backup),
   # so a read-only staged copy makes it fail -> "Failed to save game. Save data is corrupted." popup
-  # (bd offline-notice-fix-works-revealed-save-update-gate-2026-06-23). Make the ISOLATED staged copy
+  # (bd offline-notice-fix-works-revealed-save-update-gate-2026-06-23). Make the isolated staged copy
   # writable so that write lands on the copy (save-safe: the user's gold is never touched).
   chmod u+w "$STAGED_SAVE"
   export ER_QUICKLOAD_SAVE_FILE="$STAGED_SAVE"
-  # SEAMLESS MODE: ER_QUICKLOAD_SAVE_FILE must target the .co2 -- and this override must come AFTER the
+  # Seamless MODE: ER_QUICKLOAD_SAVE_FILE must target the .co2 -- and this override must come after the
   # .sl2 export above or it gets clobbered (run seamless-co2unified-smoke-20260706-150810 armed on .sl2
   # for exactly that ordering slip). The DLL arms its save-swap snapshot/commit and the own-load feed
   # deserialize on this path, and under Seamless the game deserializes + autosaves + re-reads the
   # ProfileSummary table from the .co2: a .sl2-armed run commits foreign bytes to a file the game's
-  # table re-read never sees, so mid-load stats/portrait show the PRIOR character even when the load
+  # table re-read never sees, so mid-load stats/portrait show the prior character even when the load
   # itself lands (runs 150435/150810).
   if [[ "$RUNTIME_EXPECTED_MODE" == "seamless" ]]; then
     export ER_QUICKLOAD_SAVE_FILE="$STAGED_SAVE_DIR/ER0000.co2"
@@ -484,7 +484,7 @@ else
   fi
   echo "save-source: staged gold save -> $STAGED_SAVE (ER_QUICKLOAD_SAVE_FILE); slot=${ER_QUICKLOAD_GOLD_SLOT:-most-recent}; autosaves isolated from $GOLD_SAVE"
 
-  # DISPLAY CONFIG: the redirected %APPDATA%\EldenRing root also redirects graphicsconfig.xml.
+  # Display CONFIG: the redirected %APPDATA%\EldenRing root also redirects graphicsconfig.xml.
   # For on-screen probes, default to the user's real appdata GraphicsConfig.xml so direct/offline
   # probe launches use the same display config as the known-good manual offline launcher. A stale
   # repo golden config can encode the wrong monitor/display dimensions and make startup window
@@ -507,15 +507,15 @@ fi
 # user's real/default save tree.
 wipe_appdata_saves
 
-# TRUE T0 = the closest bash timestamp to eldenring.exe process start. Captured here, immediately
-# before the Proton launch is fired, written to launch-epoch.txt AND exported to the watcher as
+# True T0 = the closest bash timestamp to eldenring.exe process start. Captured here, immediately
+# before the Proton launch is fired, written to launch-epoch.txt and exported to the watcher as
 # ER_PROBE_LAUNCH_EPOCH so every milestone delta (and the world-load fail-fast deadline) is measured
 # from the real launch, not from watcher-start. The watcher's spawn-poll tolerates the game process
 # already existing, so starting it just after the launch fire does not race.
 LAUNCH_EPOCH="$(date +%s.%N)"
 printf '%s\n' "$LAUNCH_EPOCH" > "$ARTIFACT_DIR/launch-epoch.txt"
 
-# Session-default runtime probes render to a REAL on-screen window so the user can WATCH the
+# Session-default runtime probes render to a real on-screen window so the user can watch the
 # zero-input autoload and falsify any title-cover claim visually. The DLL's input block auto-releases
 # in-world (IN_WORLD_REACHED), so the user takes control once the character is in the world.
 # RUNTIME_ONSCREEN=0: force the old gamescope headless/offscreen compositor path for oracle-only runs
@@ -543,8 +543,8 @@ start_hypr_window_placer() {
 
 start_hypr_window_placer
 
-# RUNTIME_NO_TEARDOWN=1: run the game in the FOREGROUND of this launcher (which a human runs detached,
-# e.g. via the agent's background mode) and do NOT run the readiness watcher. The me3 CLI owns the
+# RUNTIME_NO_TEARDOWN=1: run the game in the foreground of this launcher (which a human runs detached,
+# e.g. via the agent's background mode) and do not run the readiness watcher. The me3 CLI owns the
 # compat-tool/wine tree, which dies with its parent, so we must stay as the launch parent for the
 # game's whole lifetime --
 # backgrounding and exiting kills it (observed). The zero-input autoload then runs on the user's
@@ -564,7 +564,7 @@ if [[ "${RUNTIME_NO_TEARDOWN:-0}" == "1" ]]; then
   echo " END when done: use Elden Ring's native in-game quit flow"
   echo "============================================================================"
   cd "$GAME_DIR"
-  # exec -> this launcher BECOMES the foreground me3 CLI, which owns the compat-tool/wine tree;
+  # exec -> this launcher becomes the foreground me3 CLI, which owns the compat-tool/wine tree;
   # it holds the game until quit. me3 sets its own STEAM_COMPAT_* env internally.
   exec env \
     ER_QUICKLOAD_TELEMETRY_PATH="$TELEMETRY_PATH" \

@@ -3,24 +3,24 @@
 //! Same shape as `er-enemynpc-effects` and `er-refill-all`, for the same reasons: the file lives
 //! in the game's own directory (the process CWD), the DLL writes a fully commented default the
 //! first time it cannot find one, and `er_hotkey_config::HotFile` notices edits by comparing the
-//! file's TEXT rather than its mtime -- mtime has one-second resolution on the filesystems a Wine
+//! file's text rather than its mtime -- mtime has one-second resolution on the filesystems a Wine
 //! prefix sits on, so two saves inside a second are invisible to it, which reads as "changing the
 //! key did nothing".
 //!
 //! # The one thing this file does that the other two do not
 //!
 //! **`[target]` is not live.** Everything else here takes effect on the next reload, about a
-//! second after the file is saved. `[target]` decides WHO you are about to become, and moving that
+//! second after the file is saved. `[target]` decides who you are about to become, and moving that
 //! while a possession is in flight would leave the mapping, the camera and the moveset describing
 //! a different character than the body on screen. So an edit to it is STAGED: the value on disk is
-//! remembered, the value IN FORCE does not move, and [`adopt_staged_target`] promotes one to the
+//! remembered, the value in force does not move, and [`adopt_staged_target`] promotes one to the
 //! other at the next possession. The log says `[target] staged` rather than `[target] now`, so
 //! nobody is left believing an edit took that has not.
 //!
 //! # The second file
 //!
 //! A later layer writes `er-npc-possess.derived.toml` -- one line per animation, auto-classified,
-//! for the player to correct. It is NOT implemented here, and nothing below assumes there is only
+//! for the player to correct. It is not implemented here, and nothing below assumes there is only
 //! one file: [`PossessConfig::apply`] takes text rather than a path, the watcher is a field rather
 //! than a global, and [`DERIVED_CONFIG_FILE_NAME`] is already spelled out. Adding it is a second
 //! `HotFile` in [`ConfigState`] and a second `apply`, not a rewrite.
@@ -60,7 +60,7 @@ const CONFIG_FILE_NAME: &str = "er-npc-possess.toml";
 /// be typing in. Separate so the private constant stays private to the path logic.
 pub(crate) const CONFIG_FILE_NAME_FOR_LOG: &str = CONFIG_FILE_NAME;
 
-/// The auto-classified moveset table a later layer WRITES and the player then edits. Named here
+/// The auto-classified moveset table a later layer writes and the player then edits. Named here
 /// so the second file has a spelling before it has an implementation; nothing reads it yet.
 pub(crate) const DERIVED_CONFIG_FILE_NAME: &str = "er-npc-possess.derived.toml";
 
@@ -494,7 +494,7 @@ pub(crate) struct PossessConfig {
     keyboard: Binding<Option<Chord>>,
     pub(crate) keyboard_text: String,
     /// Not an `er_hotkey_config::Binding`: that type's parser must fail with `KeyParseError`,
-    /// whose `Unknown` message tells the reader to pick a KEY -- and listing keyboard names at
+    /// whose `Unknown` message tells the reader to pick a key -- and listing keyboard names at
     /// somebody who mistyped a pad button is a worse answer than none. The keep-the-last-working
     /// -value rule it exists to enforce is reimplemented in [`Self::apply_pad`], which is the
     /// half that matters. Same call `er-refill-all` makes.
@@ -504,7 +504,7 @@ pub(crate) struct PossessConfig {
     pub(crate) radial_text: String,
     /// `[target]` as the possession engine would see it right now.
     target_in_force: TargetSettings,
-    /// `[target]` as the FILE says. Differs from the above between an edit and the next
+    /// `[target]` as the file says. Differs from the above between an edit and the next
     /// possession; see the module docs.
     target_on_disk: TargetSettings,
     pub(crate) tables: Tables,
@@ -525,14 +525,14 @@ pub(crate) struct LiveBindings {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct ConfigUpdate {
     pub(crate) enabled_moved: Option<(bool, bool)>,
-    /// `(old name, new name)`. THIS is the edge-reset signal for the keyboard.
+    /// `(old name, new name)`. This is the edge-reset signal for the keyboard.
     pub(crate) keyboard_moved: Option<(String, String)>,
     pub(crate) keyboard_rejected: Option<(String, String)>,
     pub(crate) gamepad_moved: Option<(String, String)>,
     pub(crate) gamepad_rejected: Option<(String, String)>,
     pub(crate) radial_moved: Option<(String, String)>,
     pub(crate) radial_rejected: Option<(String, String)>,
-    /// `[target]` changed ON DISK and is waiting for the next possession. NOT in force.
+    /// `[target]` changed on disk and is waiting for the next possession. Not in force.
     pub(crate) target_staged: Option<(String, String)>,
     /// One of the live tables moved; carries the whole new summary rather than a per-field diff,
     /// because these are reserved settings and the useful log line is "here is what is in force
@@ -558,7 +558,7 @@ impl ConfigUpdate {
 
     /// Did a binding the input path edge-detects on move?
     ///
-    /// Reported for the LOG, not as a control signal: `crate::input::Edges::rebind` compares each
+    /// Reported for the log, not as a control signal: `crate::input::Edges::rebind` compares each
     /// of the three bindings against its own latch every tick, which is what stops an edit to the
     /// pad chord from clearing the keyboard latch and manufacturing a press out of a held key.
     /// Routing the reset through one crate-wide boolean is exactly the bug that would reintroduce.
@@ -609,7 +609,7 @@ impl PossessConfig {
         }
     }
 
-    /// The `[target]` table a possession starting NOW would use.
+    /// The `[target]` table a possession starting now would use.
     pub(crate) const fn target(&self) -> TargetSettings {
         self.target_in_force
     }
@@ -619,7 +619,7 @@ impl PossessConfig {
         (self.target_on_disk != self.target_in_force).then_some(self.target_on_disk)
     }
 
-    /// Stage a creature the in-game picker chose, exactly as if the FILE had named it.
+    /// Stage a creature the in-game picker chose, exactly as if the file had named it.
     ///
     /// # Why this writes `target_on_disk` and adds no field of its own
     ///
@@ -630,7 +630,7 @@ impl PossessConfig {
     /// could stage differently. A `target_picked` field beside it would have been exactly that
     /// second path.
     ///
-    /// The consequence is worth stating because it is a rule rather than an accident: the NEXT
+    /// The consequence is worth stating because it is a rule rather than an accident: the next
     /// edit to the config file re-stages from the file and the pick is gone. [`Self::apply`]
     /// rebuilds `target_on_disk` from the file on every reload, and the shipped file always names
     /// `mode` and `chr_id`. Editing the file wins; that is the same precedence the rest of this
@@ -640,26 +640,26 @@ impl PossessConfig {
     /// Returns the `(from, to)` summaries for the log.
     pub(crate) fn pick_target(&mut self, chr_id: u32) -> (String, String) {
         let before = self.target_on_disk.summary();
-        // SPAWN MODE IS PRESERVED, and this is not a nicety. `mode = "chr_id"` searches the
-        // characters ALREADY LOADED in the map, so choosing from a 408-entry catalogue and being
+        // Spawn mode is preserved, and this is not a nicety. `mode = "chr_id"` searches the
+        // characters already loaded in the map, so choosing from a 408-entry catalogue and being
         // switched into it means the next press is almost always refused with "no loaded enemy
         // matches chr_id" -- measured live 2026-09-02: eight consecutive refusals against 428
         // loaded characters, because the picker had silently overwritten the mode that worked.
         // In spawn mode the pick names `[spawn].chr_id` instead, which is the field that decides
-        // WHICH creature gets created, and the mode the player chose is left alone.
+        // which creature gets created, and the mode the player chose is left alone.
         if self.target_on_disk.mode == TargetMode::Spawn {
             self.target_on_disk.spawn.chr_id = chr_id;
             return (before, self.target_on_disk.summary());
         }
         self.target_on_disk = TargetSettings {
             mode: TargetMode::ChrId,
-            // `[target] chr_id` is an `i32` because the FILE can name a negative and the parser
+            // `[target] chr_id` is an `i32` because the file can name a negative and the parser
             // has to be able to reject it out loud. The catalogue's ids are `u32` and run
             // 100..9001, so this conversion cannot fail in practice; a value that did not fit
             // would not be a chr id at all, and `0` is what `mode = "chr_id"` already means by
             // "no creature named".
             chr_id: i32::try_from(chr_id).unwrap_or(0),
-            // NOT reset: `release_on_death` is a preference about how a possession ends, and the
+            // Not reset: `release_on_death` is a preference about how a possession ends, and the
             // picker is a statement about who to possess. Carrying it forward is what stops the
             // picker from silently undoing a setting it has no opinion about.
             release_on_death: self.target_on_disk.release_on_death,
@@ -673,7 +673,7 @@ impl PossessConfig {
     /// The chr id a possession starting now would use, or `None` when `[target]` is not in
     /// `chr_id` mode. Read by the picker so re-opening lands on what is already chosen.
     ///
-    /// The STAGED value rather than the one in force, because that is what the picker last wrote
+    /// The staged value rather than the one in force, because that is what the picker last wrote
     /// and what the next possession will use.
     pub(crate) fn staged_chr_id(&self) -> Option<u32> {
         let target = self.staged_target().unwrap_or(self.target_in_force);
@@ -685,7 +685,7 @@ impl PossessConfig {
         u32::try_from(target.chr_id).ok().filter(|id| *id != 0)
     }
 
-    /// Promote a staged `[target]` into force. Called at the START of a possession, never during
+    /// Promote a staged `[target]` into force. Called at the start of a possession, never during
     /// one. Returns the `(from, to)` summaries when something actually moved.
     pub(crate) fn adopt_staged_target(&mut self) -> Option<(String, String)> {
         let staged = self.staged_target()?;
@@ -720,7 +720,7 @@ impl PossessConfig {
         match parsed {
             Ok(chord) if chord == *current => {
                 // Record the spelling they used, so the status line echoes their file rather than
-                // the last spelling of the same chord. NOT a change.
+                // the last spelling of the same chord. Not a change.
                 *text = raw.to_owned();
             }
             Ok(chord) => {
@@ -729,7 +729,7 @@ impl PossessConfig {
                 *text = raw.to_owned();
                 *moved = Some((before, pad_chord_name(chord)));
             }
-            // A REJECTION IS NOT A CHANGE and the last working chord stays. Not the shipped
+            // A rejection is not a change and the last working chord stays. Not the shipped
             // default -- that would drag somebody back onto a collision they had just escaped.
             Err(error) => {
                 *rejected = Some((format!("{raw:?}: {error}"), pad_chord_name(*current)));
@@ -794,8 +794,8 @@ impl PossessConfig {
             );
         }
 
-        // [target] is STAGED, never applied. The `on_disk` copy is rebuilt from the value in
-        // FORCE rather than from itself, so a table the player deleted returns to the built-in
+        // [target] is staged, never applied. The `on_disk` copy is rebuilt from the value in
+        // force rather than from itself, so a table the player deleted returns to the built-in
         // default the same way every other absent setting does.
         let mut on_disk = self.target_in_force;
         on_disk.apply_from(&doc, &mut rejections);
@@ -818,7 +818,7 @@ impl PossessConfig {
 
 /// The live settings plus the watcher that keeps them current.
 ///
-/// The derived moveset file is a SECOND `HotFile` field here when it lands, not a rewrite of this
+/// The derived moveset file is a second `HotFile` field here when it lands, not a rewrite of this
 /// struct -- see the module docs.
 struct ConfigState {
     config: PossessConfig,
@@ -847,7 +847,7 @@ fn state() -> MutexGuard<'static, ConfigState> {
             }
         };
         let mut hot = HotFile::new(path.clone());
-        // Adopt what we just read -- including a default we just WROTE -- so the first poll a
+        // Adopt what we just read -- including a default we just wrote -- so the first poll a
         // second from now is not a spurious reload of text nothing has touched. A reload resets
         // the key edge detectors, and one at that moment is a press nobody made.
         hot.adopt(text.clone());
@@ -887,16 +887,16 @@ pub(crate) fn take_request() -> (PossessionRequest, Option<(String, String)>) {
     (guard.config.request(), adopted)
 }
 
-/// The `[movement]` table IN FORCE, read fresh.
+/// The `[movement]` table in force, read fresh.
 ///
 /// A per-frame accessor rather than a field on [`PossessionRequest`], because `[movement]` is a
-/// LIVE table: `speed_scale` is the one setting a player tunes by saving the file and watching
+/// live table: `speed_scale` is the one setting a player tunes by saving the file and watching
 /// what changes, and snapshotting it at possession start would make it the one setting that
 /// mysteriously needs a re-possess. `[target]` is snapshotted for the opposite reason -- see
 /// [`PossessConfig::adopt_staged_target`].
 /// The `[chr.cNNNN]` overrides for one creature, or `None` when the file names none.
 ///
-/// Read at possession START rather than snapshotted into [`PossessionRequest`]: the override is a
+/// Read at possession start rather than snapshotted into [`PossessionRequest`]: the override is a
 /// growable `Vec` of pins and animation ids, and `PossessionRequest` is `Copy` on purpose so that
 /// the log line describing a possession is a value rather than a borrow of a lock.
 pub(crate) fn chr_override(chr_id: u32) -> Option<ChrOverride> {
@@ -914,12 +914,12 @@ pub(crate) fn movement() -> MovementSettings {
     state().config.tables.movement
 }
 
-/// The `[camera]` table IN FORCE.
+/// The `[camera]` table in force.
 pub(crate) fn camera() -> CameraSettings {
     state().config.tables.camera
 }
 
-/// How many reloads have MOVED something, since the process started.
+/// How many reloads have moved something, since the process started.
 ///
 /// The camera layer watches this rather than re-reading its two settings sixty times a second:
 /// `[camera]` costs a lock and the per-character `camera_distance_scale` costs a `format!` and a
@@ -935,7 +935,7 @@ pub(crate) fn hud() -> HudSettings {
     state().config.tables.hud
 }
 
-/// The `[picker]` table IN FORCE, read fresh. Live, like `[movement]`.
+/// The `[picker]` table in force, read fresh. Live, like `[movement]`.
 pub(crate) fn picker() -> PickerSettings {
     state().config.tables.picker
 }
@@ -963,7 +963,7 @@ pub(crate) fn poll_reload() -> Option<ConfigUpdate> {
             if update.is_quiet() {
                 return None;
             }
-            // Bumped only when something ACTUALLY moved, which is what makes this usable as a
+            // Bumped only when something actually moved, which is what makes this usable as a
             // "are my settings stale" test rather than a "was the file touched" one.
             GENERATION.fetch_add(1, Ordering::Relaxed);
             Some(update)
@@ -1039,7 +1039,7 @@ mod tests {
         config
     }
 
-    /// THE ROUND TRIP. The file the DLL writes on first run must parse back to exactly the
+    /// The round trip. The file the DLL writes on first run must parse back to exactly the
     /// built-in defaults -- otherwise the shipped file silently means something other than what
     /// the code does, and the difference only shows up in somebody's session.
     #[test]
@@ -1084,14 +1084,14 @@ mod tests {
         assert_eq!(config.tables.mapping.model, MappingModel::Context);
         assert_eq!(config.tables.mapping.combo_window_ms, 1200);
         assert_eq!(config.tables.mapping.bands_m, (4.0, 12.0));
-        // ON, and asserted rather than assumed: TAE event 304 is 100% of the 4000 animation band
+        // On, and asserted rather than assumed: TAE event 304 is 100% of the 4000 animation band
         // and every boss grab in the game, so a `false` here silently removes the signature move
         // of most of what anybody would want to possess.
         assert!(config.tables.mapping.allow_grabs);
         assert_eq!(config.tables.mapping.unbound_inputs, UnboundInputs::Promote);
         assert_eq!(config.tables.mapping.watchdog_seconds, 4.0);
         assert_eq!(config.tables.buttons.r1, Bucket::Light);
-        // THE ATTACK-SET PAGE KEYS, asserted rather than assumed for the same reason the picker's
+        // The attack-set page keys, asserted rather than assumed for the same reason the picker's
         // arrows are: these two are the keys vanilla puts the armament swap on, and picking any
         // other pair would throw away the muscle memory that is the whole argument for them.
         assert_eq!(
@@ -1115,7 +1115,7 @@ mod tests {
         assert!(picker.enabled);
         assert_eq!(picker.visible_rows, 15);
         assert_eq!(picker.toggle, Some(parse_chord("F10").expect("F10")));
-        // ARROWS, not the keypad, and asserted rather than assumed: `KP_8` parses to
+        // Arrows, not the keypad, and asserted rather than assumed: `KP_8` parses to
         // `VK_NUMPAD8`, which the numpad does not send with NumLock off, so a keypad default is
         // silently dead for anyone who leaves it off. See `settings::PickerSettings`.
         assert_eq!(picker.up, Some(parse_chord("Up").expect("Up")));
@@ -1125,7 +1125,7 @@ mod tests {
             picker.next_group,
             Some(parse_chord("Right").expect("Right"))
         );
-        // EMPTY, and asserted rather than assumed. This DLL cannot take a key away from the game,
+        // Empty, and asserted rather than assumed. This DLL cannot take a key away from the game,
         // so a shipped pad default for "cursor down" would also swap the player's spell every
         // time they pressed it. See the `er-npc-possess` entry in scripts/me3-dll-conflicts.toml.
         for pad in [
@@ -1141,7 +1141,7 @@ mod tests {
                 "every shipped pad binding is unbound"
             );
         }
-        // The example per-chr table ships COMMENTED OUT, so a fresh install overrides nothing.
+        // The example per-chr table ships commented out, so a fresh install overrides nothing.
         assert!(config.tables.chr_overrides.is_empty());
     }
 
@@ -1160,7 +1160,7 @@ mod tests {
         typed.apply("[target]\nmode = \"chr_id\"\nchr_id = 4630\n");
         assert_eq!(picked.staged_target(), typed.staged_target());
 
-        // ...and the pick is STAGED, not in force, exactly like the edit.
+        // ...and the pick is staged, not in force, exactly like the edit.
         assert_eq!(picked.target().mode, TargetMode::LockOn);
         assert!(picked.adopt_staged_target().is_some());
         assert_eq!(picked.target().mode, TargetMode::ChrId);
@@ -1192,7 +1192,7 @@ mod tests {
         assert!(!staged.release_on_death);
     }
 
-    /// The picker opens on whatever is already chosen, so this has to read the STAGED value and
+    /// The picker opens on whatever is already chosen, so this has to read the staged value and
     /// has to say "nobody" for every mode that is not `chr_id`.
     #[test]
     fn the_staged_chr_id_is_only_reported_in_chr_id_mode() {
@@ -1234,7 +1234,7 @@ mod tests {
         );
     }
 
-    /// THE RULE THAT MATTERS. A typo keeps the key that was working. It does not fall back to the
+    /// The rule that matters. A typo keeps the key that was working. It does not fall back to the
     /// built-in default, and it does not turn the binding off.
     #[test]
     fn a_rejected_binding_keeps_the_last_working_one() {
@@ -1258,7 +1258,7 @@ mod tests {
         );
     }
 
-    /// A value that means the SAME key is not a change. Reporting one resets the edge detector,
+    /// A value that means the same key is not a change. Reporting one resets the edge detector,
     /// and a key held at that instant fires without being pressed.
     #[test]
     fn respelling_a_binding_is_not_a_change() {
@@ -1283,7 +1283,7 @@ mod tests {
         assert!(!config.bindings().gamepad.is_bound());
     }
 
-    /// THE NOT-LIVE TABLE. An edit to `[target]` is staged and does NOT move what a possession
+    /// The not-live table. An edit to `[target]` is staged and does not move what a possession
     /// starting now would use.
     #[test]
     fn a_target_edit_is_staged_and_does_not_take_effect_until_the_next_possession() {
@@ -1297,7 +1297,7 @@ mod tests {
             !update.bindings_moved(),
             "staging a target must not reset a key edge detector"
         );
-        // Still lock_on IN FORCE, which is what an engine would be handed.
+        // Still lock_on in force, which is what an engine would be handed.
         assert_eq!(config.target().mode, TargetMode::LockOn);
         assert_eq!(config.request().target.mode, TargetMode::LockOn);
         assert_eq!(
@@ -1331,7 +1331,7 @@ mod tests {
         assert_eq!(config.adopt_staged_target(), None);
     }
 
-    /// Everything that is NOT `[target]` is live: it moves on the reload, with no re-possession.
+    /// Everything that is not `[target]` is live: it moves on the reload, with no re-possession.
     #[test]
     fn the_other_tables_are_live() {
         let mut config = from_default();

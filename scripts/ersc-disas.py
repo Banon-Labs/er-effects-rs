@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Disassemble / read any archived or installed `ersc.dll` build, for Seamless re-pin work.
 
-Reads the DLLs IN PLACE (AGENTS.md forbids copying or staging `ersc.dll`). Reuses the PE
+Reads the DLLs in place (AGENTS.md forbids copying or staging `ersc.dll`). Reuses the PE
 reader and pin parser from `locate-ersc-entry-points.py` so there is one implementation of
 "which sections hold real code".
 
-USAGE
+Usage
     uv run --with capstone python3 scripts/ersc-disas.py disas 0x1800258d0 0x1800259d0 --build v200
     uv run --with capstone python3 scripts/ersc-disas.py disas 0x1800243e0 --build v199 -n 0x80
     uv run --with capstone python3 scripts/ersc-disas.py find 'f3 0f 1e fa 56 57' --build v200
@@ -41,7 +41,7 @@ LOC = _locate_module()
 Pe = LOC.Pe
 
 
-# `--build` names a SEAMLESS VERSION, and it is resolved by the version marker inside the
+# `--build` names a seamless version, and it is resolved by the version marker inside the
 # file -- never by which directory the file sits in.
 #
 # It used to be positional: `v200` meant "whatever `find_installed` returns" and `v199` meant
@@ -53,7 +53,7 @@ Pe = LOC.Pe
 # by the version marker inside it, never by the directory it happens to sit in."
 #
 # So this resolves the same way, fails closed when the asked-for build is not on disk, and
-# says which builds ARE available rather than quietly handing back the wrong bytes.
+# says which builds are available rather than quietly handing back the wrong bytes.
 BUILD_MARKERS = {
     "v199": "Seamless Co-op v1.9.9 by Yui",
     "v200": "Seamless Co-op v2.0.0 by Yui",
@@ -154,7 +154,7 @@ def xrefs_to(pe, target, direct_only=True):
     """Every reference in real code that reaches `target`.
 
     Always: `call`/`jmp rel32`, found by direct displacement arithmetic. With `direct_only`
-    false, also every RIP-RELATIVE operand of any mnemonic -- which is how a data constant
+    false, also every RIP-relative operand of any mnemonic -- which is how a data constant
     (an SHA-256 IV, a salt, a string) is reached, and how an option table takes a callback's
     address. That pass disassembles the whole code section, so it costs a few seconds.
     """
@@ -173,9 +173,9 @@ def xrefs_to(pe, target, direct_only=True):
                         hits.append((base + at, kind))
                 at = data.find(bytes([opcode]), at + 1)
     if not direct_only:
-        # Disassemble FROM FUNCTION STARTS, never linearly from the top of the section. A linear
+        # Disassemble from function starts, never linearly from the top of the section. A linear
         # sweep desynchronises on the first jump table or alignment padding and then decodes
-        # garbage -- which silently MISSES real references rather than inventing fake ones, so
+        # garbage -- which silently misses real references rather than inventing fake ones, so
         # the failure looks like "nothing refers to this constant". Measured: a linear sweep of
         # v1.9.9 `.text` found no reference to the SHA-256 IV at 0x1801bab00, which
         # `movaps xmm0,[rip+0x10eaef]` at 0x1800ac00a plainly is.
@@ -221,7 +221,7 @@ def pdata_entries(pe):
 
     `.pdata` is the authoritative function table for x64 PE: one RUNTIME_FUNCTION per
     non-leaf function, sorted by address. It is emitted by the linker, not by us, which makes
-    an entry's INDEX a build-independent fact about where a function sits in link order --
+    an entry's index a build-independent fact about where a function sits in link order --
     evidence of a different kind from any byte pattern.
     """
     import struct
@@ -240,9 +240,9 @@ def pdata_entries(pe):
 
 
 def align_report(old, new, rvas, tolerance=4):
-    """Cross-build function mapping by `.pdata` INDEX rather than by bytes.
+    """Cross-build function mapping by `.pdata` index rather than by bytes.
 
-    For each `rva` in the OLD build, report its index, then the longest run of consecutive
+    For each `rva` in the old build, report its index, then the longest run of consecutive
     functions around it whose sizes still agree at a constant index shift. A long run is the
     strong claim: it says the linker emitted the same functions in the same order with the
     same sizes on both sides, so the function at `old_index + shift` is the same function --
@@ -296,15 +296,15 @@ def align_report(old, new, rvas, tolerance=4):
 def state_stores(pe, field_offset):
     """Every `mov dword ptr [reg+field_offset], imm32` in real code: `[(va, base_reg, imm)]`.
 
-    The session-state field is written with a plain immediate everywhere it matters, so the SET
+    The session-state field is written with a plain immediate everywhere it matters, so the set
     of immediates stored into it is a complete, static picture of the state enum -- independent
     of which function does the storing. Comparing that set across two builds is how "the enum
     was renumbered" stops being a claim about five option actions and becomes a measurement over
     every writer in the module.
 
-    Matching is by DISPLACEMENT ONLY, so any other struct with a field at the same offset shows
+    Matching is by displacement only, so any other struct with a field at the same offset shows
     up too. Read the result as a distribution to compare across builds, never as a list of
-    session writers: it is the per-value SITE COUNTS lining up under a constant shift that
+    session writers: it is the per-value site counts lining up under a constant shift that
     carries the argument, not any single row.
 
     Encoding: `C7 /0 disp32 imm32`, modrm mod=10 reg=000. A REX prefix may extend the base
@@ -407,10 +407,10 @@ def main():
     nbytes = int(args.nbytes, 0)
 
     if args.command == "crossmatch":
-        # Take a byte window out of ONE build and count where it occurs in BOTH. This is the
+        # Take a byte window out of one build and count where it occurs in both. This is the
         # check a version gate needs before it can trust a pin: the window must occur exactly
-        # once in the build it came from (so it identifies a function, not a shape) and NOT AT
-        # ALL in the other build (so the two versions' gates cannot both accept the same DLL).
+        # once in the build it came from (so it identifies a function, not a shape) and not at
+        # all in the other build (so the two versions' gates cannot both accept the same DLL).
         source, source_path = load(args.build)
         # "the other build" is the next-newest one actually on disk, not a hard-coded twin.
         others = [name for name in sorted(BUILD_MARKERS) if name != args.build]
@@ -491,7 +491,7 @@ def main():
     pe, path = load(args.build)
     print(f"# {args.build}: {path}\n#   {pe.describe()}")
 
-    # Every command takes a LIST, so one invocation answers a whole batch of addresses. The
+    # Every command takes a list, so one invocation answers a whole batch of addresses. The
     # shell loop that would otherwise be needed pays uv's startup per address and is refused by
     # this workspace's command guard as unverifiable.
     for argument in args.argument:

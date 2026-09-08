@@ -2,12 +2,12 @@
 """Behavioral tests for the cupcake signal `last_assistant_authority_agreement`.
 
 The signal script scans the last-completed assistant turn of the session transcript and returns a
-TAGGED marker:
+tagged marker:
   * AUTH:<phrase>         -- Category A authority-coded agreement (banned outright)
-  * ACKUNBACKED:<phrase>  -- Category B feedback-acknowledgement prose with NO bd-memory in the turn
-  * ""                    -- clean (Category A absent; Category B absent OR backed by a bd memory)
+  * ACKUNBACKED:<phrase>  -- Category B feedback-acknowledgement prose with no bd-memory in the turn
+  * ""                    -- clean (Category A absent; Category B absent or backed by a bd memory)
 
-We drive it against crafted transcript JSONL under a temporary HOME so the script's
+We drive it against crafted transcript JSONL under a temporary home so the script's
 `~/.claude/projects/<cwd-key>/*.jsonl` discovery resolves to our fixture, then assert the tag.
 """
 from __future__ import annotations
@@ -29,7 +29,7 @@ def user(text: str) -> dict:
 
 
 def tool_result() -> dict:
-    """A tool-result carrier user event -- must NOT split the assistant turn."""
+    """A tool-result carrier user event -- must not split the assistant turn."""
     return {"type": "user", "message": {"content": [{"type": "tool_result", "content": "ok"}]}}
 
 
@@ -53,7 +53,7 @@ def assistant_bd_remember() -> dict:
 
 
 def run_signal(events: list[dict]) -> str:
-    """Write events to a fixture transcript under a temp HOME and return the signal's stdout."""
+    """Write events to a fixture transcript under a temp home and return the signal's stdout."""
     with tempfile.TemporaryDirectory() as home:
         key = PROJECT_DIR.replace("/", "-")
         tdir = Path(home) / ".claude" / "projects" / key
@@ -79,7 +79,7 @@ def expect(name: str, events: list[dict], predicate, describe: str) -> None:
 
 
 def main() -> int:
-    # (1) Ack phrase in a turn WITHOUT a bd-memory recording -> ACKUNBACKED.
+    # (1) Ack phrase in a turn without a bd-memory recording -> ACKUNBACKED.
     expect(
         "ack-unbacked",
         [user("Stop doing X."), assistant_text("Point taken. I'll adjust the approach.")],
@@ -87,7 +87,7 @@ def main() -> int:
         "expected ACKUNBACKED for an unbacked acknowledgement",
     )
 
-    # (2) Same ack WITH a bd-memory recording in the same turn -> empty (allowed).
+    # (2) Same ack with a bd-memory recording in the same turn -> empty (allowed).
     expect(
         "ack-backed",
         [
@@ -124,7 +124,7 @@ def main() -> int:
         "expected empty when the ack appears only inside double quotes",
     )
 
-    # (5) Ack phrase in a NON-final block of the turn (later clean block must not mask it) -> detected.
+    # (5) Ack phrase in a non-final block of the turn (later clean block must not mask it) -> detected.
     expect(
         "ack-in-nonfinal-block",
         [
@@ -136,7 +136,7 @@ def main() -> int:
         "expected ACKUNBACKED from a whole-turn scan when the ack is not the last block",
     )
 
-    # (6) Interrupted turn: a NEW user prompt after the ack -> the prior turn is still detected.
+    # (6) Interrupted turn: a new user prompt after the ack -> the prior turn is still detected.
     expect(
         "interrupted-turn",
         [

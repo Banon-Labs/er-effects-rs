@@ -1,4 +1,4 @@
-//! Does the MERGED ProfileSelect row header actually fit before the attribute block?
+//! Does the merged ProfileSelect row header actually fit before the attribute block?
 //!
 //! Merging `PlayerName` + the `Level` caption + the level value into one left-aligned string moves
 //! where the row's ink stops: instead of a short name ending well before a fixed caption, one run
@@ -6,7 +6,7 @@
 //! introduces, and it is measurable offline -- the menu font's own per-glyph advances are in the
 //! extracted `font.gfx`, so this is arithmetic, not judgement.
 //!
-//! Corpus-gated: SKIPS (does not fail) when the extracted font is absent, like every other test that
+//! Corpus-gated: Skips (does not fail) when the extracted font is absent, like every other test that
 //! needs real asset bytes. No game-derived bytes are versioned here.
 
 use er_gfx::Movie;
@@ -117,7 +117,7 @@ fn location_fits_the_longest_place_names() {
 ///
 /// Deliberately measured on INK, not on boxes. `ErCharStats` is centre-aligned in a 484px box, so
 /// its text occupies the middle and comes nowhere near its right edge; `Location` is right-aligned,
-/// so its text hugs ITS right edge. Their boxes are allowed to overlap — asserting otherwise would
+/// so its text hugs its right edge. Their boxes are allowed to overlap — asserting otherwise would
 /// forbid a layout that renders perfectly well and would force the location narrower than the place
 /// names need. What matters is whether the glyphs meet.
 #[test]
@@ -171,7 +171,7 @@ fn the_attribute_line_and_the_location_do_not_collide_as_drawn() {
 /// er-gfx row tests use; the list mask is wider and is not a valid oracle for row bleed).
 const PROFILE_ROW_VISIBLE_CONTENT_RIGHT_PX: f32 = 540.0;
 
-/// The whole point of merging: the name gets MORE horizontal room than it had when a fixed `Level`
+/// The whole point of merging: the name gets more horizontal room than it had when a fixed `Level`
 /// caption sat immediately to its right. If this ever inverts, the merge has stopped paying for
 /// itself and the geometry needs revisiting rather than silently clipping names.
 #[test]
@@ -189,12 +189,12 @@ fn merging_gives_the_name_more_room_than_the_caption_layout_did() {
 }
 
 /// `PlayerName`'s load-character sample is what the web layout editor draws on its canvas, so after
-/// the merge it must BE the merged string -- otherwise the editor shows a short name, the user
+/// the merge it must be the merged string -- otherwise the editor shows a short name, the user
 /// positions the field against ink that is 100px narrower than the real thing, and the row overruns
 /// in game while looking fine in the editor.
 ///
 /// It is checked here rather than trusted: this asserts the sample is a real expansion of the
-/// shipped template (not hand-written drift) AND that it clears the attribute block as drawn.
+/// shipped template (not hand-written drift) and that it clears the attribute block as drawn.
 #[test]
 fn the_editor_sample_is_the_merged_string_and_clears_the_attribute_block() {
     let layout = Profile05_010Layout::default();
@@ -228,14 +228,14 @@ fn the_editor_sample_is_the_merged_string_and_clears_the_attribute_block() {
     );
 }
 
-/// How much name the header can carry, stated as a per-glyph BUDGET rather than a glyph count, so
+/// How much name the header can carry, stated as a per-glyph budget rather than a glyph count, so
 /// the pin does not depend on which letter you pick.
 ///
 /// The honest limit, measured: 288px of room minus 97.9px of worst-case suffix leaves 190px for a
 /// 16-unit name, i.e. **11.8px per glyph**. Real menu-font advances at height 24 are 'W' 15.6px and
 /// 'a' 7.1px, so a full-length name of average English letters fits and a full-length name of all
 /// capital Ws does not -- and no layout that also shows eight attributes could make the latter fit.
-/// That is a property of the font and the row width, not of the merge: BEFORE merging, the name had
+/// That is a property of the font and the row width, not of the merge: Before merging, the name had
 /// only 172px before it ran under the fixed `Level` caption, which is less.
 ///
 /// Pinning the budget means a schema edit that steals room fails here, with the number, instead of

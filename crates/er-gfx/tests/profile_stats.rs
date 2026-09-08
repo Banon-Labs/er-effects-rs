@@ -4,7 +4,7 @@
 //! ground truth is the recorded fingerprint of the generated asset
 //! (`EDITED_LEN` + `EDITED_FNV1A64`, what the in-game runtime-serve telemetry
 //! validates). Derivation tests read the real vanilla movie from the
-//! extraction corpus and SKIP when it is absent; the failure-path garbage test
+//! extraction corpus and skip when it is absent; the failure-path garbage test
 //! always runs. Regenerate the asset with
 //! `cargo run -p er-gfx --example make_05_010_stats` for byte-level debugging.
 
@@ -25,7 +25,7 @@ use er_gfx::title_05_010::{
 use er_gfx::{Matrix, Movie, Tag};
 use std::path::PathBuf;
 
-// Measured pitch of the SHIPPED row list, the baseline `COMPACT_ROW_PITCH_PX` is derived
+// Measured pitch of the shipped row list, the baseline `COMPACT_ROW_PITCH_PX` is derived
 // against. Retained as the record of vanilla geometry even with no live assertion.
 #[allow(dead_code)]
 const VANILLA_ROW_PITCH_PX: i32 = 156;
@@ -37,10 +37,10 @@ const PROFILE_ROW_VISIBLE_CONTENT_LEFT_PX: i32 = -540;
 const PROFILE_ROW_VISIBLE_CONTENT_RIGHT_PX: i32 = 540;
 const LOAD_CHARACTER_RENDERED_VERTICAL_TOLERANCE_PX: i32 = 4;
 /// Worst-case filename characters the save-file view can show in `PlayerName` before the name
-/// reaches the metadata line. This is the MEASURED floor, and it is too low: `ER0000.sl2` is 10 and
+/// reaches the metadata line. This is the measured floor, and it is too low: `ER0000.sl2` is 10 and
 /// fits, but a dated backup like `er-quickload-save-20260807.sl2` is 28 and does not.
 ///
-/// It is a regression gate, NOT a statement that the file view is well laid out. `PlayerName` is one
+/// It is a regression gate, not a statement that the file view is well laid out. `PlayerName` is one
 /// box shared by the merged character header and the save-file name, and it has been `x -520 w1200`
 /// for six revisions -- so this ceiling predates the merged header rather than being caused by it
 /// (`git log -p crates/er-gfx/profile_05_010_layout.toml`). Raising it means giving the two surfaces
@@ -146,7 +146,7 @@ fn stats_panel_of_vanilla_matches_generated_fingerprint() {
     assert_eq!(fnv1a64(&out), EDITED_FNV1A64);
 }
 
-/// Structural gates on the edited movie: the face box stays PLACED (so the
+/// Structural gates on the edited movie: the face box stays placed (so the
 /// native row-populate can resolve/release it -- unplacing it crashes,
 /// er-effects-rs-7e7) but is hidden by an alpha-0 color transform, and the row
 /// template places a `DefineEditText` char as [`STATS_FIELD_NAME`] (the exact
@@ -204,14 +204,14 @@ fn placed_instance_names(movie: &Movie) -> std::collections::BTreeSet<String> {
     out
 }
 
-/// THE FIELDS THIS MOD INJECTS MUST NAME NOTHING THE GAME ALREADY HAS.
+/// The fields this mod INJECTS must name nothing the game already has.
 ///
 /// The DLL decides whether a character-summary row belongs to this mod by asking the row proxy for
 /// its `ErCharStats` child: `CS::MenuSaveDataSummary`'s populate is a shared template, so the
 /// System>Quit `GameEnd` panel in `02_040_OptionSetting` -- which owns its own `PlayerName`,
 /// `Level`, `StaticText_110502`, `Location` and `PlayTime` -- arrives at the very same hook as a
 /// ProfileSelect row. The probe is only decisive while the injected names exist in the edited movie
-/// and in NO vanilla one; the moment a vanilla movie gains a child by one of these names, this mod
+/// and in no vanilla one; the moment a vanilla movie gains a child by one of these names, this mod
 /// starts rewriting the game's own menu again, which is the defect the gate exists to prevent.
 ///
 /// Vanilla `02_040_OptionSetting` is checked by name here because it is the specific panel the user
@@ -300,7 +300,7 @@ fn stats_panel_output_places_stats_field_and_hides_face_box() {
             _ => None,
         })
         .collect();
-    // Icon_0 must stay PLACED (native resolve/release depends on it) but be
+    // Icon_0 must stay placed (native resolve/release depends on it) but be
     // rendered invisible via an alpha-0 CXFORMWITHALPHA multiply term.
     let icon = row
         .iter()
@@ -420,7 +420,7 @@ fn stats_panel_output_places_stats_field_and_hides_face_box() {
         );
         assert_not_alpha_zero(row, inline);
     }
-    // PlayTime is absent from that list because it is asserted alpha-ZERO above -- it is placed and
+    // PlayTime is absent from that list because it is asserted alpha-zero above -- it is placed and
     // schema-positioned but never drawn. Its schema y placement is still checked here, so the schema
     // stays the single source of truth for a field that only a future un-hide would render.
     assert_eq!(
@@ -718,7 +718,7 @@ fn stats_panel_output_keeps_row_text_fields_positive_width() {
     // a schema that said 600. A `width` edit only reaches the movie when
     // `scripts/rebuild-profile-05-010-layout.sh` re-bakes `title_05_010_edits.rs`, and the live
     // editor's save path runs that script's `--hot-reload` branch, which reloads the running game
-    // and does NOT re-emit the table -- so an un-listed field is a field whose authored width can
+    // and does not re-emit the table -- so an un-listed field is a field whose authored width can
     // silently never ship.
     let names = [
         "PlayerName",
@@ -895,7 +895,7 @@ fn stats_panel_output_keeps_load_character_row_text_from_overlapping() {
     };
     let out = stats_panel(&vanilla).expect("edits must apply cleanly");
     let movie = Movie::parse(&out).expect("edited movie parses");
-    // WHAT A LOAD-CHARACTER ROW ACTUALLY DRAWS. The name, Rune Level and weapon level are ONE
+    // What a load-character row actually draws. The name, Rune Level and weapon level are one
     // merged string in `PlayerName`; the `Level` FMG caption, the `Level` value and `PlayTime` are
     // hidden per row (`RowSlotFieldVisibility::NATIVE_MERGED`). Listing hidden fields here would
     // assert a layout nothing renders -- and would fail on exactly the overlap the merge creates on
@@ -934,7 +934,7 @@ fn stats_panel_output_keeps_load_character_row_text_from_overlapping() {
 }
 
 /// Assert no two rendered-ink rects in `rects` touch, allowing `gutter_px` of slack.
-/// Reports EVERY colliding pair, not just the first, so one run names the whole defect.
+/// Reports every colliding pair, not just the first, so one run names the whole defect.
 fn assert_no_ink_overlaps(kind: &str, rects: &[TextRect], gutter_px: i32) {
     let mut collisions = Vec::new();
     for (i, a) in rects.iter().enumerate() {
@@ -959,18 +959,18 @@ fn assert_no_ink_overlaps(kind: &str, rects: &[TextRect], gutter_px: i32) {
 /// the merged header cannot be composed (no readable name). It draws the game's own layout: the
 /// name, the `Level` FMG caption and its value, `Location`, and our attribute line.
 ///
-/// This is the "vanilla view" and it had NO overlap gate. Only the merged rendering was measured,
+/// This is the "vanilla view" and it had no overlap gate. Only the merged rendering was measured,
 /// so widening `PlayerName` into a full-width merged-header strip was free to run straight through
 /// the caption and value that this rendering still draws.
 ///
-/// `PlayTime` is NOT sampled: it is hidden at the asset level (alpha-0, asserted in
+/// `PlayTime` is not sampled: it is hidden at the asset level (alpha-0, asserted in
 /// `stats_panel_output_places_stats_field_and_hides_face_box`) because the widened `Location` now
-/// occupies its band. Dropping it from this list is the FIX being asserted, not a way to dodge the
+/// occupies its band. Dropping it from this list is the fix being asserted, not a way to dodge the
 /// failure -- it was the sole collision this gate found (`Location` 6600..10600 twips through
 /// `PlayTime` 9200..10500, 65px of ink).
 ///
 /// The caption sample is the real FMG text `Level`, not the schema's `sample_load_character` -- the
-/// merge only HIDES that field, it never rewrites the FMG, so `Level` is what an unmerged row puts
+/// merge only hides that field, it never rewrites the FMG, so `Level` is what an unmerged row puts
 /// on screen.
 #[test]
 fn stats_panel_output_keeps_unmerged_vanilla_character_row_text_from_overlapping() {
@@ -1008,7 +1008,7 @@ fn stats_panel_output_keeps_unmerged_vanilla_character_row_text_from_overlapping
 /// `PlayerName`; file/folder rows may draw the wide `ErStats` metadata line and a staged `Location`
 /// timestamp, while the mutually-exclusive drive row draws its populated drive cells instead.
 ///
-/// The save-picker rendering had a CONTAINMENT gate (every field inside the row frame) but no
+/// The save-picker rendering had a containment gate (every field inside the row frame) but no
 /// overlap gate, so two picker fields could sit on top of each other and stay green. Containment
 /// and separation are different properties; the character row has always had both.
 #[test]
@@ -1021,14 +1021,14 @@ fn stats_panel_output_keeps_save_picker_row_text_from_overlapping() {
     };
     let out = stats_panel(&vanilla).expect("edits must apply cleanly");
     let movie = Movie::parse(&out).expect("edited movie parses");
-    // A DRIVE row: the strip is populated and the name is the root label.
+    // A drive row: the strip is populated and the name is the root label.
     let drive_row = [
         ("PlayerName", "Save Root", None),
         (DRIVE_CELL_FIELD_NAMES[0], "C:", None),
         (DRIVE_CELL_FIELD_NAMES[1], "S:", None),
         (DRIVE_CELL_FIELD_NAMES[2], "Z:", None),
     ];
-    // A FILE row: the metadata line is populated, the drive cells are hidden (and blanked as
+    // A file row: the metadata line is populated, the drive cells are hidden (and blanked as
     // redundant content hygiene), and the timestamp is staged into Location.
     let file_row = [
         ("PlayerName", "er-quickload-save-20260807.sl2", None),
@@ -1051,7 +1051,7 @@ fn stats_panel_output_keeps_save_picker_row_text_from_overlapping() {
             .collect();
         assert_no_ink_overlaps(kind, &rects, 4);
     }
-    // MEASURE the headroom, do not just check one sample. `PlayerName` is one box shared by every
+    // Measure the headroom, do not just check one sample. `PlayerName` is one box shared by every
     // surface, sized for the merged character header (a name is at most 16 characters), while the
     // file view puts arbitrary FILENAMES in it. Report how many characters actually fit before the
     // name reaches `ErStats`, so shrinking that budget is a visible regression rather than a
@@ -1302,7 +1302,7 @@ fn stats_panel_output_scales_row_internal_chrome_to_compact_pitch() {
             _ => None,
         })
         .expect("edited movie keeps row backing shape 53 bounds");
-    // Depth 1 is the vanilla full-row backing. It is selected by DEPTH, not by "the first char-54
+    // Depth 1 is the vanilla full-row backing. It is selected by depth, not by "the first char-54
     // placement": char 54 is reused by every `DriveButton_*`, by `CurrentPathButton`, and by the
     // invisible `HitArea`, so a character-id search would resolve whichever one happens to be
     // serialized first.
@@ -1464,7 +1464,7 @@ fn placement_transform(matrix: Option<&Matrix>) -> (f64, f64, f64, f64) {
     (sx, sy, f64::from(m.translate_x), f64::from(m.translate_y))
 }
 
-/// Bounds of character `id` in its OWN coordinate space, in twips -- what the engine's
+/// Bounds of character `id` in its own coordinate space, in twips -- what the engine's
 /// `GetBounds` (vtbl `+0x1f0`) hands the row hit test before the inverse world transform.
 /// Shapes contribute their `shape_bounds`, GFx external images (tag 1009) their target rect, and
 /// a sprite the union of its children under their placement matrices.
@@ -1564,17 +1564,17 @@ fn row_child_hit_box(movie: &Movie, name: &str) -> (f64, f64, f64, f64) {
     (b.0 * sx + tx, b.1 * sx + tx, b.2 * sy + ty, b.3 * sy + ty)
 }
 
-/// THE ROW'S MOUSE TARGET, AND THE PROOF IT DID NOT MOVE FOR ANYONE ELSE.
+/// The row'S mouse target, and the proof it did not move for anyone else.
 ///
 /// `GridControl::HandleMouse` -> `FUN_140736c90` asks `FUN_14074b0d0` for each row's hit object,
 /// and that resolver takes the child named `HitArea` first, `Cursor` second, and the cell itself
-/// last; `FUN_140d7ff40` then hit-tests THAT ONE object's bounds (`GetBounds` at vtbl `+0x1f0`,
+/// last; `FUN_140d7ff40` then hit-tests that one object's bounds (`GetBounds` at vtbl `+0x1f0`,
 /// inverse world transform, AABB, then `PointTestLocal` at `+0x200` with mask 0 -- a bounds test,
 /// no visibility term, which is why an alpha-0 plate is still a valid target). Without a
-/// `HitArea`, the row's mouse target IS `Cursor` -- the sprite the drive-row runtime shrinks onto
+/// `HitArea`, the row's mouse target is `Cursor` -- the sprite the drive-row runtime shrinks onto
 /// the focused sub-control, which is why the drive row was hoverable only where focus already was.
 ///
-/// The catch is that sprite 76 is ONE template for every row, including the character-slot views.
+/// The catch is that sprite 76 is one template for every row, including the character-slot views.
 /// So the gate is not "a HitArea exists" but "the hit box is bit-identical to the full-row `Cursor`
 /// it takes over from" -- computed here through both character chains rather than asserted from
 /// the matrices, because `Backing`/char 54 and `CursorBody`/char 73 are different art.
@@ -1667,7 +1667,7 @@ fn injected_row_hit_area_reproduces_the_full_row_cursor_hit_box_exactly() {
         "only the row backing (depth 1) may sit below the hit target: {below:?}"
     );
 
-    // THE SHARED-ROW GATE: the hit box the engine will now use must be the one it used before.
+    // The shared-row GATE: the hit box the engine will now use must be the one it used before.
     let hit_box = row_child_hit_box(&movie, ROW_HIT_AREA_NAME);
     let cursor_box = row_child_hit_box(&movie, "Cursor");
     assert_eq!(
@@ -2071,7 +2071,7 @@ fn stats_panel_output_scrollbar_track_and_thumb_span_the_visible_rows() {
     }
 }
 
-/// The edit set must NOT apply to a movie it wasn't derived for: applying it
+/// The edit set must not apply to a movie it wasn't derived for: applying it
 /// twice has to fail all-or-nothing.
 #[test]
 fn stats_panel_of_already_edited_movie_fails_closed() {

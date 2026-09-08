@@ -1,33 +1,33 @@
-//! THE TWO STRUCTS THE HUD RETARGET TOUCHES, AND THE BUILD GATE IN FRONT OF THEM.
+//! The two STRUCTS the HUD RETARGET touches, and the build gate in front of them.
 //!
 //! # Why this is a second offset table and not more rows in `possess::layout`
 //!
-//! `possess::layout` describes what the POSSESSION engine writes: `ChrCtrl`, the manipulator
-//! override, the neuter flags. This describes what the HUD post-pass READS and where it puts the
+//! `possess::layout` describes what the possession engine writes: `ChrCtrl`, the manipulator
+//! override, the neuter flags. This describes what the HUD post-pass reads and where it puts the
 //! answer. They are separate questions with separate evidence, and the one field they have in
 //! common -- `CSChrDataModule.hp` -- is asserted equal to its counterpart there by a test below,
 //! so the duplication cannot drift into a disagreement without failing.
 //!
 //! # The offsets did not move between the two builds, and that is measured rather than assumed
 //!
-//! Every constant here was read out of BOTH `eldenring-deobf.bin` (1.16.2) and
+//! Every constant here was read out of both `eldenring-deobf.bin` (1.16.2) and
 //! `eldenring-deobf-1.17.bin` (1.17) at the corresponding site inside
 //! `CSFeManImp::UpdatePlayerComponents`, and the two disassemblies agree instruction for
 //! instruction across the whole vitals span -- 1.16.2 `0x140772b83..c4d`, 1.17
-//! `0x140773a03..acd`. A SECOND, INDEPENDENT WITNESS agrees:
+//! `0x140773a03..acd`. A second, independent witness agrees:
 //! `scripts/re117_module_field_scan.py` sweeps every `componentContainer+0x190` ->
 //! `module+0x00` -> `[module+disp]` chain in both flat images and finds the same six
-//! data-module offsets in both with IDENTICAL site counts -- `+0x138` 47/47, `+0x13c` 15/15,
+//! data-module offsets in both with identical site counts -- `+0x138` 47/47, `+0x13c` 15/15,
 //! `+0x148` 11/11, `+0x14c` 11/11, `+0x154` 11/11, `+0x158` 8/8.
 //!
-//! Read that for what it is: corroboration that the LAYOUT did not shift, not proof of any
+//! Read that for what it is: corroboration that the layout did not shift, not proof of any
 //! individual site. Identical counts would also survive a renumbering that happened to preserve
 //! them. The per-site proof is the disassembly of the vitals span above, plus the compile-time
 //! `offset_of!` cross-check in `crate::hud::detour` against `fromsoftware-rs`'s separately
 //! derived `CSChrDataModule`.
 //!
 //! **That is not a licence to skip the gate.** `ChrIns` grew eight bytes at `+0x3b8` on 1.17 with
-//! its size unchanged, so a stale offset on this game reads the NEIGHBOURING FIELD instead of
+//! its size unchanged, so a stale offset on this game reads the neighbouring field instead of
 //! faulting -- there is no crash to notice. [`Layout::for_build`] therefore answers `None` on any
 //! build nobody has measured, and the detour is not installed at all rather than installed with
 //! offsets whose provenance is "they were the same last time".
@@ -50,7 +50,7 @@ use crate::possess::layout::FILE_VERSION_1170;
 
 /// `CSFeManImp+0x80`, where the `FrontEndViewValues` sub-object begins.
 ///
-/// TEST-ONLY, and deliberately not a term in any calculation: every offset in [`ViewOffsets`] is
+/// Test-only, and deliberately not a term in any calculation: every offset in [`ViewOffsets`] is
 /// quoted from the game's own disassembly as `[rsi+0xNN]` with `rsi` the `CSFeManImp`, so nothing
 /// adds this to anything. It exists so a reader checking those numbers against the curated
 /// `FrontEndViewValues` struct -- where the same fields are named at `0xNN - 0x80` -- can
@@ -61,18 +61,18 @@ const FRONT_END_VIEW_VALUES: usize = 0x80;
 
 /// What the HUD reads, as offsets from the `CSFeManImp`.
 ///
-/// # These eight are the WHOLE claim
+/// # These eight are the whole claim
 ///
 /// `UpdatePlayerComponents` writes far more than eight fields; the post-pass overwrites only
 /// these, which is precisely why runes, equipment, the great rune and the spell slots keep
 /// reading the real player. Those come from `PlayerGameData` (vtable `+0x168`) and
 /// `GetWeaponGaitemHandleBySlot` (vtable `+0x230`) and are never touched here.
 ///
-/// # `HP_MAX` IS NOT THE MAXIMUM
+/// # `HP_MAX` is not the maximum
 ///
 /// The trap in this struct, and the one a reader will otherwise assume away. The game computes
 /// `view.hpMax = data.hpMaxUncapped - data.hpMax`, so the field named `hpMax` holds the
-/// DIFFERENCE -- the amount of maximum HP currently lost, i.e. the darkened right-hand segment of
+/// difference -- the amount of maximum HP currently lost, i.e. the darkened right-hand segment of
 /// the bar. The bar's full width is [`ViewOffsets::hp_max_uncapped`]. For a character with no
 /// max-HP reduction the two source fields are equal and this field is zero, which is what looks
 /// like a max that happens to be broken. See [`crate::hud::vitals::Source::view`].
@@ -82,7 +82,7 @@ pub(crate) struct ViewOffsets {
     pub(crate) player_hp: usize,
     /// `maxRecoverableHp`, `int`. The far end of the rally segment.
     pub(crate) max_recoverable_hp: usize,
-    /// `hpMax`, `int` -- the LOST max, not the max. See the struct docs.
+    /// `hpMax`, `int` -- the lost max, not the max. See the struct docs.
     pub(crate) hp_max: usize,
     /// `hpMaxUncapped`, `int`. The bar's full width.
     pub(crate) hp_max_uncapped: usize,
@@ -99,7 +99,7 @@ pub(crate) struct ViewOffsets {
 /// Where the values come from, as offsets from the `CSChrDataModule`.
 ///
 /// The module is reached the same way the game reaches it: `ChrIns+0x190` `componentContainer`,
-/// then the container's first slot (`+0x00`). This is the GENERIC data module every `ChrIns` has,
+/// then the container's first slot (`+0x00`). This is the generic data module every `ChrIns` has,
 /// which is the entire reason a creature can feed the player's HUD at all -- nothing here is
 /// `PlayerIns`-shaped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -130,11 +130,11 @@ pub(crate) struct Layout {
     pub(crate) source: SourceOffsets,
 }
 
-/// The offsets as measured on 1.16.2 AND on 1.17.
+/// The offsets as measured on 1.16.2 and on 1.17.
 ///
-/// ONE constant shared by both arms of [`Layout::for_build`], on purpose. Writing it twice would
+/// One constant shared by both arms of [`Layout::for_build`], on purpose. Writing it twice would
 /// invite the two copies to drift and would imply the builds were measured to differ, which they
-/// were not -- they were measured to AGREE, and a single shared value says that where two equal
+/// were not -- they were measured to agree, and a single shared value says that where two equal
 /// literals would merely repeat it.
 pub(crate) const MEASURED: Layout = Layout {
     view: ViewOffsets {
@@ -160,7 +160,7 @@ pub(crate) const MEASURED: Layout = Layout {
 };
 
 impl Layout {
-    /// The layout FOR THE RUNNING BUILD, or `None` when nobody has measured it.
+    /// The layout for the running build, or `None` when nobody has measured it.
     ///
     /// `None` is what stops the detour being installed. It is the honest answer and the only safe
     /// one: on 1.17 a wrong `ChrIns`-relative offset lands on a live neighbouring field rather
@@ -201,7 +201,7 @@ mod tests {
         assert_eq!(Layout::for_build(None), None, "the host has no game image");
     }
 
-    /// THE CROSS-CHECK against the possession engine's own table. `CSChrDataModule.hp` is the one
+    /// The cross-check against the possession engine's own table. `CSChrDataModule.hp` is the one
     /// field both modules name, and two tables disagreeing about it would mean one of them is
     /// reading a different struct than it thinks.
     #[test]
@@ -262,13 +262,13 @@ mod tests {
         assert_eq!(MEASURED.source.stamina - MEASURED.source.fp_max, 8);
     }
 
-    /// The rally source is the only FLOAT among the reads. Pinning it separately is cheap and
+    /// The rally source is the only float among the reads. Pinning it separately is cheap and
     /// stops a future edit from folding it into the int list, where it would be read as garbage.
     #[test]
     fn the_rally_source_sits_past_the_integer_block() {
         // A `const` block rather than a plain `assert!`: both sides are constants, so this is
         // decidable at compile time and clippy's `assertions_on_constants` rightly refuses to let
-        // it masquerade as a runtime check. Promoting it means a bad edit fails the BUILD rather
+        // it masquerade as a runtime check. Promoting it means a bad edit fails the build rather
         // than one test run.
         const {
             assert!(MEASURED.source.recoverable_hp > MEASURED.source.stamina_max);

@@ -1,6 +1,6 @@
 """The one place a launcher learns where this run's artifacts go.
 
-WHY THIS IS A MODULE AND NOT FIVE COPIES
+Why this is a module and not five copies
 ----------------------------------------
 The bug that started all of this was a launcher that redirected the autoload debug log and the crash
 log out of the game directory, and not the continue trace. One line of env, missing from one array,
@@ -8,10 +8,10 @@ and the 11:09 run destroyed the 09:07 run's 5.4 MB `er-quickload-continue-trace.
 evidence, gone, with no error anywhere. Copying that array into every Python launcher would have set
 the same trap five more times: the next artifact gets added to four of them.
 
-A game-directory artifact is SINGLE-SLOT. `er_game_base::log::begin_fresh_run` renames `<name>` to
-`<name>.prev` and truncates on the first write of each process -- ONE generation -- so two launches
+A game-directory artifact is single-slot. `er_game_base::log::begin_fresh_run` renames `<name>` to
+`<name>.prev` and truncates on the first write of each process -- One generation -- so two launches
 lose the run before last, and several sessions launch concurrently in this repo, which makes that the
-normal case rather than a race. Redirecting the writer at LAUNCH, into a directory unique to the run,
+normal case rather than a race. Redirecting the writer at launch, into a directory unique to the run,
 means two runs never share a path; a copy at teardown cannot help, because by then this run has
 already clobbered the previous one's file, and a crashed or killed run never reaches the copy at all.
 
@@ -37,7 +37,7 @@ ARTIFACT_ENV: dict[str, str] = {
     "ER_QUICKLOAD_BOOTSTRAP_PATH": "er-quickload-bootstrap.jsonl",
     "ER_QUICKLOAD_BOOTSTRAP_STATE_PATH": "er-quickload-bootstrap-state.json",
     "ER_QUICKLOAD_PROFILE_PATH": "er-quickload-profile.jsonl",
-    # THE OTHER SHELLS' ARTIFACTS. These five had no redirect knob at all until 2026-08-31, so no
+    # The other shells' artifacts. These five had no redirect knob at all until 2026-08-31, so no
     # launcher could move them and every launch rotated the previous run's copy to `.prev`. The
     # reload trace is the largest producer in the repo (~655 MB/hour) and was the least movable.
     "ER_QUICKLOAD_RELOAD_TRACE_PATH": "er-reload-trace.log",
@@ -49,16 +49,16 @@ ARTIFACT_ENV: dict[str, str] = {
     # is gone the instant this one writes.
     "ER_QUICKLOAD_CPU_PROFILE_PATH": "er-cpu-profile.txt",
     # The badge shell's log. Both of its launchers used to `rm -f` this out of the game directory
-    # before launching, which destroys the live file AND the `.prev` behind it -- two prior runs,
+    # before launching, which destroys the live file and the `.prev` behind it -- two prior runs,
     # neither of them the deleting run's.
     "ER_QUICKLOAD_ARMAMENT_ICONS_PATH": "er-armament-icons.log",
     # The standalone portrait shell's run log and crash log -- the last two artifacts in the repo
     # with no knob at all (they resolved against the process CWD, which no launcher can move), and
-    # `run-portrait-dll-standalone-smoke.sh` deleted BOTH from the game directory before launching.
+    # `run-portrait-dll-standalone-smoke.sh` deleted both from the game directory before launching.
     # One knob each, because that smoke reads them for different verdicts.
     "ER_QUICKLOAD_LOADING_PORTRAIT_PATH": "er-loading-portrait.log",
     "ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH": "er-loading-portrait-crash-log.txt",
-    # The standalone crash-logging shell's four files. It had NO knob until 2026-09-04, which made
+    # The standalone crash-logging shell's four files. It had no knob until 2026-09-04, which made
     # it the one writer no launcher could move -- and the one whose output is least reproducible.
     # A relaunch that day erased a 26-record log mid-investigation, the only copy of a 22-deep
     # unwind cascade, and the user had to re-provoke the crash to get it back.
@@ -67,9 +67,9 @@ ARTIFACT_ENV: dict[str, str] = {
     "ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH": "er-crash-breadcrumb-latest.txt",
     "ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH": "er-crash-modules.txt",
     # The save-census shell's run log and its telemetry -- the last two artifacts in the repo with
-    # no knob. The telemetry is the worse of the pair and the more valuable: it is the RUN-STOPPING
-    # ORACLE for a save-suppression proof (`escaped_write_sites` must be empty), and it publishes
-    # with a write-tmp-then-rename, so it keeps ZERO previous generations -- the last run's verdict
+    # no knob. The telemetry is the worse of the pair and the more valuable: it is the run-stopping
+    # oracle for a save-suppression proof (`escaped_write_sites` must be empty), and it publishes
+    # with a write-tmp-then-rename, so it keeps zero previous generations -- the last run's verdict
     # is gone the instant this run installs, with no `.prev` to fall back on. Both are read back by
     # `run-save-census-probe.sh`, which also used to `rm -f` them out of the game directory before
     # launching, taking the `.prev` behind the live file with them.
@@ -78,7 +78,7 @@ ARTIFACT_ENV: dict[str, str] = {
 }
 
 # The name a watcher reads to find this run's artifacts. A reader still on the fixed game-directory
-# path finds nothing for a redirected run and reports a perfectly healthy run as SILENT -- a false
+# path finds nothing for a redirected run and reports a perfectly healthy run as silent -- a false
 # negative that looks exactly like a failed feature, which is the more dangerous half of this change.
 RUN_ARTIFACT_DIR_ENV = "ER_RUN_ARTIFACT_DIR"
 
@@ -94,16 +94,16 @@ def artifact_env(directory: str | os.PathLike[str]) -> dict[str, str]:
 def artifact_source_dirs(
     game_dir: str | os.PathLike[str], prefer: str | os.PathLike[str] | None = None
 ) -> list[Path]:
-    """Every directory a READER should look in, in priority order.
+    """Every directory a reader should look in, in priority order.
 
     The redirect first, then the game directory -- because the env has to survive `launch.sh` -> me3
     -> Proton, and when it does not the DLL falls back to the game directory rather than writing
     nowhere. A reader that knows only one of the two calls a healthy run silent half the time, and
     "the DLL wrote nothing" is indistinguishable from "the feature is broken" in a report.
 
-    `prefer` is the run directory a caller ALREADY KNOWS, and it beats the environment because it is
+    `prefer` is the run directory a caller already knows, and it beats the environment because it is
     the stronger evidence. A shell launcher passes the redirects to the game with an `env VAR=... me3`
-    prefix, which does NOT put them in the launcher's own environment -- so a monitor started as a
+    prefix, which does not put them in the launcher's own environment -- so a monitor started as a
     sibling of that launch inherits nothing and would fall back to the game directory while the DLL
     writes somewhere else. Every such monitor is handed `--artifact-dir`; that is what to pass here.
     """
@@ -135,27 +135,27 @@ def resolve_artifact(
     prefer: str | os.PathLike[str] | None = None,
     newer_than: float | None = None,
 ) -> Path:
-    """This run's copy of `name`: the redirect if it EXISTS on disk, else the game-directory copy.
+    """This run's copy of `name`: the redirect if it exists on disk, else the game-directory copy.
 
     Existence decides, not configuration. The redirect is set from the launcher's side; whether the
     DLL honoured it depends on the environment surviving the whole launch chain, and returning a
     path that is not there would make a healthy run look silent.
 
-    `newer_than` IS THE OTHER HALF OF THAT, and it is not optional for a reader that resolves at
-    LAUNCH TIME. The game-directory copy of a redirected artifact is the PREVIOUS run's file, sitting
+    `newer_than` is the other half of that, and it is not optional for a reader that resolves at
+    launch time. The game-directory copy of a redirected artifact is the previous run's file, sitting
     on disk with its final contents, and it exists for the whole window between the launcher starting
     the watcher and the DLL writing the redirect for the first time -- a couple of seconds. A reader
     that resolves inside that window binds to the last run's answers and never looks again.
 
     Measured 2026-08-31, run wedge-writers-20260831-a: the same-character watcher resolved at t=0,
     fell through to the game directory, read `system_quit_continue_confirm_fresh_deser_count = 2` and
-    `oracle_player_present = true` from a run that had ENDED, declared "epoch 2: WORLD-STABLE reached"
+    `oracle_player_present = true` from a run that had ended, declared "epoch 2: WORLD-STABLE reached"
     at elapsed 0.0s, wrote no switch-control file, and tore down a game that had not finished booting.
     The report said `NEVER ARMED ... Trigger never invoked`, which is true and reads as a product
     failure. The same shape explains a frozen-telemetry verdict: a stale file's mtime never changes,
     so a watcher bound to one reports `TELEMETRY_FROZEN_HUNG` against a perfectly healthy game.
 
-    So pass the run's own start time and RE-RESOLVE until it returns something: a candidate older
+    So pass the run's own start time and RE-resolve until it returns something: a candidate older
     than the run cannot be this run's, and returning the run directory's not-yet-existing path is the
     honest answer -- the caller reads nothing and waits, instead of reading someone else's evidence.
     """

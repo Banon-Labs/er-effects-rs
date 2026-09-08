@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ask the game's own message files what a param row is CALLED -- offline.
+"""Ask the game's own message files what a param row is called -- offline.
 
 The exporter names every equipped item by handing its row id to the game's name getter, which is
 one exact `MsgRepositoryImp::LookupEntry` into these same FMGs. So "would this id have exported?"
@@ -55,7 +55,7 @@ def read_fmg(path):
         offset_size = 4
         offset_fmt = endian + "i"
 
-    # Each group maps a CONTIGUOUS id range onto consecutive entries of the string-offset table.
+    # Each group maps a contiguous id range onto consecutive entries of the string-offset table.
     entries = {}
     for index in range(group_count):
         base = groups_start + index * group_size

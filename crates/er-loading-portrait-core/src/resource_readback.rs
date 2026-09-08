@@ -34,8 +34,8 @@ pub const RGBA8_BPP: usize = 4;
 /// Pack one straight (non-premultiplied) RGBA8 texel into a little-endian `DXGI_FORMAT_R10G10B10A2_UNORM`
 /// u32: bits 0-9 = R, 10-19 = G, 20-29 = B, 30-31 = A. Widens each 8-bit channel to 10 bits by
 /// `v*1023/255` (rounded) so full-scale white stays full-scale; alpha 8->2 bits by `a*3/255`. This is a
-/// plain UNORM widen -- it does NOT apply scRGB/PQ, so on an HDR display the result reads slightly dim
-/// but is fully VISIBLE (the accepted first step for the native-Windows 10-bit backbuffer; the composite
+/// plain UNORM widen -- it does not apply scRGB/PQ, so on an HDR display the result reads slightly dim
+/// but is fully visible (the accepted first step for the native-Windows 10-bit backbuffer; the composite
 /// paths that render through a GPU PSO don't need this because the ROP float-converts to the RTV format).
 #[inline]
 pub fn pack_rgba8_to_r10g10b10a2(r: u8, g: u8, b: u8, a: u8) -> u32 {
@@ -47,7 +47,7 @@ pub fn pack_rgba8_to_r10g10b10a2(r: u8, g: u8, b: u8, a: u8) -> u32 {
 /// How a straight RGBA8 texel must be written into a swapchain backbuffer of a given format, for the
 /// CPU raw-copy composite paths (boot bar, effect-selector HUD). `Straight`/`SwapRb` are 8-bit byte
 /// copies; `Pack10` packs into `R10G10B10A2` (native-Windows HDR/10-bit swapchain). GPU-PSO composite
-/// paths do NOT use this -- the ROP float-converts to the RTV format for them.
+/// paths do not use this -- the ROP float-converts to the RTV format for them.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum BackbufferEncoding {
     /// 8-bit RGBA: copy the tight bytes unchanged.
@@ -82,8 +82,8 @@ pub const READBACK_FENCE_TARGET: u64 = 1;
 
 /// GX swapchain command-queue global: deobf RVA of the qword holding the game's `ID3D12CommandQueue` (the
 /// `pDevice` arg the GX backend passes to `IDXGIFactory::CreateSwapChain` -- for a D3D12 swapchain that arg
-/// IS the command queue). Dump `0x1448012a8` (= `&DAT_1448012a0 + 8`, resolved from the swapchain creator
-/// `FUN_141e9cc70` via `FUN_141e888c0`). RETAINED FOR REFERENCE ONLY: submitting our composite on the
+/// is the command queue). Dump `0x1448012a8` (= `&DAT_1448012a0 + 8`, resolved from the swapchain creator
+/// `FUN_141e9cc70` via `FUN_141e888c0`). Retained for reference ONLY: submitting our composite on the
 /// game's queue from the Present hook caused a vkd3d access violation, so we now use our own private queue.
 #[allow(dead_code)]
 const GX_COMMAND_QUEUE_RVA: usize = 0x8012a8;
@@ -107,7 +107,7 @@ unsafe fn pe_image_range(base: usize) -> Option<(usize, usize)> {
 ///
 /// # Safety
 ///
-/// `name` MUST be NUL-terminated -- it is passed straight to `GetModuleHandleA` as a
+/// `name` must be NUL-terminated -- it is passed straight to `GetModuleHandleA` as a
 /// `PCSTR`, which reads until it finds a zero byte. A slice without a terminator reads off
 /// the end of the allocation. Pass a `b"...\0"` literal.
 ///
@@ -126,14 +126,14 @@ unsafe fn try_texture2d(ptr: usize) -> Option<(ID3D12Resource, u64)> {
     let unk = unsafe { IUnknown::from_raw_borrowed(&raw) }?;
     let res: ID3D12Resource = match unk.cast() {
         Ok(r) => r,
-        // Per-candidate "QI failed" / "IS resource" logs removed 2026-07-18: they fired for EVERY
+        // Per-candidate "QI failed" / "IS resource" logs removed 2026-07-18: they fired for every
         // scanned d3d object (~1.4M lines = 90% of the debug log), crowding out the load/freeze state
-        // the user needs to read. The scan's useful result is still logged by the FOUND / no-TEXTURE2D
+        // the user needs to read. The scan's useful result is still logged by the found / no-TEXTURE2D
         // summary lines below.
         Err(_) => return None,
     };
     let desc = unsafe { res.GetDesc() };
-    // COLOR ONLY: the offscreen has a color render target AND a same-size depth-stencil sibling
+    // Color ONLY: the offscreen has a color render target and a same-size depth-stencil sibling
     // (observed: 256x256 fmt=28 color next to 256x256 fmt=19 R32G8X24 depth). Accept only the 8bpp
     // RGBA/BGRA formats our de-swizzle handles; reject depth/typeless-depth so "largest" can't pick
     // the depth buffer over the head color RT.
@@ -166,10 +166,10 @@ unsafe fn try_texture2d(ptr: usize) -> Option<(ID3D12Resource, u64)> {
 ///
 /// # Safety
 ///
-/// The address argument carries NO precondition: every pointer hop is a fault-tolerant
+/// The address argument carries no precondition: every pointer hop is a fault-tolerant
 /// `safe_read_*`, so 0, garbage, or a freed address yields `None` instead of a fault.
 ///
-/// The caller owns LIFETIME. The walk finishes with a real `QueryInterface` on a
+/// The caller owns lifetime. The walk finishes with a real `QueryInterface` on a
 /// candidate whose vtable lives in a d3d12 module, and a QI against an object the game
 /// has already freed is an access violation this crate cannot catch. Call only while the
 /// renderer that owns this nest is still live (the draw tick's model/vtable gate), never
@@ -179,27 +179,27 @@ pub unsafe fn find_d3d12_resource(start: usize) -> Option<ID3D12Resource> {
     unsafe { find_d3d12_resource_ex(start, 0, false, 0) }.map(|(r, _)| r)
 }
 
-// CANDIDATE PINS (fix for the cross-slot portrait swap, run strip-default-drive-20260702-194018): the
-// offscreen nest BFS reaches EVERY profile slot's same-size 1024x1024 RT through shared GX structures, so
-// "largest texture, first found" flips to a FOREIGN slot's RT the moment a late slot's model finishes
+// Candidate pins (fix for the cross-slot portrait swap, run strip-default-drive-20260702-194018): the
+// offscreen nest BFS reaches every profile slot's same-size 1024x1024 RT through shared GX structures, so
+// "largest texture, first found" flips to a foreign slot's RT the moment a late slot's model finishes
 // building mid-load -> the displayed portrait swapped to another save character between two frames. Once a
-// readback of candidate `v` publishes a confirmed non-checker head, `v` is PINNED and preferred by every
+// readback of candidate `v` publishes a confirmed non-checker head, `v` is pinned and preferred by every
 // subsequent scan while it remains reachable; only its disappearance (RT recreation/teardown) falls back to
-// the largest-candidate heuristic. Pinning the CANDIDATE POINTER (re-QI'd each frame) -- not the resource
+// the largest-candidate heuristic. Pinning the candidate pointer (re-QI'd each frame) -- not the resource
 // handle -- avoids the stale-cache dangling-handle bug that killed `readback_cached_content_rgba8`.
 /// Pinned depth-sibling candidate pointer (0 = unpinned); latched when a depth readback yields a mask
 /// with clean bg/head separation, so the alpha cutout can't sample a foreign slot's depth buffer.
 pub use er_telemetry_core::counters::PROFILE_DEPTH_PIN;
 /// Pinned content-RT candidate object pointer (0 = unpinned). `oracle_portrait_rt_pin`.
 pub use er_telemetry_core::counters::PROFILE_RT_PIN;
-/// Times the pin moved to a DIFFERENT candidate after first latch (`oracle_portrait_rt_pin_switches`).
+/// Times the pin moved to a different candidate after first latch (`oracle_portrait_rt_pin_switches`).
 /// >0 on a single load window means the content source was unstable -- the swap-bug tripwire.
 pub use er_telemetry_core::counters::PROFILE_RT_PIN_SWITCHES;
-// COLOR/DEPTH SOURCE PROVENANCE (green-face wrong-buffer fix, 2026-07-03). The offscreen nest holds
+// COLOR/DEPTH source provenance (green-face wrong-buffer fix, 2026-07-03). The offscreen nest holds
 // same-size same-format non-final render targets (material/G-buffer: flat-green face, saturated
 // orange emissive -- user screenshot), and the whole-nest "largest texture" scan can pick one when
 // the deterministic scene-bundle chain misses; keyed+tear gates cannot tell buffers apart. Track
-// where each tick's color/depth came from; the strict publish gate displays ONLY bundle-provenance
+// where each tick's color/depth came from; the strict publish gate displays only bundle-provenance
 // color (identity-proven by construction), and scan-resolved frames hold the bridge instead.
 /// Cumulative ticks whose color resolved from the scene bundle vs the scan fallback.
 pub use er_telemetry_core::counters::PROFILE_COLOR_FROM_BUNDLE;
@@ -210,7 +210,7 @@ pub use er_telemetry_core::counters::PROFILE_COLOR_SRC_BUNDLE_LAST;
 pub use er_telemetry_core::counters::PROFILE_DEPTH_FROM_BFS;
 /// Cumulative depth resolutions via the deterministic bundle chain vs the heuristic BFS fallback.
 pub use er_telemetry_core::counters::PROFILE_DEPTH_FROM_CHAIN;
-/// Keyed+clean frames NOT displayed because their color was scan-resolved (no bundle provenance).
+/// Keyed+clean frames not displayed because their color was scan-resolved (no bundle provenance).
 pub use er_telemetry_core::counters::PROFILE_PUBLISH_SKIPPED_UNPAIRED;
 
 // Static-RE'd offscreen scene-target member chain (Ghidra dump decompiles, 2026-07-03 -- the
@@ -218,7 +218,7 @@ pub use er_telemetry_core::counters::PROFILE_PUBLISH_SKIPPED_UNPAIRED;
 // at +0x48 (FUN_140bb7440 wraps the GXSgSceneFactory product into `field9_0x48`); the facade's
 // vt+0x18 getter (FUN_141b64640) is the trivial member read `*(facade+0x38)` = the 0xc4b0-byte
 // GXSceneContext; the context's render-target bundle sits at +0x248 (FUN_140bb73a0 clears its RTV
-// via the FUN_141a1adc0 accessor) with the color RTV view at bundle+0x30 and the DEPTH DSV view at
+// via the FUN_141a1adc0 accessor) with the color RTV view at bundle+0x30 and the depth DSV view at
 // bundle+0x40 -- proven by the engine's own target bind FUN_141a086c0:
 // `FUN_1419ea4c0(cmdlist, 1, &*(bundle+0x30), *(bundle+0x40))` (count, RTV array, DSV).
 // bundle+0x548 is the redirect-to-global-target flag the accessor checks; when set the local views
@@ -228,41 +228,41 @@ const SCENE_FACADE_CONTEXT_OFFSET: usize = 0x38;
 const SCENE_CONTEXT_TARGET_BUNDLE_OFFSET: usize = 0x248;
 const TARGET_BUNDLE_REDIRECT_FLAG_OFFSET: usize = 0x548;
 const TARGET_BUNDLE_DSV_VIEW_OFFSET: usize = 0x40;
-/// The COLOR RTV view sits at bundle+0x30 (paired with the depth DSV at bundle+0x40 in the SAME bundle) --
-/// resolving BOTH from one bundle guarantees the color and depth are the same render pass's siblings.
+/// The color RTV view sits at bundle+0x30 (paired with the depth DSV at bundle+0x40 in the same bundle) --
+/// resolving both from one bundle guarantees the color and depth are the same render pass's siblings.
 const TARGET_BUNDLE_RTV_VIEW_OFFSET: usize = 0x30;
 /// One-shot diagnostic latch for the deterministic depth-view chain (first resolve + first miss).
 pub use er_telemetry_core::counters::DEPTH_CHAIN_DIAG;
 
-/// Find the offscreen scene's DEPTH-STENCIL resource (same-size sibling of the color RT, observed
+/// Find the offscreen scene's depth-STENCIL resource (same-size sibling of the color RT, observed
 /// format 19 = R32G8X24_TYPELESS). Used for the depth-key transparent background: background =
 /// pixels the character geometry never wrote (cleared/far depth).
 ///
 /// Resolution order (run anim-bind21 root cause): the whole-nest heuristic BFS only reached the
 /// depth buffer when the GX allocator happened to place it within the bounded scan window -- true
-/// for boot-era renderers (load 1 keyed fine), FALSE for every renderer built mid-load, which made
+/// for boot-era renderers (load 1 keyed fine), false for every renderer built mid-load, which made
 /// window 2+ fail open to the opaque black background (dk find-fails climbed 1:1 with no-mask
-/// frames). So: first walk the static-RE'd member chain straight to OUR scene's DSV view object
+/// frames). So: first walk the static-RE'd member chain straight to our scene's DSV view object
 /// and QI the resource out of that tiny nest (deterministic, slot-local by construction); only if
 /// a chain link is null/redirected fall back to the historical BFS from the offscreen object.
 ///
 /// # Safety
 ///
-/// The address argument carries NO precondition: every pointer hop is a fault-tolerant
+/// The address argument carries no precondition: every pointer hop is a fault-tolerant
 /// `safe_read_*`, so 0, garbage, or a freed address yields `None` instead of a fault.
 ///
-/// The caller owns LIFETIME. The walk finishes with a real `QueryInterface` on a
+/// The caller owns lifetime. The walk finishes with a real `QueryInterface` on a
 /// candidate whose vtable lives in a d3d12 module, and a QI against an object the game
 /// has already freed is an access violation this crate cannot catch. Call only while the
 /// renderer that owns this nest is still live (the draw tick's model/vtable gate), never
 /// across menu->world teardown. Render thread only: the resolve caches and the shared
 /// `RB_*` D3D12 objects are used without locking.
 pub unsafe fn find_depth_resource(start: usize) -> Option<(ID3D12Resource, usize)> {
-    // Deterministic bundle-paired DSV FIRST, walked with NO pin (prefer=0): the color RTV (bundle+0x30)
-    // and depth DSV (bundle+0x40) are the SAME render-target bundle, so this view already points at the
-    // scene's OWN depth sibling -- letting the drifting DEPTH_PIN win here would override that correct
+    // Deterministic bundle-paired DSV first, walked with no pin (prefer=0): the color RTV (bundle+0x30)
+    // and depth DSV (bundle+0x40) are the same render-target bundle, so this view already points at the
+    // scene's own depth sibling -- letting the drifting DEPTH_PIN win here would override that correct
     // pointer with a foreign larger buffer (user 2026-07-03: share the paired pointer, don't heuristically
-    // re-pin). The pin is kept ONLY in the BFS fallback below, for mid-load renderers whose DSV chain is
+    // re-pin). The pin is kept only in the BFS fallback below, for mid-load renderers whose DSV chain is
     // null/redirected.
     if let Some(dsv_view) = unsafe { offscreen_depth_view(start) }
         && let Some(found) = unsafe { find_d3d12_resource_ex(dsv_view, 0, true, 0) }
@@ -289,7 +289,7 @@ pub unsafe fn find_depth_resource(start: usize) -> Option<(ID3D12Resource, usize
     r
 }
 
-/// NATIVE ALPHA-0 CLEAR of the offscreen scene's color RT (scene-alpha keying, strategy pivot
+/// Native alpha-0 clear of the offscreen scene's color RT (scene-alpha keying, strategy pivot
 /// 2026-07-03). Replicates the engine's own per-slot offscreen clear (dump FUN_140bb73a0) with
 /// clear color {0,0,0,0} instead of the shared opaque-black constant: pop a GX frame context,
 /// ClearRTV the scene bundle's own RTV through the frame's subcontext, release the frame context.
@@ -302,11 +302,11 @@ pub unsafe fn find_depth_resource(start: usize) -> Option<(ID3D12Resource, usize
 ///
 /// # Safety
 ///
-/// This transmutes three `base + RVA` addresses into function pointers and CALLS them
+/// This transmutes three `base + RVA` addresses into function pointers and calls them
 /// (GX frame-context pop, ClearRTV wrapper, frame-context release). The caller must
 /// guarantee:
 ///
-/// * `base` is the running `eldenring.exe` image base AND that image is the version these
+/// * `base` is the running `eldenring.exe` image base and that image is the version these
 ///   RVAs were reverse-engineered against -- otherwise this calls into arbitrary code;
 /// * `off` is the offscreen render object of a live renderer, so the bundle/RTV it resolves
 ///   still belongs to a scene that exists (the bundle walk itself is guarded and fails
@@ -335,7 +335,7 @@ pub unsafe fn portrait_alpha0_clear(base: usize, off: usize) -> bool {
     if !valid(gx) {
         return false;
     }
-    // All three through the 1.17 gate, resolved BEFORE the pop: pop and release must balance
+    // All three through the 1.17 gate, resolved before the pop: pop and release must balance
     // exactly like the engine's own body, so refusing halfway would leak a frame context.
     let (Ok(pop_addr), Ok(clear_addr), Ok(release_addr)) = (
         er_game_base::mem::game_rva_named(GX_FRAME_CTX_POP_RVA as u32, "GX_FRAME_CTX_POP_RVA"),
@@ -382,10 +382,10 @@ unsafe fn offscreen_depth_view(off: usize) -> Option<usize> {
     (dsv > 0x10000 && dsv < 0x8000_0000_0000).then_some(dsv)
 }
 
-/// Resolve the offscreen scene's render-target BUNDLE via the static-RE'd member chain (facade -> ctx ->
+/// Resolve the offscreen scene's render-target bundle via the static-RE'd member chain (facade -> ctx ->
 /// bundle), redirect-checked so a bundle pointing at the global target fails closed. The color RTV view is
-/// at `bundle+0x30` and the depth DSV at `bundle+0x40` -- resolving BOTH from this one bundle is what makes
-/// the coherent readback's color and depth the SAME render pass's paired siblings (no cross-bundle drift,
+/// at `bundle+0x30` and the depth DSV at `bundle+0x40` -- resolving both from this one bundle is what makes
+/// the coherent readback's color and depth the same render pass's paired siblings (no cross-bundle drift,
 /// the 2nd-character desync). All reads fault-guarded.
 unsafe fn offscreen_target_bundle(off: usize) -> Option<usize> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -408,8 +408,8 @@ unsafe fn offscreen_target_bundle(off: usize) -> Option<usize> {
     Some(bundle)
 }
 
-/// The offscreen scene's COLOR RTV view object (`bundle+0x30`) -- the paired sibling of
-/// `offscreen_depth_view`'s DSV. Resolving the coherent readback's color from THIS (same bundle as the
+/// The offscreen scene's color RTV view object (`bundle+0x30`) -- the paired sibling of
+/// `offscreen_depth_view`'s DSV. Resolving the coherent readback's color from this (same bundle as the
 /// depth) guarantees they are the same render pass, so the depth-derived mask matches the color head.
 unsafe fn offscreen_color_view(off: usize) -> Option<usize> {
     let bundle = unsafe { offscreen_target_bundle(off) }?;
@@ -443,18 +443,18 @@ unsafe fn try_depth_texture2d(ptr: usize) -> Option<(ID3D12Resource, u64)> {
 
 /// Like `find_d3d12_resource` but (a) returns the candidate object pointer alongside the resource, and
 /// (b) skips any candidate whose pointer == `exclude_v`. Lets the RT->SRV copy pick the SRV from its own
-/// single-texture nest, then the LARGEST OTHER texture in the offscreen nest as the content source --
+/// single-texture nest, then the largest other texture in the offscreen nest as the content source --
 /// deterministic where plain "largest texture" is ambiguous between two same-size textures.
-/// `prefer_v` (0 = none): a previously PINNED candidate -- if the scan reaches it and it still QIs as a
+/// `prefer_v` (0 = none): a previously pinned candidate -- if the scan reaches it and it still QIs as a
 /// valid texture, it wins immediately over the largest-candidate heuristic, so the resolved content source
 /// cannot flip between same-size RTs frame-to-frame (the cross-slot portrait-swap bug).
 ///
 /// # Safety
 ///
-/// The address argument carries NO precondition: every pointer hop is a fault-tolerant
+/// The address argument carries no precondition: every pointer hop is a fault-tolerant
 /// `safe_read_*`, so 0, garbage, or a freed address yields `None` instead of a fault.
 ///
-/// The caller owns LIFETIME. The walk finishes with a real `QueryInterface` on a
+/// The caller owns lifetime. The walk finishes with a real `QueryInterface` on a
 /// candidate whose vtable lives in a d3d12 module, and a QI against an object the game
 /// has already freed is an access violation this crate cannot catch. Call only while the
 /// renderer that owns this nest is still live (the draw tick's model/vtable gate), never
@@ -473,18 +473,18 @@ pub unsafe fn find_d3d12_resource_ex(
     if start == 0 || start == null {
         return None;
     }
-    // FPS PARITY ROOT (bd FPS-ROOT-perframe-find_d3d12_resource_ex-...-2026-07-22): this process-wide
+    // FPS parity root (bd FPS-root-perframe-find_d3d12_resource_ex-...-2026-07-22): this process-wide
     // "largest TEXTURE2D" walk is a LOADING/portrait/boot-view readback helper. A per-frame caller was
     // running it ~3400x in-world on reloads (load2/load3) vs 8x on load1, burning ~30ms/frame -- the
-    // 20fps reload root (present fast, composite skipped, focused, flip targets 60; the cost was HERE).
-    // Once the CURRENT fresh_deser epoch is genuinely in-world (world-clock live), there is no loading RT
+    // 20fps reload root (present fast, composite skipped, focused, flip targets 60; the cost was here).
+    // Once the current fresh_deser epoch is genuinely in-world (world-clock live), there is no loading RT
     // to find, so skip the scan -- the same per-epoch gate the composite (present_overlay.rs:277) and the
     // lookat draw-tick (lookat_bone_hooks.rs:366) already use. Loading-time scans (world not yet live)
-    // still run. BOOT-EPOCH EXEMPTION (bd er-effects-rs-io53): `cur != 0`, matching the composite and
-    // the draw tick -- on epoch 0 the world clock can go live MID boot loading screen, and this gate
+    // still run. Boot-epoch exemption (bd er-effects-rs-io53): `cur != 0`, matching the composite and
+    // the draw tick -- on epoch 0 the world clock can go live mid boot loading screen, and this gate
     // then starved the staged readback (gx samples 0 all cover). Boot in-world stays cheap because the
     // draw-tick callers idle via portrait_pipeline_idle_in_gameplay (load1 in-world measured 8 scans,
-    // bd FPS-ROOT-...-2026-07-22); the reload fps protection (cur != 0) is unchanged.
+    // bd FPS-root-...-2026-07-22); the reload fps protection (cur != 0) is unchanged.
     {
         use std::sync::atomic::Ordering as RbOrd;
         let cur = er_telemetry_core::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
@@ -526,10 +526,10 @@ pub unsafe fn find_d3d12_resource_ex(
     }
     let in_ranges = |v: usize, r: &[(usize, usize)]| r.iter().any(|&(lo, hi)| lo <= v && v < hi);
     // VTABLE HARDENING (crash root fix 2026-07-03, runs +154662ms/+170480ms, previously
-    // misattributed to er-effects-rs-az9). A real COM vtable lies PAST the PE header page of its
+    // misattributed to er-effects-rs-az9). A real COM vtable lies past the PE header page of its
     // module (.rdata), and its slot 0 (QueryInterface) points back into a d3d module's code. The
     // plain `in_ranges(vt, &d3d)` check also accepted vt == module BASE: a freed heap chunk reused
-    // to store a d3d module HANDLE (a base address) passed it, and the QI vcall then executed the
+    // to store a d3d module handle (a base address) passed it, and the QI vcall then executed the
     // PE header as code -- the crash RIP 0x300905a4d is literally the 'MZ\x90' signature bytes.
     // Require both the vtable and its QI slot to sit >= 0x1000 into a d3d module before any vcall.
     let d3d_vtable_ok = |vt: usize, r: &[(usize, usize)]| {
@@ -543,7 +543,7 @@ pub unsafe fn find_d3d12_resource_ex(
     let mut budget = 0u32;
     let mut d3d_hits = 0u32; // pointers whose vtable is in a d3d module
     let mut qi_fails = 0u32; // d3d candidates that failed the ID3D12Resource TEXTURE2D QI
-    // Collect the LARGEST TEXTURE2D in the nest -- the offscreen RT, not the 1x1 null/dummy textures
+    // Collect the largest TEXTURE2D in the nest -- the offscreen RT, not the 1x1 null/dummy textures
     // vkd3d leaves bound on unused descriptor slots (observed: the gx sub-nest is all 1x1).
     let mut best: Option<(ID3D12Resource, u64, usize)> = None;
     while let Some((obj, depth)) = queue.pop() {
@@ -608,8 +608,8 @@ pub unsafe fn find_d3d12_resource_ex(
 ///
 /// # Safety
 ///
-/// `list` must be a command list in the RECORDING state, and `before` must be the
-/// resource's ACTUAL current state on the GPU timeline. A wrong `before` is not caught
+/// `list` must be a command list in the recording state, and `before` must be the
+/// resource's actual current state on the GPU timeline. A wrong `before` is not caught
 /// here -- the driver acts on it, which is a device-removal-class error, and the debug
 /// layer would flag it.
 ///
@@ -643,15 +643,15 @@ pub unsafe fn record_transition(
 
 /// D3D12 readback of the offscreen render target behind `gpu_child` into tightly-packed RGBA8.
 ///
-/// Returns `(width, height, rgba8)` on success, `None` on ANY failure. Never panics, never crashes,
+/// Returns `(width, height, rgba8)` on success, `None` on any failure. Never panics, never crashes,
 /// never Releases the game's resource, never touches the game's command queue.
 ///
 /// # Safety
 ///
-/// The address argument carries NO precondition: every pointer hop is a fault-tolerant
+/// The address argument carries no precondition: every pointer hop is a fault-tolerant
 /// `safe_read_*`, so 0, garbage, or a freed address yields `None` instead of a fault.
 ///
-/// The caller owns LIFETIME. The walk finishes with a real `QueryInterface` on a
+/// The caller owns lifetime. The walk finishes with a real `QueryInterface` on a
 /// candidate whose vtable lives in a d3d12 module, and a QI against an object the game
 /// has already freed is an access violation this crate cannot catch. Call only while the
 /// renderer that owns this nest is still live (the draw tick's model/vtable gate), never
@@ -665,7 +665,7 @@ pub unsafe fn readback_offscreen_rgba8(gpu_child: usize) -> Option<(u32, u32, Ve
     .flatten()
 }
 
-/// Per-frame DISPLAY readback: re-resolve the offscreen nest's content RT FRESH each frame -- but PREFER
+/// Per-frame display readback: re-resolve the offscreen nest's content RT fresh each frame -- but prefer
 /// the pinned candidate (`PROFILE_RT_PIN`) when it is still reachable, so the resolved source cannot flip
 /// to another profile slot's same-size RT mid-load (the cross-slot swap bug). Falls back to the largest-
 /// texture heuristic only while unpinned or after the pinned RT was recreated/torn down. Copies with the
@@ -678,10 +678,10 @@ pub unsafe fn readback_offscreen_rgba8(gpu_child: usize) -> Option<(u32, u32, Ve
 ///
 /// # Safety
 ///
-/// The address argument carries NO precondition: every pointer hop is a fault-tolerant
+/// The address argument carries no precondition: every pointer hop is a fault-tolerant
 /// `safe_read_*`, so 0, garbage, or a freed address yields `None` instead of a fault.
 ///
-/// The caller owns LIFETIME. The walk finishes with a real `QueryInterface` on a
+/// The caller owns lifetime. The walk finishes with a real `QueryInterface` on a
 /// candidate whose vtable lives in a d3d12 module, and a QI against an object the game
 /// has already freed is an access violation this crate cannot catch. Call only while the
 /// renderer that owns this nest is still live (the draw tick's model/vtable gate), never
@@ -714,11 +714,11 @@ pub fn take_coherent_depth() -> Option<(u32, u32, Vec<f32>, usize)> {
 // it hands the worker a staging-buffer slot instead. See `readback_offscreen_color_depth_staged` below.
 // `take_coherent_depth`/`COHERENT_DEPTH` are left as dead code per the Step-2 design note.)
 
-/// A STAGED readback (Step 2 worker offload): the render thread resolved the offscreen COLOR RT + its
-/// DEPTH sibling, recorded BOTH copies into one command list, executed + WAITED on one fence (so the game
-/// RT is released synchronously and the staging buffers hold the data), but did NOT map or de-swizzle. The
-/// worker maps `slot`'s staging buffers and de-swizzles from the footprint metadata below. Carries NO game
-/// pointer and NO D3D12 object -- only the ring `slot` index + plain scalars.
+/// A staged readback (Step 2 worker offload): the render thread resolved the offscreen color RT + its
+/// depth sibling, recorded both copies into one command list, executed + waited on one fence (so the game
+/// RT is released synchronously and the staging buffers hold the data), but did not map or de-swizzle. The
+/// worker maps `slot`'s staging buffers and de-swizzles from the footprint metadata below. Carries no game
+/// pointer and no D3D12 object -- only the ring `slot` index + plain scalars.
 pub struct StagedReadback {
     pub slot: usize,
     pub cw: u32,
@@ -736,9 +736,9 @@ pub struct StagedReadback {
     pub color_from_bundle: bool,
 }
 
-/// RAII guard for a claimed ring slot: on drop it frees the slot (state -> FREE) UNLESS committed. On the
-/// render thread a claimed slot must be released on ANY failure (`?` early-return or panic); on success the
-/// guard is committed and the WORKER frees the slot after it finishes de-swizzling + publishing.
+/// RAII guard for a claimed ring slot: on drop it frees the slot (state -> free) unless committed. On the
+/// render thread a claimed slot must be released on any failure (`?` early-return or panic); on success the
+/// guard is committed and the worker frees the slot after it finishes de-swizzling + publishing.
 struct SlotGuard {
     slot: usize,
     committed: bool,
@@ -751,20 +751,20 @@ impl Drop for SlotGuard {
     }
 }
 
-/// COHERENT STAGED readback of the offscreen COLOR RT and its DEPTH sibling (Step 2). Picks the next ring
-/// slot; if it is still BUSY (worker behind) DROPS the frame (bumps `RB_COH_SLOT_BUSY_DROPS`, returns
+/// Coherent staged readback of the offscreen color RT and its depth sibling (Step 2). Picks the next ring
+/// slot; if it is still busy (worker behind) drops the frame (bumps `RB_COH_SLOT_BUSY_DROPS`, returns
 /// `None` -- mirror the existing skip path; `copy_offscreen_rt_to_srv` and the rest of the draw tick still
-/// run). Otherwise claims it, does resolve + record-copy + execute + WAIT on the SINGLE shared queue/fence
-/// (KEEPING the wait on the render thread so the game RT is released here), and returns the slot + footprint
-/// metadata. Does NOT map or de-swizzle -- the worker does that from the staging buffers. `None` on any
+/// run). Otherwise claims it, does resolve + record-copy + execute + wait on the single shared queue/fence
+/// (keeping the wait on the render thread so the game RT is released here), and returns the slot + footprint
+/// metadata. Does not map or de-swizzle -- the worker does that from the staging buffers. `None` on any
 /// resolve/copy failure (caller skips). Never touches the game's queues; catch_unwind; fault-guarded.
 ///
 /// # Safety
 ///
-/// The address argument carries NO precondition: every pointer hop is a fault-tolerant
+/// The address argument carries no precondition: every pointer hop is a fault-tolerant
 /// `safe_read_*`, so 0, garbage, or a freed address yields `None` instead of a fault.
 ///
-/// The caller owns LIFETIME. The walk finishes with a real `QueryInterface` on a
+/// The caller owns lifetime. The walk finishes with a real `QueryInterface` on a
 /// candidate whose vtable lives in a d3d12 module, and a QI against an object the game
 /// has already freed is an access violation this crate cannot catch. Call only while the
 /// renderer that owns this nest is still live (the draw tick's model/vtable gate), never
@@ -773,12 +773,12 @@ impl Drop for SlotGuard {
 ///
 /// This one claims a ring slot and hands its staging buffers to the consume worker. The
 /// returned `StagedReadback` names a slot the worker will map; the caller must publish it
-/// to the worker (or release it) exactly once, or that slot stays BUSY and every later
+/// to the worker (or release it) exactly once, or that slot stays busy and every later
 /// frame is dropped.
 pub unsafe fn readback_offscreen_color_depth_staged(gpu_child: usize) -> Option<StagedReadback> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        // Pick + CLAIM the next ring slot (round-robin). If it is still BUSY the worker has not finished
-        // consuming it, so DROP this frame's readback (the render thread never blocks -- intended
+        // Pick + claim the next ring slot (round-robin). If it is still busy the worker has not finished
+        // consuming it, so drop this frame's readback (the render thread never blocks -- intended
         // backpressure).
         let slot = RB_COH_FRAME.fetch_add(1, Ordering::SeqCst) % RB_COH_RING;
         if RB_COH_SLOT_STATE[slot]
@@ -793,7 +793,7 @@ pub unsafe fn readback_offscreen_color_depth_staged(gpu_child: usize) -> Option<
             RB_COH_SLOT_BUSY_DROPS.fetch_add(1, Ordering::SeqCst);
             return None;
         }
-        // The slot is now BUSY (claimed). The guard frees it on any `?`-failure or panic below; on success
+        // The slot is now busy (claimed). The guard frees it on any `?`-failure or panic below; on success
         // it is committed and the worker frees it after de-swizzle + publish.
         let mut guard = SlotGuard {
             slot,
@@ -815,18 +815,18 @@ pub unsafe fn readback_offscreen_color_depth_staged(gpu_child: usize) -> Option<
     .flatten()
 }
 
-/// Render-thread half of the staged readback: resolve color + its depth sibling, record BOTH
-/// CopyTextureRegion into ring `slot`'s staging buffers on the SINGLE shared queue/list, execute + Signal +
-/// WAIT (one fence), and return the slot + footprint metadata. NO map, NO de-swizzle (the worker does
+/// Render-thread half of the staged readback: resolve color + its depth sibling, record both
+/// CopyTextureRegion into ring `slot`'s staging buffers on the single shared queue/list, execute + Signal +
+/// wait (one fence), and return the slot + footprint metadata. No map, no de-swizzle (the worker does
 /// those). The game RT owned refs (`color_res`/`depth_res`) drop at end of scope -- safe: the wait
 /// guarantees the GPU copy finished, so the staging buffers hold the data and the game RT is no longer
 /// needed. `None` on any COM/resolve failure (the caller frees the slot via the guard).
 unsafe fn readback_resolve_copy_wait(gpu_child: usize, slot: usize) -> Option<StagedReadback> {
     unsafe {
-        // Resolve the COLOR from the SAME render-target bundle as the depth (bundle+0x30 RTV), so the two
+        // Resolve the color from the same render-target bundle as the depth (bundle+0x30 RTV), so the two
         // are the same render pass's paired siblings -- the fix for the 2nd-character desync, where the
-        // pinned color and the bundle depth came from DIFFERENT bundles (temporally coherent via the one
-        // fence, but not IDENTITY-coherent). Fall back to the RT-pin scan only if the bundle RTV view is
+        // pinned color and the bundle depth came from different bundles (temporally coherent via the one
+        // fence, but not identity-coherent). Fall back to the RT-pin scan only if the bundle RTV view is
         // unavailable (mid-load renderers whose scene chain is null/redirected).
         let bundle_color = offscreen_color_view(gpu_child)
             .and_then(|rtv| find_d3d12_resource_ex(rtv, 0, false, 0));
@@ -858,8 +858,8 @@ unsafe fn readback_resolve_copy_wait(gpu_child: usize, slot: usize) -> Option<St
         }
         LOADING_BG_PORTRAIT_FORMAT.store(cformat.0 as usize, Ordering::SeqCst);
 
-        // DEPTH sibling via the deterministic bundle-paired chain (find_depth_resource now walks the
-        // scene's own DSV with no pin), so it is THIS scene's depth, not a drifted foreign buffer.
+        // Depth sibling via the deterministic bundle-paired chain (find_depth_resource now walks the
+        // scene's own DSV with no pin), so it is this scene's depth, not a drifted foreign buffer.
         let (depth_res, _depth_cand) = find_depth_resource(gpu_child)?;
         let mut cfoot = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
         let mut ctotal: u64 = 0;
@@ -884,8 +884,8 @@ unsafe fn readback_resolve_copy_wait(gpu_child: usize, slot: usize) -> Option<St
         if dw == 0 || dh == 0 || dw > MAX_RT_DIM || dh > MAX_RT_DIM {
             return None;
         }
-        // COHERENCE GUARD: color and its depth sibling must share dimensions -- a mismatch means the
-        // depth is NOT this color's pair (the drift bug), so reject the frame rather than copy a bad pair
+        // Coherence GUARD: color and its depth sibling must share dimensions -- a mismatch means the
+        // depth is not this color's pair (the drift bug), so reject the frame rather than copy a bad pair
         // (the caller falls back). This is a sanity check on the deterministic pointer, not a size-based
         // resolution heuristic.
         if dw != cw || dh != ch {
@@ -907,7 +907,7 @@ unsafe fn readback_resolve_copy_wait(gpu_child: usize, slot: usize) -> Option<St
             return None;
         }
 
-        // Create the shared queue/allocator/list/fence ONCE (list left Closed so the first Reset works).
+        // Create the shared queue/allocator/list/fence once (list left Closed so the first Reset works).
         if RB_COH_QUEUE.load(Ordering::SeqCst) == 0 {
             let queue_desc = D3D12_COMMAND_QUEUE_DESC {
                 Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
@@ -1013,7 +1013,7 @@ unsafe fn readback_resolve_copy_wait(gpu_child: usize, slot: usize) -> Option<St
             return None;
         }
 
-        // COLOR copy: COMMON -> COPY_SOURCE, copy subresource 0, back to COMMON.
+        // Color copy: Common -> COPY_SOURCE, copy subresource 0, back to common.
         record_transition(
             list,
             &color_res,
@@ -1044,7 +1044,7 @@ unsafe fn readback_resolve_copy_wait(gpu_child: usize, slot: usize) -> Option<St
             D3D12_RESOURCE_STATE_COMMON,
         );
 
-        // DEPTH copy: plane 0, same list -> same fence -> same GPU moment as the color copy.
+        // Depth copy: plane 0, same list -> same fence -> same GPU moment as the color copy.
         record_transition(
             list,
             &depth_res,
@@ -1079,7 +1079,7 @@ unsafe fn readback_resolve_copy_wait(gpu_child: usize, slot: usize) -> Option<St
             return None;
         }
         let base_list: ID3D12CommandList = list.cast().ok()?;
-        // STALL-SPLIT diagnostic: time the GPU-WAIT (removable by an async ring buffer) separately from
+        // Stall-split diagnostic: time the GPU-wait (removable by an async ring buffer) separately from
         // the CPU de-swizzle below (which stays on the render thread even async).
         let rb_wait_t0 = std::time::Instant::now();
         queue.ExecuteCommandLists(&[Some(base_list)]);

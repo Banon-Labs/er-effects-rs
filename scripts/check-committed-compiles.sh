@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# DOES THE COMMITTED STATE COMPILE?  -- not "does my working tree compile".
+# Does the committed state compile?  -- not "does my working tree compile".
 #
-# WHY THIS IS A DIFFERENT QUESTION, and why every other gate in this repo answers the wrong one.
+# Why this is a different question, and why every other gate in this repo answers the wrong one.
 # Agents here commit with explicit pathspecs (correctly -- several of them share this checkout and
 # a bare `git commit -a` would sweep up each other's work). A pathspec is also the exact mechanism
-# by which a CONSUMER gets committed without its PRODUCER: the new caller is named on the command
+# by which a consumer gets committed without its PRODUCER: the new caller is named on the command
 # line, the new function/crate it calls is not. The author's working tree still holds the producer,
 # so it compiles for them, and every gate that builds the working tree agrees with them. The
 # pushed commit does not compile for anybody else.
@@ -18,11 +18,11 @@
 # a210af7f then landed an 18-file compile closure and made the branch green again. In between,
 # `origin` did not compile either, and a dozen agents built on top of it.
 #
-# HOW IT ANSWERS THE RIGHT QUESTION: it type-checks a git WORKTREE pinned to the commit under
+# How it answers the right QUESTION: it type-checks a git WORKTREE pinned to the commit under
 # test, so the only files in scope are the ones actually in that commit. An uncommitted producer
 # sitting in the author's checkout is invisible to it, which is the whole point.
 #
-# WHAT IT COMPILES, and why every word of that invocation is load-bearing:
+# What it COMPILES, and why every word of that invocation is load-bearing:
 #   cargo xwin clippy --workspace --all-targets --keep-going --target x86_64-pc-windows-msvc
 #   * --workspace, because the workspace sets `default-members = ["crates/er-quickload"]`. A bare
 #     `cargo xwin check`/`build` selects that one package, exits 0 in a fraction of a second having
@@ -31,22 +31,22 @@
 #     er-save-suppress is a workspace member that nothing in default-members reaches.
 #   * --all-targets, so `#[cfg(test)]` modules, benches and examples are compiled too. A lib-only
 #     check reports OK over a test module that names a helper the commit does not carry -- the
-#     same defect one layer down. MEASURED 2026-08-31 on a cold cache: 100 s with --all-targets
+#     same defect one layer down. Measured 2026-08-31 on a cold cache: 100 s with --all-targets
 #     against 105 s without, and 3.1 GB against 2.6 GB. The dev-dependency graph is almost
 #     entirely shared with the normal one, so the wider check is free.
 #   * the windows target, because most crates here are `#![cfg(windows)]` -- a host `cargo check`
 #     compiles them to an empty crate and then reports OK over nothing. And a host check is not a
-#     substitute for a different reason too: `cargo check --workspace --all-targets` on the HOST
-#     fails at a green HEAD (er-invasion-path, windows-future), because this workspace is not
+#     substitute for a different reason too: `cargo check --workspace --all-targets` on the host
+#     fails at a green head (er-invasion-path, windows-future), because this workspace is not
 #     meant to build for Linux as a whole. Measured the same day. Do not "fix" that by adding it.
 #   * --keep-going, so one broken crate does not hide the state of the rest. Without it the run
 #     stops at er-save-suppress and never reaches er-quickload, so the report understates the
 #     damage.
-#   * clippy RATHER THAN check, since 2026-09-03. `cargo clippy` runs everything `cargo check`
+#   * clippy rather than check, since 2026-09-03. `cargo clippy` runs everything `cargo check`
 #     runs and then applies the lints, so nothing is lost and it is one pass, not two -- the only
 #     cost is a one-time cache rebuild, because clippy's fingerprints differ from check's.
 #
-#     WHY IT HAD TO CHANGE: `clippy` appeared ZERO times across the entire pre-push path --
+#     Why it had to CHANGE: `clippy` appeared zero times across the entire pre-push path --
 #     scripts/hooks/pre-push, the pre-push gate suite and this file -- while the workspace root
 #     sets `[workspace.lints.clippy]` to deny. So every lint denial in this repo was enforced
 #     exclusively by CI, and `cargo check` is happy with code `cargo clippy` rejects. Measured on
@@ -56,18 +56,18 @@
 #     hook ran and did not ask the question. rustc was 1.98.0 on both sides; this was never a
 #     toolchain skew.
 #
-# NO BYPASS. There is no --force, no skip flag and no environment escape, by design: the other
+# No bypass. There is no --force, no skip flag and no environment escape, by design: the other
 # gates in this repo have none either, and a compile gate that can be waved through is the gate
 # that was not running in the first place.
 #
 # Usage:
-#   scripts/check-committed-compiles.sh [<rev>...]        # default: HEAD
+#   scripts/check-committed-compiles.sh [<rev>...]        # default: Head
 #   scripts/check-committed-compiles.sh --selftest        # prove the gate can go red
 #
 # Env:
 #   ER_COMMITTED_CHECK_WORKTREE   worktree path   (default <repo>/.worktrees/committed-compiles)
 #   ER_COMMITTED_CHECK_TARGET_DIR CARGO_TARGET_DIR (default <repo>/target/committed-compiles)
-# Both default inside gitignored directories. The worktree and target dir are REUSED between runs
+# Both default inside gitignored directories. The worktree and target dir are reused between runs
 # on purpose: cargo fingerprints include the absolute source path, so a fresh directory per run is
 # a cold build every time (~10 min here) while a stable one is incremental (~seconds when the
 # commit under test is close to the last one checked). Concurrent runs serialise on a flock rather
@@ -76,9 +76,9 @@ set -euo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 
-# THE HEAVIEST THING IN THE PUSH PATH, AND IT WAS THE ONE STEP STILL RUNNING AT THE PRIORITY IT
-# INHERITED. This gate cross-compiles the WHOLE workspace with --all-targets on a cold cache
-# (~100 s, 3.1 GB) and the pre-push hook runs it BEFORE check.sh -- so on 2026-09-06, with
+# The heaviest thing in the push path, and it was the one step still running at the priority it
+# inherited. This gate cross-compiles the whole workspace with --all-targets on a cold cache
+# (~100 s, 3.1 GB) and the pre-push hook runs it before check.sh -- so on 2026-09-06, with
 # check.sh already yielding, the desktop still froze for the first two minutes of every push.
 # Yield here too, from inside, so no caller has to remember.
 # shellcheck source=lib/cpu-courtesy.sh
@@ -114,7 +114,7 @@ for arg in "$@"; do
 		*) revs+=("$arg") ;;
 	esac
 done
-[[ ${#revs[@]} -eq 0 ]] && revs=(HEAD)
+[[ ${#revs[@]} -eq 0 ]] && revs=(head)
 
 # --- serialise -------------------------------------------------------------------------------
 mkdir -p "$(dirname -- "$worktree")" "$target_dir"
@@ -122,7 +122,7 @@ exec 9>"$target_dir/.gate.lock"
 flock 9
 
 # --- the sibling checkout and the vendored C the workspace cannot load without -----------------
-# The root crate uses `../fromsoftware-rs` PATH dependencies, resolved relative to the manifest.
+# The root crate uses `../fromsoftware-rs` path dependencies, resolved relative to the manifest.
 # From <repo>/.worktrees/committed-compiles that is <repo>/.worktrees/fromsoftware-rs, which does
 # not exist -- so without this link cargo cannot even parse the workspace, and the gate would fail
 # for a reason that has nothing to do with the commit under test.
@@ -136,14 +136,14 @@ link_sibling() {
 	fi
 	# Only ever replace a symlink of our own making; never touch a real directory.
 	#
-	# `pwd -P`, NOT `pwd`. bash's logical pwd echoes back the path you arrived by, symlinks and
-	# all -- so when `$real` and `$link` name the SAME path, `ln -sfn` points the link at itself
+	# `pwd -P`, not `pwd`. bash's logical pwd echoes back the path you arrived by, symlinks and
+	# all -- so when `$real` and `$link` name the same path, `ln -sfn` points the link at itself
 	# and every later read of it dies with ELOOP ("Too many levels of symbolic links"), which
 	# cargo reports as `failed to load manifest for dependency eldenring`. That collision is not
-	# hypothetical: it is what happens whenever the INVOKING checkout is itself a worktree under
+	# hypothetical: it is what happens whenever the invoking checkout is itself a worktree under
 	# `<repo>/.worktrees/` and ER_COMMITTED_CHECK_WORKTREE points back at the family's shared
 	# scratch dir -- then `$repo_root/../fromsoftware-rs` and `$(dirname $worktree)/fromsoftware-rs`
-	# are both `<repo>/.worktrees/fromsoftware-rs`. Measured 2026-09-03; it also POISONS the link
+	# are both `<repo>/.worktrees/fromsoftware-rs`. Measured 2026-09-03; it also poisons the link
 	# for every later run, including the main checkout's, because the damage is on disk.
 	# `pwd -P` resolves to the real sibling and can never name the link.
 	if [[ -L "$link" || ! -e "$link" ]]; then
@@ -158,7 +158,7 @@ link_vendor() {
 	# Two places are searched, and the second is not optional. `$repo_root` is whichever checkout
 	# invoked this script -- and when that is itself an agent worktree (`.claude/worktrees/...`,
 	# `.worktrees/...`), it is gitignored-empty too, so looking only there fails the gate with
-	# "clone MinHook" for a tree that has a perfectly good copy one directory up. The MAIN
+	# "clone MinHook" for a tree that has a perfectly good copy one directory up. The main
 	# checkout is found through `--git-common-dir`, which every linked worktree shares: its
 	# parent is the checkout the whole worktree family was made from.
 	if [[ -f "$worktree/vendor/minhook/src/buffer.c" ]]; then
@@ -200,7 +200,7 @@ pin_worktree() {
 	# Remove leftovers from the previous commit under test so a deleted file cannot linger and
 	# make a broken commit look whole. -x because the interesting leftovers (a stray crate
 	# directory, a generated module) are exactly the gitignored/untracked ones. CARGO_TARGET_DIR
-	# lives OUTSIDE the worktree, so this never touches the build cache.
+	# lives outside the worktree, so this never touches the build cache.
 	git -C "$worktree" clean -qxfd
 	link_vendor
 }
@@ -225,7 +225,7 @@ run_one() {
 
 # --- a deliberately broken commit, built without touching any working tree -------------------
 # Used by the selftest when the historical failures below are no longer reachable (a squash-merge,
-# a shallow clone). It appends a call to a symbol that does not exist onto a LEAF crate -- the same
+# a shallow clone). It appends a call to a symbol that does not exist onto a leaf crate -- the same
 # error class as the real failures, E0433/E0425 -- and assembles the commit with plumbing against a
 # temporary index, so the main checkout, its index and its five agents' uncommitted work are never
 # touched. The result is a dangling commit object; `git gc` reaps it.
@@ -284,10 +284,10 @@ link_sibling
 
 # --- selftest ---------------------------------------------------------------------------------
 # A gate is not trusted on its own say-so, and "it passed" is worthless from a gate that cannot
-# fail. Two-sided: a broken commit must go RED and HEAD must go GREEN, because a gate wedged red
+# fail. Two-sided: a broken commit must go red and head must go green, because a gate wedged red
 # is as useless as one wedged green.
 #
-# The red half prefers the two REAL historical failures over a synthetic mutant -- they are the
+# The red half prefers the two real historical failures over a synthetic mutant -- they are the
 # commits this gate exists for, they are free, and they exercise the exact shapes seen in the
 # wild. They stop being reachable after a squash-merge or in a shallow clone, so the synthetic
 # path above takes over rather than letting the selftest quietly pass on nothing.

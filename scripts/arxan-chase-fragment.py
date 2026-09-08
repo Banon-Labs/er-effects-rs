@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Chase an Arxan-hoisted code fragment back to a function `.pdata` declares.
 
-An Arxan-rewritten ELDEN RING image parks stolen/hoisted instructions in the DEAD bytes of
+An Arxan-rewritten ELDEN RING image parks stolen/hoisted instructions in the dead bytes of
 other functions' `.pdata` extents.  So "which function contains this address" is answered by
-physical placement and is WRONG.  The only sound answer is "who branches here", walked until
+physical placement and is wrong.  The only sound answer is "who branches here", walked until
 the walk lands inside a real `.pdata` extent.
 """
 import bisect, struct, sys, os

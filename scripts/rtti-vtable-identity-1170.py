@@ -1,29 +1,29 @@
 #!/usr/bin/env python3
-"""Identify a virtual function by the RTTI CLASS NAME of the vtable that holds it.
+"""Identify a virtual function by the RTTI class name of the vtable that holds it.
 
-WHY THIS IS THE STRONGEST EVIDENCE CLASS FOR A VIRTUAL
+Why this is the strongest evidence class for a virtual
 -----------------------------------------------------
 A masked signature says "these bytes look the same"; a caller vote says "the code that called
 the old address calls the new one". Neither applies to a function that is only ever reached
-through a vtable: `CS::FeSystemAnnounceView::Update` has ZERO direct callers in either image
+through a vtable: `CS::FeSystemAnnounceView::Update` has zero direct callers in either image
 (measured: `report-1170-caller-votes.py 0x8c47c0` -> "0 candidate branch site(s)"), so the whole
 caller-voting class is silent on it.
 
-RTTI is not. MSVC emits, immediately BEFORE a vtable's first slot, a pointer to that class's
+RTTI is not. MSVC emits, immediately before a vtable's first slot, a pointer to that class's
 Complete Object Locator; `COL+0x0c` is the RVA of the Type Descriptor, and `+0x10` inside the
 descriptor is the mangled class name as a NUL-terminated string. That name is a property of the
 C++ source, not of the build layout, so it identifies the same class in two different images
 with no address translation anywhere in the chain. If the 1.16.2 address sits in slot N of
 `.?AVFeSystemAnnounceView@CS@@`'s vtable and the 1.17 candidate sits in slot N of a vtable whose
-RTTI name is the SAME string, the two addresses are the same virtual method -- derived
+RTTI name is the same string, the two addresses are the same virtual method -- derived
 independently of every byte-level argument.
 
-The check deliberately reports the SLOT INDEX as well as the name. Same class, different slot is
+The check deliberately reports the slot index as well as the name. Same class, different slot is
 a different method, and it is the failure this is here to catch: a vtable that gained a method
 shifts every slot after it, so "found in that class's vtable" alone would happily pair `Update`
 with the method that used to follow it.
 
-USAGE
+Usage
     python3 scripts/rtti-vtable-identity-1170.py 1162:0x1408c47c0 1170:0x1408c5960
 """
 
@@ -38,7 +38,7 @@ IMAGES = {
 }
 BASE = 0x140000000
 # A vtable is a run of absolute 8-byte code pointers. Scanning every aligned qword of the whole
-# image for the target VA finds each slot that holds it; walking BACK from a slot to the run's
+# image for the target VA finds each slot that holds it; walking back from a slot to the run's
 # start finds the vtable head, and the qword before the head is the COL pointer.
 PTR = 8
 

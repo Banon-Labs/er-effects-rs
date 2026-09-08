@@ -121,7 +121,7 @@ where
     // Runtime/static RE shows the real Continue path is not a direct call to
     // the load primitives. Menu code queues GameMan flags, and the MoveMapList
     // task consumes those flags at safe scheduler points.
-    // 0x67bc10 WRITES save-container entry 0xb (allocates 0x240010, DLMemoryOutputStream,
+    // 0x67bc10 writes save-container entry 0xb (allocates 0x240010, DLMemoryOutputStream,
 // submits through the write lane, sets GameMan->saveState = 1). It does not load.
 // Renamed 2026-08-01.
 const SAVE_DISPATCH_ENTRY0B_RVA: u32 = 0x0067bc10;
@@ -243,18 +243,18 @@ where
     G: GameManSaveAccess,
     F: FnMut(String),
 {
-    // WARNING (corrected 2026-08-01 against the 1.16.2 Ghidra dump): 0x67b750 is
-    // `GameMan::WriteSaveToSlot(slot, flushToDisk, blankSlot)` -- it WRITES a save, it does
+    // Warning (corrected 2026-08-01 against the 1.16.2 Ghidra dump): 0x67b750 is
+    // `GameMan::WriteSaveToSlot(slot, flushToDisk, blankSlot)` -- it writes a save, it does
     // not read one. It was named `CONTINUE_LOAD_RVA` here and in er-quickload, but
-    // `SAVE_DISPATCH_CHAR_RVA` in er-save-suppress (which hooks it precisely to SWALLOW
+    // `SAVE_DISPATCH_CHAR_RVA` in er-save-suppress (which hooks it precisely to swallow
     // saves); er-save-suppress had it right. Decompile: bails on `CanShowSaveMenu()`,
     // requires `saveState == 0`, resolves slot -1 to `GameMan->saveSlot`, allocates
     // 0x280000, calls `MarkProfileIndexAsUsed`, serializes game state into the buffer via
     // 0x14067dc00 (`DLMemoryOutputStream` + `Write`), stamps `DLDateTime`, writes the buffer
     // through the IO device (0xe6e060 -> 0x140e6ec70), then sets `saveState = 1`.
     //
-    // CONSEQUENCE, NOT YET CHANGED: the DIRECT_SEQUENCE_PHASE_CONTINUE arm below invokes it
-    // as `(-1, 0, 0)`, which resolves to the ACTIVE save slot and takes the serialize branch
+    // Consequence, not yet CHANGED: the DIRECT_SEQUENCE_PHASE_CONTINUE arm below invokes it
+    // as `(-1, 0, 0)`, which resolves to the active save slot and takes the serialize branch
     // -- i.e. this "load method" writes current game state over the player's active slot.
     // `blankSlot == 1` would instead write a zeroed 0x280000 buffer (an erased slot); this
     // call passes 0, so it is a state overwrite rather than an erase. Left in place because
@@ -325,7 +325,7 @@ where
         }
         DIRECT_SEQUENCE_PHASE_CONTINUE => {
             unsafe { save_request_profile(MAP_LOAD_FALSE_RETURN) };
-            // NOTE: despite the phase name, this CALLS THE SAVE WRITER (see the warning on
+            // NOTE: despite the phase name, this calls the save writer (see the warning on
             // SAVE_WRITE_TO_SLOT_RVA above). `-1` resolves to GameMan->saveSlot and the
             // third arg 0 selects the serialize-real-state branch, so this overwrites the
             // active slot with current game state.
@@ -388,13 +388,13 @@ unsafe fn save_buffer_allocator_ready(module_base: usize) -> Result<bool, String
     Ok(!save_buffer_allocator.is_null())
 }
 
-/// `module_base + rva`, resolved for the RUNNING build.
+/// `module_base + rva`, resolved for the running build.
 ///
 /// Takes the base as an argument rather than resolving it (callers already hold one and the
 /// tests pass a fake), which is the only reason this is not `er_game_base::mem::game_rva`
 /// outright. The build resolution is the same call, so a 1.16.2 RVA on a build that moved the
 /// code is translated when a mapping is verified and an `Err` when it is not -- these results
-/// are transmuted into function pointers and CALLED, and a stale one transfers control into
+/// are transmuted into function pointers and called, and a stale one transfers control into
 /// whatever now occupies those bytes.
 fn game_rva(module_base: usize, rva: u32) -> Result<usize, String> {
     if module_base == NULL_MODULE_BASE {
@@ -517,7 +517,7 @@ mod tests {
 
     #[test]
     fn downgrade_policy_only_neutralizes_gated_direct_menu_load() {
-        // The experimental product path (DirectMenuLoad) is neutralized to SaveRequested ONLY when the
+        // The experimental product path (DirectMenuLoad) is neutralized to SaveRequested only when the
         // gate is off; with the gate on it survives. No other method is touched by this policy.
         assert!(should_downgrade_direct_menu_load(
             SaveLoadMethod::DirectMenuLoad,
@@ -565,7 +565,7 @@ mod tests {
             std::process::id(),
             TEST_TEMP_FILE_DISAMBIGUATOR
         ));
-        // own_load armed but continue NOT set -> verify-only stays the default.
+        // own_load armed but continue not set -> verify-only stays the default.
         fs::write(&path, "own_load=1\n").unwrap();
         let request = SaveLoadRequest::from_autoload_file_at(&path);
         let _ = fs::remove_file(&path);

@@ -41,9 +41,9 @@ PROFILE_NAME = "mushroom-man"
 DEFAULT_GAME = "eldenring"
 WINDOWS_ME3_RELATIVE_PATH = Path("garyttierney") / "me3" / "bin" / "me3.exe"
 # me3 install locations to try when neither --me3 nor ME3_EXE/ME3_BIN names one. Current-user
-# aware: a native Linux me3 lives on PATH or under this user's ~/.local/bin, and the Windows
+# aware: a native Linux me3 lives on path or under this user's ~/.local/bin, and the Windows
 # layout is reached through LOCALAPPDATA. The /mnt/c/Users glob is the retired WSL2 layout and
-# is searched LAST, so on a box without /mnt it costs one failed stat rather than making a
+# is searched last, so on a box without /mnt it costs one failed stat rather than making a
 # present me3 read as missing.
 NATIVE_ME3_FALLBACKS = (Path("~/.local/bin/me3"),)
 WSL_LOCAL_APP_DATA_ROOT = Path("/mnt/c/Users")
@@ -205,7 +205,7 @@ def local_app_data_candidates() -> list[Path]:
 
 
 def locate_default_me3() -> Path | None:
-    """me3 for the generated launcher / --launch: env override, then PATH, then known installs."""
+    """me3 for the generated launcher / --launch: env override, then path, then known installs."""
     for variable in ("ME3_EXE", "ME3_BIN"):
         override = os.environ.get(variable)
         if override:

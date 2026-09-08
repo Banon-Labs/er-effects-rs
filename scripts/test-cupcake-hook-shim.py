@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Prove the cupcake hook shim evaluates, still DENIES, and restores the newline separator.
+"""Prove the cupcake hook shim evaluates, still denies, and restores the newline separator.
 
-WHY THIS GATE EXISTS
+Why this gate exists
 --------------------
 Two production defects, both invisible by construction -- a guard that never runs looks
 exactly like a guard that allowed you -- so both are asserted here rather than trusted.
 
-1. PERMISSION MODES. cupcake 0.5.2 deserializes `permission_mode` into a closed enum and
+1. Permission modes. cupcake 0.5.2 deserializes `permission_mode` into a closed enum and
    exits 1 on anything outside {default, plan, acceptEdits, bypassPermissions}. Claude Code
-   shipped an `auto` mode, so on 2026-08-24 EVERY hook in this repo -- PreToolUse and
+   shipped an `auto` mode, so on 2026-08-24 every hook in this repo -- PreToolUse and
    PostToolUse included -- failed with
 
        Error: unknown variant `auto`, expected one of `default`, `plan`, ...
@@ -19,27 +19,27 @@ exactly like a guard that allowed you -- so both are asserted here rather than t
    nothing".
 
 2. UNQUOTED NEWLINES (bd er-effects-rs-5eah). `cupcake eval` replaces unquoted newlines with
-   spaces before any policy runs, so the second and later LINES of a Bash command arrive with
+   spaces before any policy runs, so the second and later lines of a Bash command arrive with
    no separator in front of them and are invisible to every guard that anchors on a shell
    separator class. A two-line command whose first line was harmless and whose second pushed
-   to main was ALLOWED in production while `opa test` denied the same text. The shim rewrites
+   to main was allowed in production while `opa test` denied the same text. The shim rewrites
    unquoted newlines to `; ` before cupcake sees them; newlines inside quoted spans, and
    inside a heredoc body a non-shell command reads, are left alone.
 
-WHAT IT ASSERTS
+What it asserts
 ---------------
   * for a known mode, the `auto` mode that broke it, and an invented future one: the shim
     exits 0, emits parseable JSON, still denies a denied command, still allows a benign one,
     and keeps stderr quiet (the default `info` level floods ~4KB per event);
   * the exact rewritten command text for the quoting shapes the rewrite turns on, driven
     through the shim's own `--normalize-only` mode so there is one implementation, not two;
-  * the DECISION the real cupcake binary reaches for every separator case, denials and the
+  * the decision the real cupcake binary reaches for every separator case, denials and the
     allow-shapes that must not regress alike.
 
-`--table` prints the decision each case gets BEFORE the rewrite (the raw event handed
+`--table` prints the decision each case gets before the rewrite (the raw event handed
 straight to `cupcake eval`, which is what production did until this change) beside the one it
-gets AFTER, which is how the fix was measured in the first place. Only the rewrite and the
-permission-mode normalisation are removed from the BEFORE column: it loads the SAME policy set
+gets after, which is how the fix was measured in the first place. Only the rewrite and the
+permission-mode normalisation are removed from the before column: it loads the same policy set
 the shim loads, global config included, so a difference in the table is the shim's doing and
 nothing else's.
 """
@@ -57,7 +57,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 SHIM = REPO / "scripts" / "cupcake-hook.sh"
 # `default` is the control, `auto` is the mode that actually broke, and the third is a mode
-# that does not exist -- the point is that the NEXT unknown mode must not repeat this.
+# that does not exist -- the point is that the next unknown mode must not repeat this.
 MODES = ["default", "auto", "some-future-mode"]
 DENIED_COMMAND = "git push origin main"
 ALLOWED_COMMAND = "echo hello"
@@ -69,7 +69,7 @@ ON_MAIN = {"CUPCAKE_CURRENT_BRANCH_OVERRIDE": "main"}
 
 
 def signal_env(extra: dict[str, str] | None = None) -> dict[str, str]:
-    """Pin the live signals so a case's verdict depends on its COMMAND, not on this checkout.
+    """Pin the live signals so a case's verdict depends on its command, not on this checkout.
 
     Without the pins, `current_branch` reads whatever branch the agent happens to be on and
     `origin_main_oids` runs `git ls-remote` over the network on every single evaluation.
@@ -113,7 +113,7 @@ def global_config_root(env: dict[str, str]) -> Path:
     """Where cupcake looks for the global config, resolved exactly the way the shim resolves it.
 
     `${CUPCAKE_GLOBAL_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/cupcake}`, transcribed from
-    cupcake-hook.sh (`:-` treats an EMPTY value as unset, hence the `or` chain).
+    cupcake-hook.sh (`:-` treats an empty value as unset, hence the `or` chain).
     """
     override = env.get("CUPCAKE_GLOBAL_CONFIG")
     if override:
@@ -124,19 +124,19 @@ def global_config_root(env: dict[str, str]) -> Path:
 
 
 def global_config_args(env: dict[str, str]) -> list[str]:
-    """The `--global-config` argv the shim would pass -- including passing NONE of it.
+    """The `--global-config` argv the shim would pass -- including passing none of it.
 
-    THE ARGUMENT IS A DIRECTORY, NOT A FILE, and getting that wrong is silent. cupcake 0.5.2
+    The argument is a directory, not a file, and getting that wrong is silent. cupcake 0.5.2
     rejects a non-directory (and a missing path) with a DEBUG line and then continues
-    project-only WITHOUT falling back to discovery, so a wrong override loads strictly LESS
+    project-only without falling back to discovery, so a wrong override loads strictly less
     than no override -- and at `--log-level error` nothing says so. This function used to be a
     hard-coded `REPO/.cupcake/rulebook.yml`, which was exactly that mistake, and it made the
-    BEFORE column measure a global-less evaluation that no longer corresponds to anything: the
-    table then showed the rewrite's effect PLUS the absence of the global policy set, and
+    before column measure a global-less evaluation that no longer corresponds to anything: the
+    table then showed the rewrite's effect plus the absence of the global policy set, and
     attributed the sum to the shim.
 
     The two structural preconditions are the shim's, for the shim's reason: no directory, or no
-    `policies/claude` under it, means no global policy CAN load, and the shim drops the override
+    `policies/claude` under it, means no global policy can load, and the shim drops the override
     rather than forward a value the engine will discard.
     """
     root = global_config_root(env)
@@ -146,7 +146,7 @@ def global_config_args(env: dict[str, str]) -> list[str]:
 
 
 def run_raw(command: str, env: dict[str, str] | None = None) -> str:
-    """The BEFORE column: the same evaluation the shim runs, minus the shim.
+    """The before column: the same evaluation the shim runs, minus the shim.
 
     No newline rewrite and no permission-mode normalisation -- but the same `--policy-dir` and
     the same `--global-config` (see above), so the only variable between the columns is the
@@ -185,7 +185,7 @@ def verdict(stdout: str) -> str:
 
 
 def normalized_command(command: str) -> str:
-    """The command text the shim would hand cupcake, from the shim's OWN normaliser."""
+    """The command text the shim would hand cupcake, from the shim's own normaliser."""
     proc = subprocess.run(
         ["bash", str(SHIM), "--normalize-only"],
         input=json.dumps(event(command)).encode(),
@@ -210,7 +210,7 @@ class RewriteCase:
     expected: str
 
 
-# The `; ` (semicolon AND space) is load-bearing in both halves: `;` is in the anchor class
+# The `; ` (semicolon and space) is load-bearing in both halves: `;` is in the anchor class
 # every git guard uses, and the space is what commands.has_verb's `(^|\s)verb(\s|$)` needs.
 REWRITE_CASES = [
     RewriteCase(
@@ -251,7 +251,7 @@ REWRITE_CASES = [
         'bd remember --key k "a\nb"\necho done',
         'bd remember --key k "a\nb"; echo done',
     ),
-    # A heredoc a NON-SHELL command reads is data. Its newlines, INCLUDING the one before
+    # A heredoc a non-shell command reads is data. Its newlines, including the one before
     # the terminator, stay newlines -- commands.rego finds the body by looking for "\n"+tag,
     # so breaking that newline would drop the whole text back to its raw form there.
     RewriteCase(
@@ -264,25 +264,25 @@ REWRITE_CASES = [
         "python3 - <<'PY'\nimport os\nprint(os.getpid())\nPY",
         "python3 - <<'PY'\nimport os\nprint(os.getpid())\nPY",
     ),
-    # ... but text AFTER the terminator is command text again.
+    # ... but text after the terminator is command text again.
     RewriteCase(
         "line-after-data-heredoc-terminator-separated",
         "git commit -F - <<'EOF'\nmessage body\nEOF\ngit push origin main",
         "git commit -F - <<'EOF'\nmessage body\nEOF; git push origin main",
     ),
-    # A heredoc a SHELL reads is a program, so its lines are commands.
+    # A heredoc a shell reads is a program, so its lines are commands.
     RewriteCase(
         "shell-read-heredoc-separated",
         "bash <<'EOF'\ngit push origin main\nEOF",
         "bash <<'EOF'; git push origin main; EOF",
     ),
-    # A trailing backslash JOINS two lines. It is not a boundary and must not become `;`.
+    # A trailing backslash joins two lines. It is not a boundary and must not become `;`.
     RewriteCase(
         "line-continuation-preserved",
         "cargo xwin build --release \\\n  --target x86_64-pc-windows-msvc \\\n  -p er-quickload",
         "cargo xwin build --release \\\n  --target x86_64-pc-windows-msvc \\\n  -p er-quickload",
     ),
-    # An EVEN number of backslashes is an escaped backslash, not a continuation.
+    # An even number of backslashes is an escaped backslash, not a continuation.
     RewriteCase(
         "escaped-backslash-is-not-a-continuation",
         "echo one\\\\\ngit push origin main",
@@ -315,7 +315,7 @@ REWRITE_CASES = [
 
 @dataclass(frozen=True)
 class DecisionCase:
-    """What the REAL cupcake binary decides for a command, end to end through the shim."""
+    """What the real cupcake binary decides for a command, end to end through the shim."""
 
     name: str
     command: str
@@ -449,7 +449,7 @@ DECISION_CASES = [
         "allow",
         "control: the shim must not deny everything",
     ),
-    # --- Multi-line forms the rewrite DOES reach, kept honest ----------------
+    # --- Multi-line forms the rewrite does reach, kept honest ----------------
     DecisionCase(
         "deny-crlf-two-line-push-main",
         "echo hi\r\ngit push origin main",
@@ -487,9 +487,9 @@ DECISION_CASES = [
         "the shim passes this through, and it already failed CLOSED: the engine keeps the "
         "newline (it reads the rest as quoted) and the policies fall back to the raw text",
     ),
-    # --- KNOWN-OPEN, pinned so the residue stays visible ----------------------
+    # --- Known-open, pinned so the residue stays visible ----------------------
     #
-    # Each of these is a shape the shim deliberately hands over UNCHANGED because it cannot
+    # Each of these is a shape the shim deliberately hands over unchanged because it cannot
     # tell quoted from unquoted in it, and guessing would break working commands (see the
     # residue notes in cupcake-hook.sh). They are exactly as open as they were before this
     # change -- nothing regressed -- and they are pinned as `allow` so that closing one shows
@@ -568,7 +568,7 @@ def check_decisions() -> list[str]:
 
 
 def print_table() -> int:
-    """BEFORE (raw event straight to cupcake) beside AFTER (through the shim)."""
+    """Before (raw event straight to cupcake) beside after (through the shim)."""
     width = max(len(case.name) for case in DECISION_CASES)
     print(f"{'case'.ljust(width)}  {'want':6}  {'BEFORE':7}  {'AFTER':7}  changed")
     for case in DECISION_CASES:

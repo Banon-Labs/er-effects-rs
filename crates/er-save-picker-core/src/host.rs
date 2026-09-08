@@ -2,23 +2,23 @@
 //!
 //! Same pattern as `er_loading_portrait_core::host`: function pointers installed once at DLL
 //! attach, neutral defaults until then (so the crate is inert rather than wrong), and
-//! crate-internal wrappers bearing the EXACT names the moved code already calls.
+//! crate-internal wrappers bearing the exact names the moved code already calls.
 //!
-//! Every field below is one MEASURED outbound reference from the files this crate will
+//! Every field below is one measured outbound reference from the files this crate will
 //! own into the rest of `er-quickload`. Nothing else leaves the crate: drawing goes
 //! through `er-loading-bar-core`, save-container parsing through `er-save-loader`, counters
 //! through `er-telemetry-core`.
 
 // `PickerCover::owner_hwnd` is an HWND read in exactly one place: `os_dialog::os_dialog_owner`
 // (via the `PickerCover::owner_hwnd` method path, which is why a grep for `owner_hwnd()` finds
-// nothing). That reader is gated TWICE -- the module is `#[cfg(feature = "os-dialog")]`, and its
+// nothing). That reader is gated twice -- the module is `#[cfg(feature = "os-dialog")]`, and its
 // body is windows-only -- so the field and its getter are genuinely unreachable in two builds:
 // a host build, and `--no-default-features`, which `scripts/check-rust-build.sh` checks on the
-// SHIPPING target precisely so a feature-off configuration cannot rot unnoticed.
+// shipping target precisely so a feature-off configuration cannot rot unnoticed.
 //
 // Both conditions are named here rather than just `not(windows)`, because the earlier gate said
 // only the first and the no-default-features build stayed red on a crate everyone had measured
-// clean with default features. A shipping build WITH `os-dialog` still carries the full deny.
+// clean with default features. A shipping build with `os-dialog` still carries the full deny.
 #![cfg_attr(any(not(windows), not(feature = "os-dialog")), allow(dead_code))]
 
 use std::path::{Path, PathBuf};
@@ -28,12 +28,12 @@ use crate::model::PickerStatusMessage;
 
 /// An opaque screen cover held for the lifetime of one OS-dialog interaction.
 ///
-/// The dim overlay belongs to product (B) and must NOT dim the boot missing-save dialog
+/// The dim overlay belongs to product (B) and must not dim the boot missing-save dialog
 /// (user decision 2026-07-30), so this crate never constructs one -- it only accepts a
 /// caller-supplied guard and drops it when the dialog interaction ends. `er-quit-menu-core`
 /// passes a factory that arms its dim; the boot flow passes none.
 ///
-/// The guard drops BEFORE the dialog claim, and spans the WHOLE reopen loop rather than
+/// The guard drops before the dialog claim, and spans the whole reopen loop rather than
 /// each individual dialog, so an invalid pick does not flash the game back at full
 /// brightness between two dialogs.
 pub struct PickerCover {
@@ -75,7 +75,7 @@ pub struct SavePickerHost {
 
     // --- boot missing-save flow -------------------------------------------------------
     /// True while the boot is held at the save-check because no save was resolved. This is
-    /// the ONE latch that arms, gates and disarms the boot picker
+    /// the one latch that arms, gates and disarms the boot picker
     /// (`save_redirect::path_hooks::missing_save_selection_pending`).
     pub missing_save_selection_pending: fn() -> bool,
     /// Commit a picked container: validate it, activate the save redirect, install the
@@ -94,14 +94,14 @@ pub struct SavePickerHost {
     pub remember_picker_dir: fn(&Path),
 
     // --- OS common-file-dialog mechanism ----------------------------------------------
-    /// The GAME's main top-level window (`experiments::input_block::game_main_window`).
+    /// The game's main top-level window (`experiments::input_block::game_main_window`).
     /// 0 = none.
     ///
     /// This is the dialog's FALLBACK `hwndOwner`, not its usual one. Since 2026-07-31 a
-    /// System>Quit open owns the dialog to the DIM COVER instead, because a window is always
+    /// System>Quit open owns the dialog to the dim cover instead, because a window is always
     /// above the window that owns it and that is the only way to make "the picker is in front
     /// of the blur" structural rather than a race with comdlg32's window creation. The cover
-    /// is in turn an owned popup of THIS window, so the chain is game < cover < dialog. The
+    /// is in turn an owned popup of this window, so the chain is game < cover < dialog. The
     /// game window is still the owner wherever no cover is up -- the missing-save boot arm,
     /// which raises none, and an arm whose cover did not come up in time.
     pub game_main_window: fn() -> usize,
@@ -114,7 +114,7 @@ pub struct SavePickerHost {
     /// (`system_quit_windows_path_for_log`).
     pub windows_path_for_log: fn(&str) -> String,
     /// True while a destination-commit window is armed. Log-only context on the dialog
-    /// OPENED line (`save_dest_commit_window_armed`).
+    /// opened line (`save_dest_commit_window_armed`).
     pub save_dest_commit_window_armed: fn() -> bool,
 }
 
@@ -145,7 +145,7 @@ fn default_windows_path_for_log(path: &str) -> String {
 
 impl SavePickerHost {
     /// Neutral defaults: no-op logging, never pending, every commit refused, vanilla
-    /// flavor, no start directory, no owner window, and the H4 gate CLOSED (so an
+    /// flavor, no start directory, no owner window, and the H4 gate closed (so an
     /// un-hosted crate never opens a modal dialog over a game it knows nothing about).
     pub const fn defaults() -> Self {
         Self {
@@ -172,7 +172,7 @@ impl Default for SavePickerHost {
 static DEFAULT_HOST: SavePickerHost = SavePickerHost::defaults();
 static HOST: OnceLock<SavePickerHost> = OnceLock::new();
 
-/// Install the host seam ONCE, at DLL attach, BEFORE any hook install or task spawn can
+/// Install the host seam once, at DLL attach, before any hook install or task spawn can
 /// run moved code. Returns false (and changes nothing) if a host was already installed.
 pub fn install_host(host: SavePickerHost) -> bool {
     HOST.set(host).is_ok()
@@ -182,7 +182,7 @@ fn host() -> &'static SavePickerHost {
     HOST.get().unwrap_or(&DEFAULT_HOST)
 }
 
-// --- crate-internal wrappers bearing the EXACT original product names -----------------
+// --- crate-internal wrappers bearing the exact original product names -----------------
 
 #[allow(dead_code)]
 pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
@@ -234,7 +234,7 @@ mod tests {
     #[test]
     fn the_uninstalled_seam_refuses_rather_than_pretends() {
         // No host installed: the picker must report "nothing pending", refuse every commit
-        // and keep the H4 dialog gate CLOSED, so a crate loaded without a host cannot
+        // and keep the H4 dialog gate closed, so a crate loaded without a host cannot
         // half-drive a save selection or throw a modal over an unknown window.
         assert!(!missing_save_selection_pending());
         assert!(matches!(

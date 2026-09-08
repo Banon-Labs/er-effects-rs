@@ -1,11 +1,11 @@
 //! The on-disk `.aip` (auto-invade-point) record decoder.
 //!
 //! Each entry inside `other:/AutoInvadePoint.aipbnd` (and `_dlc02`) is one `.aip` file
-//! holding one block's spawn points. Being able to decode them OFFLINE is what lets the
+//! holding one block's spawn points. Being able to decode them offline is what lets the
 //! catalog be validated with no game running: the runtime array is a verbatim `memcpy` of
 //! the file body, so a target decoded here is byte-for-byte the target the engine will hold.
 //!
-//! # Layout, PROVEN from `CS::CSAutoInvadePoint::AddForBlockId` @ 0x140a69550 (1.16.2)
+//! # Layout, proven from `CS::CSAutoInvadePoint::AddForBlockId` @ 0x140a69550 (1.16.2)
 //!
 //! ```text
 //! +0x00  char  magic[4]   == "FPIA"  (the decompile's `*(int*)magic == 0x41495046`)
@@ -24,7 +24,7 @@
 //!
 //! # Corpus, not fixtures
 //!
-//! Game-derived bytes are never versioned in this repo. The constants below are FINGERPRINTS
+//! Game-derived bytes are never versioned in this repo. The constants below are fingerprints
 //! (lengths, counts, FNV-1a64 digests) plus a deterministic [`encode_aip`] generator that
 //! builds synthetic files for the unit tests. The integration test that reads the real
 //! extraction reads it from disk and SKIPs when it is absent.
@@ -160,14 +160,14 @@ pub fn encode_aip(block: BlockKey, points: &[([f32; 3], f32)]) -> Vec<u8> {
     out
 }
 
-/// Digest of a catalog's CONTENT, computable identically from live memory and from disk.
+/// Digest of a catalog's content, computable identically from live memory and from disk.
 ///
 /// This exists to answer one question with a measurement instead of an argument: **does a mod
 /// rewrite the invasion point table in memory, or only change how the game picks from it?**
 /// Seamless Co-op modifies invasion locations at runtime, and the answer decides whether on-disk
 /// data can ever be trusted to describe what a player will actually encounter.
 ///
-/// The existing count-based oracle cannot answer it -- a mod that MOVES points without adding or
+/// The existing count-based oracle cannot answer it -- a mod that moves points without adding or
 /// removing any leaves 365 blocks and 7073 points looking untouched. This folds every position and
 /// yaw, so a moved point changes the digest.
 ///
@@ -196,11 +196,11 @@ pub fn catalog_content_digest(targets: &[(BlockKey, [f32; 3], f32)]) -> u64 {
     hash
 }
 
-/// [`catalog_content_digest`] over the VANILLA on-disk containers (ELDEN RING 1.16.2): all 365
+/// [`catalog_content_digest`] over the vanilla on-disk containers (ELDEN RING 1.16.2): all 365
 /// entries, 7073 points, blocks in ascending raw-BlockId order.
 ///
 /// A live catalog that hashes to this is byte-for-byte the shipped table. A live catalog that
-/// does NOT -- while still reporting 365 blocks and 7073 points, as the count oracle would --
+/// does not -- while still reporting 365 blocks and 7073 points, as the count oracle would --
 /// has been rewritten in memory by a mod, and that is the signal that on-disk data cannot
 /// describe what the player will actually meet.
 ///

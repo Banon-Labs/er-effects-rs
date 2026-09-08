@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Cupcake signal: last_assistant_native_ownership_vocab
 #
-# Scans the most recently COMPLETED assistant turn of the current session transcript and returns a
+# Scans the most recently completed assistant turn of the current session transcript and returns a
 # tagged list of risky implementation-vocabulary hits, or empty if the turn is clean. Consumed by
 # native_ownership_vocab_reminder.rego, which injects an ADVISORY/non-blocking reminder on the next
 # prompt. The reminder is intentionally not a halt: the user asked for caution text sent back to the

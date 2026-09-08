@@ -1,17 +1,17 @@
-//! Is this address a legitimate place to write into the RUNNING image?
+//! Is this address a legitimate place to write into the running image?
 //!
 //! # The question the version gate cannot answer
 //!
 //! `er_game_base::game_build::resolve_detour_address` answers "where did this 1.16.2 address go on
 //! the running build". That is the right question for an address that came from a constant, and it
-//! is a question with no meaning for an address the caller found by SCANNING the running image --
+//! is a question with no meaning for an address the caller found by scanning the running image --
 //! an AOB hit, a function pointer read out of a live vtable. Those addresses are already correct
-//! for the build in front of them; asking the table where they moved to gets a REFUSAL, because
+//! for the build in front of them; asking the table where they moved to gets a refusal, because
 //! the table is keyed by 1.16.2 RVAs and a 1.17 address is not one of its keys.
 //!
 //! Measured 2026-08-30: `er-armament-icons` and `er-invasion-warp` both locate the GFx tag-parse
 //! function by a unique 30-byte `.text` signature -- *precisely because* hardcoded RVAs drift
-//! between patches -- and the scan is CORRECT on 1.17 (`0x1411cf1a0` -> `0x1411d0fa0`,
+//! between patches -- and the scan is correct on 1.17 (`0x1411cf1a0` -> `0x1411d0fa0`,
 //! byte-identical body, `.pdata` extent `0x68` in both images). Both then handed the hit to the
 //! translating installer, which refused it, and both features were off on a build where the
 //! address was right all along. The one mechanism built to survive a patch was the one the
@@ -23,7 +23,7 @@
 //! fatal as a stale one: MinHook overwrites five bytes, and five bytes written into the middle of
 //! a live function corrupt the image with no error anywhere.
 //!
-//! So a runtime-derived address is checked against the running image's OWN function table -- the
+//! So a runtime-derived address is checked against the running image's own function table -- the
 //! `.pdata` exception directory, which the linker wrote and which the OS itself binary-searches on
 //! every unwind. Three answers, and the middle one is the whole reason this module exists:
 //!
@@ -31,8 +31,8 @@
 //! * `Leaf` -- no `.pdata` record covers it. The x64 ABI lets a function omit unwind data when it
 //!   allocates no stack and calls nothing, so the game's many small getters and `jmp` thunks have
 //!   no record at all. Hooking one is fine, and refusing them would throw away a large, legitimate
-//!   population -- including `ONLINE_DISABLE_RVA` (`0x67a030`), a LEAF in 1.16.2.
-//! * `MidFunction` -- the address is INSIDE some other function's declared extent. Refuse.
+//!   population -- including `ONLINE_DISABLE_RVA` (`0x67a030`), a leaf in 1.16.2.
+//! * `MidFunction` -- the address is inside some other function's declared extent. Refuse.
 //!
 //! # Why the middle of a function is the case worth a whole module
 //!
@@ -46,7 +46,7 @@
 //! wrong about.
 //!
 //! The four stale stub targets are the other half of the demonstration. On 1.17, at their
-//! unchanged 1.16.2 RVAs, `0x67a030`, `0xe56310`, `0x24129b0` and `0x240f490` are ALL
+//! unchanged 1.16.2 RVAs, `0x67a030`, `0xe56310`, `0x24129b0` and `0x240f490` are all
 //! MID-FUNCTION -- and three of the four open with a byte that passes their caller's one-byte
 //! signature check, because `0x40`/`0x48`/`0x4c` are REX prefixes and the image is full of them.
 
@@ -92,7 +92,7 @@ const FIRST_SECTION_RVA: usize = 0x1000;
 /// What the running image's own `.pdata` says about an address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryKind {
-    /// `.pdata` declares a function START here, spanning `extent` bytes.
+    /// `.pdata` declares a function start here, spanning `extent` bytes.
     Entry { extent: u32 },
     /// No `.pdata` record covers this address: an x64 leaf, or padding. `room` is the distance to
     /// the next declared function start (`u32::MAX` when there is none after it).
@@ -107,7 +107,7 @@ pub enum EntryKind {
 pub enum Refusal {
     /// The address is zero. A refused RVA resolves to `0`, and it is the caller's job to notice.
     Null,
-    /// Outside the running game image's `.text`. This module can only consult the GAME's function
+    /// Outside the running game image's `.text`. This module can only consult the game's function
     /// table, so an address in a foreign module is unauditable here rather than acceptable.
     OutsideText,
     /// The opening bytes could not be read, so nothing is known about them.
@@ -276,7 +276,7 @@ fn function_table() -> Option<(usize, usize)> {
     Some((base + table_rva, table_size / RUNTIME_FUNCTION_LEN))
 }
 
-/// [`classify`] against the RUNNING image's `.pdata`.
+/// [`classify`] against the running image's `.pdata`.
 #[cfg(windows)]
 fn classify_live(address: usize) -> Result<EntryKind, Refusal> {
     let base = er_game_base::mem::game_module_base().map_err(|_| Refusal::NoFunctionTable)?;
@@ -320,7 +320,7 @@ fn log_refusal(what: &str, address: usize, refusal: Refusal) {
 
 /// Is `address` a place this process may write `needed` bytes of code?
 ///
-/// The address must already be correct for the RUNNING build -- this asks nothing about versions,
+/// The address must already be correct for the running build -- this asks nothing about versions,
 /// and answers only what the running image's own function table can say. Refusals are logged
 /// naming which check failed, bounded; `true` means the site passed every check below.
 ///
@@ -438,7 +438,7 @@ mod tests {
     }
 
     /// An unreadable record refuses rather than guessing. A binary search that silently treated a
-    /// failed read as "not found" would answer LEAF for a mid-function address.
+    /// failed read as "not found" would answer leaf for a mid-function address.
     #[test]
     fn an_unreadable_record_refuses_instead_of_answering() {
         assert_eq!(classify(0x1000, TABLE.len(), |_| None), None);

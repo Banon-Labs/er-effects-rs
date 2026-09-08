@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline preflight for the runtime-probe harness, run BEFORE spending an Elden Ring launch.
+"""Offline preflight for the runtime-probe harness, run before spending an Elden Ring launch.
 
 Why this exists: a watcher edit that did `telemetry.get(...)` on a None telemetry crashed the
 readiness watcher at runtime and burned a full gated ER launch (the game booted and closed in
@@ -8,7 +8,7 @@ user watching, save-safety stakes) and must never be spent to surface an offline
 
 This validator:
   1. py_compiles every probe Python script and `bash -n`-checks the probe shell scripts.
-  2. Imports er-readiness-watch.py and exercises EVERY `telemetry_*` decision helper against the
+  2. Imports er-readiness-watch.py and exercises every `telemetry_*` decision helper against the
      telemetry states a real run actually produces -- None (file not written yet), {} (empty),
      and representative oracle payloads -- asserting none raise (the exact failure mode that
      escaped before, because the inline check skipped the helper pattern's None guard).
@@ -80,7 +80,7 @@ def load_watcher_module():
 
 def helper_checks() -> None:
     module = load_watcher_module()
-    # The None-critical helpers are the boolean early-exit predicates evaluated each poll BEFORE
+    # The None-critical helpers are the boolean early-exit predicates evaluated each poll before
     # telemetry is confirmed non-None (names end in `_detected` / `_complete`). Other telemetry_*
     # functions (e.g. *_chain_stage report builders) run after a None guard, so are out of scope.
     helpers = [
@@ -111,8 +111,8 @@ def helper_checks() -> None:
         fail("cold_char_mount_complete did not fire on PHASE_DONE")
     print(f"preflight: validated {len(helpers)} telemetry helpers against {len(TELEMETRY_FIXTURES)} states OK")
 
-    # World-stream stall semaphore: the watermark/armed helpers parse hex-string OWN-LOAD oracle
-    # fields each poll and MUST tolerate every real telemetry state (None/empty/malformed) without
+    # World-stream stall semaphore: the watermark/armed helpers parse hex-string own-load oracle
+    # fields each poll and must tolerate every real telemetry state (None/empty/malformed) without
     # raising -- same class of bug that burned a launch before. The watermark must be None until the
     # map-load arms (continue fired + player block present) so a slow boot/title never trips it.
     armed = getattr(module, "world_stream_armed", None)
@@ -156,8 +156,8 @@ def helper_checks() -> None:
         fail("world-stream stall fired despite forward streaming progress")
     print("preflight: validated world-stream stall semaphore (arm gate + watermark + stall window) OK")
 
-    # PER-PHASE PROGRESS WATCHDOG: the phase predicates + progress watermarks + step parse telemetry
-    # each poll and MUST tolerate every real telemetry state (None/empty/malformed) without raising --
+    # Per-phase progress WATCHDOG: the phase predicates + progress watermarks + step parse telemetry
+    # each poll and must tolerate every real telemetry state (None/empty/malformed) without raising --
     # same class of bug that burned a launch before. No watched phase may arm before telemetry, and
     # once continue has fired the watchdog must hand off to world_stream (no watched phase active).
     phase_step = getattr(module, "phase_progress_stall_step", None)

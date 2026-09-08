@@ -2,12 +2,12 @@
 """Analyze a vanilla (telemetry-only, user-driven) reload FPS capture.
 
 Reads vanilla-timeseries.jsonl (from run-vanilla-reload-fps.sh) and segments the
-IN-WORLD (world-live) periods, split by the play_time PLATEAU during a System->Quit
-->Continue reload (play_time is cumulative per character, so it does NOT reset on a
-same-char reload -- it PAUSES while the world is torn down, then resumes). Reports
+in-world (world-live) periods, split by the play_time plateau during a System->Quit
+->Continue reload (play_time is cumulative per character, so it does not reset on a
+same-char reload -- it pauses while the world is torn down, then resumes). Reports
 the game frame time (flip task_delta -> fps) per world-live period so period 0
 (boot-continue) can be compared to period 1 (the reload). bd
-USER-chose-vanilla-reload-comparison-2026-07-22.
+user-chose-vanilla-reload-comparison-2026-07-22.
 
 Usage: python3 scripts/analyze-vanilla-reload-fps.py <artifact-dir-or-jsonl>
 """
@@ -56,7 +56,7 @@ def main() -> int:
         return 1
 
     # A sample is "world-live" if play_time advanced since the last sample. Group consecutive world-live
-    # samples into periods; a run of >= PLATEAU_SAMPLES consecutive NON-rising play_time samples (the
+    # samples into periods; a run of >= PLATEAU_SAMPLES consecutive non-rising play_time samples (the
     # world torn down during System->Quit->Continue, while the frame counter keeps ticking) splits them.
     # The DLL writes every 4th frame, so 8 samples ~= 32 frames of flat play_time = a real reload gap.
     PLATEAU_SAMPLES = 8

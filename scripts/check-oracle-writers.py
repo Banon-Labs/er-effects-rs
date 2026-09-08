@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Fail the build when a telemetry counter is READ but never WRITTEN.
+"""Fail the build when a telemetry counter is read but never written.
 
-WHY THIS GATE EXISTS. A counter in `er-telemetry-core` that is defined, re-exported and read once to
+Why this gate exists. A counter in `er-telemetry-core` that is defined, re-exported and read once to
 emit an oracle -- but never written -- reports 0/false forever. Nothing downstream can tell that
 apart from "the feature ran and did nothing", so the oracle does not merely fail to inform, it
 actively misinforms. That is not hypothetical: on 2026-07-31 an agent cited
@@ -11,7 +11,7 @@ writers at all; a further 13 with the same shape were found by audit (er-effects
 
 A `bd` note cannot prevent the next one. This can.
 
-WHAT COUNTS AS A WRITE. Any of `.store` `.fetch_add` `.fetch_sub` `.fetch_max` `.fetch_min`
+What counts as a write. Any of `.store` `.fetch_add` `.fetch_sub` `.fetch_max` `.fetch_min`
 `.fetch_or` `.fetch_and` `.fetch_xor` `.fetch_nand` `.fetch_update` `.swap`
 `.compare_exchange[_weak]`, matched across newlines because
 rustfmt wraps them (`NAME\n    .fetch_add(1, ...)`), and optionally through an index (`NAME[i]`)
@@ -22,7 +22,7 @@ reference (`MhHook::new(addr, detour, &TITLE_UPDATE_ORIG)`) and written through 
 naive scan flags all ~20 `*_ORIG` statics as dead. They are not. Omitting this rule was the
 difference between a first audit reporting 86 dead counters and the true figure of 13.
 
-That by-reference rule accepts a PATH QUALIFIER (`&crate::map_confirm::ORIG_WARP_JOB_ASSEMBLER`),
+That by-reference rule accepts a path qualifier (`&crate::map_confirm::ORIG_WARP_JOB_ASSEMBLER`),
 because the installer and the trampoline do not have to live in the same module. Requiring a bare
 name made this gate punish exactly the refactor it should be neutral about: moving a hook into its
 own file turned a written static into a reported offender without changing one line of behaviour,
@@ -42,7 +42,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
-# Definitions are collected from EVERY crate file, not just er-telemetry-core/src/counters.rs. That file
+# Definitions are collected from every crate file, not just er-telemetry-core/src/counters.rs. That file
 # holds ~1295 atomic statics but a further ~960 live in 84 other files (constants/autoload_state.rs,
 # constants/system_quit.rs, the sibling DLL crates, ...), and auditing only the central file would
 # give false assurance for more than a third of them.
@@ -61,7 +61,7 @@ WRITE_OPS = (
 
 
 def write_re(name: str) -> re.Pattern[str]:
-    # NAME [maybe an index] . op (   -- newlines allowed anywhere rustfmt may break the line.
+    # Name [maybe an index] . op (   -- newlines allowed anywhere rustfmt may break the line.
     return re.compile(
         rf"\b{re.escape(name)}\b\s*(?:\[[^\]]{{0,64}}\])?\s*\.\s*(?:{WRITE_OPS})\s*\(", re.S
     )
@@ -72,10 +72,10 @@ def write_re(name: str) -> re.Pattern[str]:
 BY_REF_QUALIFIER = r"(?:(?:raw\s+(?:const|mut)\s+)?(?:(?:crate|self|super|[A-Za-z_]\w*)\s*::\s*)*)"
 
 
-# ...but only a REAL reference. Two shapes look like `&NAME` and write nothing, and both were
-# concealing live offenders from THIS gate until 2026-08-31:
-#   `&& NAME.load(..)`  -- the second `&` of a boolean AND, immediately followed by the counter.
-#                          TITLE_CUSTOM_COVER_RUN_CALLS hid here. It is the fifth AND-term of
+# ...but only a real reference. Two shapes look like `&NAME` and write nothing, and both were
+# concealing live offenders from this gate until 2026-08-31:
+#   `&& NAME.load(..)`  -- the second `&` of a boolean and, immediately followed by the counter.
+#                          TITLE_CUSTOM_COVER_RUN_CALLS hid here. It is the fifth and-term of
 #                          `oracle_title_loaded_character_portrait_rendered`, so this gate's silence
 #                          is why an oracle that could never be true kept being emitted.
 #   `let _ = &NAME;`    -- a discard binding written only to silence an unused warning.
@@ -94,7 +94,7 @@ def read_re(name: str) -> re.Pattern[str]:
     return re.compile(rf"\b{re.escape(name)}\b\s*(?:\[[^\]]{{0,64}}\])?\s*\.\s*load\s*\(", re.S)
 
 
-# The same four rules with the identifier as a CAPTURE GROUP, so one scan of a file yields every
+# The same four rules with the identifier as a capture group, so one scan of a file yields every
 # name it writes/reads. `audit()` uses these; the per-name forms above stay because they document
 # each rule in isolation and the selftest exercises the behaviour through `audit()` either way.
 _NAME = r"([A-Z][A-Z0-9_]{2,})"
@@ -113,11 +113,11 @@ def audit(sources: dict[str, str], counters_src: str = "") -> list[tuple[str, in
     names = set(DEF_RE.findall(counters_src))
     for text in sources.values():
         names.update(DEF_RE.findall(text))
-    # ONE PASS PER FILE, not one pass per (name, file). The rules are unchanged -- these are the
+    # One pass per file, not one pass per (name, file). The rules are unchanged -- these are the
     # same four patterns with the identifier left as a capture group instead of substituted in --
     # but the loop is transposed, so the cost is ~900 file scans rather than 2,645 names x 900
     # files. That took this gate from ~30s (with a `.load()`-heavy tree it had drifted past its
-    # documented ~22s, straight at the 30s per-command shell cap, where a kill reads as a TIMEOUT
+    # documented ~22s, straight at the 30s per-command shell cap, where a kill reads as a timeout
     # rather than as a verdict) to a few seconds. Every declared counter name is SCREAMING_SNAKE
     # and at least three characters, which is exactly what these capture groups match -- verified
     # against the whole declared set, 0 names outside the shape.
@@ -207,7 +207,7 @@ def selftest() -> int:
             "let d = WRITTEN_INDEXED[0].load(Ordering::SeqCst);\n"
             # the defect: read to emit an oracle, never written
             "push_json_usize(body, \"oracle_dead\", DEAD_READ_ONCE.load(Ordering::SeqCst));\n"
-            # `&&` is not a reference: the `&` of a boolean AND sits directly before the counter.
+            # `&&` is not a reference: the `&` of a boolean and sits directly before the counter.
             "let ok = a != 0\n    && DEAD_BEHIND_LOGICAL_AND.load(Ordering::SeqCst) == 1;\n"
             # a discard binding is not a write, and the counter is still read to emit an oracle
             "let _ = &DEAD_BEHIND_DISCARD;\n"
@@ -259,7 +259,7 @@ def main() -> int:
     known = load_allowlist()
 
     new = [(n, r) for n, r in offenders if n not in known]
-    # An allowlist entry that is no longer an offender must be DELETED from the list, not left to
+    # An allowlist entry that is no longer an offender must be deleted from the list, not left to
     # rot. Enforcing that is what makes the list shrink-only: fixing a counter is not finished until
     # its line is gone, so the file is an honest running count of the remaining debt.
     stale = sorted(known - names)

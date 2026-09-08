@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Static call-graph climber over the deobf flat image (eldenring-deobf.bin).
 
-Given a target VA and a depth, recursively resolve CALLERS (up) or CALLEES
+Given a target VA and a depth, recursively resolve callers (up) or CALLEES
 (down) of a function, grounding each `call rel32` site to its containing
 function entry -- so we stop chasing xrefs one level at a time by hand.
 
 Mapped image: file offset == RVA, base 0x140000000 (see disas-deobf.sh).
 Only direct `E8` rel32 calls are followed (the reliable, unambiguous edges);
-indirect/vtable dispatch is NOT in the graph -- use find-xrefs.py's
+indirect/vtable dispatch is not in the graph -- use find-xrefs.py's
 absolute-pointer mode for vtable slots. `E9` tail-jmps are optionally included
 (--jmp) since FromSoft thunks tail-call.
 

@@ -5,10 +5,10 @@
 //! name, own config file, own log file, and no dependency on save/autoload/render
 //! product crates.
 
-// HOST-BUILD HYGIENE. This crate is a windows `cdylib`: on a non-windows host every item
+// Host-build hygiene. This crate is a windows `cdylib`: on a non-windows host every item
 // whose only consumer is `DllMain` or a hook reads as dead, and `[workspace.lints.rust]
 // warnings = "deny"` promotes that to a hard compile ERROR -- so `cargo test -p er-inventory-sort`
-// failed outright, and its unit tests had therefore never executed in ANY gate. Same fix,
+// failed outright, and its unit tests had therefore never executed in any gate. Same fix,
 // same reason, as er-save-suppress / er-seamless-bugfixes / er-armament-icons. The shipping
 // target is unaffected: this allow does not exist there.
 #![cfg_attr(not(windows), allow(dead_code, unused_imports))]
@@ -117,8 +117,8 @@ pub unsafe extern "system" fn DllMain(
     _reserved: *mut core::ffi::c_void,
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
-        // FIRST, before anything that can panic. A panic in a cdylib crosses an
-        // `extern "system"` boundary and becomes an ABORT, which does not dispatch to a
+        // First, before anything that can panic. A panic in a cdylib crosses an
+        // `extern "system"` boundary and becomes an abort, which does not dispatch to a
         // vectored handler -- so `er_crash_logging` writes no record at all and the process
         // just vanishes. This hook is what turns that silence into a file:line. The hook is
         // per-DLL: every cdylib links its own `er-game-base`, so another shell installing it
@@ -126,7 +126,7 @@ pub unsafe extern "system" fn DllMain(
         er_game_base::panic_report::report_panics_to("er-inventory-sort", log_message);
 
         // This DLL installs no detours (it registers a FrameBegin tick), so it has no er-hook
-        // dependency -- but it still resolves game addresses, and a refusal is silent HERE unless
+        // dependency -- but it still resolves game addresses, and a refusal is silent here unless
         // the sink is installed, because every cdylib links its own copy of er-game-base.
         er_game_base::game_build::set_address_logger(log_message);
         START.call_once(spawn_inventory_sort_task);
@@ -162,7 +162,7 @@ fn spawn_inventory_sort_task() {
             };
             use fromsoftware_shared::{FromStatic, SharedTaskImpExt};
 
-            // BOUNDED (2026-08-29): see er_game_base::wait -- the unbounded form of this loop
+            // Bounded (2026-08-29): see er_game_base::wait -- the unbounded form of this loop
             // starved the wineserver and hung a boot.
             let Some(task) =
                 er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""The policies must be tested against the input the ENGINE DELIVERS.
+"""The policies must be tested against the input the engine delivers.
 
-WHY THIS GATE EXISTS (2026-08-31). `.cupcake/tests/*_test.rego` runs in the OPA
+Why this gate exists (2026-08-31). `.cupcake/tests/*_test.rego` runs in the OPA
 interpreter, which feeds a policy whatever text the test author typed. Cupcake
 does not deliver that text. Before a single policy runs it ENRICHES the event,
 and two of those enrichments change the answer:
 
   * `whitespace_normalization` collapses every run of unquoted whitespace --
     newlines included -- to one space, and trims the ends. A multi-line command
-    therefore arrives as ONE line, so any rule that locates something by line
+    therefore arrives as one line, so any rule that locates something by line
     position is inert in production;
   * the Rust preprocessor OVERWRITES `affected_parent_directories` with its own
     answer whenever that answer is non-empty, so a hand-written fixture for that
@@ -20,32 +20,32 @@ been dead since 2026-07-29 -- `lines` is always one element -- while its own
 regressions passed, because they fed raw multi-line text the engine never
 delivers. `test_deny_root_delete_inside_command_substitution` hand-fed
 `affected_parent_directories: ["/"]` for `echo $(rm -rf /)` and passed, while the
-same command was ALLOWED through the real binary, because the preprocessor
+same command was allowed through the real binary, because the preprocessor
 actually reports `["<cwd>/$(rm", "/)"]`.
 
 A dead rule whose tests are green is indistinguishable from a working one. That
 is the whole problem, and it is why this file measures rather than assumes.
 
-WHAT IT CHECKS
+What it checks
 
-  1. ENRICHMENT CONTRACT. Every transform the engine applies, pinned by
+  1. Enrichment contract. Every transform the engine applies, pinned by
      measurement. If a cupcake upgrade changes one, this goes red -- instead of
      silently resurrecting a dead rule, or killing a live one.
 
-  2. THE SHARED CASE TABLE. `delivered_cases` in protected_paths_test.rego is
+  2. The shared case table. `delivered_cases` in protected_paths_test.rego is
      consumed here as well as by `opa test`: this runner sends each command
-     through the real binary, lets the ENGINE compute `affected_parent_directories`,
+     through the real binary, lets the engine compute `affected_parent_directories`,
      and asserts the fixture recorded in the table is what the engine actually
      produced. A fixture production never produces now fails.
 
-  3. DEAD-LOGIC INVENTORY. Each helper known to be unreachable in production is
+  3. Dead-logic inventory. Each helper known to be unreachable in production is
      asserted unreachable, by measurement, so the inventory cannot rot into
      folklore -- and so that anyone who "fixes" the engine finds out here.
 
-  4. THE PRODUCTION PATH. `scripts/test-cupcake-policies.py` calls `cupcake eval`
-     DIRECTLY, which is not how any command reaches the guards: Claude Code runs
+  4. The production path. `scripts/test-cupcake-policies.py` calls `cupcake eval`
+     directly, which is not how any command reaches the guards: Claude Code runs
      `scripts/cupcake-hook.sh`, which rewrites every unquoted newline to `; `
-     before the engine sees it. That rewrite is the ONLY reason multi-line
+     before the engine sees it. That rewrite is the only reason multi-line
      commands are still guarded at all, and no policy suite exercises it. These
      cases run the shim end to end.
 
@@ -68,7 +68,7 @@ import tempfile
 from pathlib import Path
 
 def _pool_width(requested: int) -> int:
-    """Never open more workers than this run is ALLOWED to use.
+    """Never open more workers than this run is allowed to use.
 
     Every pool below was sized against a free 16-core box -- one of them at 20. Under
     scripts/lib/cpu-courtesy.sh a gate run is confined to an affinity mask of half the machine,
@@ -76,7 +76,7 @@ def _pool_width(requested: int) -> int:
     20-wide pool on 8 permitted cores is oversubscription rather than parallelism: the same work,
     more context switches, and a longer wall clock for the person waiting on the push.
 
-    `sched_getaffinity` reports the MASK rather than the core count, which is precisely the number
+    `sched_getaffinity` reports the mask rather than the core count, which is precisely the number
     the cap granted. Falls back to the requested width where affinity is unavailable (never Linux,
     where this gate runs).
     """
@@ -94,12 +94,12 @@ PROTECTED_PATHS_POLICY = CUPCAKE_DIR / "policies" / "claude" / "builtins" / "pro
 COMMANDS_POLICY = CUPCAKE_DIR / "system" / "commands.rego"
 HOOK_SHIM = REPO_ROOT / "scripts" / "cupcake-hook.sh"
 
-# Assembled rather than written whole, so this FILE is not itself denied by the
+# Assembled rather than written whole, so this file is not itself denied by the
 # guard it tests when an agent edits it through a Bash command.
 ROOT_DELETE = " ".join(["rm", "-rf", "/"])
 PUSH_MAIN = " ".join(["git", "push", "origin", "main"])
 # Same reason, and it is not hypothetical here: writing these two tokens whole into
-# one Bash command line is exactly what BUILTIN-GIT-BLOCK-NO-VERIFY denies, so an
+# one Bash command line is exactly what BUILTIN-git-block-no-verify denies, so an
 # agent editing this file through a heredoc would be blocked by the rule it is
 # testing. Splitting them is the difference between a file that can be maintained
 # and one that can only be read.
@@ -120,8 +120,8 @@ class Failure(Exception):
 class _Undefined:
     """OPA's "the query has no value", kept distinct from JSON null.
 
-    A Rego function with no matching body is UNDEFINED, not null, and for the
-    dead-logic inventory below that distinction IS the finding.
+    A Rego function with no matching body is undefined, not null, and for the
+    dead-logic inventory below that distinction is the finding.
     """
 
     def __repr__(self) -> str:  # pragma: no cover - diagnostic only
@@ -139,7 +139,7 @@ UNDEFINED = _Undefined()
 def eval_event(event: dict) -> dict:
     """Run the real binary on an event and recover what the policies were given.
 
-    `--debug-files` writes a trace whose ENRICH section is the enriched input
+    `--debug-files` writes a trace whose enrich section is the enriched input
     verbatim. That is the only way to see the delivered shape: it is produced
     inside the engine, after the hook JSON is parsed and before any policy runs.
     """
@@ -204,7 +204,7 @@ def eval_bash(command: str, **extra) -> dict:
 
 
 def eval_through_shim(command: str, permission_mode: str = "default") -> dict:
-    """The REAL production path: Claude Code -> scripts/cupcake-hook.sh -> cupcake.
+    """The real production path: Claude Code -> scripts/cupcake-hook.sh -> cupcake.
 
     The shim deliberately does not pass `--strict`, so a denial is reported in
     the JSON body with exit code 0. Reading the exit code here would score every
@@ -259,7 +259,7 @@ def opa_eval(query: str, *files: Path, input_doc: dict | None = None):
     parsed = json.loads(result.stdout)
     results = parsed.get("result") or []
     if not results:
-        # OPA reports an UNDEFINED query by returning no result at all, which is
+        # OPA reports an undefined query by returning no result at all, which is
         # precisely the answer the dead-logic inventory is asking for. Raising
         # here would turn "this helper does nothing" into a harness error.
         return UNDEFINED
@@ -328,7 +328,7 @@ def check_enrichment_contract() -> list[str]:
             )
         findings.append(label)
 
-    # whitespace_normalization is BASH-ONLY. A file path with a double space is
+    # whitespace_normalization is BASH-only. A file path with a double space is
     # delivered untouched, so a policy reading tool_input.file_path sees the raw
     # string and the Bash-side reasoning above does not transfer to it.
     write_event = {
@@ -347,7 +347,7 @@ def check_enrichment_contract() -> list[str]:
             "whitespace_normalization now touches non-Bash tool input: "
             f"file_path delivered as {delivered.get('file_path')!r}"
         )
-    # ... but `content_unification` DOES synthesise `new_string` from `content`,
+    # ... but `content_unification` does synthesise `new_string` from `content`,
     # and `symlink_resolution` synthesises the canonical path fields. A policy
     # may rely on those existing; a test that omits them is testing a shape
     # production does not produce.
@@ -358,7 +358,7 @@ def check_enrichment_contract() -> list[str]:
             raise Failure(f"symlink_resolution no longer synthesises {field}")
     findings.append("Bash-only normalisation; Write gets content_unification + symlink_resolution")
 
-    # THE OVERWRITE. A hand-written affected_parent_directories survives only
+    # The OVERWRITE. A hand-written affected_parent_directories survives only
     # while the preprocessor finds nothing. The moment it finds a path, the
     # caller's value is discarded -- which is why an `opa test` fixture for that
     # field can be pure fiction and still pass.
@@ -394,14 +394,14 @@ def load_delivered_cases() -> list[dict]:
     )
 
 
-# THE ONE PLACE THE TABLE CANNOT SPEAK FOR ITSELF. `affected_parent_directories` is
+# The one place the table cannot speak for itself. `affected_parent_directories` is
 # synthesised by the engine from the CWD it is invoked in, so the fixture literals in
 # `.cupcake/tests/protected_paths_test.rego` have to spell out an absolute path -- and a
 # `.rego` file cannot ask where it is checked out. They were written against
 # `/home/banon/projects/er-mods-rs`, which makes every wrapper case fail in a linked git
 # worktree, in a second clone, and on anyone else's machine, with a diff that looks like a
 # policy regression rather than a path assumption. Rebase the fixture's root onto the live
-# one before comparing: the assertion still checks the SHAPE the engine produced, which is
+# one before comparing: the assertion still checks the shape the engine produced, which is
 # the thing the case is about, and it now checks it wherever the repo lives.
 FIXTURE_REPO_ROOT = "/home/banon/projects/er-mods-rs"
 
@@ -463,7 +463,7 @@ def check_case_table() -> list[str]:
             )
         if case["expect"] == "deny" and case["rule"] and case["rule"] not in outcome["output"]:
             # The reason text carries the rule's own wording; a denial from a
-            # DIFFERENT rule would otherwise score as a pass and hide that the
+            # different rule would otherwise score as a pass and hide that the
             # rule under test is dead.
             reason_markers = {
                 "BUILTIN-PROTECTED-PATHS-WRAPPER": "inside a shell-wrapper payload",
@@ -622,7 +622,7 @@ SHIM_CASES = [
 ]
 
 
-# Commands whose verdict DIFFERS between the direct `cupcake eval` call and the
+# Commands whose verdict differs between the direct `cupcake eval` call and the
 # production path. Each one is allowed direct and denied through the shim, which
 # is the measurement that makes the shim load-bearing rather than convenient:
 # remove it and these commands run.
@@ -700,24 +700,24 @@ def check_production_path() -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# 5. core.hooksPath: the two tokens must be ONE assignment
+# 5. core.hooksPath: the two tokens must be one assignment
 # ---------------------------------------------------------------------------
 #
-# BUILTIN-GIT-BLOCK-NO-VERIFY's hook-disable rule used to AND
+# BUILTIN-git-block-no-verify's hook-disable rule used to and
 # `contains(cmd, "core.hookspath")` with `contains(cmd, "/dev/null")` across the
-# WHOLE command string. Co-presence, not relation. So this -- which INSTALLS
+# whole command string. Co-presence, not relation. So this -- which INSTALLS
 # hooks and merely silences an unrelated read --
 #
 #     git config core.hooksPath scripts/hooks && git config --get core.hooksPath >/dev/null
 #
 # was denied with "Disabling git hooks is not permitted", and it was denied while
-# an agent was REPAIRING core.hooksPath after the er-effects-rs -> er-mods-rs
+# an agent was repairing core.hooksPath after the er-effects-rs -> er-mods-rs
 # rename left it pointing at an absolute path that no longer existed. Git had
-# silently run NO hooks since 39a919e0: not the main-push guard, not
+# silently run no hooks since 39a919e0: not the main-push guard, not
 # the pre-push gate suite. The guard was blocking the fix for a total, silent failure of
 # the guard layer, which is the worst direction a false positive can point.
 #
-# These cases live HERE rather than only in `opa test` because the interpreter
+# These cases live here rather than only in `opa test` because the interpreter
 # feeds a policy whatever text the author typed, and two of these commands are
 # multi-line -- the shapes where typed text and delivered text differ most. The
 # separator that makes line 2 visible is inserted by scripts/cupcake-hook.sh, so a
@@ -768,7 +768,7 @@ HOOKS_PATH_CASES = [
         f"GIT_CONFIG_KEY_1=core.pager GIT_CONFIG_VALUE_1={DEV_NULL} git status",
         True,
     ),
-    # ---- must stay DENIED: the tokens ARE one assignment ----------------------
+    # ---- must stay DENIED: the tokens are one assignment ----------------------
     ("git config, positional", f"git config {HOOKS_PATH} {DEV_NULL}", False),
     ("git config --global", f"git config --global {HOOKS_PATH} {DEV_NULL}", False),
     ("git config --worktree", f"git config --worktree {HOOKS_PATH} {DEV_NULL}", False),
@@ -811,11 +811,11 @@ HOOK_DISABLE_REASON = "Disabling git hooks is not permitted"
 def check_hooks_path_forms() -> list[str]:
     """Both directions, through the production shim, with a vacuity guard.
 
-    THE VACUITY GUARD IS THE POINT OF DOING THIS HERE. An allow-case passes just
+    The VACUITY guard is the point of doing this here. An allow-case passes just
     as happily when the engine has eaten one of the two tokens before any policy
     ran -- and then it is testing nothing, while reading as proof. So every
-    allow-case additionally asserts that BOTH tokens are still present in the
-    DELIVERED text: the co-presence that used to trigger the denial must still be
+    allow-case additionally asserts that both tokens are still present in the
+    delivered text: the co-presence that used to trigger the denial must still be
     there for the allow to mean the predicate got tighter.
 
     Run concurrently because each case is one `cupcake eval` process and this
@@ -865,13 +865,13 @@ def check_hooks_path_forms() -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# 6. A CONFIGURED BUILTIN IS NOT AN ENABLED BUILTIN
+# 6. A configured BUILTIN is not an enabled BUILTIN
 # ---------------------------------------------------------------------------
 #
-# `rulebook_security_guardrails` -- upstream's TOTAL LOCKDOWN of `.cupcake/` and
+# `rulebook_security_guardrails` -- upstream's total lockdown of `.cupcake/` and
 # `.git/hooks/` -- was configured in .cupcake/rulebook.yml with a message and a
 # protected_paths list, and it had never run once. cupcake 0.5.2 treats a builtin
-# as DISABLED unless its block carries an explicit `enabled: true`, so the engine
+# as disabled unless its block carries an explicit `enabled: true`, so the engine
 # logged `Skipping disabled builtin policy` and the rulebook's own comment
 # ("Builtins are ENABLED BY DEFAULT when configured") was simply false.
 #
@@ -880,7 +880,7 @@ def check_hooks_path_forms() -> list[str]:
 # never compiled produces no decisions -- and no decisions is indistinguishable
 # from a clean event.
 #
-# So the mechanism is pinned here by MEASUREMENT, in both directions: the live
+# So the mechanism is pinned here by measurement, in both directions: the live
 # tree must not enable it, and a copy differing by that one line must deny what
 # the live tree allows. If a cupcake upgrade changes the default, or someone adds
 # the key, this goes red and the decision recorded in .cupcake/rulebook.yml gets
@@ -911,7 +911,7 @@ def _enabled_builtins() -> set[str]:
 
 
 def _write_verdict(policy_dir: Path, file_path: str) -> bool:
-    """True when a Write to `file_path` is ALLOWED by the policies in `policy_dir`."""
+    """True when a Write to `file_path` is allowed by the policies in `policy_dir`."""
     event = {
         "session_id": "cupcake-delivered-shape",
         "transcript_path": "/tmp/cupcake-delivered-shape.jsonl",
@@ -1003,8 +1003,8 @@ def check_lockdown_builtin_is_off() -> list[str]:
 # 7. The guard-layer destructive rule, through the production path
 # ---------------------------------------------------------------------------
 #
-# CLAUDE-GUARD-LAYER-DESTRUCTIVE is what replaced the lockdown: it denies
-# destructive SHELL operations on `.cupcake` and `.git/hooks` and leaves reading,
+# Claude-guard-layer-destructive is what replaced the lockdown: it denies
+# destructive shell operations on `.cupcake` and `.git/hooks` and leaves reading,
 # editing and testing alone. The `opa test` suite covers its matching; these
 # cases cover the two things the interpreter cannot see -- a multi-line command
 # (whose second statement exists only because the hook shim rewrites the newline)
@@ -1020,7 +1020,7 @@ GUARD_LAYER_REASON = "Destructive shell operation on the guard layer"
 
 # (name, command, expect_allow)
 GUARD_LAYER_CASES = [
-    # ---- must be DENIED ------------------------------------------------------
+    # ---- must be denied ------------------------------------------------------
     ("recursive delete of the policy tree", f"{DELETE_RECURSIVE} {CUPCAKE_DIR_TOKEN}", False),
     (
         "MULTI-LINE: a destructive SECOND line, visible only through the shim's `; `",
@@ -1051,8 +1051,8 @@ GUARD_LAYER_CASES = [
         f"cat > docs/guards.md <<'EOF'\n{DELETE_RECURSIVE} {CUPCAKE_DIR_TOKEN}\nEOF",
         True,
     ),
-    # THE IN-VIVO FALSE POSITIVE. `{` is a command-position anchor and is the one
-    # such character that quoted-span blanking does NOT neutralise, so an inline
+    # The in-VIVO false positive. `{` is a command-position anchor and is the one
+    # such character that quoted-span blanking does not neutralise, so an inline
     # python set literal put `rm` in command position and the rule denied the
     # one-liner that was auditing it. It belongs here rather than only in
     # `opa test` because the blanking that creates the shape happens in the
@@ -1072,7 +1072,7 @@ def check_guard_layer_forms() -> list[str]:
 
     An allow-case passes just as happily when the engine has eaten the path token
     before any policy ran, and then it proves nothing. So every allow-case also
-    asserts the guard-layer path is still present in the DELIVERED text.
+    asserts the guard-layer path is still present in the delivered text.
     """
     from concurrent.futures import ThreadPoolExecutor
 
@@ -1115,32 +1115,32 @@ def check_guard_layer_forms() -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# 8. Hook removal: the verb and the hook directory must be ONE statement
+# 8. Hook removal: the verb and the hook directory must be one statement
 # ---------------------------------------------------------------------------
 #
 # The same co-presence defect as section 5, in the same vendored builtin, one
 # screen further down: three arms ANDed a removal verb with
-# `contains(cmd, "<hooks dir>")` over the WHOLE command string. So a command that
-# removed an unrelated directory and then INSTALLED a hook was denied with
+# `contains(cmd, "<hooks dir>")` over the whole command string. So a command that
+# removed an unrelated directory and then installed a hook was denied with
 # "Disabling git hooks is not permitted" -- and so was the bug report about it,
 # for quoting both tokens. bd er-effects-rs-c0t9, measured live 2026-08-31.
 #
-# WHY THESE CASES ARE HERE AND NOT ONLY IN `opa test`. Two reasons, and the
+# Why these cases are here and not only in `opa test`. Two reasons, and the
 # second is the one that would otherwise go unnoticed:
 #
 #   * the interpreter never sees the engine's normalisation, and one of these
 #     commands is multi-line;
-#   * for `.git/hooks` specifically, CLAUDE-GUARD-LAYER-DESTRUCTIVE covers almost
-#     the same ground and answers FIRST. Measured: `rm -rf <hooks dir>`,
+#   * for `.git/hooks` specifically, claude-guard-layer-destructive covers almost
+#     the same ground and answers first. Measured: `rm -rf <hooks dir>`,
 #     `mv <hooks dir> <hooks dir>.off` and the fish-wrapped delete all come back
 #     with the guard-layer reason, not this builtin's. A deny-case that does not
 #     name which rule answered would therefore stay green with this builtin's
 #     hook arms entirely dead. So every deny-case pins its expected reason, and
 #     the pipeline case exists precisely because it is the one shape the sibling
-#     guard MISSES (it segments at pipes; this rule does not), which makes it the
+#     guard misses (it segments at pipes; this rule does not), which makes it the
 #     only production proof that these arms are alive at all.
 HOOK_REMOVAL_CASES = [
-    # ---- must be DENIED, by THIS rule ---------------------------------------
+    # ---- must be denied, by this rule ---------------------------------------
     (
         "PIPELINE: the path is in one stage and the verb in the next",
         f"echo {GIT_HOOKS_TOKEN}/pre-commit | xargs rm -f",
@@ -1153,7 +1153,7 @@ HOOK_REMOVAL_CASES = [
         False,
         HOOK_DISABLE_REASON,
     ),
-    # ---- must be DENIED, whichever guard answers -----------------------------
+    # ---- must be denied, whichever guard answers -----------------------------
     (
         "a plain recursive delete of the hook directory",
         f"{DELETE_RECURSIVE} {GIT_HOOKS_TOKEN}",
@@ -1166,7 +1166,7 @@ HOOK_REMOVAL_CASES = [
         False,
         GUARD_LAYER_REASON,
     ),
-    # ---- must be ALLOWED -----------------------------------------------------
+    # ---- must be allowed -----------------------------------------------------
     (
         "THE REPORTED FALSE POSITIVE: remove an unrelated dir, then INSTALL a hook",
         f"{DELETE_RECURSIVE} /tmp/lab && mkdir -p /tmp/lab/{GIT_HOOKS_TOKEN}"
@@ -1189,7 +1189,7 @@ HOOK_REMOVAL_CASES = [
     ),
 ]
 
-# The tokens whose CO-PRESENCE used to trigger the denial. An allow-case that no
+# The tokens whose co-presence used to trigger the denial. An allow-case that no
 # longer delivers both is testing nothing.
 HOOK_REMOVAL_VACUITY_TOKENS = (GIT_HOOKS_TOKEN, "rm")
 
@@ -1309,7 +1309,7 @@ def selftest_hooks_path() -> int:
     A table of expectations that can only ever agree with the engine is not a
     test. One case in this repo passed today for the wrong reason -- a capitalised
     verb against a case-sensitive matcher -- and looked identical to a real pass
-    from the outside. So the check is made to FAIL here, twice, on the two ways it
+    from the outside. So the check is made to fail here, twice, on the two ways it
     is supposed to fail: an allow-expectation over a genuinely disabling command,
     and a deny-expectation over a repair command.
     """
@@ -1396,7 +1396,7 @@ def selftest_guard_layer() -> int:
 def selftest_hook_removal() -> int:
     """Sabotage the hook-removal table and prove the check goes red both ways.
 
-    THREE sabotages, not two. The usual pair is here -- a real removal claimed
+    Three sabotages, not two. The usual pair is here -- a real removal claimed
     allowed, the repair command claimed denied -- plus one this section needs and
     the others do not: a deny-case whose expected reason is swapped for the
     sibling guard's. For `.git/hooks` the guard-layer rule answers first on most

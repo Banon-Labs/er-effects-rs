@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Capture an on-screen ER screenshot timed off a DLL TELEMETRY MARKER (not launch_epoch).
+# Capture an on-screen ER screenshot timed off a DLL telemetry marker (not launch_epoch).
 # The launch_epoch->DLL-epoch offset (wine/proton + me3 native load) makes launch-relative offsets
 # land in the wrong place in the game timeline; this waits for a regex to appear in the live
 # er-quickload-autoload-debug.log, optionally waits POST_DELAY_MS more, captures, then tears down.
 #
 #   $1 MARKER_REGEX : python regex matched against each new debug-log line (required)
-#   $2 POST_DELAY_MS: ms to wait AFTER the marker before capturing (default 0)
+#   $2 POST_DELAY_MS: ms to wait after the marker before capturing (default 0)
 #   HARD_CAP_S      : absolute teardown deadline after launch (default 40)
 #   ARTIFACT_DIR    : run dir (default target/runtime-probe/marker-capture-<ts>)
 set -uo pipefail

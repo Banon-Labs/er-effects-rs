@@ -1,18 +1,18 @@
-//! ORACLE-1 / SEMAPHORE-A: title-rebuild `dialog+0xb78` SceneObjProxy binding.
+//! Oracle-1 / SEMAPHORE-A: title-rebuild `dialog+0xb78` SceneObjProxy binding.
 //!
 //! The warm switch-reload title DEADLOCKS because the press-start SceneObjProxy at
 //! `dialog+0xb78` never binds (own_load/loaders.rs:249-261), which is why the
 //! menu-free own_load reload exists. This oracle reads -- passively -- the exact
 //! binding window so the armed-vs-disarmed A/B can pin which product hook/hold
-//! keeps the proxy unbound: BOUND iff the proxy vtable matches CS::SceneObjProxy
-//! AND its embedded CSScaleformValue handle at `+0x28` is non-null.
+//! keeps the proxy unbound: Bound iff the proxy vtable matches CS::SceneObjProxy
+//! and its embedded CSScaleformValue handle at `+0x28` is non-null.
 //!
-//! It resolves the TitleStep owner via its OWN vtable-gated address-space scan
+//! It resolves the TitleStep owner via its own vtable-gated address-space scan
 //! cached in a module static (ported from `find_title_owner_by_vtable`
 //! experiments/title/profile_select_flow.rs:717 and the already-decoupled port
-//! er-input-harness/src/title_scan.rs) -- it does NOT read the product's
+//! er-input-harness/src/title_scan.rs) -- it does not read the product's
 //! `TITLE_OWNER_PTR`/`PRODUCT_CORE_LAST_TITLE_DIALOG`. All field reads are
-//! fault-safe `safe_read_*`; NO vtable function is ever called.
+//! fault-safe `safe_read_*`; No vtable function is ever called.
 
 use core::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
@@ -52,7 +52,7 @@ const SCENE_OBJ_PROXY_COMPONENT_08_OFFSET: usize = 0x08;
 /// SceneObjProxy context back-ref (`proxy+0x20`). Source:
 /// constants/stats_panel_background.rs `SCENE_OBJ_PROXY_CONTEXT_20_OFFSET`.
 const SCENE_OBJ_PROXY_CONTEXT_20_OFFSET: usize = 0x20;
-/// SceneObjProxy embedded CSScaleformValue handle (`proxy+0x28`) -- BOUND iff this
+/// SceneObjProxy embedded CSScaleformValue handle (`proxy+0x28`) -- Bound iff this
 /// is non-null (the named-child binder 0x74a2f0 fills it). Source:
 /// constants/stats_panel_text.rs `SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET`.
 const SCENE_OBJ_PROXY_EMBEDDED_VALUE_28_OFFSET: usize = 0x28;
@@ -191,7 +191,7 @@ fn scan_for_owner(base: usize) -> Option<usize> {
         "INNER_TITLE_STATE_TABLE_RVA",
     );
     // A refused RVA resolves to 0. As a dereference target that is safe -- the guarded read just
-    // fails -- but as a SEARCH NEEDLE it inverts: `vtable == 0` matches every zeroed qword in the
+    // fails -- but as a search needle it inverts: `vtable == 0` matches every zeroed qword in the
     // address space, and the cross-check does not save us because it is built from the same
     // refusal (`want_table` is 0 too, so `[cand+0x10] == want_table` also passes). The first
     // zeroed block would be captured, cached, and re-validated forever, and this oracle would

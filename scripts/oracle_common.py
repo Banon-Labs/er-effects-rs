@@ -1,16 +1,16 @@
 """Shared logic for the real-oracle tools (imprinter + comparator), user 2026-07-20.
 
 A telemetry timeseries is a list of per-poll dicts ({"t_ms", ...oracle_* fields...}). The oracle models
-a boot/load PHASE as an ordered sequence of DISCRETE-SEMAPHORE TRANSITIONS (a tracked field's value
+a boot/load phase as an ordered sequence of discrete-SEMAPHORE transitions (a tracked field's value
 changing). Continuous/noisy fields (fps, frame_ms, play_time_ms, havok_pos, per-frame counters, the
-loading-bar frame/permille) are deliberately NOT step boundaries and are excluded here.
+loading-bar frame/permille) are deliberately not step boundaries and are excluded here.
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-# Discrete state semaphores whose value CHANGE marks a step. Keep imprinter + comparator identical.
+# Discrete state semaphores whose value change marks a step. Keep imprinter + comparator identical.
 DISCRETE_FIELDS = [
     "system_quit_continue_confirm_fresh_deser_count",
     "oracle_system_step_state",
@@ -60,9 +60,9 @@ def key(v: object) -> str:
     return json.dumps(v, sort_keys=True)
 
 
-# Epoch / driver markers: kept in the rows (the imprinter slices by deser) but EXCLUDED from the
+# Epoch / driver markers: kept in the rows (the imprinter slices by deser) but excluded from the
 # transition sequence, so a load2 (deser=1) run can be compared against a load1 (deser=0) imprint on
-# the GAME semaphores alone -- the deser value and the sq-repro driver state are phase keys, not steps.
+# the game semaphores alone -- the deser value and the sq-repro driver state are phase keys, not steps.
 EXCLUDE_FROM_TRANSITIONS = {
     "system_quit_continue_confirm_fresh_deser_count",
     "sq_repro_state",

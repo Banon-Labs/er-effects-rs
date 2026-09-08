@@ -7,11 +7,11 @@
 //! `max_stored` is `EquipParamGoods.maxNum`, read out of the installed regulation, which is what
 //! [`er_build_import_core::catalog::Entry::max_stored`] is defined to hold and what the runtime
 //! catalog puts there. For every tool, tear and great rune here the planner's own database agrees
-//! with the game exactly. Its SPELL rows do not -- it records `maxRepositoryNum` (600) where the
+//! with the game exactly. Its spell rows do not -- it records `maxRepositoryNum` (600) where the
 //! game's `maxNum` is 99 -- so those nine carry the game's number rather than the planner's, to
 //! keep this table a faithful stand-in for the one built from a live session.
 //!
-//! [`Kind::Ammo`] rows are the exception to the FIELD, not to the rule: an arrow is an
+//! [`Kind::Ammo`] rows are the exception to the field, not to the rule: an arrow is an
 //! `EquipParamWeapon` row and has no `maxNum`, so their `max_stored` is
 //! `EquipParamWeapon.maxArrowQuantity` -- the field the engine's own `::GetMaxItemQuantity` reads
 //! for `weaponCategory` 13 and 14. Same source, same regulation, different table.
@@ -141,7 +141,7 @@ pub fn catalog() -> MapCatalog {
             pot_group: None,
         },
     );
-    // AMMUNITION, read out of the installed 1.17 `regulation.bin` by
+    // Ammunition, read out of the installed 1.17 `regulation.bin` by
     // `scripts/regulation-ammo-census.py`: item id is the bare `EquipParamWeapon` row (category
     // nibble 0, same as an armament) and `max_stored` is that row's `maxArrowQuantity`.
     c.insert(

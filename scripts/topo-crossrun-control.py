@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The control the ledger cannot give: two pairings whose SEED SETS ARE DISJOINT, compared on the
+"""The control the ledger cannot give: two pairings whose seed sets are DISJOINT, compared on the
 population `functions.tsv` does not cover.
 
 Every accuracy number in this migration so far has been measured against `functions.tsv`, and
@@ -8,11 +8,11 @@ funclets and the `.pdata`-less leaves -- the whole reason for going to a call gr
 had a measured error rate at all, and the temptation is to quote the ledger number for them.
 
 Run the pairing twice with complementary halves of the ledger as seeds (`--holdout 0.5` and
-`--holdout 0.5 --holdout-invert`). The two runs then share no seed. On a node NEITHER run seeded
+`--holdout 0.5 --holdout-invert`). The two runs then share no seed. On a node neither run seeded
 and the ledger never mentions, their agreement is independent evidence and their disagreement is
 proof that at least one of them is wrong.
 
-Read the output honestly: a disagreement rate D means the error rate is AT LEAST D/2, and errors
+Read the output honestly: a disagreement rate D means the error rate is at least D/2, and errors
 the two runs make identically are invisible to this test. It is a floor, not a measurement.
 
   python3 scripts/topo-crossrun-control.py --x DIRA/topo-pairs.pickle --y DIRB/topo-pairs.pickle \

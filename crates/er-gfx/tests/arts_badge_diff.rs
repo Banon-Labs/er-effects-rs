@@ -1,6 +1,6 @@
 //! Exhaustive structural diff of vanilla vs badge-edited movie, for every target.
 //!
-//! The badge is meant to be a STRICTLY ADDITIVE edit plus ONE re-pointed placement. This
+//! The badge is meant to be a strictly additive edit plus one re-pointed placement. This
 //! enumerates every top-level tag that differs and every sprite whose child stream differs,
 //! so "did the edit touch anything else" (e.g. `AttributeIcon`, the vanilla infusion badge)
 //! is answered by the asset rather than by reading the patch code.
@@ -92,7 +92,7 @@ fn edit_is_additive_plus_one_repoint() {
         println!("  removed characters: {removed:?}");
         assert!(removed.is_empty(), "the edit must remove no character");
 
-        // Every PRE-EXISTING character whose definition changed.
+        // Every pre-existing character whose definition changed.
         let mut changed = 0usize;
         for vt in &v.tags {
             let Some(id) = char_id(vt) else { continue };
@@ -124,7 +124,7 @@ fn edit_is_additive_plus_one_repoint() {
         }
         println!("  changed pre-existing characters: {changed}");
 
-        // The vanilla infusion badge is only ever READ (its placement is the mirror
+        // The vanilla infusion badge is only ever read (its placement is the mirror
         // reference). Nothing named AttributeIcon may differ anywhere in the movie.
         for vt in &v.tags {
             let Tag::DefineSprite { id, tags: vs, .. } = vt else {

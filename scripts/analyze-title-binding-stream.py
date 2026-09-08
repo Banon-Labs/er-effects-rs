@@ -11,8 +11,8 @@ Two independent, per-oracle-marker-gated read streams (bd decoupled-diagnostics-
       while the player is movable? fields: epoch, play_time_ms, streaming_active, player_movable,
       overlap, overlap_run, flip_task_delta
 
-The A/B is product {armed, disarmed} x an IDENTICAL diagnostic set, so any delta is the product feature:
-- title-binding: the armed arm is expected to FAIL to bind (proxy_handle_nonnull stays false) -- that is
+The A/B is product {armed, disarmed} x an identical diagnostic set, so any delta is the product feature:
+- title-binding: the armed arm is expected to fail to bind (proxy_handle_nonnull stays false) -- that is
   the deadlock this experiment localizes. proxy_bound True in disarmed but False in armed pins the hold.
 - stream-overlap: overlap==True while player_movable==True is the dip mechanism; the fix should drive it
   toward 0 (streaming settles before movable).
@@ -21,7 +21,7 @@ Usage:
   python3 scripts/analyze-title-binding-stream.py <dir-or-glob-root>            # summarize one run
   python3 scripts/analyze-title-binding-stream.py --compare <armed_dir> <disarmed_dir>
 
-A "dir" may be a run artifact dir OR the game dir (default game dir if a bare oracle file is not found).
+A "dir" may be a run artifact dir or the game dir (default game dir if a bare oracle file is not found).
 """
 from __future__ import annotations
 

@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
-"""Where the call-graph topology and `functions.tsv` disagree, ask the BYTES which one is right.
+"""Where the call-graph topology and `functions.tsv` disagree, ask the bytes which one is right.
 
 The two signals share nothing: `functions.tsv` pairs by masked byte signature across `.pdata` and
 never looks at callers; the topology pairing never looks at a byte. So a disagreement is a bug in
 exactly one of them, and a third, independent test can say which.
 
-THE TEST, and what it is careful not to claim.  Both images now have Ghidra function bodies, so a
-candidate is judged over its WHOLE declared body rather than a fixed-length prefix: the normalised
-instruction sequences must have the SAME LENGTH and be equal at every position. Length-anchored
+The test, and what it is careful not to claim.  Both images now have Ghidra function bodies, so a
+candidate is judged over its whole declared body rather than a fixed-length prefix: the normalised
+instruction sequences must have the same length and be equal at every position. Length-anchored
 equality, not a prefix ratio -- because a prefix ratio is precisely how the impostor at 0xaec480
-came back IDENTICAL over 56 instructions while the correct pair matched over 9. A longer look-alike
+came back identical over 56 instructions while the correct pair matched over 9. A longer look-alike
 must not win, so length is part of the claim rather than a tie-break on top of it.
 
 Normalisation blanks every numeric literal: displacements and immediates are exactly what 1.17 was
-expected to move, so comparing them would refuse every correct pair. That makes an ACCEPT a SHAPE
+expected to move, so comparing them would refuse every correct pair. That makes an accept a shape
 claim, never an identity claim -- adjacent same-shape siblings both accept, and the verdict then
-rests on the REJECTION of the loser. When both candidates accept, this reports UNDECIDABLE and
+rests on the rejection of the loser. When both candidates accept, this reports UNDECIDABLE and
 takes no side.
 
   python3 scripts/adjudicate-topo-vs-functions-tsv.py --pairs DIR/topo-pairs.pickle \
@@ -132,7 +132,7 @@ def main():
 
 
 def selftest(args, md):
-    """Negative control: how often does the shape test ACCEPT a deliberately wrong destination?
+    """Negative control: how often does the shape test accept a deliberately wrong destination?
 
     An accept rate is not a bug -- adjacent same-length siblings really do have equal masked
     bodies -- but it is the number that says how much an accept is worth, so it is measured

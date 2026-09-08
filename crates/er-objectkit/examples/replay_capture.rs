@@ -1,4 +1,4 @@
-//! Replay a captured Elden Ring frame's object draw OFFLINE: bind the GAME'S real constant
+//! Replay a captured Elden Ring frame's object draw OFFLINE: bind the game'S real constant
 //! buffers (scene camera + lighting, material params) — extracted from a RenderDoc capture —
 //! to our FLVER geometry and draw it through the native `.vpo`/`.ppo` on lavapipe. This is
 //! the exact-render path: the captured `cbSceneParam` carries the real `VC_MatrixViewProj`
@@ -207,7 +207,7 @@ fn main() {
     let vpo = std::fs::read("target/er-objectkit/sample.vpo").expect("sample.vpo");
     let ppo = std::fs::read("target/er-objectkit/sample.ppo").expect("sample.ppo");
 
-    // Native shaders. Compute OUR cbuffers' (register, byte size) BEFORE the binding-rewrite
+    // Native shaders. Compute our cbuffers' (register, byte size) before the binding-rewrite
     // patches — at this point the SPIR-V binding == the D3D register (dxil-spirv identity), the
     // key the captured cbuffers (whose register vkd3d-proton erased) re-associate on by size.
     let mut v_spv = dxil_to_spirv(&vpo, None).expect("translate vpo");
@@ -242,7 +242,7 @@ fn main() {
     let vr = reflect(&v_spv).expect("reflect vpo");
     let pr = reflect(&p_spv).expect("reflect ppo");
 
-    // Re-associate each captured cbuffer to OUR register by (stage, byte size), then map that
+    // Re-associate each captured cbuffer to our register by (stage, byte size), then map that
     // register to our compacted binding via the assign_unique_bindings maps, and bind the bytes.
     let captured = capture.captured_sizes();
     let matched = match_by_size(&ours, &captured);

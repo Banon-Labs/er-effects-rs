@@ -5,7 +5,7 @@ Pure-logic tests: we drive the watchdog with synthetic telemetry samples at expl
 times, so they run without a game and pin the behaviors that make the model correct -- especially
 the two that are easy to get wrong: (1) permille RESETTING between the first and second load must
 not read as a stall, and (2) a liveness counter (present_hook_hits) that keeps ticking while the
-world is wedged at WORLD RES WAIT must NOT keep the run alive.
+world is wedged at world RES wait must not keep the run alive.
 """
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ def check_continuous_progress_never_tears_down(m) -> None:
 
 
 def check_stall_trips_after_idle_window(m) -> None:
-    # permille freezes (WORLD RES WAIT): armed run with no advance must stall out at the window.
+    # permille freezes (world RES wait): armed run with no advance must stall out at the window.
     wd = m.ProgressWatchdog(idle_window_seconds=1.0,
                             progress_keys=("oracle_loading_bar_progress_permille",))
     assert wd.observe({"oracle_loading_bar_progress_permille": 300}, 0.0) == m.CONTINUE
@@ -61,7 +61,7 @@ def check_stall_trips_after_idle_window(m) -> None:
 
 
 def check_liveness_counter_does_not_mask_stall(m) -> None:
-    # THE trap: present_hook_hits ticks every frame while wedged at WORLD RES WAIT. It is NOT a
+    # The trap: present_hook_hits ticks every frame while wedged at world RES wait. It is not a
     # progress key, so it must not keep the run alive -- the frozen permille still stalls.
     wd = m.ProgressWatchdog(idle_window_seconds=1.0,
                             progress_keys=("oracle_loading_bar_progress_permille",))
@@ -80,7 +80,7 @@ def check_liveness_counter_does_not_mask_stall(m) -> None:
 
 def check_permille_reset_between_loads_is_not_a_stall(m) -> None:
     # First load fills to 1000, then the second load resets permille to 0 and climbs again. The
-    # reset (a DECREASE) must not be scored as progress NOR as a stall; the subsequent climb is
+    # reset (a decrease) must not be scored as progress nor as a stall; the subsequent climb is
     # progress. A naive all-time-max would think "no new max" and false-stall the whole 2nd load.
     wd = m.ProgressWatchdog(idle_window_seconds=1.0,
                             progress_keys=("oracle_loading_bar_progress_permille",))
@@ -92,7 +92,7 @@ def check_permille_reset_between_loads_is_not_a_stall(m) -> None:
     # reset to 0 (load boundary) -- a decrease; not progress, but must not immediately stall
     assert wd.observe({"oracle_loading_bar_progress_permille": 0}, now) == m.CONTINUE
     now += 0.3
-    # second load climbs from a LOW value that never exceeds the first load's 1000 peak
+    # second load climbs from a low value that never exceeds the first load's 1000 peak
     for permille in range(50, 400, 50):
         d = wd.observe({"oracle_loading_bar_progress_permille": permille}, now)
         assert d == m.CONTINUE, f"second-load climb misread as {d}"
@@ -113,7 +113,7 @@ def check_terminal_semaphore_teardown_after_delay(m) -> None:
 
 
 def check_arm_predicate_suppresses_early_stall(m) -> None:
-    # Before arming (no loading screen yet), a multi-second gap with no progress must NOT stall.
+    # Before arming (no loading screen yet), a multi-second gap with no progress must not stall.
     wd = m.ProgressWatchdog(idle_window_seconds=1.0,
                             arm_predicate=lambda t: m.coerce_number(
                                 t.get("oracle_loading_bar_progress_permille")) not in (None, 0.0),

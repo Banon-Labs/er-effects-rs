@@ -13,7 +13,7 @@ use super::*;
 // The shared import block for the remaining modules below (it used to live at the
 // top of resource_readback.rs before that file moved to er-loading-portrait-core).
 //
-// It used to be much longer. The release fade was the only thing here that BUILT D3D12 objects --
+// It used to be much longer. The release fade was the only thing here that built D3D12 objects --
 // command allocator/list/queue/fence, descriptor heaps, PSOs, copy footprints, viewports -- and it
 // moved to `er-cover-fade`, taking every one of those imports with it. What is left is what the
 // modules below still touch directly: the swapchain they composite onto and the backbuffer they get

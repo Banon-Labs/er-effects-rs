@@ -1,34 +1,34 @@
-/// Route ONE direct-file (picked / loose `save_file`) autoload tick, and give the native Continue
+/// Route one direct-file (picked / loose `save_file`) autoload tick, and give the native Continue
 /// row a chance to become usable before deciding.
 ///
 /// `refresh_direct_source_profile_summary` is idempotent and self-throttling, and on the settled
-/// path it is no longer free: it watches the target slot's record for DRIFT, because the game's own
+/// path it is no longer free: it watches the target slot's record for drift, because the game's own
 /// boot `CS::ProfileSummary::Deserialize` can overwrite the body-derived records after we write
 /// them and put another character on the loading screen (bd er-effects-rs-ccud). That watch is two
 /// guarded reads and a hash of at most seventeen UTF-16 units per tick; the correction behind it is
 /// bounded. The decision itself is still the pure
 /// [`crate::autoload_route::title_autoload_route`], which carries the reasoning and the tests.
-/// The DEFAULT boot save has no usable native Continue row on this build, so it must take the same
+/// The default boot save has no usable native Continue row on this build, so it must take the same
 /// verified full-read chain a picked save takes.
 ///
 /// `product_continue` waits for `MENU_CONTINUE_ITEM`, whose latch requires a MenuWindowJob whose
-/// docall matches `MENU_TITLE_CONTINUE_DOCALL_RVA` AND whose accept predicate is
+/// docall matches `MENU_TITLE_CONTINUE_DOCALL_RVA` and whose accept predicate is
 /// `MENU_ITEM_ACCEPT_NATIVE_RVA`. The 1.16.2 curated dump names both, and neither is a Continue row:
 /// the docall is an adjustor thunk onto a function that constructs `CS::BackScreen` (the
 /// `L"01_900_Black"` fade window, factory called only from `CSMenuManImp::Update`), and the accept
-/// predicate is `GLOBAL_CSMenuMan != 0 && !busy(GLOBAL_CSMenuMan)`, stored by the GENERIC
+/// predicate is `GLOBAL_CSMenuMan != 0 && !busy(GLOBAL_CSMenuMan)`, stored by the generic
 /// MenuWindowJob ctors. Measured 2026-09-05 21:32: 416/416 candidate observations idle,
 /// `native_accept_hits = 0`, and the boot parked at the title until teardown.
 ///
 /// `title_menu_action_ready` cannot rescue it either: the title's rows are reference-counted
-/// `CS::MenuMemberFuncJob` nodes CHAINED into a `FixOrderJobSequence` by the registrar
+/// `CS::MenuMemberFuncJob` nodes chained into a `FixOrderJobSequence` by the registrar
 /// `0x1409b24e0` and owned by the menu manager -- they are not fields of the dialog, so
 /// `scan_dialog_for_loadgame`'s bounded flat scan of the dialog object reports `hits=0` by
 /// construction (measured, 1280 qwords, every tick).
 ///
-/// Both guards are required. The summary must be REAL, because the full-read chain loads what the
+/// Both guards are required. The summary must be real, because the full-read chain loads what the
 /// record describes -- and it now is, from the boot container repair. And the action node must be
-/// absent, so that a build where the native row IS identifiable keeps using it.
+/// absent, so that a build where the native row is identifiable keeps using it.
 unsafe fn boot_default_needs_full_read(owner: usize, base: usize) -> bool {
     if direct_save_file_source_active() {
         return false;
@@ -44,7 +44,7 @@ fn direct_source_autoload_route() -> crate::autoload_route::TitleAutoloadRoute {
     crate::autoload_route::title_autoload_route(true, direct_source_slot_summary_real())
 }
 
-/// Must this direct-file tick run the TITLE-TIME full read (submit/drain/deserialise at the title)?
+/// Must this direct-file tick run the title-time full read (submit/drain/deserialise at the title)?
 ///
 /// Two ways in, and the second is not optional:
 ///
@@ -53,8 +53,8 @@ fn direct_source_autoload_route() -> crate::autoload_route::TitleAutoloadRoute {
 ///   * the full-read chain has already left `FULLREAD_PHASE_SUBMIT`, so it owns `FULLREAD_PHASE`
 ///     **and** the native slot-request register `GameMan+0xb78`. Diverting a chain mid-flight would
 ///     strand that register armed, and the in-game save manager services any `>= 0` request on the
-///     first frames after world arrival -- a SECOND full deserialize into the live world, which is
-///     precisely what `fullread_disarm_slot_request` exists to prevent. Only a DONE exit of the
+///     first frames after world arrival -- a second full deserialize into the live world, which is
+///     precisely what `fullread_disarm_slot_request` exists to prevent. Only a done exit of the
 ///     chain itself disarms it, so once it starts, it finishes.
 fn direct_source_runs_title_full_read() -> bool {
     if FULLREAD_PHASE.load(Ordering::SeqCst) != FULLREAD_PHASE_SUBMIT {
@@ -63,11 +63,11 @@ fn direct_source_runs_title_full_read() -> bool {
     direct_source_autoload_route().deserialises_at_title()
 }
 
-/// Per-frame PUMP for the built LoadGame job (bd drain-dialog-plus8-not-menujob-pump-our-job-directly).
+/// Per-frame pump for the built LoadGame job (bd drain-dialog-plus8-not-menujob-pump-our-job-directly).
 /// Runs from the recurring game task once `maybe_fire_tfc_continue` armed `TFC_DRAIN_JOB`. Calls
-/// `ExecuteMenuJob(rcx = &job_slot, rdx = &FD4Time)` DIRECTLY on our built job -- it invokes the job's
+/// `ExecuteMenuJob(rcx = &job_slot, rdx = &FD4Time)` directly on our built job -- it invokes the job's
 /// own `vtable[2]` (the LoadGame chain's Execute), advancing deser/world-stream, and zeroes the slot
-/// when done (`ShouldContinue==false`). We pump OUR job (not the dialog's `+0x8` slot, which is not a
+/// when done (`ShouldContinue==false`). We pump our job (not the dialog's `+0x8` slot, which is not a
 /// MenuJob and AV'd the queue-drain wrapper). Pure native call (no input). Stops on completion (slot
 /// cleared), in-world, panic, or the tick cap. Every call is `catch_unwind`-guarded.
 pub unsafe fn tfc_continue_drain_tick(base: usize, frame_delta: f32) {
@@ -133,13 +133,13 @@ pub unsafe fn tfc_continue_drain_tick(base: usize, frame_delta: f32) {
     }
 }
 // `inject_nav_buttons(n) -> u16` sat here: the per-poll-frame D-pad-Down fabrication schedule for
-// the INJECT-NAV title-cursor drive. Its sole caller was the INJECT-NAV branch behind
+// the inject-NAV title-cursor drive. Its sole caller was the inject-NAV branch behind
 // `inject_nav_enabled()`, a gate that could only return `false`; that branch was deleted first and
 // the schedule was left with no caller in any crate, so it went with the gate (2026-08-26). Its
 // tap/gap constants are gone from constants_moved.rs for the same reason.
-/// Tap Confirm (inputmgr+0x90+0x3d, edge) to walk the NATURAL flow:
-/// press-any-button -> [confirm] -> connection-error modal -> [confirm] -> MAIN MENU.
-/// STOPS once the modal has been SEEN and is now GONE, so we never confirm a main-menu item
+/// Tap Confirm (inputmgr+0x90+0x3d, edge) to walk the natural flow:
+/// press-any-button -> [confirm] -> connection-error modal -> [confirm] -> main menu.
+/// Stops once the modal has been seen and is now gone, so we never confirm a main-menu item
 /// (Continue = load most-recent = SetState(5) save-write risk). Pure observation of the post-modal
 /// view. Uses the builder capture hook only to know when the modal is up.
 pub fn auto_confirm_tap() {
@@ -154,7 +154,7 @@ pub fn auto_confirm_tap() {
     }
     let seen = AUTO_CONFIRM_MODAL_SEEN.load(Ordering::SeqCst) != null;
     if seen && !modal_now {
-        // Past the modal -> stop tapping (do NOT confirm Continue on the main menu).
+        // Past the modal -> stop tapping (do not confirm Continue on the main menu).
         return;
     }
     let inputmgr = unsafe {
@@ -473,18 +473,18 @@ unsafe fn hide_title_press_start_proxy(base: usize, dialog: usize, proxy: usize,
 }
 
 pub unsafe fn maybe_hide_title_press_start(base: usize, ready: &ProductCoreAutoloadReady) {
-    // THE SUPPRESSION GATE THESE TWO SITES NEVER HAD (2026-09-04). The shared predicate exists
-    // precisely so the title is force-hidden ONLY while the product cover is in front of it, and
+    // The suppression gate these two sites never had (2026-09-04). The shared predicate exists
+    // precisely so the title is force-hidden only while the product cover is in front of it, and
     // three call sites were converted to it -- but these two were missed, so they hid the title
     // unconditionally on every tick of the product-core autoload path, cover or no cover.
     //
-    // MEASURED, run br-20260904-235559-0a2b: the cover armed, drew, and STOPPED normally
+    // Measured, run br-20260904-235559-0a2b: the cover armed, drew, and stopped normally
     // (stop_ms=32250, stop_reason=3 WORLD_HANDOFF) -- so the predicate was correctly answering
     // "released" the whole time -- and these two sites kept hiding anyway:
     // oracle_title_press_start_gfx_hide_calls climbed 979 -> 4967 in a single minute, with
-    // oracle_title_logo_gfx_hide_last_requested_visible=1 recording that the GAME was asking for the
-    // title to be VISIBLE while we answered by hiding it. With PressStart hidden the title cannot be
-    // advanced by ANY accept signal -- not the product's accept byte, not the harness, not a human --
+    // oracle_title_logo_gfx_hide_last_requested_visible=1 recording that the game was asking for the
+    // title to be visible while we answered by hiding it. With PressStart hidden the title cannot be
+    // advanced by any accept signal -- not the product's accept byte, not the harness, not a human --
     // which is a black screen with no way out (bd er-effects-rs-tkfb).
     if !er_telemetry_core::counters::title_visual_suppression_active() {
         return;
@@ -694,7 +694,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
     PRODUCT_CORE_AUTOLOAD_TICKS.fetch_add(1, Ordering::SeqCst);
     let phase = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
     PRODUCT_CORE_LAST_PHASE.store(phase, Ordering::SeqCst);
-    // NOTE: the stats-panel neutral-bg register is NOT called here -- this product-core tick only runs
+    // NOTE: the stats-panel neutral-bg register is not called here -- this product-core tick only runs
     // on the `direct_menu_load` path (product_autoload_armed), whereas the product `save_requested`
     // autoload never enters it. The register lives on the always-running FrameBegin game task in
     // `spawn_recurring_effects_task` (src/lib.rs) so it fires on every autoload path.
@@ -702,13 +702,13 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         return true;
     }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    // IN-WORLD FINALIZE-DRIVE RECOVERY (bd rt5d-drive-blocked-by-title-owner-gate-early-return-inworld-
-    // 2026-07-20). The product-core tick EARLY-RETURNS at the title_owner gate just below, and
-    // title_owner() is None during stable in-world -- so the rt5d recovery further down NEVER runs for
+    // In-world FINALIZE-drive recovery (bd rt5d-drive-blocked-by-title-owner-gate-early-return-inworld-
+    // 2026-07-20). The product-core tick early-returns at the title_owner gate just below, and
+    // title_owner() is None during stable in-world -- so the rt5d recovery further down never runs for
     // load2's in-world frozen mms18. Resolve MoveMapStep via the CACHED owner here (write_oracle.rs path),
-    // BEFORE that gate, and drive menuData+0x5d=1 at the exact frozen-finalize signature so load2 walks
-    // 18->19->20 the SAME non-warp way load1 does (load1 proven: rt5d/end5e=1, warp=0, run 1042). Purely
-    // ADDITIVE (does not alter the existing flow); tightly gated on active-switch + requestCode==1 +
+    // before that gate, and drive menuData+0x5d=1 at the exact frozen-finalize signature so load2 walks
+    // 18->19->20 the same non-warp way load1 does (load1 proven: rt5d/end5e=1, warp=0, run 1042). Purely
+    // additive (does not alter the existing flow); tightly gated on active-switch + requestCode==1 +
     // mms_state(+0x48)==18 + finalize(+0x12a)==0 + cVar10 inputs (0x5d/0x5e)==0 after a sustained streak,
     // so a healthy load never trips it; clears 0x5d the frame mms leaves 18 (avoids the ~4s bounce).
     {
@@ -728,7 +728,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             .and_then(|ig| unsafe { safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) })
             .unwrap_or(-1);
         // Prefer write_oracle's reliably-resolved MoveMapStep pointer: the cached-owner walk here reads a
-        // STALE step for load2 (proven -- it saw 13-16, not the true 18). Fall back to the local walk only
+        // stale step for load2 (proven -- it saw 13-16, not the true 18). Fall back to the local walk only
         // if the oracle has not published a pointer yet this session.
         let reliable_mms = ORACLE_RELIABLE_MMS_PTR.load(Ordering::SeqCst);
         let cmms = if reliable_mms > 0x10000 {
@@ -760,18 +760,18 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         let c5e = cmenu
             .and_then(|d| unsafe { safe_read_u8(d + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) })
             .unwrap_or(0xff);
-        // Gate on the RELIABLE mms_state/finalize (creq dropped from the gate -- it comes from the
+        // Gate on the reliable mms_state/finalize (creq dropped from the gate -- it comes from the
         // possibly-stale cached-owner ingame; kept in the log only). mms_state==18 && finalize==0 with
         // cVar10 inputs (0x5d/0x5e) both 0 is load2's exact frozen-finalize signature.
-        // FINALIZE-FORCING was disabled 2026-07-21 because it was shoving mms 18->19->20 on the INCOMING
-        // load (diverging from vanilla). PHASE-3 (bd PHASE3-render-release-is-CommonFinalize, 2026-07-23)
-        // RE-ENABLES it but SCOPED to the OUTGOING switch window ONLY (phase RETURN_TITLE_REQUESTED..
-        // AUTOLOAD_HANDOFF). This block runs BEFORE the title_owner gate, i.e. while the OUTGOING world is
-        // still the live in-world InGameStep, so driving menuData+0x5d=1 here walks the OUTGOING MoveMapStep
+        // FINALIZE-forcing was disabled 2026-07-21 because it was shoving mms 18->19->20 on the incoming
+        // load (diverging from vanilla). Phase-3 (bd PHASE3-render-release-is-CommonFinalize, 2026-07-23)
+        // RE-enables it but SCOPED to the outgoing switch window only (phase RETURN_TITLE_REQUESTED..
+        // AUTOLOAD_HANDOFF). This block runs before the title_owner gate, i.e. while the outgoing world is
+        // still the live in-world InGameStep, so driving menuData+0x5d=1 here walks the outgoing MoveMapStep
         // 18->Cleanup(19)->Finish(20)->_Common_Finalize -- releasing the pre-quit world's render globals
-        // BEFORE own_load rebuilds fresh. It is NOT applied at AUTOLOAD_HANDOFF (the incoming/vanilla load),
+        // before own_load rebuilds fresh. It is not applied at AUTOLOAD_HANDOFF (the incoming/vanilla load),
         // honoring the 2026-07-21 directive. `active_switch` (phase >= RETURN_TITLE_REQUESTED) is the
-        // switch-reload gate: on the boot autoload (LOAD1, phase IDLE) this drive never fires. OPT-IN via
+        // switch-reload gate: on the boot autoload (LOAD1, phase idle) this drive never fires. OPT-in via
         // er-quickload-enable-outgoing-teardown.txt (default-off; reverted after run angre-phase3fix-1).
         let finalize_forcing_enabled = crate::compat::gating::outgoing_teardown_enabled()
             && active_switch
@@ -784,7 +784,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             && c5e == 0;
         if frozen_mms18 {
             if let Some(d) = cmenu {
-                // Fire after ~2s of a HELD frozen signature (40 frames; load2 froze 26s in prior runs,
+                // Fire after ~2s of a held frozen signature (40 frames; load2 froze 26s in prior runs,
                 // and a healthy load leaves 18 / walks cfin within a few frames, so this can't trip on a
                 // transient). Short so the RAM-gated drive completes before an incidental unfocused-mouse
                 // click can contaminate the run (bd er-accepts-unfocused-mouse-input-contaminates-runs).
@@ -804,7 +804,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 }
             }
         } else {
-            // WHY-NOT: load2 at mms18 but the frozen signature was not met -> name which field blocks so
+            // Why-NOT: load2 at mms18 but the frozen signature was not met -> name which field blocks so
             // a run is conclusive even if the drive never fires (throttled). Only at cstate==18.
             if cstate == MOVEMAPSTEP_STEP_MOVEMAP_INDEX {
                 let w = INWORLD_FINALIZE_DRIVE_WHYNOT_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
@@ -862,7 +862,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 "system-quit-quickload: title owner appeared after internal return-title request owner=0x{owner:x}; handing off to product Continue autoload"
             ));
         }
-        // NOTE: the return-title chain submit is intentionally NOT done here. This product-core
+        // NOTE: the return-title chain submit is intentionally not done here. This product-core
         // tick runs on the game task, concurrently with the game's menu/Scaleform pump; submitting
         // the return-title job from here races that pump and corrupts Scaleform state (observed:
         // non-deterministic execute-fault into Scaleform string data). The submit is done in
@@ -904,16 +904,16 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
     };
     PRODUCT_CORE_LAST_RETURN_TITLE_JOB_PREDICATE_BC4
         .store(return_title_job_predicate_bc4, Ordering::SeqCst);
-    // (Deferred return-title-context clear experiment REMOVED 2026-07-16: it was inert -- the stuck load's
+    // (Deferred return-title-context clear experiment removed 2026-07-16: it was inert -- the stuck load's
     // menuData+0x5d is 0 to begin with, the functor never set it. The real root is the incomplete teardown
     // functor, not our clear. See bd ending-request-fix-was-wrong / rt5d-never-set findings.)
-    // SWITCH-OUTCOME ORACLE (read-only, user-mandated reliable semaphore). Runs whenever a slot is picked,
-    // OUTSIDE the dormancy gate below, so it observes the post-commit native session too. CSMenuMan comes
+    // switch-outcome oracle (read-only, user-mandated reliable semaphore). Runs whenever a slot is picked,
+    // outside the dormancy gate below, so it observes the post-commit native session too. CSMenuMan comes
     // from CS_MENU_MAN_GLOBAL_RVA (1.16.2 +0x3d6b7b0), resolved for the running build like every other read
     // of it here; literals: in-game menu job +0x798, InGameStep = TitleStep(owner)+0x2e8, requestCode +0xd8.
     // The trace classifies the outcome with no eyeballs: stable_frames (player present + requestCode==2 +
-    // menu_job!=0) climbing high = LOADED_STABLE; resetting after a peak = the world DROPPED (bounce/reload);
-    // the line STOPPING = FROZE; bc4 stuck at 1 = never-tears-down freeze.
+    // menu_job!=0) climbing high = LOADED_STABLE; resetting after a peak = the world dropped (bounce/reload);
+    // the line stopping = froze; bc4 stuck at 1 = never-tears-down freeze.
     if slot >= OWN_STEPPER_SLOT_ZERO && gm != null {
         let player_present = unsafe { PlayerIns::local_player_mut() }.is_ok();
         let ig_d8 = if owner != null {
@@ -943,8 +943,8 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             .and_then(|m| unsafe { safe_read_u8(m + 0x731) })
             .map(|v| v as i32)
             .unwrap_or(-1);
-        // MoveMapStep CHILD state (3rd-load root, 2026-07-16 Ghidra). InGameStep step 7
-        // STEP_MoveMap_Update loops until the MoveMapStep child's own step machine FINISHES (gate
+        // MoveMapStep child state (3rd-load root, 2026-07-16 Ghidra). InGameStep step 7
+        // STEP_MoveMap_Update loops until the MoveMapStep child's own step machine finishes (gate
         // FUN_140eb5550); only then does requestCode(ig_d8) go 1->2. On the softlock the child is
         // created (step 6 STEP_MoveMap_Init ran) but never finishes, so ig_d8 stays 1 and step 7
         // self-loops. Read the child's internal step + world-res streaming state so the true stuck
@@ -959,7 +959,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         let mms = ig_ptr
             .and_then(|ig| unsafe { safe_read_usize(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) })
             .filter(|&v| v > 0x10000);
-        // LOADLIST ROOT LEAD: the world-res loadlist is built by STEP_MoveMap_LoadlistInit only when
+        // LOADLIST root LEAD: the world-res loadlist is built by STEP_MoveMap_LoadlistInit only when
         // worldloadlistlistVirtualPath.size (InGameStep+0x220) != 0, storing the cap at +0x238. At the
         // step-3 stall, ll_size==0 + ll_fcap==0 == "loadlist never built for the target area".
         let ll_size = ig_ptr
@@ -972,7 +972,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 safe_read_usize(ig + INGAMESTEP_LOADLISTLIST_FILECAP_238_OFFSET)
             })
             .unwrap_or(0);
-        // The loadlist virtual path CONTENT: is it the TARGET map (m28) or a STALE map (m60)? DLString
+        // The loadlist virtual path CONTENT: is it the target map (m28) or a stale map (m60)? DLString
         // wchar; size 35 > 7 so it is heap (data = *(base+0x210)). Read the ASCII low byte of each wchar
         // (map paths are ASCII) into a string -- reveals the map id in the path (e.g. .../m28.. vs /m60..).
         let ll_path = if ll_size > 0 && ll_size < 200 {
@@ -1009,11 +1009,11 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         let mms_resmgr = mms_wrm
             .and_then(|w| unsafe { safe_read_usize(w + WORLDRES_RESMGR_10_OFFSET) })
             .filter(|&v| v > 0x10000);
-        // DEST-BLOCK REGISTER (RE wf_3f1e7d9a): worldres+0xb798 = current dest BlockId the WorldResWait
+        // DEST-block register (RE wf_3f1e7d9a): worldres+0xb798 = current dest BlockId the WorldResWait
         // drives to, +0xb79c = previous. ResetAreaResLists sets b798=-1 each load; FUN_14066da30 pushes
         // the target on a "changed" transition. If on the reload b798 stays -1/stale (not 0x1c000000)
         // while it is 0x1c000000 on the first load, the dest was never seeded -> area never activates
-        // -> WORLD RES WAIT. Read-only.
+        // -> world RES wait. Read-only.
         let (mms_b798, mms_b79c) = if let Some(wio) = mms_resmgr {
             (
                 unsafe { safe_read_i32(wio + 0xb798) }.unwrap_or(-2),
@@ -1029,7 +1029,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         let mms_blocks = mms_resmgr
             .and_then(|r| unsafe { safe_read_i32(r + RESMGR_BLOCK_COUNT_B3140_OFFSET) })
             .unwrap_or(-1);
-        // STEP-3 (WORLD RES WAIT) DETERMINANT: the BlockId step 3 waits on (FieldArea+0x2c) and whether
+        // Step-3 (world RES wait) DETERMINANT: the BlockId step 3 waits on (FieldArea+0x2c) and whether
         // its areaId is present in the world's loaded-block list. `mms_wrm` = FieldArea, `mms_resmgr` =
         // worldInfoOwner. Only scan the list at step 3 (bounded cost). `mms_cur_block` = the target
         // BlockId; `mms_block_found` = is that block's areaId among the loaded blocks (1 yes / 0 no /
@@ -1060,7 +1060,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             let wio = mms_resmgr.unwrap_or(null);
             // areaId is BlockId byte[3] (disasm FUN_14066d4d0: `MOVZX R11D, byte ptr [RDX + 0x3]`,
             // then `CMP dword ptr [inner + 0xc], R11D`). So the block the step waits on is the one whose
-            // inner+0xc == (curblk >> 24) & 0xff. Match EXACTLY that (the earlier byte-set match false-
+            // inner+0xc == (curblk >> 24) & 0xff. Match exactly that (the earlier byte-set match false-
             // positived on the 0x00 bytes of curblk).
             let cur_area = (mms_cur_block >> 24) & 0xff;
             let mut found = false;
@@ -1076,7 +1076,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             // Rendered once at the end rather than threaded out as seven more tuple slots.
             let mut ls_phase2 = String::new();
             let mut areas = String::new();
-            // WorldAreaRes ACTIVATION state (RE wf_3f1e7d9a): the matched +0xb3030 entry IS the area's
+            // WorldAreaRes activation state (RE wf_3f1e7d9a): the matched +0xb3030 entry is the area's
             // WorldAreaRes. +0x1a = "area wanted" flag, +0x1c = activation state machine (0..7; ==6 is
             // the state that permits the block load to start), +0xcd8 = the area's WorldBlockRes count.
             // If on the reload the area's state never reaches 6 (not wanted), the block load never kicks.
@@ -1109,11 +1109,11 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                     ar_state = unsafe { safe_read_i32(bp + 0x1c) }.unwrap_or(-1);
                     ar_bres = unsafe { safe_read_i32(bp + 0xcd8) }.unwrap_or(-1);
                     ar_ptr = bp;
-                    // STALE +0xce0 DUMP (run-validated root probe 2026-07-17): the getter
+                    // Stale +0xce0 dump (run-validated root probe 2026-07-17): the getter
                     // (deobf 0x14062f470) searches WorldAreaRes+0xce0[i] (stride 0xb98), reads
                     // *(entry+0x8)=worldBlockInfo, +0x34=mapId2, matching the requested BlockId
                     // (0x1c000000). ar_bres=1 yet the getter returns null => the resident entry's
-                    // mapId2 != 0x1c000000, i.e. a STALE block-res left over from the prior in-world
+                    // mapId2 != 0x1c000000, i.e. a stale block-res left over from the prior in-world
                     // load and never reset on the switch. Dump each entry's mapId2 to identify the
                     // stale block. Change-detected (base ^ first ^ count) so a steady stall logs once.
                     if ar_bres > 0
@@ -1180,9 +1180,9 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                                     unsafe { safe_read_u8(ls + BLOCK_LOADSTATE_PHASE_35_OFFSET) }
                                         .map(|v| v as i32)
                                         .unwrap_or(-1);
-                                // PHASE-2 STALL DISCRIMINATORS. `fc_*` above scans the caps on the
+                                // Phase-2 stall DISCRIMINATORS. `fc_*` above scans the caps on the
                                 // WorldAreaRes and reported all-loaded while this block sat at phase
-                                // 2, so the caps phase 2 actually waits on may be the BLOCK's own.
+                                // 2, so the caps phase 2 actually waits on may be the block's own.
                                 // Sample both those and the `[+0x2f]` gate that decides whether phase
                                 // 2 polls at all. Read-only; no call, no write.
                                 let ls_2f = unsafe {
@@ -1218,13 +1218,13 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                                         safe_read_usize(cap + FD4_FILECAP_BYTES_90_OFFSET)
                                     }
                                     .unwrap_or(0);
-                                    // WHY `msbResCap == 0` -- the two surviving explanations.
-                                    // `bytes` is `MsbFileCap::msbResCap`, written at exactly ONE
-                                    // site, guarded on the cap's CONTENT being non-null (see the
+                                    // Why `msbResCap == 0` -- the two surviving explanations.
+                                    // `bytes` is `MsbFileCap::msbResCap`, written at exactly one
+                                    // site, guarded on the cap's content being non-null (see the
                                     // constant's docs). So a null here means the parse never ran,
-                                    // and the question is whether this cap is (a) FRESH, built by
+                                    // and the question is whether this cap is (a) fresh, built by
                                     // this reload, whose file read came back empty, or (b) a
-                                    // CACHE-HIT SURVIVOR from the previous load that was never
+                                    // cache-hit survivor from the previous load that was never
                                     // reparsed. `rc`/`fl` separate those; `ct` shows whether the
                                     // content the callback gates on is present right now.
                                     let rc = unsafe {
@@ -1252,7 +1252,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                                         ),
                                     );
                                 }
-                                // The user reports the NATIVE loading screen owns the screen at the
+                                // The user reports the native loading screen owns the screen at the
                                 // softlock, where a healthy load only flashes it for about a vblank.
                                 // Pin that to RAM rather than leaving it a visual observation: sample
                                 // both loading-screen surfaces at the stall so the report becomes a
@@ -1266,7 +1266,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                                     None => (-1, -1),
                                 };
                                 // The caps above name `mapstudio_dlc2:/m28_*.msb`, so dump the DLIO
-                                // alias that prefix resolves through. An alias present but EMPTY is
+                                // alias that prefix resolves through. An alias present but empty is
                                 // a 0-byte read by construction, which is the null `msbResCap`.
                                 let roots = match module_base {
                                     Some(b) => unsafe { dlio_virtual_roots_summary(b) },
@@ -1318,7 +1318,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 String::new(),
             )
         };
-        // FILE-CAP READINESS (RE FUN_140613710): the state-2 handler advances 2->3 only when every present
+        // File-cap readiness (RE FUN_140613710): the state-2 handler advances 2->3 only when every present
         // FD4FileCap slot on the WorldAreaRes has load-status +0x88 == 0x04. Scan them so the stall shows
         // whether a file cap is stuck (present but not 0x04) -- vs all-loaded (=> the CSEmkResMan gate is
         // what stalls). Read-only, bounded.
@@ -1365,7 +1365,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 (-1, -1, String::new())
             }
         };
-        // OVERWORLD-RESIDUAL confirm: the overworld block list (+0xb3148, count +0xb31d0). If the boot
+        // OVERWORLD-residual confirm: the overworld block list (+0xb3148, count +0xb31d0). If the boot
         // char's m60 overworld blocks (area 0x3c) are still resident here while step 3 waits on the
         // incoming legacy block (area 0x1c), the overworld residual is starving the legacy load-request.
         let (mms_ow_count, mms_ow_areas) = if (MOVEMAPSTEP_STEP_WORLDRESWAIT_INDEX..=8)
@@ -1391,23 +1391,23 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         } else {
             (-1, String::new())
         };
-        // STEP-3 / WORLD-RES FIX (2026-07-17, decompile+runtime grounded). When a switch reaches
-        // WORLD RES WAIT (step 3) with the incoming block's load-state NULL (blk_ls=0), the block-res
+        // Step-3 / world-RES fix (2026-07-17, decompile+runtime grounded). When a switch reaches
+        // world RES wait (step 3) with the incoming block's load-state NULL (blk_ls=0), the block-res
         // entry was never created because the fast in-process switch skipped STEP_MoveMap_Init's
         // world-res rebuild. Re-run the game's own CS::WorldInfoOwner::ProcessMsbLoadLists(worldInfoOwner,
         // loadlistlistFileCap, dlc02=0) (0x14066b2c0) -- it runs ResetAreaResLists + PopulateLists to
-        // CREATE the missing block-res, exactly like _Common_Initialize (which calls it with
+        // create the missing block-res, exactly like _Common_Initialize (which calls it with
         // &worldInfoOwner, loadlistlistFileCap, loadlistlistFileCap_dlc02). dlc02=0 is null-safe
         // (decompile line 214 null-checks it; base-game areas have no dlc02 loadlist). Gate on a
-        // SUSTAINED null (>= 2s) so the sub-second boot-load transient (which loads fine) never trips
+        // sustained null (>= 2s) so the sub-second boot-load transient (which loads fine) never trips
         // it, and one-shot per DLL load.
-        // The null-block-load-state stall persists across WORLD RES WAIT (3) and CURRENT LOD BLOCK (4)
+        // The null-block-load-state stall persists across world RES wait (3) and current LOD block (4)
         // -- the switch advances 3->4 but both wait on the same never-created block-res -- so count the
         // streak across steps 3..=8, not step 3 alone (the switch left step 3 before 2s elapsed).
         // Count the streak on the null load-state alone (curblk flickers to 0xffffffff while the
         // world-res is half-set-up, which would keep resetting a curblk-gated streak); the valid-block
-        // check stays on the actual fire below. Gate on IN_WORLD_REACHED==YES so this only counts a
-        // SWITCH reload (we were already in-world), never the sub-second boot-load transient -- which is
+        // check stays on the actual fire below. Gate on IN_WORLD_REACHED==yes so this only counts a
+        // switch reload (we were already in-world), never the sub-second boot-load transient -- which is
         // what let us drop the threshold to 30 frames (the switch reaches step 3/4 late, after the old
         // world's slow step-18 teardown, so a 2s window did not fit before the run cap).
         if IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES
@@ -1426,15 +1426,15 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         {
             let owner = mms_resmgr.unwrap_or(0);
             SWITCH_WORLDRES_REBUILD_COUNT.fetch_add(1, Ordering::SeqCst);
-            // DETECT-ONLY. Calling CS::WorldInfoOwner::ProcessMsbLoadLists reactively HERE (at WORLD RES
-            // WAIT / step 3-4) ACCESS-VIOLATES -- runtime-proven 2026-07-17: the PRE-CALL log flushed,
+            // Detect-only. Calling CS::WorldInfoOwner::ProcessMsbLoadLists reactively here (at world RES
+            // wait / step 3-4) access-violates -- runtime-proven 2026-07-17: the pre-call log flushed,
             // the game died before the call returned. ProcessMsbLoadLists runs ResetAreaResLists +
-            // PopulateLists, which is only safe at STEP_MoveMap_Init (BEFORE the world starts streaming);
-            // resetting the area-res lists mid-stream faults. So the reactive rebuild is DISABLED. The
-            // correct fix must run BEFORE STEP_MoveMap_Init (1.16.2 0x140aec120; _Common_Initialize
+            // PopulateLists, which is only safe at STEP_MoveMap_Init (before the world starts streaming);
+            // resetting the area-res lists mid-stream faults. So the reactive rebuild is disabled. The
+            // correct fix must run before STEP_MoveMap_Init (1.16.2 0x140aec120; _Common_Initialize
             // is 0x140aed820 -- the 0x140aec210/0x140aed910 pair this comment used to name are
             // 1.16.1-era addresses and neither is a function entry on 1.16.2, so do not chase them).
-            // FIXED 2026-09-05, and it was not the loadlist: `STEP_MoveMap_Init` takes the
+            // Fixed 2026-09-05, and it was not the loadlist: `STEP_MoveMap_Init` takes the
             // MoveMapStep's `mapId` (+0xdc) from `GameMan::GetMoveMapStepBlockId()` = GameMan+0x14
             // and then clears that field, and nothing on the switch path was writing it -- read live
             // out of a stalled process, MoveMapStep+0xdc was 0xffffffff, so WorldResWait was waiting
@@ -1482,7 +1482,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         let mms_req248 = mms
             .and_then(|m| unsafe { safe_read_i32(m + MOVEMAPSTEP_FINALIZE_REQ_248_OFFSET) })
             .unwrap_or(-1);
-        // SAME-SESSION RELOAD ADVANCE-GATE CANDIDATE (2026-07-19): state-18 disassembly shows
+        // Same-session reload advance-gate candidate (2026-07-19): state-18 disassembly shows
         // MoveMapStep::STEP_MoveMap advances to Cleanup/Finish through the native gate at +0x4b8.
         // The failing reload has gate=1/0 while movement is still false, then Cleanup/Finish destroys
         // WorldChrMan via InGameStep::_Common_Finalize. Hold only that advance bit low during the active
@@ -1490,9 +1490,9 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         let reload_epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
         let movement_proven_for_reload = crate::compat::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
             && crate::compat::MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == reload_epoch;
-        // PHASE-3 (bd PHASE3-render-release-is-CommonFinalize): while the outgoing-teardown fix is active,
-        // do NOT clear the +0x4b8 advance gate. Blocking Cleanup/Finish here is exactly what keeps the
-        // reused in-place world's WorldChrMan alive (the ~5x-heavier render); with the OUTGOING world torn
+        // Phase-3 (bd PHASE3-render-release-is-CommonFinalize): while the outgoing-teardown fix is active,
+        // do not clear the +0x4b8 advance gate. Blocking Cleanup/Finish here is exactly what keeps the
+        // reused in-place world's WorldChrMan alive (the ~5x-heavier render); with the outgoing world torn
         // down first the reload builds fresh and this hold must not fire. Re-engages on fail-soft.
         if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
             == SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
@@ -1517,11 +1517,11 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 }
             }
         }
-        // ENDING-REQUEST diagnostic (2nd runtime-accum lock, 2026-07-16). STEP_MoveMap walks the child
+        // Ending-request diagnostic (2nd runtime-accum lock, 2026-07-16). STEP_MoveMap walks the child
         // to its -1 terminal only while the advancer FUN_140afa7c0 sets menuData+0x5e (cVar10 = an
         // ending/load-completion condition). If 0x5e stays 0 on a re-load, the child parks at resident
         // step 18 and the InGameStep parent (finished == MoveMapStep+0x48==-1) waits forever. Read the
-        // OUTPUT (0x5e) + the two easy INPUTS (return-title byte 0x5d, force-flag 0x3d856a0) + the PARENT
+        // output (0x5e) + the two easy inputs (return-title byte 0x5d, force-flag 0x3d856a0) + the parent
         // step (InGameStep+0x48/+0x4c) so the next repro names why the ending request never fires.
         let ig_pstep = ig_ptr
             .and_then(|ig| unsafe { safe_read_i32(ig + INGAMESTEP_STEP_STATE_OFFSET) })
@@ -1556,7 +1556,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         }
         .map(|b| b as i32)
         .unwrap_or(-1);
-        // Remaining cVar10 ending-request INPUTS read straight off GameMan (the load-in signals): 0xb7c,
+        // Remaining cVar10 ending-request inputs read straight off GameMan (the load-in signals): 0xb7c,
         // 0xb7d, warpRequested@0x10. On a good load one is 1; on the stuck re-load they should reveal the
         // stale one. gm is the live GameMan ptr from the outer guard; safe_read guards a bad offset.
         let gb7c = unsafe { safe_read_u8(gm + GAME_MAN_ENDING_FLAG_B7C_OFFSET) }
@@ -1568,17 +1568,17 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         let gwarp = unsafe { safe_read_u8(gm + GAME_MAN_WARP_REQUESTED_10_OFFSET) }
             .map(|b| b as i32)
             .unwrap_or(-1);
-        // CVAR10 RISING EDGE -- the decision instant, which MMS-CLEANUP samples ~2s too late.
+        // CVAR10 rising edge -- the decision instant, which MMS-cleanup samples ~2s too late.
         //
-        // WHY THIS EXISTS. `menuData+0x5e` IS `cVar10`: the ending-request evaluator writes it every
+        // Why this exists. `menuData+0x5e` is `cVar10`: the ending-request evaluator writes it every
         // frame (`GLOBAL_CSMenuMan->menuData->field_0x5e = cVar10`) and only a 1 lets the MoveMap
         // child leave the resident STEP_MoveMap(18). Run br-20260905-022413-272e settled that leaving
-        // 18 IS the teardown -- the healthy Da BEAST boot load never emitted a single MMS-CLEANUP and
-        // its world lived, while both children that DID leave 18 had their world torn down to
-        // BeginLogo ~2s later. But that same run measured every live input as ZERO at the Cleanup
+        // 18 is the teardown -- the healthy Da beast boot load never emitted a single MMS-cleanup and
+        // its world lived, while both children that did leave 18 had their world torn down to
+        // BeginLogo ~2s later. But that same run measured every live input as zero at the Cleanup
         // edge (`warp=0 b7c=0 b7d=0 rt5d=0 force=0 session_proto=6 dead_reset=0`), which cannot be
         // the state the evaluator decided on. The gap is timing: Cleanup entry is downstream of the
-        // decision, so a TRANSIENT input has already been consumed by then. Sampling on the 0->1
+        // decision, so a transient input has already been consumed by then. Sampling on the 0->1
         // edge of the output catches the inputs while they still hold.
         //
         // Read-only, and deliberately not gated on a switch phase: the boot load is the negative
@@ -1596,13 +1596,13 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                     .unwrap_or(-1)
             }
         };
-        // KEEP THE INTERMEDIATES. This collapsed `event_man == null`, `deadReset == null` and "the
+        // Keep the INTERMEDIATES. This collapsed `event_man == null`, `deadReset == null` and "the
         // state read faulted" into a single `-1`, and `-1` then reads as "measured, and not the
-        // ending value 2" -- which is how the last unobserved input to a NINE-term evaluator stayed
+        // ending value 2" -- which is how the last unobserved input to a nine-term evaluator stayed
         // unobserved. Measured run 2026-09-06 09:59:14, the rise that killed a fully-loaded world:
         // `rt5d=0 warp=0 b7c=0 b7d=0 force=0 session_proto=6 dead_reset=-1`. Seven terms are zero,
         // `CSEzSelectBot::IsBotEnabled` reads the `EnableBot` debug property (default false, no
-        // debug properties on a retail build), so THIS term is the only live candidate left and it
+        // debug properties on a retail build), so this term is the only live candidate left and it
         // is the one the probe cannot see. Naming which link broke is what makes the next run
         // decisive instead of another `-1`.
         let (dead_reset, dead_reset_em, dead_reset_ptr) = {
@@ -1683,18 +1683,18 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         // bd live-genuine-switch-stalls-mms18-end5e0-2026-07-18). A genuine switch's return-title
         // suppresses the quit-save (no-save-on-quit by design), so none of cVar10's inputs
         // (b7c/b7d/force/warp/rt5d) are set, the advancer FUN_140afa7c0 never writes menuData+0x5e=1,
-        // and the OLD world's MoveMapStep child parks at STEP_MoveMap(18): the InGameStep parent (step 7)
+        // and the old world's MoveMapStep child parks at STEP_MoveMap(18): the InGameStep parent (step 7)
         // waits forever on MoveMapStep+0x48 != -1, so the world never tears down (the switched-from char
         // stays resident, mms_step pinned at 18, end5e=0, rt5d=0, b7c1=1, blocks>0 -- the exact runtime
         // signature captured live). RE-proven differentiator (bd
-        // ending-request-recovery-fix-applied-2026-07-16): an ADVANCING child has menuData+0x5d(rt5d)==1;
+        // ending-request-recovery-fix-applied-2026-07-16): an advancing child has menuData+0x5d(rt5d)==1;
         // the stuck child has rt5d==0. So drive rt5d=1 -> the advancer computes cVar10=1 -> writes 0x5e=1
         // -> STEP_MoveMap walks the child 18->Cleanup(19)->Finish(20)->-1, tearing down the old world so
-        // the clean-title autoload of the picked slot proceeds via the proven boot path. Then CLEAR rt5d
-        // the frame the child leaves 18, BEFORE the ~4s resident-world bounce a lingering rt5d triggers via
+        // the clean-title autoload of the picked slot proceeds via the proven boot path. Then clear rt5d
+        // the frame the child leaves 18, before the ~4s resident-world bounce a lingering rt5d triggers via
         // CheckReturnToTitle (return_title.rs:1-7). This is distinct from bc4 (the 1st teardown flag): the
         // suppressed quit-save that would pump bc4->3 and set 0x5d never runs, so we supply the
-        // ending-request input directly. Gate on the EXACT stuck signature + a sustained streak so a
+        // ending-request input directly. Gate on the exact stuck signature + a sustained streak so a
         // healthy load (leaves 18 in a few frames) never trips it. The stricter settled-gate run
         // (target/runtime-probe/samechar-3x-settledgate-20260719-053409) proved this same signature also
         // appears after Continue/SetState5 during AUTOLOAD_HANDOFF: load2 becomes movable, but its native
@@ -1709,7 +1709,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
             let active_switch_phase =
                 quickload_phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED;
-            // FINALIZE-FORCING DISABLED (user 2026-07-21): see the IN-WORLD FINALIZE DRIVE above -- the
+            // FINALIZE-forcing disabled (user 2026-07-21): see the in-world FINALIZE drive above -- the
             // menuData+0x5d finalize-forcing is not the vanilla path; disable it so the load follows vanilla.
             const FINALIZE_FORCING_ENABLED: bool = false;
             let stuck_mms18 = FINALIZE_FORCING_ENABLED
@@ -1728,14 +1728,14 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                         .is_ok()
                 {
                     let n = ENDING_REQUEST_SET_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-                    // DRIVE rt5d=1 -- the NON-WARP finalize input load1 uses (re-enabled from the prior
-                    // observe-only downgrade, RE bd REFINED-load1-finishes-via-rt5d-end5e-warp0-load2-
+                    // Drive rt5d=1 -- the non-warp finalize input load1 uses (re-enabled from the prior
+                    // observe-only downgrade, RE bd refined-load1-finishes-via-rt5d-end5e-warp0-load2-
                     // overcleared-both-2026-07-20). Run 20260720-101944 proved: LOAD1 completes
-                    // mms18->19(CLEANUP)->20(FINISH) with rt5d/end5e=1 and warp=0, while LOAD2 arrives at
-                    // mms18 with ALL cVar10 inputs 0 (warp consumed + our handoff over-cleared 0x5d/0x5e)
+                    // mms18->19(cleanup)->20(finish) with rt5d/end5e=1 and warp=0, while LOAD2 arrives at
+                    // mms18 with all cVar10 inputs 0 (warp consumed + our handoff over-cleared 0x5d/0x5e)
                     // and freezes at finalize case 0 (present but frozen; 463 move-input frames, 4 moved).
                     // Setting menuData+0x5d=1 makes the advancer FUN_140afa7c0 compute cVar10=1 and write
-                    // 0x5e=1, walking the child 18->19->20 the SAME non-warp way load1 does -- no case-8
+                    // 0x5e=1, walking the child 18->19->20 the same non-warp way load1 does -- no case-8
                     // re-warp (warp stays native-owned/cleared, so no warp-reload teardown loop). The
                     // ending-latch-residual-clear below clears rt5d the frame mms leaves 18, preventing the
                     // ~4s CheckReturnToTitle bounce. One-shot per stall (ENDING_REQUEST_SET latch).
@@ -1747,7 +1747,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                     ));
                 }
             } else {
-                // WHY-NOT diagnostic: load2 sits FROZEN at mms18/finalize-0 but the rt5d drive above did
+                // Why-not diagnostic: load2 sits frozen at mms18/finalize-0 but the rt5d drive above did
                 // not fire, so one of stuck_mms18's sub-conditions is false. Log each one (throttled) so a
                 // run names the exact blocker instead of guessing (b7c1==1/blocks>0 were captured from the
                 // cross-char switch stall and may not hold for the boot-reload freeze). Fires only at the
@@ -1785,7 +1785,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         let prev_mms_step = SWITCH_ORACLE_MMS_STEP.swap(mms_step_pub, Ordering::SeqCst);
         let mms_step_changed = prev_mms_step != mms_step_pub;
         SWITCH_ORACLE_REQUEST_CODE.store(ig_d8, Ordering::SeqCst);
-        // Publish the MoveMapStep finalize substate (+0x12a) so the loading-bar MOVE MAP phase shows
+        // Publish the MoveMapStep finalize substate (+0x12a) so the loading-bar move map phase shows
         // its real native sub-progression (0..9) instead of coarse proxies.
         SWITCH_ORACLE_FINALIZE_12A.store(
             if mms_disp != 0 {
@@ -1797,11 +1797,11 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             },
             Ordering::SeqCst,
         );
-        // b80 IS `GameMan::saveState`. Publish for the loading bar, and DRAIN the
+        // b80 is `GameMan::saveState`. Publish for the loading bar, and drain the
         // FD4-IO reload's stuck residency: the reload SUBMIT/DRAIN leaves b80=3 (the resident IO buffer
         // is never consumed by the feed), and the finalize case-7 gate (FUN_14067a170 == saveState==0)
-        // waits on it forever. Force b80->0 ONLY at the exact stuck signature -- AUTOLOAD_HANDOFF,
-        // MoveMapStep step 18, finalize substate live (1..=9), b80==3 RESIDENT, player present (world
+        // waits on it forever. Force b80->0 only at the exact stuck signature -- AUTOLOAD_HANDOFF,
+        // MoveMapStep step 18, finalize substate live (1..=9), b80==3 resident, player present (world
         // genuinely resident+live) -- so a healthy load (b80 already draining) is never touched.
         // Marker-gated (er-quickload-reload-drainb80.txt) for A/B against the stuck baseline.
         let b80_now = if gm != null {
@@ -1811,16 +1811,16 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         };
         SWITCH_ORACLE_B80.store(b80_now, Ordering::SeqCst);
         let finalize_now = SWITCH_ORACLE_FINALIZE_12A.load(Ordering::SeqCst);
-        // EARLY b73 HOLD -- the post-warp revert ROOT FIX (RE er-effects-rs-9fmm). GameMan+0xb73 is the
-        // quit-save RETURN-TITLE latch our System->Quit sets (FUN_14067a490); it persists into the
+        // Early b73 hold -- the post-warp revert root fix (RE er-effects-rs-9fmm). GameMan+0xb73 is the
+        // quit-save return-title latch our System->Quit sets (FUN_14067a490); it persists into the
         // reload's world, and the MoveMapStep ending evaluator FUN_140afa7c0 -> FUN_140679460
         // (= b73 && !savePopup && bc4!=3) latches session-end into CSMenuMan.menuData+0x5e at load2's
         // MoveMap entry -> STEP_EndFlow -> SetState 6->2 revert. The case-7 drain below also clears b73
-        // but only at finalize (mms18) -- TOO LATE, the evaluator already latched. Clear it CONTINUOUSLY
+        // but only at finalize (mms18) -- Too late, the evaluator already latched. Clear it continuously
         // from reload commit (FRESH_DESER_DONE=1), before mms18, so the evaluator never sees b73=1.
         // Semantically safe: post-SetState5 the quit->return-title intent is already fulfilled (we are
         // loading, not returning to title) and nothing legitimately re-sets b73 during the stream
-        // (auto-save touches saveRequested, not b73). DEFAULT behavior gated only on the real reload
+        // (auto-save touches saveRequested, not b73). Default behavior gated only on the real reload
         // condition (a committed switch reload); no marker/env toggle -- validated by running.
         if gm != null && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 1 {
             let b73 = unsafe { safe_read_u8(gm + GAME_MAN_SAVE_REQUEST_COMPANION_B73_OFFSET) }
@@ -1834,27 +1834,27 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                     ));
                 }
             }
-            // ENDING-LATCH RESIDUAL CLEAR (corrected, RE er-effects-rs-9fmm run 1650; re-grounded on
-            // 1.17 2026-09-04). menuData+0x5e is NOT a pure return-title flag: the MoveMapStep ending
-            // evaluator writes it = cVar10 each frame, and cVar10=1 is exactly what DRIVES the MoveMap
+            // Ending-latch residual clear (corrected, RE er-effects-rs-9fmm run 1650; re-grounded on
+            // 1.17 2026-09-04). menuData+0x5e is not a pure return-title flag: the MoveMapStep ending
+            // evaluator writes it = cVar10 each frame, and cVar10=1 is exactly what drives the MoveMap
             // finalize (walk field25_0x12a 0..8, case 8 advances 18->19 and consumes warpRequested). So
-            // while warpRequested==1 md5e=1 is the finalize DRIVER -- clearing it then SABOTAGES the
-            // finalize (the earlier every-frame clear caused the MMS-CLEANUP re-drive bursts + timing
-            // variance). After case 8 consumes the warp (warpRequested 1->0), md5e stays 1 RESIDUAL.
-            // FIX: clear the residual ONLY when warpRequested==0 (warp consumed / not driving), never
+            // while warpRequested==1 md5e=1 is the finalize driver -- clearing it then SABOTAGES the
+            // finalize (the earlier every-frame clear caused the MMS-cleanup re-drive bursts + timing
+            // variance). After case 8 consumes the warp (warpRequested 1->0), md5e stays 1 residual.
+            // FIX: clear the residual only when warpRequested==0 (warp consumed / not driving), never
             // during the warp-driven finalize.
             //
-            // The evaluator is `FUN_140afb9f0` on the INSTALLED 1.17 build (1.16.2: `FUN_140afa6d0`).
+            // The evaluator is `FUN_140afb9f0` on the installed 1.17 build (1.16.2: `FUN_140afa6d0`).
             // The `FUN_140afa7c0` this comment used to name is not a function entry on either build.
             // See `CS_MENU_DATA_ENDING_FLAG_5E_OFFSET` in `constants_moved.rs` for the pairing proof.
             //
-            // Gate ONLY on warpRequested==0 (warp consumed / not driving the finalize). Do NOT also gate
+            // Gate only on warpRequested==0 (warp consumed / not driving the finalize). Do not also gate
             // on mms_step/player: the residual persists after the child is torn down (mms==-1) and the
             // player is briefly gone, which is exactly the frame the revert is observed on (run 1707:
             // the clear fired 0 times because the mms>=18/player sub-gate excluded that frame). While
             // warpRequested==1 md5e is the live finalize driver and is left untouched.
             //
-            // THIS CLEAR DOES NOT PREVENT THE 6->2 REVERT (measured 2026-09-04). The comment used to
+            // This clear does not prevent the 6->2 revert (measured 2026-09-04). The comment used to
             // say "STEP_EndFlow reads that as return-to-title -> SetState 6->2". No such reader
             // exists on either build: scanning all 779 CSMenuMan global loads per image, the only
             // reader of menuData+0x5e is `AddEntry(SummonMsgQueue*, SummonMsgData*)`. The real
@@ -1899,9 +1899,9 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         // (b73==0) && FUN_140a9ceb0(CSRemo). Fire at the exact stuck signature and satisfy the two
         // GameMan-owned conditions we control: (a) drain b80 (== save_state) 3->0 (the reload's
         // resident IO buffer, never consumed by the feed), and (b) clear saveRequested -- the reload's
-        // unwanted SetState5/advancer autosave (user 2026-07-19: the reload must NOT autosave; only an
+        // unwanted SetState5/advancer autosave (user 2026-07-19: the reload must not autosave; only an
         // explicit user save writes). Both are re-applied each frame since the native advancer re-sets
-        // them. DEFAULT behavior gated only on the real stuck runtime signature (world resident+live at
+        // them. Default behavior gated only on the real stuck runtime signature (world resident+live at
         // mms18 finalize 1..9, AUTOLOAD_HANDOFF) so a healthy load is never touched; no marker toggle.
         if gm != null
             && mms_step == MOVEMAPSTEP_STEP_MOVEMAP_INDEX
@@ -1922,7 +1922,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
             }
             // Clear the b73 save-request companion (FUN_140679460 = b73 && menu_gate && bc4!=3): our
-            // return-title REQUEST set it for the switch teardown and it lingers (LEVEL flag, nothing
+            // return-title request set it for the switch teardown and it lingers (level flag, nothing
             // resets it), keeping the case-7 !FUN_140679460() condition false. Runtime-confirmed b73=1
             // at the finalize-7 stall.
             let b73_was = unsafe { safe_read_u8(gm + GAME_MAN_SAVE_REQUEST_COMPANION_B73_OFFSET) }
@@ -1964,11 +1964,11 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             0
         };
         let peak = SWITCH_ORACLE_MAX_STABLE_FRAMES.load(Ordering::SeqCst);
-        // POST-FINISH STABLE-PROOF: hold the reloaded world (phase->IDLE + clear b78) so the native
-        // InGameStep does not revert to title after the MoveMap finish. Trigger on the STRONGEST
-        // readiness signal available -- movement proven (can_move latched) for THIS reload epoch, which
-        // latches ~immediately after the finalize completes, BEFORE the ~1.4s post-finish revert -- OR
-        // the legacy 30 stable frames as a fallback. Latch is per-reload-epoch (NOT FRESH_DESER_DONE,
+        // Post-finish stable-PROOF: hold the reloaded world (phase->idle + clear b78) so the native
+        // InGameStep does not revert to title after the MoveMap finish. Trigger on the strongest
+        // readiness signal available -- movement proven (can_move latched) for this reload epoch, which
+        // latches ~immediately after the finalize completes, before the ~1.4s post-finish revert -- Or
+        // the legacy 30 stable frames as a fallback. Latch is per-reload-epoch (not FRESH_DESER_DONE,
         // which own_load consumes at commit -- that consumption is exactly why this block never fired
         // and the world reverted after finish). bd er-effects-rs-9fmm.
         let reload_epoch_now =
@@ -1976,7 +1976,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         let can_move_for_reload = reload_epoch_now > 0
             && crate::compat::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
             && crate::compat::MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == reload_epoch_now;
-        // Finalize effectively done this reload epoch (reached WARP/SERVER FINALIZE) -- hold NOW, before
+        // Finalize effectively done this reload epoch (reached WARP/SERVER FINALIZE) -- hold now, before
         // the post-finish revert, while the player is still present.
         let finalize_done_for_reload = reload_epoch_now > 0
             && SYSTEM_QUIT_RELOAD_FINALIZE_DONE_EPOCH.load(Ordering::SeqCst) == reload_epoch_now
@@ -1989,9 +1989,9 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 != reload_epoch_now
         {
             SYSTEM_QUIT_QUICKLOAD_PHASE.store(SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE, Ordering::SeqCst);
-            // DO NOT clear GameMan+0xb78 here. RE-confirmed (InGameStep::STEP_MoveMap_Update
+            // Do not clear GameMan+0xb78 here. RE-confirmed (InGameStep::STEP_MoveMap_Update
             // @0x140aec810 + orchestrator FUN_140afb970, bd er-effects-rs-9fmm): b78
-            // (requestedSaveSlotLoad) IS the MoveMap WARP TARGET the finalize (case 8) consumes to load
+            // (requestedSaveSlotLoad) is the MoveMap warp target the finalize (case 8) consumes to load
             // the destination block and rebuild the player; STEP_MoveMap_Update skips the map load when
             // the destination BlockId is 0xffffffff, which is what happens if b78 was cleared to -1
             // before the warp issues its load. This block fires at finalize>=8 -- exactly the warp window
@@ -1999,7 +1999,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             // Cleanup with nothing to reload (player true->false -> native SetState 6->2 revert; runtime
             // af27ec75 +84315 clear -> +84746 player gone). The native warp consumes and autoclears b78
             // itself; leave it armed. Clearing save_requested is safe (it is not the destination and it
-            // satisfies the case-7 ShouldSave gate); phase->IDLE only stops our re-drive.
+            // satisfies the case-7 ShouldSave gate); phase->idle only stops our re-drive.
             if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
                 er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
             }
@@ -2007,23 +2007,23 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 "system-quit-quickload: post-finish stable proof OK (can_move={can_move_for_reload} sf={sf}) epoch={reload_epoch_now} slot={slot} player_present={player_present} ig_d8={ig_d8} -> phase IDLE, cleared save_requested; b78 KEPT ARMED as the warp target (native finalize consumes+autoclears it) so the destination reloads instead of reverting"
             ));
         }
-        // BREAK A STALE `TITLE_OWNER_SEEN` LATCH (2026-09-04).
+        // Break a stale `TITLE_OWNER_SEEN` latch (2026-09-04).
         //
-        // The post-finish stable-proof reset above is the ONLY path back to `PHASE_IDLE`, and it is
+        // The post-finish stable-proof reset above is the only path back to `PHASE_IDLE`, and it is
         // gated on `phase >= AUTOLOAD_HANDOFF`. A switch that reaches `TITLE_OWNER_SEEN` and is then
         // torn down never advances that far, so it can never reach the reset -- `active_switch` stays
         // true for the rest of the process and the load-job Run guard never lifts. Measured on run
         // br-20260904-181251-0586: `Load Character from File` became a permanent silent no-op, the
-        // log reading `forwarding native (load-job Run remains guarded)` with two WHY-NOT lines
+        // log reading `forwarding native (load-job Run remains guarded)` with two why-not lines
         // spinning on `active_switch=true(phase=3)` while this very oracle reported a healthy world
         // (`player=true ig_d8=1 pstep=7/7 menu_job=0x0`). Restarting the game was the only cure.
         //
-        // Phase `TITLE_OWNER_SEEN` asserts the TITLE owner is up and we are handing off to the
+        // Phase `TITLE_OWNER_SEEN` asserts the title owner is up and we are handing off to the
         // product Continue autoload. A live player plus a pending in-world MoveMap request plus no
         // menu job is the direct contradiction of that: at the title there is no player at all. So
-        // the latch is provably stale, and the recovery is to drop it back to IDLE. Debounced over
+        // the latch is provably stale, and the recovery is to drop it back to idle. Debounced over
         // consecutive ticks so a single transient frame cannot trip it, and it deliberately does
-        // NOT touch GameMan state -- it only stops our own guard from refusing forever.
+        // not touch GameMan state -- it only stops our own guard from refusing forever.
         {
             let phase_now = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
             let stale_shape = phase_now == SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN
@@ -2083,13 +2083,13 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 movemapstep_step_name(mms_step),
                 SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
             ));
-            // PROBE (reliable): fire the EBL mount census the moment WORLD RES WAIT (mms_step 3) is reached
-            // on a SECOND load, from this always-ticking oracle (the WORLDRES-GETTER is silent some loads).
+            // Probe (reliable): fire the EBL mount census the moment world RES wait (mms_step 3) is reached
+            // on a second load, from this always-ticking oracle (the WORLDRES-GETTER is silent some loads).
             // One-shot; emits the `EBL-MOUNT-CENSUS DONE` measurement semaphore -> the monitor tears down 1s
-            // after that exact line. m28 ABSENT in the registry => mount step skipped; m28 present but the
-            // block cap +0x90 still null => bind step skipped -- discriminates WHERE the warm-reload guard is.
-            // Census is the MEASUREMENT mode (fix disabled via the marker); when the guard-flip FIX is
-            // active it is off, so its DONE line does not trigger a premature census-teardown.
+            // after that exact line. m28 absent in the registry => mount step skipped; m28 present but the
+            // block cap +0x90 still null => bind step skipped -- discriminates where the warm-reload guard is.
+            // Census is the measurement mode (fix disabled via the marker); when the guard-flip fix is
+            // active it is off, so its done line does not trigger a premature census-teardown.
             if mms_step == 3
                 && IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES
                 && !crate::compat::trace::blockres_stalecap_fix_enabled()
@@ -2097,13 +2097,13 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 crate::compat::trace::run_ebl_mount_census("oracle-mms3");
             }
         }
-        // RESTORE bc4 AFTER THE FUNCTOR (save-disabled switch completion, 2026-07-16). We forced bc4=READY(3)
-        // at the return-title REQUEST purely to fire the final functor without a quit-save. bc4=3 has done its
+        // Restore bc4 after the FUNCTOR (save-disabled switch completion, 2026-07-16). We forced bc4=ready(3)
+        // at the return-title request purely to fire the final functor without a quit-save. bc4=3 has done its
         // one job the moment the functor has fired (FINAL_FUNCTOR_CALL_COUNT>0), so put it straight back to 0
         // -- leaving it at 3 would keep clearing the incoming world's STEP_MoveMap advance gate (+0x4b8)
-        // (FUN_140679010 reads bc4). This is NOT the step-18 stall fix: runtime (2026-07-16) proved the child
-        // parks at STEP_MoveMap with the +0x4b8 gate ALREADY ready (1/0) at bc4=0 and cd100 (field17_0x100)
-        // frozen -- i.e. the child's step handler is not ticking at all, a task-starvation freeze, NOT a bc4
+        // (FUN_140679010 reads bc4). This is not the step-18 stall fix: runtime (2026-07-16) proved the child
+        // parks at STEP_MoveMap with the +0x4b8 gate already ready (1/0) at bc4=0 and cd100 (field17_0x100)
+        // frozen -- i.e. the child's step handler is not ticking at all, a task-starvation freeze, not a bc4
         // gate. So this only keeps bc4 from interfering; the real freeze is handled elsewhere. Deterministic
         // (keyed on the functor one-shot), fires effectively once. Game-thread; `gm` non-null per outer guard.
         let post_continue_stable_pending_for_bc4 = SYSTEM_QUIT_QUICKLOAD_PHASE
@@ -2132,38 +2132,38 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             }
         }
     }
-    // POST-COMMIT DORMANCY (2026-07-16, runtime-confirmed instability). This whole per-frame switch block
+    // Post-commit DORMANCY (2026-07-16, runtime-confirmed instability). This whole per-frame switch block
     // (b78 re-arm guard + disableSaveMenu clear + save-gate diagnostic) touches game state every frame while
-    // the switch is active. Once the picked slot's load has COMMITTED (FRESH_DESER_DONE=1 -- set by the
-    // feed/continue_confirm, cleared only when a NEW switch arms), the native continue_confirm->SetState5
+    // the switch is active. Once the picked slot's load has committed (FRESH_DESER_DONE=1 -- set by the
+    // feed/continue_confirm, cleared only when a new switch arms), the native continue_confirm->SetState5
     // stream is establishing the in-game session on the game's worker threads; our per-frame writes racing
     // that stream is the most likely cause of the non-deterministic Windows-native instability (bc4-freeze /
-    // post-load bounce / stream hard-freeze -- all after the char has already fed correctly). So go FULLY
+    // post-load bounce / stream hard-freeze -- all after the char has already fed correctly). So go fully
     // dormant here once committed: emit nothing, write nothing, let the native session settle. Inert before
     // the feed (latch 0 -> block runs and fires the initial load exactly as before); re-enabled for the next
     // genuine pick when the arm clears the latch.
-    // PHASE UPPER BOUND (bd er-effects-rs-af3a; ported from branch commit c1b2dccd, which shipped it
+    // Phase upper bound (bd er-effects-rs-af3a; ported from branch commit c1b2dccd, which shipped it
     // as "b78 guard phase-windowing" and never reached main). The window is [RETURN_TITLE_REQUESTED,
     // AUTOLOAD_HANDOFF) == phases 2..3, not [2, inf).
     //
-    // WHY A PHASE AND NOT THE LATCH. FRESH_DESER_DONE alone cannot close this window, because it is
-    // not monotonic: system_quit_repro_guards.rs re-arms it to 0 on EVERY user ProfileSelect arm, and
+    // Why a phase and not the latch. FRESH_DESER_DONE alone cannot close this window, because it is
+    // not monotonic: system_quit_repro_guards.rs re-arms it to 0 on every user ProfileSelect arm, and
     // its own comment there records where that leads -- "FRESH_DESER_DONE stuck 0 -> the b78 guard
     // wrote GameMan requestedSaveSlotLoad=-1 every frame -> native pump gate false -> world torn down
-    // at ENTERING WORLD = the load3 softlock" (bd compounding-reload-two-roots-...-chainB-stale-fd4io-
+    // at entering world = the load3 softlock" (bd compounding-reload-two-roots-...-chainB-stale-fd4io-
     // latch-b78-2026-07-23). c1b2dccd reached the same conclusion from the other direction: "the
     // FRESH_DESER_DONE latch may be consumed/cleared before world readiness". The quickload phase does
     // not have that problem -- it advances to AUTOLOAD_HANDOFF and stays there -- and past that point
-    // the SetState5/handoff owns b78, so BOTH of this block's branches (force -1, and re-arm = slot)
+    // the SetState5/handoff owns b78, so both of this block's branches (force -1, and re-arm = slot)
     // are wrong there regardless of what the latch says.
     //
-    // WHAT THIS DOES *NOT* FIX, stated so nobody re-derives it. It would NOT have prevented the PR-117
-    // black screen: that write happened at quickload phase 3, which is INSIDE this window. Only the
-    // fd4io COMMIT stand-down below covers that. The two conditions guard different failures and
+    // What this does *not* fix, stated so nobody re-derives it. It would not have prevented the PR-117
+    // black screen: that write happened at quickload phase 3, which is inside this window. Only the
+    // fd4io commit stand-down below covers that. The two conditions guard different failures and
     // neither subsumes the other.
     //
-    // MEASURED IMPACT ON HEALTHY RUNS: none. Across the five user-driven and agent-driven runs captured
-    // 2026-08-01 (userdrive-b78-20260801-091449, userdrive-MAIN-control-20260801-092134,
+    // Measured impact on healthy RUNS: none. Across the five user-driven and agent-driven runs captured
+    // 2026-08-01 (userdrive-b78-20260801-091449, userdrive-main-control-20260801-092134,
     // userdrive-COMMITscoped-20260801-092654 and their pre-run logs), every single b78-guard write --
     // 12 of them -- reported quickload phase 3. Zero fired at phase >= 4. So this bound is inert on a
     // run that behaves, and only bites the stuck-latch shape above.
@@ -2174,52 +2174,52 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 0
         && gm != null
         && slot >= OWN_STEPPER_SLOT_ZERO;
-    // FD4IO OWNERSHIP STAND-DOWN (black-screen fix, user eval run 20260731-user-eval-pr117
+    // FD4IO ownership stand-down (black-screen fix, user eval run 20260731-user-eval-pr117
     // switch #2 / cross-save Banon; bd er-effects-rs-9jbe). Once the switch-reload fd4io machine
-    // has left IDLE it OWNS GameMan+0xb78 as the warp target ("b78 kept armed (warp target)
-    // through finalize" at SUBMIT->DRAIN->COMMIT); this guard's force-(-1) below raced that
-    // finalize when the quickload phase lagged at 3 (+95422ms: "kept gm_b78=-1" 650ms AFTER the
-    // fd4io COMMIT) and stripped the warp destination mid-warp -- STEP_MoveMap_Update reads
+    // has left idle it owns GameMan+0xb78 as the warp target ("b78 kept armed (warp target)
+    // through finalize" at submit->drain->commit); this guard's force-(-1) below raced that
+    // finalize when the quickload phase lagged at 3 (+95422ms: "kept gm_b78=-1" 650ms after the
+    // fd4io commit) and stripped the warp destination mid-warp -- STEP_MoveMap_Update reads
     // BlockId 0xffffffff, skips the map load, and the world tears down with nothing armed (black
     // screen, mms=-1, defaulted level-9 character, loading bar frozen at 1/500). The in-world
-    // protection this guard exists for is UNAFFECTED: fd4io SUBMIT only ever happens post-teardown
-    // at the clean title, so IDLE still covers the whole in-world window (the 2026-07-01
+    // protection this guard exists for is UNAFFECTED: fd4io submit only ever happens post-teardown
+    // at the clean title, so idle still covers the whole in-world window (the 2026-07-01
     // RequestLoadSlot spin, where writing b78=slot in-world made FUN_140afb970 spin
     // RequestLoadSlot 4600+ times). Reset per switch by reset_switch_reload_latches.
     //
-    // SCOPED TO COMMIT, NOT ALL OF NON-IDLE (user-driven A/B, 2026-08-01, runs
-    // userdrive-b78-20260801-091449 vs userdrive-MAIN-control-20260801-092134). The first shipped
-    // form of this stand-down used `!= IDLE`, which also covers DRAIN -- and standing down through
-    // DRAIN broke the user's ProfileSelect switch. Measured, same save/slot on both sides:
-    //   MAIN     forces "kept gm_b78=-1" three times inside the DRAIN window; the finalize's own
+    // SCOPED to commit, not all of non-idle (user-driven A/B, 2026-08-01, runs
+    // userdrive-b78-20260801-091449 vs userdrive-main-control-20260801-092134). The first shipped
+    // form of this stand-down used `!= IDLE`, which also covers drain -- and standing down through
+    // drain broke the user's ProfileSelect switch. Measured, same save/slot on both sides:
+    //   Main     forces "kept gm_b78=-1" three times inside the drain window; the finalize's own
     //            autosave then dispatches, saveRequested+b73 clear 51ms later, 0 declines/4 calls.
-    //   != IDLE  leaves b78 armed for all 81 DRAIN frames; 15s later the NATIVE save dispatcher
+    //   != idle  leaves b78 armed for all 81 drain frames; 15s later the native save dispatcher
     //            refuses the finalize autosave with `load-job-latched-0x18+0x20` (SL request slot
     //            still holds load_content=0x97e71200 job=0x353300c0, save_content=0x0) -- 907
     //            declines/910 calls, so b72/b73 latch forever, the case-7 gate (which needs both
-    //            == 0, bd CASE7-GATE-DECOMPILED-...-2026-07-21) never opens, STEP_MoveMap self-
+    //            == 0, bd CASE7-gate-DECOMPILED-...-2026-07-21) never opens, STEP_MoveMap self-
     //            loops at 18, the cover FPS-bails and the vanilla loading screen reaches the user.
-    // So the DRAIN-window clears are load-bearing: they retire the load request before the finalize
-    // needs the SL slot for its save. The PR-117 black screen was never a DRAIN-window write -- its
-    // evidence is a "kept gm_b78=-1" 650ms AFTER the fd4io COMMIT. COMMIT is therefore the exact
+    // So the drain-window clears are load-bearing: they retire the load request before the finalize
+    // needs the SL slot for its save. The PR-117 black screen was never a drain-window write -- its
+    // evidence is a "kept gm_b78=-1" 650ms after the fd4io commit. Commit is therefore the exact
     // and only window where the finalize owns b78 as the warp target and this guard must not touch
-    // it; DRAIN keeps the pre-existing behavior.
+    // it; Drain keeps the pre-existing behavior.
     let fd4io_owns_b78 = er_telemetry_core::counters::SWITCH_RELOAD_FD4IO_PHASE
         .load(Ordering::SeqCst)
         == er_telemetry_core::counters::SWITCH_RELOAD_FD4IO_COMMIT;
     if b78_guard_window_open && fd4io_owns_b78 {
-        // ENGAGEMENT SEMAPHORE. Count every frame the guard would have forced b78=-1 and now does
-        // not. `> 0` == a real fd4io COMMIT overlap was survived.
+        // Engagement SEMAPHORE. Count every frame the guard would have forced b78=-1 and now does
+        // not. `> 0` == a real fd4io commit overlap was survived.
         //
-        // EXPECT 0 ON A HEALTHY RUN, BY CONSTRUCTION (measured 2026-08-01, run
+        // Expect 0 on a healthy run, by construction (measured 2026-08-01, run
         // userdrive-COMMITscoped-20260801-092654: two switches incl. a cross-save, 0 stand-downs,
-        // 0 dispatcher declines, 0 native-LS exposure). COMMIT's own feed sets
+        // 0 dispatcher declines, 0 native-LS exposure). Commit's own feed sets
         // FRESH_DESER_DONE=1 (own_load/loaders.rs), and that is one of `b78_guard_window_open`'s
         // conditions -- so on a run whose deserialize completes normally the window shuts the
-        // instant COMMIT starts and this branch is unreachable. It becomes reachable only in the
-        // PR-117 failure timing, where the deserialize has NOT completed and the window is still
-        // open 650ms past COMMIT. That is the intended shape (a guard that is inert until the
-        // thing it guards against is actually happening), but it means a clean run can NEVER
+        // instant commit starts and this branch is unreachable. It becomes reachable only in the
+        // PR-117 failure timing, where the deserialize has not completed and the window is still
+        // open 650ms past commit. That is the intended shape (a guard that is inert until the
+        // thing it guards against is actually happening), but it means a clean run can never
         // prove this engaged: healthy runs are non-regression evidence only, and `> 0` will only
         // ever be seen on a run that was heading for the black screen. Do not read 0 as broken,
         // and do not read a clean run as proof. bd er-effects-rs-9jbe.
@@ -2237,7 +2237,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
     if b78_guard_window_open && !fd4io_owns_b78 {
         // GameMan+0xb78 is CS::GameMan::GetRequestedSaveSlotLoad: the per-frame MoveMapStep load
         // orchestrator (FUN_140afb970, live) reads it and, when != -1, calls RequestLoadSlot(b78) to
-        // load that slot IN-WORLD. So while the OLD world is still up (local player present) b78 MUST
+        // load that slot in-world. So while the old world is still up (local player present) b78 must
         // stay -1 -- writing the picked slot here arms the very in-world load we are trying to avoid.
         // (Observed 2026-07-01: writing b78=slot while in-world made FUN_140afb970 spin
         // RequestLoadSlot(slot) 4600+ times; with that arm blocked the map machine stuck "loading" and
@@ -2246,23 +2246,23 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         // b78=slot so the clean-title autoload loads the picked slot via that same b78 -> RequestLoadSlot
         // path. See bd system-quit-loadjob-success-commits-phantom-load-2026-07-01.
         let world_up = unsafe { PlayerIns::local_player_mut() }.is_ok();
-        // SWITCH-2 SOFT-LOCK FIX (game-task path, 2026-07-16). RE of the 1.16.1 dump (Ghidra persistent
+        // Switch-2 soft-lock fix (game-task path, 2026-07-16). RE of the 1.16.1 dump (Ghidra persistent
         // project) proved the switch-2 freeze is the native quit-save aborting on a stale
         // `CSMenuMan->disableSaveMenu` (+0x13c): `ShouldSave` (dump 0x1406794c0) does
         // `if (CanShowSaveMenu()) saveRequested = 0;` and `CanShowSaveMenu` (dump 0x14080d150) returns
         // `GLOBAL_CSMenuMan->disableSaveMenu != 0`, so while that byte is set the quit-save returns 0
         // regardless of saveRequested/menu-gate/save_state -- `bc4` never pumps 1->2->3 and the world
-        // never tears down. This is DISTINCT from the menu gate the stall-diag below logs (`FUN_14080d660`
+        // never tears down. This is distinct from the menu gate the stall-diag below logs (`FUN_14080d660`
         // = CSMenuMan+0x80->0x290/0x298), which is why that diag reported `menu_gate_ok=true ->
-        // blocked_by=NONE(orchestrator not called?)`: it never checked +0x13c. The sibling menu-pump path
+        // blocked_by=none(orchestrator not called?)`: it never checked +0x13c. The sibling menu-pump path
         // (`system_quit_restore_real_system_windows`) already clears this byte, but that observer is not
         // re-invoked for switch 2's torn-down windows, so the stale byte survives into the game-task stall.
-        // Clear it HERE, on the game task, every frame the switch-2 stall signature holds (world still up
-        // AND bc4 frozen at 1 == GAME_MAN_RETURN_TITLE_JOB_PREDICATE_PENDING), so the clear fires
+        // Clear it here, on the game task, every frame the switch-2 stall signature holds (world still up
+        // and bc4 frozen at 1 == GAME_MAN_RETURN_TITLE_JOB_PREDICATE_PENDING), so the clear fires
         // independently of the menu-pump path. Native BOOL field write of an RE-confirmed gate (not a
         // speculative poke); no-op once 0. Byte-for-byte inert on switch 1 (its byte is already 0, and this
         // whole block only runs at phase >= RETURN_TITLE_REQUESTED). SYSTEM_QUIT_DISABLE_SAVE_MENU_CLEAR_COUNT
-        // is the runtime semaphore: >0 on a switch == that switch's quit-save was gated OFF and we unblocked it.
+        // is the runtime semaphore: >0 on a switch == that switch's quit-save was gated off and we unblocked it.
         if world_up && return_title_job_predicate_bc4 == GAME_MAN_RETURN_TITLE_JOB_PREDICATE_PENDING
         {
             let cs_menu_man = unsafe {
@@ -2289,21 +2289,21 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 }
             }
         }
-        // b78 GUARD (companion to the disableSaveMenu clear above). Force b78 = -1 for the WHOLE time
+        // b78 guard (companion to the disableSaveMenu clear above). Force b78 = -1 for the whole time
         // the old world is up (through bc4 1 -> 2 -> 3), and only write the picked slot once the world has
-        // torn down. The switch-2-fix proposal to narrow this to only `world_up && bc4 == 1` was NOT
+        // torn down. The switch-2-fix proposal to narrow this to only `world_up && bc4 == 1` was not
         // applied on this branch: with the disableSaveMenu clear now letting bc4 advance to 2/3 while the
         // player is still briefly present, gating on `bc4 == 1` alone would let b78 = slot leak at bc4 2/3
         // and re-arm the very in-world MoveMapStep load the block comment above warns against (2026-07-01:
         // b78 = slot while in-world spun RequestLoadSlot 4600+ times and stuck the map machine "loading").
         // `world_up` is the correct invariant: b78 must be -1 until the world is gone, then = slot for the
         // clean-title autoload. So the force-(-1) condition stays keyed on world_up, unchanged from switch 1.
-        // POST-COMMIT RE-LOAD LOOP FIX (2026-07-16, runtime-confirmed). Once this switch's picked slot has
-        // COMMITTED its load (SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE=1 -- set by the feed/continue_confirm
-        // at the clean-title stream, cleared to 0 only when a genuinely NEW switch arms at
-        // system_quit_repro_guards.rs:864), STOP re-arming b78=slot. Proven from the gm-snap/setstate trace:
+        // Post-commit RE-load loop fix (2026-07-16, runtime-confirmed). Once this switch's picked slot has
+        // committed its load (SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE=1 -- set by the feed/continue_confirm
+        // at the clean-title stream, cleared to 0 only when a genuinely new switch arms at
+        // system_quit_repro_guards.rs:864), stop re-arming b78=slot. Proven from the gm-snap/setstate trace:
         // after the picked char loads and reaches stable in-world (ig_d8=2, menu_job populated), the world
-        // momentarily drops to world_up=false and this guard RE-WROTE b78=slot -> a redundant in-world reload
+        // momentarily drops to world_up=false and this guard RE-wrote b78=slot -> a redundant in-world reload
         // that tears the freshly-loaded world down and bounces it back to title (menu_job->0 -> requestCode->0
         // -> SetState 6->2 -> our autoload re-drives -> loop = the soft-lock). Holding b78=-1 once committed
         // keeps the loaded world up. Inert before the feed (latch still 0 -> b78=slot fires the initial load
@@ -2312,19 +2312,19 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         // native requested-slot load branch (`FUN_14067b2f0`) and re-enters the 0x67141a
         // crash path. Keep it disarmed here; do not use b78 as a progress mechanism.
         unsafe { *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) = OWN_STEPPER_SLOT_NONE };
-        // CLEAR THE QUIT-SAVE REQUEST FLAGS DURING TEARDOWN (2026-07-16, Ghidra + runtime proven root).
+        // Clear the quit-save request flags during TEARDOWN (2026-07-16, Ghidra + runtime proven root).
         // The old world's MoveMapStep leaves its resident STEP_MoveMap(18) step only when the "ending
         // request" sub-machine (MoveMapStep.field25_0x12a, in FUN_140afa7c0, ticked by the MoveMap update
         // FUN_140aff730) walks case 0->..->7->8; case 8 calls FUN_140af9e80 to advance the parent step
         // (18->19->20->-1), which is what lets the InGameStep finish and the world tear down. The gate that
-        // FREEZES it is case 7->8: it requires `ShouldSave() == false` AND `FUN_140679460() == false`.
+        // freezes it is case 7->8: it requires `ShouldSave() == false` and `FUN_140679460() == false`.
         // `ShouldSave` (0x1406794c0) = saveRequested(b72) && !CanShowSaveMenu() && menu_gate && bc4!=3;
-        // `FUN_140679460` = GameMan+0xb73 && menu_gate && bc4!=3. Our return-title REQUEST set b72 and b73
-        // (it intends a quit-save); the native quit clears them BY SAVING, but we suppress the save (no save
+        // `FUN_140679460` = GameMan+0xb73 && menu_gate && bc4!=3. Our return-title request set b72 and b73
+        // (it intends a quit-save); the native quit clears them by saving, but we suppress the save (no save
         // on quit, by design), so they stay set -> ShouldSave/FUN_140679460 stay true -> case 7 hangs forever
         // -> child never finishes -> world never tears down = the "MOVE MAP 18/20" stall (runtime: the stuck
         // switch had b72=1 b73=1; the one that tore down had b72=0 b73=0). So clear both here every teardown
-        // frame while the OLD world is up: this makes ShouldSave()/FUN_140679460() deterministically false,
+        // frame while the old world is up: this makes ShouldSave()/FUN_140679460() deterministically false,
         // unblocks the ending sub-machine, and is exactly the no-save-on-quit behavior we want (no disk
         // write; we are only dropping the request flags the game would otherwise satisfy via a save). Once
         // the world is gone (world_up=false) the block stops mattering; the post-commit dormancy latch and
@@ -2337,8 +2337,8 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             SYSTEM_QUIT_TEARDOWN_SAVEREQ_CLEAR_COUNT.fetch_add(1, Ordering::SeqCst);
         }
         // NOTE: an earlier attempt repointed GameMan+0xac0 (set_save_slot) here at the clean title.
-        // That was proven INSUFFICIENT and misleading: ac0 is a deserialize BYPRODUCT, never read as
-        // load input, and repointing it forges the `ac0==expected` deser-evidence the Continue GUARD
+        // That was proven insufficient and misleading: ac0 is a deserialize byproduct, never read as
+        // load input, and repointing it forges the `ac0==expected` deser-evidence the Continue guard
         // relies on. The picked slot is now made authoritative by the continue_confirm guard
         // (system_quit_continue_confirm_hook), which drives a fresh feed-deserialize of the picked
         // slot (setting ac0/c30/PGD as its normal byproducts) before the confirm streams. See bd
@@ -2351,21 +2351,21 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 "system-quit-quickload: requested save-slot load index world_up={world_up} kept gm_b78=-1 (read_back={requested_slot}) selected_slot={slot} phase={} bc4=0x{return_title_job_predicate_bc4:x}",
                 SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
             ));
-            // save-gate diag DURING the stall (bc4=1): the quit-save orchestrator FUN_140afb970 (RE 1.16.1)
-            // skips the save unless force-latch 0x3d856a0 == 0, GameMan->save_state(+0xb80) == 0, AND the
+            // save-gate diag during the stall (bc4=1): the quit-save orchestrator FUN_140afb970 (RE 1.16.1)
+            // skips the save unless force-latch 0x3d856a0 == 0, GameMan->save_state(+0xb80) == 0, and the
             // menu gate FUN_14080d660 (*(CSMenuMan[+0x80])->0x290==0 && ->0x298==0). Names the blocker while
             // bc4 is frozen. Both globals are read through their RVA constants
             // (ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA = the load-active latch, CS_MENU_MAN_GLOBAL_RVA), so the
             // 1.16.2 addresses quoted above are RE provenance, not addresses this code reaches for.
-            // AN UNREAD VALUE IS NOT A MEASURED ONE. Every read below is fault-tolerant, and
+            // An UNREAD value is not a measured one. Every read below is fault-tolerant, and
             // this block used to fold each failure into an in-band sentinel -- `0xff` for a
             // byte, `-1` for `disableSaveMenu`, `usize::MAX` for a pointer -- and then compare
             // the sentinel as if it were the field. `disableSaveMenu = -1` (CSMenuMan null or
-            // unreadable) satisfied `!= 0`, so `pump_fallback` came out TRUE and the line named
+            // unreadable) satisfied `!= 0`, so `pump_fallback` came out true and the line named
             // "QUIT-SAVE FALLBACK(saveSlot>=10 or disableSaveMenu!=0)" as the definitive blocker
             // for a value that was never read. The same run printed `menu_gate_ok=false` from
             // the same unreadable CSMenuMan, and `case7-gate` reported `c2_not_shouldsave` as
-            // PASSING because `dsg_dsm == 0` was false for the same reason. Three conclusions,
+            // passing because `dsg_dsm == 0` was false for the same reason. Three conclusions,
             // one absent pointer, no way for a reader to tell.
             //
             // The reads are `Option` now and every derived predicate is `Option`: a missing
@@ -2374,7 +2374,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             //
             // The gate being described (RE 1.16.1): the quit-save orchestrator FUN_140afb970
             // skips the save unless force-latch 0x3d856a0 == 0, GameMan->save_state(+0xb80) == 0,
-            // AND the menu gate FUN_14080d660 (*(CSMenuMan[+0x80])->0x290==0 && ->0x298==0).
+            // and the menu gate FUN_14080d660 (*(CSMenuMan[+0x80])->0x290==0 && ->0x298==0).
             // The 1.16.2 RVAs quoted here are RE provenance; the reads below go through
             // ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA and CS_MENU_MAN_GLOBAL_RVA, resolved for the
             // running build. A refusal makes the read `None`, which the Option chain already
@@ -2400,14 +2400,14 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 .filter(|sub| *sub > 0x10000);
             let dsg_m290 = dsg_sub.and_then(|sub| unsafe { safe_read_u8(sub + 0x290) });
             let dsg_m298 = dsg_sub.and_then(|sub| unsafe { safe_read_usize(sub + 0x298) });
-            // `None` = at least one operand of FUN_14080d660 could not be read. NOT `false`:
+            // `None` = at least one operand of FUN_14080d660 could not be read. Not `false`:
             // "the menu gate is shut" and "we could not see the menu gate" are different facts
             // and only one of them is a blocker.
             let dsg_menu_ok = match (dsg_m290, dsg_m298) {
                 (Some(m290), Some(m298)) => Some(m290 == 0 && m298 == 0),
                 _ => None,
             };
-            // The REAL orchestrator (FUN_140afb970) pump gate is bVar5:
+            // The real orchestrator (FUN_140afb970) pump gate is bVar5:
             // bVar5 = ShouldSave() [saveRequested(b72) && !CanShowSaveMenu() && menu_gate && bc4!=3]
             //      || FUN_140679460() [b73 && menu_gate && bc4!=3]  ||  GetRequestedSaveSlotLoad()(b78) != -1.
             // If bVar5==0 the orchestrator returns without pumping bc4.
@@ -2423,7 +2423,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 (Some(b73), Some(menu_ok)) => Some(b73 != 0 && menu_ok && bc4_not3),
                 _ => None,
             };
-            // A disjunction can be decided by a readable TRUE even when a term is unreadable,
+            // A disjunction can be decided by a readable true even when a term is unreadable,
             // and only that shape is honest: `Some(true)` needs one true term, `Some(false)`
             // needs every term readable and false.
             let bvar5_est = {
@@ -2436,9 +2436,9 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                     None
                 }
             };
-            // The REAL bc4 blocker (deeper than bVar5): the quit-save FUN_14067ba30 does the full
-            // bc4-advancing save ONLY if saveSlot < 10 AND disableSaveMenu == 0; otherwise it FALLS
-            // BACK to a plain save (FUN_14067b660) that writes disk but never advances bc4 (and
+            // The real bc4 blocker (deeper than bVar5): the quit-save FUN_14067ba30 does the full
+            // bc4-advancing save only if saveSlot < 10 and disableSaveMenu == 0; otherwise it falls
+            // back to a plain save (FUN_14067b660) that writes disk but never advances bc4 (and
             // clears saveRequested). CanShowSaveMenu() == (CSMenuMan->disableSaveMenu != 0).
             let dsg_slot = unsafe {
                 safe_read_i32(gm + core::mem::offset_of!(eldenring::cs::GameMan, save_slot))
@@ -2453,7 +2453,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 (None, Some(dsm)) if dsm != 0 => Some(true),
                 _ => None,
             };
-            /// Render an optional read for the log: the VALUE when it was read, the word
+            /// Render an optional read for the log: the value when it was read, the word
             /// `unreadable` when it was not. Never a sentinel that can be mistaken for data.
             fn render<T: core::fmt::Display>(value: Option<T>) -> String {
                 value.map_or_else(|| "unreadable".to_owned(), |value| value.to_string())
@@ -2473,7 +2473,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 || pump_fallback.is_none()
                 || bvar5_est.is_none()
             {
-                // The honest answer whenever any operand is missing: this diag has NOT found a
+                // The honest answer whenever any operand is missing: this diag has not found a
                 // blocker, and must not name one. Which field is absent is in the line itself.
                 "UNREADABLE(one or more gate inputs could not be read -- NO blocker determined)"
             } else if dsg_force != Some(0) {
@@ -2498,10 +2498,10 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 render(dsg_dsm),
                 render(pump_fallback),
             ));
-            // CASE-7 7->8 GATE, computed EXACTLY from the decompiled formulas (FUN_140afa7c0 case 7,
-            // bd CORRECTED-load2-substate7-NOT-save-drain-saving-disabled-shouldsave-structurally-false-2026-07-20).
-            // Advance needs ALL of: c1 FUN_14067a170[saveState b80==0], c2 !ShouldSave, c3 !FUN_140679460,
-            // c4 FUN_140a9ceb0(CSRemo) [historically PASSING]. ShouldSave = b72 && !CanShowSaveMenu()
+            // Case-7 7->8 gate, computed exactly from the decompiled formulas (FUN_140afa7c0 case 7,
+            // bd corrected-load2-substate7-not-save-drain-saving-disabled-shouldsave-structurally-false-2026-07-20).
+            // Advance needs all of: c1 FUN_14067a170[saveState b80==0], c2 !ShouldSave, c3 !FUN_140679460,
+            // c4 FUN_140a9ceb0(CSRemo) [historically passing]. ShouldSave = b72 && !CanShowSaveMenu()
             // && menu_gate && bc4!=3, and !CanShowSaveMenu()==(disableSaveMenu==0).
             //
             // `shouldsave` previously read `dsg_dsm == 0`, so an UNREADABLE CSMenuMan made it
@@ -2513,7 +2513,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 (Some(b72), Some(dsm), Some(menu_ok)) => {
                     Some(b72 != 0 && dsm == 0 && menu_ok && bc4_not3_c)
                 }
-                // A conjunction is FALSE as soon as one readable term is false, however many
+                // A conjunction is false as soon as one readable term is false, however many
                 // others are missing -- the mirror of the disjunction rule above.
                 (Some(0), _, _) | (_, _, Some(false)) => Some(false),
                 _ if !bc4_not3_c => Some(false),
@@ -2577,9 +2577,9 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
     {
-        // The return-title save has finished writing the ACTIVE slot into the active file (bc4 is
+        // The return-title save has finished writing the active slot into the active file (bc4 is
         // terminal only after save_state returned to 0). Re-commit the foreign candidate now so a
-        // SAME-SLOT switch's fresh deserialize reads the picked character instead of the clobbered
+        // same-slot switch's fresh deserialize reads the picked character instead of the clobbered
         // active one (see system_quit_save_swap_recommit_after_return_title_save).
         system_quit_save_swap_recommit_after_return_title_save();
         let system_dialog = SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.load(Ordering::SeqCst);
@@ -2650,8 +2650,8 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         // staged save itself); let it run its own GUARD/COMMIT, not the Continue-item guard below.
         // This covers both the missing-save picker and explicit loose `save_file` config.
         //
-        // NARROWED 2026-08-26: `direct_save_file_source_active()` alone is not the question. It says
-        // WHERE the bytes come from, not whether the native Continue row can be used -- and routing
+        // Narrowed 2026-08-26: `direct_save_file_source_active()` alone is not the question. It says
+        // where the bytes come from, not whether the native Continue row can be used -- and routing
         // every picked save away from that row is what put the deserialize at the title, outside
         // every precondition its only native caller establishes. Ask the route instead.
         if (direct_save_file_source_active() && direct_source_runs_title_full_read())
@@ -2683,19 +2683,19 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         unsafe { product_continue_autoload_tick(owner, module_base, gm, slot, tick, &guard_ready) };
         return true;
     }
-    // MENU-FREE SWITCH RELOAD (2026-07-18, RE workflow + bd live-switch-teardown-fixed-now-menu-open-stall).
+    // Menu-free switch reload (2026-07-18, RE workflow + bd live-switch-teardown-fixed-now-menu-open-stall).
     // The genuine System->Quit->Load-Profile switch tears the old world down cleanly (ending-request
     // recovery), but the warm-rebuilt TitleTopDialog never reaches Loop (press-start SceneObjProxy at
     // dialog+0xb78 unbound post-return-title), so product_core_autoload_ready below returns None forever
     // and the native accept-byte/open-menu path deadlocks; native_fullread_tick also stands down for a
     // switch and its direct-file call sites are inactive on the default save. Drive the picked slot
     // through the menu-free native-ownership commit (same final SetState5 as the boot load, fed from our
-    // own disk bytes). Fires ONLY for a genuine in-world switch at a clean title, NEVER the boot autoload
+    // own disk bytes). Fires only for a genuine in-world switch at a clean title, never the boot autoload
     // or the spurious boot self-reload -- four independent discriminators, any one of which excludes boot:
-    //   * QUICKLOAD_PHASE >= RETURN_TITLE_REQUESTED  -- a switch is in progress (boot=IDLE)
-    //   * ARM_PLAYER_WAS_ABSENT == 0                 -- GENUINE switch (armed in-world), not the spurious
+    //   * QUICKLOAD_PHASE >= RETURN_TITLE_REQUESTED  -- a switch is in progress (boot=idle)
+    //   * ARM_PLAYER_WAS_ABSENT == 0                 -- Genuine switch (armed in-world), not the spurious
     //                                                   boot self-reload (armed while player absent -> 1)
-    //   * player ABSENT now                          -- old world torn down (clean title): makes the
+    //   * player absent now                          -- old world torn down (clean title): makes the
     //                                                   gaitem reset safe, never deser into a live world
     //   * picked slot in 0..TITLE_PROFILE_SLOT_COUNT -- a real profile slot (boot=usize::MAX)
     //   * FRESH_DESER_DONE == 0                      -- not already committed this switch
@@ -2707,8 +2707,8 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         && gm != null
         && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 0
         && unsafe { PlayerIns::local_player_mut() }.is_err()
-        // CLEAN-A/B: skip the menu-free switch-reload so the harness's menu-driven Continue is the sole
-        // reload path -- isolates menu-free vs menu-driven under identical epoch1 (bd STEP4-RUNTIME-TRACE).
+        // Clean-A/B: skip the menu-free switch-reload so the harness's menu-driven Continue is the sole
+        // reload path -- isolates menu-free vs menu-driven under identical epoch1 (bd STEP4-runtime-trace).
         && !crate::compat::gating::switch_reload_ownload_disabled()
         && unsafe {
             crate::compat::own_load::own_load_switch_reload_fire(
@@ -2766,9 +2766,9 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         } else {
             null
         };
-        // Both expected vtables resolved ONCE, and neither may be zero. `press_start_vt` and
+        // Both expected vtables resolved once, and neither may be zero. `press_start_vt` and
         // `dialog_vt` are both `unwrap_or(null)` where `null` is `usize::MIN` = 0, which is also
-        // what `game_data_addr` answers for a refusal -- so `0 == 0` would read a PRESS-START
+        // what `game_data_addr` answers for a refusal -- so `0 == 0` would read a press-start
         // context out of an object with no vtable and take the title's loop/fadeout state off a
         // dialog nothing had identified.
         let want_scene_obj_proxy_vt = er_game_base::mem::game_data_addr(
@@ -2827,7 +2827,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 PRODUCT_CORE_BLOCKER_HEAP_ALLOCATOR
             } else if want_title_dialog_vt == null || dialog_vt != want_title_dialog_vt {
                 PRODUCT_CORE_BLOCKER_TITLE_DIALOG
-            // RESOLVED, reusing the value the PRESS-START context read above already screened.
+            // Resolved, reusing the value the press-start context read above already screened.
             // `CS::SceneObjProxy`'s vtable moved on 1.17 (0x2a94a70 -> 0x2a97af0), so this raw
             // comparison could not match and product-core readiness reported
             // `BLOCKER_PRESS_START` forever -- the autoload's own boot gate, stuck on a stale
@@ -2926,22 +2926,22 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 ready.menu_opened_latch
             ));
         }
-        // After menu-open (a40==1): commit the load. DEFAULT = the PROVEN native Continue char-load
-        // (the unchanged block below). The default-OFF ProfileSelect load flow instead fires the
-        // Load-Game row to open a LIVE ProfileLoadDialog (the render context in which the profile
-        // renderer's per-slot refresh gate is satisfied), HOLDS for the portrait render, then drives
+        // After menu-open (a40==1): commit the load. Default = the proven native Continue char-load
+        // (the unchanged block below). The default-off ProfileSelect load flow instead fires the
+        // Load-Game row to open a live ProfileLoadDialog (the render context in which the profile
+        // renderer's per-slot refresh gate is satisfied), holds for the portrait render, then drives
         // the same STAGE2 commit. `profile_select_load_flow_enabled()` is a compile-time const, so
-        // when OFF this branch is dead-code-eliminated and execution falls through to the unchanged
+        // when off this branch is dead-code-eliminated and execution falls through to the unchanged
         // Continue path below (byte-identical).
         if profile_select_load_flow_enabled() {
             unsafe { product_profile_select_load_flow(owner, module_base, slot, tick) };
             return true;
         }
-        // FORCE LIVE PROFILE RENDER (diagnostic, default-OFF) in the autoload path: at the open main
+        // Force live profile render (diagnostic, default-off) in the autoload path: at the open main
         // menu (renderers live from TitleTopDialog ctor) kick the live character-model build + capture
         // the rendered gx so the now-loading forge can display the real head. One-shot mark+refresh;
         // the build is fast (~133ms, proven run 130619) and the teardown-spare hook keeps the kept gx
-        // alive across Continue. NO hold -- the proven Continue commit proceeds unchanged; if the build
+        // alive across Continue. No hold -- the proven Continue commit proceeds unchanged; if the build
         // loses the race the capture simply never fires (degrades to current behavior, no crash).
         if force_profile_render_enabled() {
             unsafe { force_profile_render_tick(module_base, slot) };
@@ -2959,13 +2959,13 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 ));
             }
         }
-        // SWITCH-SAFETY: for the in-world System->Quit->Load-Profile switch, do NOT drive ANY native
-        // Continue/menu-readiness probing or the autoload tick until the OLD world is actually torn
+        // Switch-SAFETY: for the in-world System->Quit->Load-Profile switch, do not drive any native
+        // Continue/menu-readiness probing or the autoload tick until the old world is actually torn
         // down (local player absent). Those calls poke native menu/Scaleform functions from the game
         // task; running them while the old world + menu pump are live races the pump and corrupts
         // Scaleform (non-deterministic execute-fault). The menu-pump-owned chain (native confirm
         // Success pops ProfileSelect -> Run-hook submits the return-title chain -> world teardown)
-        // must complete first; once the player goes absent this drives the load at a CLEAN title,
+        // must complete first; once the player goes absent this drives the load at a clean title,
         // exactly like the boot autoload. Boot has no System-Quit phase, and at a fresh title there is
         // no local player, so this passes immediately there. See bd
         // system-quit-return-title-scaleform-race-2026-07-01.
@@ -3013,7 +3013,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             SYSTEM_QUIT_QUICKLOAD_AUTOLOAD_HANDOFF_COUNT.fetch_add(1, Ordering::SeqCst);
             // The three CSGaitemImp hook-disable calls that used to live here are gone with the hooks
             // themselves: install_system_quit_gaitem_{finalize,lookup,deserialize}_hook had no callers,
-            // so rustc never codegen'd them, the INSTALLED latches were never set, and each disable was
+            // so rustc never codegen'd them, the installed latches were never set, and each disable was
             // an unconditional early return. bd er-effects-rs-57fw.
         }
         // Direct-file save source: the "native Continue row" product_continue waits for can be stale
@@ -3023,10 +3023,10 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         // (submit/drain/deserialize), and commits (continue_confirm -> SetState5) into the redirected
         // staged save. The user's original source save remains read-only.
         //
-        // NARROWED 2026-08-26 (the routing fork itself): a picked save now takes this bypass ONLY
+        // Narrowed 2026-08-26 (the routing fork itself): a picked save now takes this bypass only
         // while its slot still has no readable `CS::ProfileSummary` record. Once the summary
-        // re-read lands, it goes down the SAME native Continue path the default save uses -- which
-        // deserializes IN-WORLD from `CS::MoveMapStep::DoSaveStuff`, the only caller `0x14067b290`
+        // re-read lands, it goes down the same native Continue path the default save uses -- which
+        // deserializes in-world from `CS::MoveMapStep::DoSaveStuff`, the only caller `0x14067b290`
         // has. See `crate::autoload_route`.
         if (direct_save_file_source_active() && direct_source_runs_title_full_read())
             || unsafe { boot_default_needs_full_read(owner, module_base) }

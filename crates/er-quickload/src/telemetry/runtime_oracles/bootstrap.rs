@@ -3,7 +3,7 @@
 static SEAMLESS_COOP_LATCHED: AtomicUsize = AtomicUsize::new(0);
 
 /// True if Seamless Co-op (ERSC) is resident. MONOTONIC LATCH: me3 defers native loading until
-/// after Arxan init and loads ERSC through its me2 compatibility shim, so `ersc.dll` is NOT yet
+/// after Arxan init and loads ERSC through its me2 compatibility shim, so `ersc.dll` is not yet
 /// registered in the PEB when our own DllMain runs (+1ms) -- a raw `GetModuleHandle` returns false
 /// that early and would wrongly gate every Seamless decision to "vanilla". So we re-poll on each
 /// call until the module first resolves, then latch true forever and never re-sample. This makes the
@@ -51,8 +51,8 @@ pub(crate) fn write_bootstrap_event(stage: &str, detail: &str) {
         json_escape(stage),
         json_escape(detail)
     );
-    // The EVENT file is a per-run sequence, so it is truncated by this process's first event
-    // (previous run kept one generation as `.prev`); the STATE file is rewritten whole every
+    // The event file is a per-run sequence, so it is truncated by this process's first event
+    // (previous run kept one generation as `.prev`); the state file is rewritten whole every
     // time and already carries only the latest stage.
     if let Some(mut file) = er_game_base::log::open_fresh_run_append(&event_path) {
         let _ = file.write_all(payload.as_bytes());
@@ -140,8 +140,8 @@ unsafe fn title_logo_gfx_current_frame(base: usize, title_logo_back_view_parts: 
     // The `safe_read_*` guards only reject UNMAPPED pages -- they happily return a mapped-but-garbage
     // qword. During a System-Quit -> return-title -> reload transition `PRODUCT_CORE_LAST_TITLE_DIALOG`
     // (the source of `title_logo_back_view_parts`) points at a half-torn-down / reallocated dialog whose
-    // embedded BackViewParts holds a stale `handle` whose vtable lands in the Wine heap, NOT the game
-    // image. Transmuting `*(vtable+8)` from such a vtable and CALLING it dispatches through a data
+    // embedded BackViewParts holds a stale `handle` whose vtable lands in the Wine heap, not the game
+    // image. Transmuting `*(vtable+8)` from such a vtable and calling it dispatches through a data
     // address -> access violation (observed: handle vt=0x7ffe96aa4238, call target 0x7ffe977c61b0, both
     // outside [game_base, +SizeOfImage); crash self+0x317bd `call *rdx`). Reject any vtable / resolved
     // call target that is not inside the game module image before the transmute+call. See bd

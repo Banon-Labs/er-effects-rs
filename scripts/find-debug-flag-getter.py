@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Find the GLOBAL BYTE behind a FromSoft `Game.Debug.*` accessor, from its CALLER.
+"""Find the global byte behind a FromSoft `Game.Debug.*` accessor, from its caller.
 
-WHY THIS EXISTS
+Why this exists
 ---------------
 FromSoft's debug switches compile to a three-instruction stub:
 
@@ -12,15 +12,15 @@ FromSoft's debug switches compile to a three-instruction stub:
 The stub is byte-identical between builds except for that one relocated displacement, so
 `scripts/map-rvas-1162-to-1170.py` cannot map it -- it reported *52* shape matches for
 `Game.Debug.IsEnableControlOnDisactiveWindow` and refused to pick one, which is the correct
-refusal and also a dead end. The CALLER is not ambiguous, though: a 3 KB function maps
+refusal and also a dead end. The caller is not ambiguous, though: a 3 KB function maps
 uniquely, and `docs/recon/rva-map-1162-to-1170.functions.tsv` already carries the pair.
 
 So: decode the caller, follow each `call rel32` (through a one-instruction `jmp rel32`
 thunk, which is how these accessors are reached), and report every callee that is such a
-stub together with the absolute VA of the flag byte it reads. Run it on BOTH images and the
+stub together with the absolute VA of the flag byte it reads. Run it on both images and the
 1.16.2 answer identifies which stub is which, while the 1.17 answer is the address to use.
 
-USAGE
+Usage
     uv run --with capstone python3 scripts/find-debug-flag-getter.py 0x140e33aa0
     uv run --with capstone python3 scripts/find-debug-flag-getter.py 0x140e358a0 \\
         --image eldenring-deobf-1.17.bin

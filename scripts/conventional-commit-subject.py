@@ -1,34 +1,34 @@
 #!/usr/bin/env python3
 """Is this one line a Conventional Commits subject? The single place that answers it.
 
-WHY THIS FILE EXISTS AT ALL. `.github/workflows/release.yml` has run Release Please since it was
+Why this file exists at all. `.github/workflows/release.yml` has run Release Please since it was
 written, and Release Please reads `feat:`/`fix:` prefixes off main to decide the next version. It
 has never had any to read: measured 2026-09-03, 15 of the last 400 subjects on main match the
 convention and none of the recent ones do, which is why `.release-please-manifest.json` still says
 0.1.6. The repo was carrying a release mechanism whose input nothing produced.
 
-WHY THE ENFORCEMENT IS ON A PR TITLE AND NOT ON A COMMIT MESSAGE. The obvious server-side answer --
-a repository ruleset with a `commit_message_pattern` rule -- does NOT work, and it fails silently
+Why the enforcement is on a PR title and not on a commit message. The obvious server-side answer --
+a repository ruleset with a `commit_message_pattern` rule -- does not work, and it fails silently
 rather than loudly. Measured on this repo, 2026-09-03: `POST /repos/{r}/rulesets` accepts the rule
-and returns 201 listing it, and with that rule ACTIVE on a probe branch requiring
+and returns 201 listing it, and with that rule active on a probe branch requiring
 `^(feat|fix|chore|...): `, both of these still succeeded --
 
-    POST /repos/{r}/merges   commit_message="Merge pull request #999 from ..."   -> 201, sha 0f61506
-    PUT  /repos/{r}/contents message="junk message that violates the rule"       -> 201
+    Post /repos/{r}/merges   commit_message="Merge pull request #999 from ..."   -> 201, sha 0f61506
+    put  /repos/{r}/contents message="junk message that violates the rule"       -> 201
 
 -- so GitHub does not apply metadata rules to commits it creates server-side, which is every commit
 the merge button makes. (GitHub's current "Available rules for rulesets" page no longer documents
-metadata restrictions at all; treat the rule type as retired-but-accepted.) The lever that DOES
+metadata restrictions at all; treat the rule type as retired-but-accepted.) The lever that does
 hold is the pull request TITLE: with the repo's `merge_commit_title` set to `PR_TITLE` (flipped
 2026-09-03, from `MERGE_MESSAGE`, which is what produced five months of `Merge pull request #N
-from ...` subjects), the PR title BECOMES the merge commit's subject, and a required status check
+from ...` subjects), the PR title becomes the merge commit's subject, and a required status check
 on that title gates the merge button before the commit exists.
 
 So one regex has three consumers and they must not drift apart:
 
     scripts/hooks/commit-msg                     every local commit, before it exists
     .github/workflows/conventional-commits.yml   the PR title, as a required check
-    .github/workflows/conventional-commits.yml   HEAD's subject after a push to main
+    .github/workflows/conventional-commits.yml   head's subject after a push to main
 
 The third is the one that catches a human editing the merge dialog's textarea, which no server-side
 rule can prevent -- it is detective, not preventive, and it says so where it runs.
@@ -64,14 +64,14 @@ TYPES = (
 # type(optional scope)optional-! : space description
 #
 # The trailing description is `.+` deliberately: GitHub appends " (#123)" to a merge subject built
-# from a PR title, so the description must stay free-form for the SAME string to pass both as a PR
+# from a PR title, so the description must stay free-form for the same string to pass both as a PR
 # title and as the merge commit it becomes.
 SUBJECT_RE = re.compile(
     r"^(?:" + "|".join(TYPES) + r")(?:\([^()\n]+\))?!?: .+",
 )
 
 # A subject long enough to be truncated in `git log --oneline` and in the GitHub UI. Conventional
-# Commits itself sets no limit; this is the repo's, and it is a REFUSAL rather than a warning
+# Commits itself sets no limit; this is the repo's, and it is a refusal rather than a warning
 # because a warning printed by a git hook is a warning nobody reads.
 MAX_SUBJECT_LEN = 100
 
@@ -79,11 +79,11 @@ MAX_SUBJECT_LEN = 100
 # concrete reason, not for tidiness:
 #
 #   Merge ...    `git merge` runs commit-msg too. Refusing these would make it impossible to merge
-#                main into a branch locally, and the merge commit that reaches MAIN is not this one
+#                main into a branch locally, and the merge commit that reaches main is not this one
 #                -- that one is built from the PR title, which the workflow gates.
 #   fixup!/      consumed and discarded by `git rebase --autosquash`; they never reach main.
 #   squash!
-#   Revert "..." git's own `git revert` template. `revert: ` is in TYPES for a hand-written one.
+#   Revert "..." git's own `git revert` template. `revert: ` is in types for a hand-written one.
 EXEMPT_PREFIXES = (
     "Merge ",
     "fixup!",
@@ -208,7 +208,7 @@ def selftest() -> int:
         if got != expected:
             failures.append(f"subject_of({message!r}) = {got!r}, expected {expected!r}")
 
-    # THE GRAMMAR IS NOT A PRIVATE OPINION. Every type this file accepts has to be a type Release
+    # The grammar is not a private opinion. Every type this file accepts has to be a type Release
     # Please can act on, or the gate would enforce a convention the release path ignores.
     for release_type in ("feat", "fix"):
         if release_type not in TYPES:

@@ -28,7 +28,7 @@ const CONFIG_FILE_NAME: &str = "er-invasion-path.toml";
 ///
 /// It was `F7`, chosen because Elden Ring itself binds nothing to it. That reasoning was
 /// incomplete and the omission was caught live on 2026-08-25: `er-invasion-warp` polls `VK_F7`
-/// every frame in the same process, so in a profile holding both, pressing the key WARPED the
+/// every frame in the same process, so in a profile holding both, pressing the key warped the
 /// player instead of drawing anything -- and nothing anywhere said why. The question is never
 /// "does the GAME use this key", it is "does any DLL sharing this process use it", and the mods
 /// loaded beside you are not something a default can know.
@@ -88,7 +88,7 @@ pub(crate) const DEFAULT_MARKER_KEEP_BEHIND_METERS: f32 = 12.0;
 /// where they used to be.
 pub(crate) const DEFAULT_MARKERS_PER_PASS: usize = 3;
 
-/// Item whose USE toggles the overlay, when `trigger_item_id` is set.
+/// Item whose use toggles the overlay, when `trigger_item_id` is set.
 ///
 /// Zero means "no item trigger, hotkey only". There is no default item: silently binding a real
 /// consumable would make that item behave differently for anyone who installed the DLL without
@@ -294,8 +294,8 @@ pub(crate) struct PathConfig {
 
 /// The parsed config, plus the exact text it was parsed from.
 ///
-/// The text is kept so a reload can decide whether anything actually changed by COMPARING
-/// CONTENT rather than by trusting a timestamp. `mtime` has one-second granularity on several
+/// The text is kept so a reload can decide whether anything actually changed by comparing
+/// content rather than by trusting a timestamp. `mtime` has one-second granularity on several
 /// filesystems, so an edit saved within the same second as the previous read is invisible to it
 /// -- and "I changed the key and nothing happened" is exactly the bug this is meant to prevent.
 /// The file is a kilobyte; reading it once a second is cheaper than being wrong about it.
@@ -533,7 +533,7 @@ pub(crate) fn config() -> Arc<PathConfig> {
 pub(crate) enum ReloadOutcome {
     /// Byte-identical to what is loaded. The overwhelmingly common case.
     Unchanged,
-    /// Something in the file changed. `previous_key_text` is `Some` only when the BINDING is what
+    /// Something in the file changed. `previous_key_text` is `Some` only when the binding is what
     /// changed, because that is the one change with state attached to it -- the edge detector has
     /// to forget whichever key was held.
     Changed { previous_key_text: Option<String> },
@@ -558,7 +558,7 @@ fn classify(
 /// What a reload did, so the caller can log it and react to a changed binding.
 pub(crate) struct Reloaded {
     pub(crate) config: Arc<PathConfig>,
-    /// The key that WAS bound, when the binding is what changed.
+    /// The key that was bound, when the binding is what changed.
     pub(crate) previous_key_text: Option<String>,
 }
 
@@ -612,7 +612,7 @@ mod tests {
 
     /// FXR spawned at each point along a route when world markers are switched on.
     ///
-    /// `302022` is the Rainbow Stone's LINGERING coloured stone -- the one that stays on the ground
+    /// `302022` is the Rainbow Stone's lingering coloured stone -- the one that stays on the ground
     /// after the throw, which is the whole reason it is the right effect for a trail. Its siblings
     /// are `302020` (held in hand), `302021` (the projectile in flight) and `302023` (the burst on
     /// impact); all three are momentary, so a trail built from them would flash once and vanish.
@@ -632,7 +632,7 @@ mod tests {
     /// stages rather than colours, so they make a usable default set. Any list of ids works.
     const DEFAULT_MARKER_FXR_IDS: [u32; 1] = [302_022];
 
-    /// Rainbow Stone stages that FLASH AND VANISH: held, projectile, burst. Shipping one of these
+    /// Rainbow Stone stages that flash and VANISH: held, projectile, burst. Shipping one of these
     /// as a per-player effect gives that player a trail that is not there, which is how it
     /// shipped once already -- the file documented them as momentary and then used three of them
     /// as defaults anyway.
@@ -669,7 +669,7 @@ mod tests {
         );
     }
 
-    /// Editing some OTHER setting is still a reload -- the new value has to take effect -- but it
+    /// Editing some other setting is still a reload -- the new value has to take effect -- but it
     /// is not a binding change, so the edge detector must be left alone.
     #[test]
     fn changing_a_setting_other_than_the_key_is_not_a_binding_change() {
@@ -703,7 +703,7 @@ mod tests {
         );
     }
 
-    /// A mistyped key must leave the feature BOUND to something the player can press, not
+    /// A mistyped key must leave the feature bound to something the player can press, not
     /// unbound. Reloading is when this matters most: the player is editing live, and a typo that
     /// silently killed the toggle would look exactly like the DLL crashing.
     #[test]
@@ -755,7 +755,7 @@ mod tests {
         assert_eq!(parse(&edited).search_range_meters, 250.0);
     }
 
-    /// A broken value must not become a TIGHTER search than was asked for: that would report no
+    /// A broken value must not become a tighter search than was asked for: that would report no
     /// route, which reads as "you cannot walk there" rather than as a typo.
     #[test]
     fn a_broken_limit_falls_back_to_unlimited_never_to_a_smaller_search() {

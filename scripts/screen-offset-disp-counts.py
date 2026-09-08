@@ -3,7 +3,7 @@
 
 For an offset >= 0x80, x86-64 encodes `[reg+off]` with a 4-byte little-endian displacement.
 Counting that exact 4-byte sequence in each de-Arxan'd image is crude (it also matches data and
-non-displacement bytes) but the COMPARISON is informative: a count that is identical in both
+non-displacement bytes) but the comparison is informative: a count that is identical in both
 images is corroboration that nothing referencing that offset moved, and a count that collapses
 toward zero in 1.17 while non-zero in 1.16.2 is a red flag worth a targeted accessor check.
 

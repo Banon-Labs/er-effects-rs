@@ -40,17 +40,17 @@ pub(crate) mod freelist_shutdown_assert;
 pub(crate) struct Patch {
     /// Name used in the install log.
     pub(crate) name: &'static str,
-    /// 1.16.2 RVA of the `.pdata` function ENTRY that CONTAINS the window.
+    /// 1.16.2 RVA of the `.pdata` function entry that contains the window.
     ///
     /// The window's own address is not stored, and that is the point. A patch site is by nature
     /// mid-function -- if the interesting instruction were the first one, this would be a guard --
     /// and the 1.16.2 -> 1.17 maps are keyed on function starts, so a mid-function address is
-    /// structurally unmappable and must be REFUSED on 1.17 rather than translated. What is
+    /// structurally unmappable and must be refused on 1.17 rather than translated. What is
     /// mappable is the enclosing function; the offset rides along in Rust. See
     /// [`er_game_base::game_build::resolve_call_site_rva`], which exists for exactly this and
     /// spells out why the offset must never enter a table.
     pub(crate) function_rva: usize,
-    /// Byte offset of the verified window's FIRST byte within [`Self::function_rva`]. Not the byte
+    /// Byte offset of the verified window's first byte within [`Self::function_rva`]. Not the byte
     /// written -- [`Self::offset`] indexes that within the window.
     pub(crate) offset_in_function: usize,
     /// Bytes the window must hold before anything is written. Generated and ground-truthed by
@@ -61,7 +61,7 @@ pub(crate) struct Patch {
     pub(crate) offset: usize,
     /// What that byte becomes.
     pub(crate) replacement: u8,
-    /// Set once the byte has been written AND read back as [`Self::replacement`]. See the module
+    /// Set once the byte has been written and read back as [`Self::replacement`]. See the module
     /// docs for why this is weaker evidence than a guard's counter.
     pub(crate) applied: &'static AtomicBool,
     /// Why removing the instruction is safe, printed at install time so a reader of the log does
@@ -74,14 +74,14 @@ impl Patch {
     ///
     /// Derived from the two stored halves rather than kept beside them, so no third field can
     /// drift out of agreement with the address the window was generated at. Used for the 1.16.2
-    /// bookkeeping this file does -- overlap checks, the install log -- and NEVER as the address
+    /// bookkeeping this file does -- overlap checks, the install log -- and never as the address
     /// to resolve: on 1.17 the install path resolves [`Self::function_rva`] and adds
     /// [`Self::offset_in_function`] to the answer.
     pub(crate) const fn rva(&self) -> usize {
         self.function_rva + self.offset_in_function
     }
 
-    /// Absolute address of the byte this patch rewrites, given the WINDOW's address on the
+    /// Absolute address of the byte this patch rewrites, given the window's address on the
     /// running build.
     ///
     /// It takes the resolved window rather than the module base on purpose. `base + rva` is only
@@ -178,11 +178,11 @@ mod tests {
         }
     }
 
-    /// `target` must follow the window WHEREVER the running build put it.
+    /// `target` must follow the window wherever the running build put it.
     ///
     /// This is the property the signature change exists for. `apply_patch` resolves the window for
     /// the running build and then verifies the bytes there; if `target` still derived the byte
-    /// from the module base, it would name an address inside the OLD window on any build that
+    /// from the module base, it would name an address inside the old window on any build that
     /// moved this code -- verified in one place, written in another. A moved window is modelled
     /// here by a displacement no real build would use, so the assertion cannot pass by accident.
     #[test]

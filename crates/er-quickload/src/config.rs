@@ -19,7 +19,7 @@ use crate::telemetry::{append_autoload_debug, game_directory_path};
 const CONFIG_FILE_NAME: &str = "er-quickload.toml";
 const METHOD_ENV: &str = "ER_QUICKLOAD_AUTOLOAD_METHOD";
 
-// REMOVED, NOT DEPRECATED: `ER_QUICKLOAD_SAVE_FILE` and `ER_QUICKLOAD_AUTOLOAD_SLOT`.
+// Removed, not DEPRECATED: `ER_QUICKLOAD_SAVE_FILE` and `ER_QUICKLOAD_AUTOLOAD_SLOT`.
 //
 // They were a second way to name the autoload save source, sitting in front of the config
 // file. `save_redirect/path_hooks.rs` treated the env form and the file form as one class
@@ -28,16 +28,16 @@ const METHOD_ENV: &str = "ER_QUICKLOAD_AUTOLOAD_METHOD";
 // afterwards, which makes a run impossible to reconstruct.
 //
 // The config file is now the only way to name a save source. A per-run override goes in the
-// DLL-adjacent sidecar (see `sidecar_config_path`), which is a FILE, so it can be read back.
+// DLL-adjacent sidecar (see `sidecar_config_path`), which is a file, so it can be read back.
 const SAVE_SUPPRESSION_ENABLED_KEY: &str = "save_suppression_enabled";
 
-/// The game-directory autoload REQUEST file, named here only so the log lines that refuse its
+/// The game-directory autoload request file, named here only so the log lines that refuse its
 /// `slot=` can tell the reader which file to go and look at.
 const AUTOLOAD_REQUEST_FILE_NAME: &str = "er-quickload-autoload.txt";
 
 /// The existing opt-in for the deprecated staged-save/explicit-source probe path (AGENTS.md
 /// 2026-07-08); `run-me3-product-smoke.sh` and `run-product-continue-direct-probe.sh` already gate
-/// on it. Read here in the SAFE direction only: unset means the deprecated slot channel is closed,
+/// on it. Read here in the safe direction only: unset means the deprecated slot channel is closed,
 /// so no release/default behaviour depends on this variable existing.
 const DEPRECATED_STAGED_SAVE_PROBE_ENV: &str = "ER_QUICKLOAD_ALLOW_DEPRECATED_STAGED_SAVE_PROBE";
 #[derive(Clone, Debug, Default)]
@@ -45,7 +45,7 @@ pub(crate) struct RuntimeConfig {
     pub path: PathBuf,
     /// The DLL-adjacent per-run overlay, when one was found and parsed. Recorded so the
     /// `runtime-config: loaded` line names it: that line is what a launcher reads back to
-    /// prove THIS build loaded ITS config, and a run that cannot name its overlay cannot
+    /// prove this build loaded its config, and a run that cannot name its overlay cannot
     /// prove that.
     pub sidecar: Option<PathBuf>,
     pub save_file: Option<PathBuf>,
@@ -55,8 +55,8 @@ pub(crate) struct RuntimeConfig {
     /// What `save_file_default` actually took away: the `save_file` (and `slot`) the
     /// game-directory config named before the sidecar cleared them.
     ///
-    /// KEPT ON PURPOSE, because `save_file: None` is a DERIVED state and reporting it as the
-    /// INPUT state is a lie the log used to tell. Downstream, `enforce_save_override_or_abort`
+    /// Kept on purpose, because `save_file: None` is a derived state and reporting it as the
+    /// input state is a lie the log used to tell. Downstream, `enforce_save_override_or_abort`
     /// tested `configured_save_file().is_none()` and wrote "no save_file configured" -- which is
     /// false for a user who configured one and had it overridden. That sentence sends the reader
     /// hunting for a missing setting instead of at the file that overrode it, and the run boots a
@@ -157,7 +157,7 @@ pub(crate) fn configured_explicit_save_file() -> Option<PathBuf> {
 ///
 /// "Not configured" and "configured, then deliberately overridden" are different situations with
 /// different fixes, and the old `DEFAULT-USER-SAVE` line asserted the first for both. It also
-/// named `ER_QUICKLOAD_SAVE_FILE`, an environment variable that was REMOVED (see the comment at
+/// named `ER_QUICKLOAD_SAVE_FILE`, an environment variable that was removed (see the comment at
 /// the top of this file), so a reader who believed the log went looking for a setting that no
 /// longer exists and a variable that no longer does anything.
 pub(crate) fn configured_save_file_absence_reason() -> String {
@@ -187,7 +187,7 @@ pub(crate) fn configured_save_file_absence_reason() -> String {
     }
     if config.save_file_default == Some(true) {
         // The sidecar asked for the default container and there was nothing to clear. Different
-        // from silence: this run ASKED for this, and a reader who sees only "names no save_file"
+        // from silence: this run asked for this, and a reader who sees only "names no save_file"
         // would go add one to the game config and watch the next run ignore it too.
         return format!(
             "the per-run sidecar '{}' set save_file_default = true (and '{}' named no save_file \
@@ -215,7 +215,7 @@ pub(crate) fn configured_preferred_save_picker_dir() -> Option<PathBuf> {
     runtime_config().and_then(|config| config.save_picker.preferred_save_picker_dir.clone())
 }
 
-/// Dir of the most recent validated pick THIS session. `RUNTIME_CONFIG` is parse-once, so
+/// Dir of the most recent validated pick this session. `RUNTIME_CONFIG` is parse-once, so
 /// same-session reopens would otherwise keep starting at the attach-time value even after
 /// `remember_preferred_save_picker_dir` rewrote the file.
 static SESSION_PREFERRED_PICKER_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
@@ -243,7 +243,7 @@ pub(crate) fn autoupdate_preferred_picker_dir_enabled() -> bool {
 /// `er-quickload.toml`: update the existing assignment in place, or create the file with commented
 /// boilerplate when it does not exist. Skips (with a debug line) when the config failed to load at
 /// attach, so a file the user must fix by hand is never clobbered. The in-memory `RuntimeConfig`
-/// is intentionally left as loaded -- the new value matters on the NEXT attach.
+/// is intentionally left as loaded -- the new value matters on the next attach.
 pub(crate) fn remember_preferred_save_picker_dir(dir: &std::path::Path) {
     let Some(dir_str) = dir.to_str().filter(|dir| !dir.is_empty()) else {
         return;
@@ -354,7 +354,7 @@ pub(crate) fn save_suppression_enabled() -> bool {
         .unwrap_or(false)
 }
 
-/// THE configured autoload slot -- ONE answer, shared by everything that steers a boot load.
+/// The configured autoload slot -- One answer, shared by everything that steers a boot load.
 ///
 /// It used to read `runtime_config().slot`, i.e. the TOML alone, while
 /// [`configured_save_load_request`] read the TOML *plus* the game-directory
@@ -366,9 +366,9 @@ pub(crate) fn save_suppression_enabled() -> bool {
 /// loading screen's hint said 0. Same question, two files, two answers, one wrong face.
 ///
 /// Both halves of that are now closed, and the order matters. The disagreement is gone because
-/// there is one reader; the WRONG ANSWER is gone because that reader no longer consults a probe
+/// there is one reader; the wrong answer is gone because that reader no longer consults a probe
 /// file (see [`resolve_configured_save_load_request`]). Unifying alone would have been worse than
-/// the bug: it would have made the stale `slot=0` steer the LOAD as well as the portrait.
+/// the bug: it would have made the stale `slot=0` steer the load as well as the portrait.
 ///
 /// Cached, because the callers are a per-frame resolver (`native_fullread_slot`) and a native
 /// builder hook: `SaveLoadRequest::from_env` reads a file, and doing that per frame inside a game
@@ -393,9 +393,9 @@ pub(crate) fn configured_save_load_request() -> SaveLoadRequest {
 fn resolve_configured_save_load_request() -> SaveLoadRequest {
     let mut request = SaveLoadRequest::from_env();
 
-    // THE AUTOLOAD REQUEST FILE IS NOT A PRODUCT SLOT CHANNEL. Its `slot=` is taken away here,
+    // The AUTOLOAD request file is not a product slot channel. Its `slot=` is taken away here,
     // unconditionally, and only handed back to a run that has explicitly opted into the deprecated
-    // probe path. What survives by default is the ONE documented channel: `slot` in the
+    // probe path. What survives by default is the one documented channel: `slot` in the
     // game-directory `er-quickload.toml`, or in the DLL-adjacent per-run sidecar that overlays it.
     //
     // This is not a preference, it is what the repo already says about this file in the two places
@@ -405,7 +405,7 @@ fn resolve_configured_save_load_request() -> SaveLoadRequest {
     //     `er-quickload-autoload.txt`, or the experimental DirectMenuLoad method";
     //   * `er_save_loader`'s own field docs justify it as "the only channel that reliably reaches
     //     the DLL under the Proton probe harness" -- a probe-harness argument, not a user one.
-    // And the evidence agrees: the DLL never WRITES this file (it auto-creates `er-quickload.toml`
+    // And the evidence agrees: the DLL never writes this file (it auto-creates `er-quickload.toml`
     // with explanatory comments, which is what a user surface looks like), every live writer of it
     // in this repo is a probe/smoke script, the user-facing helper package
     // (`scripts/build-user-release-package.py`) deliberately ships `er-quickload.toml.example` and
@@ -419,11 +419,11 @@ fn resolve_configured_save_load_request() -> SaveLoadRequest {
     //
     // The other keys this file carries (`own_stepper`, `own_load*`, `cold_char_mount`,
     // `own_dispatch`, `method`, ...) are untouched. They are opt-in probe levers that do nothing
-    // unless deliberately set; the SLOT is the one that silently steers a default product boot.
+    // unless deliberately set; the slot is the one that silently steers a default product boot.
     let file_slot = request.slot.take();
     let default_container =
         runtime_config().and_then(|config| config.save_file_default) == Some(true);
-    // Diagnostic override ONLY, and in the safe direction: with no env var the channel is dead, so
+    // Diagnostic override only, and in the safe direction: with no env var the channel is dead, so
     // release/default behaviour does not depend on it. Setting it re-opens a deprecated probe path
     // (AGENTS.md 2026-07-08), which is exactly what `run-me3-product-smoke.sh` and
     // `run-product-continue-direct-probe.sh` already gate their staged-save runs on.
@@ -446,7 +446,7 @@ fn resolve_configured_save_load_request() -> SaveLoadRequest {
         }
     }
 
-    // WHICH CHANNEL WON, named. With the file channel closed there is normally only one, but a
+    // Which channel won, named. With the file channel closed there is normally only one, but a
     // deprecated-probe run has two again -- and a run that cannot say where its slot came from is
     // how this defect stayed invisible for nine days.
     let from_request_channel = request.slot;
@@ -504,7 +504,7 @@ fn load_runtime_config(hmodule: HINSTANCE) -> Result<RuntimeConfig, String> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             match std::fs::read_to_string(&legacy_dll_path) {
                 Ok(contents) if legacy_dll_path != path => {
-                    // Read it, do NOT copy it into the game directory. The migration write
+                    // Read it, do not copy it into the game directory. The migration write
                     // that used to live here turned a per-build config into permanent shared
                     // state: a DLL-adjacent file staged for one run silently became the
                     // game-wide default for every later launch, including the user's own.
@@ -587,7 +587,7 @@ fn sidecar_config_path(dll_path: &std::path::Path) -> Option<PathBuf> {
     Some(dll_path.with_file_name(stem).with_extension("toml"))
 }
 
-/// Overlay `sidecar` onto `base` KEY BY KEY -- not wholesale replacement.
+/// Overlay `sidecar` onto `base` key by key -- not wholesale replacement.
 ///
 /// The game-directory config holds settings that belong to the user rather than to the run:
 /// `os_native_save_picker`, `preferred_save_picker_dir`, `boot_background_image`. Replacing it
@@ -605,7 +605,7 @@ fn apply_sidecar_overlay(mut base: RuntimeConfig, dll_path: &std::path::Path) ->
     let contents = match std::fs::read_to_string(&sidecar_path) {
         Ok(contents) => contents,
         // Logged rather than silent. A launcher stages this file and then waits for the DLL to
-        // confirm it read it; when that confirmation never comes, the ONLY question worth
+        // confirm it read it; when that confirmation never comes, the only question worth
         // answering is "which path did the DLL actually look at" -- and the module path under
         // Wine is not something to infer from the Linux side.
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -629,7 +629,7 @@ fn apply_sidecar_overlay(mut base: RuntimeConfig, dll_path: &std::path::Path) ->
         Ok(overlay) => overlay,
         Err(err) => {
             // A malformed sidecar must not silently fall back to the game-directory save: the
-            // run would load a DIFFERENT character than the launcher reported, which is worse
+            // run would load a different character than the launcher reported, which is worse
             // than not running at all. Say so loudly and leave the base config in place; the
             // launcher's identity check is what turns this into a visible failure.
             append_autoload_debug(format_args!(
@@ -649,7 +649,7 @@ fn apply_sidecar_overlay(mut base: RuntimeConfig, dll_path: &std::path::Path) ->
         // without it.
         base.save_file_cleared_by_sidecar = base.save_file.take();
         base.slot_cleared_by_sidecar = base.slot.take();
-        // CARRIED, not just acted on. The key's meaning is "no save source and no slot preference
+        // Carried, not just acted on. The key's meaning is "no save source and no slot preference
         // survives", and one of the channels it has to reach -- the game-directory
         // `er-quickload-autoload.txt` -- is read later, by `configured_save_load_request`. Consumed
         // here and forgotten, it silently only cleared half of what it promised.
@@ -738,7 +738,7 @@ fn parse_runtime_config(path: PathBuf, contents: &str) -> Result<RuntimeConfig, 
                     .map_err(|err| format!("invalid save_file on line {}: {err}", line_no + 1))?;
                 config.save_file = Some(configured_path_from_toml(&raw, &config_dir));
             }
-            // Overlay-only: an overlay can SET a key but has no way to UNSET one, so a per-run
+            // Overlay-only: an overlay can set a key but has no way to UNSET one, so a per-run
             // sidecar could never ask for "the active Steam default save" once the game-directory
             // config named a `save_file`. This key says that explicitly. It is meaningless in the
             // base config (leave `save_file` out instead) and is ignored there.
@@ -803,7 +803,7 @@ fn parse_runtime_config(path: PathBuf, contents: &str) -> Result<RuntimeConfig, 
                         )
                     })?);
             }
-            // ONE key for BOTH picker surfaces (load source and save destination). Two keys would
+            // One key for both picker surfaces (load source and save destination). Two keys would
             // let the modes drift apart, and nothing about the OS dialog is per-surface.
             "os_native_save_picker" | "use_os_file_picker" | "save_picker.os_native" => {
                 config.save_picker.os_native_save_picker =
@@ -969,7 +969,7 @@ mod tests {
         );
     }
 
-    /// THE DEFAULT MUST NOT MOVE. Both of the ways "the config did not say" can happen -- the key
+    /// The default must not move. Both of the ways "the config did not say" can happen -- the key
     /// absent from a config that loaded, and no config at all because it failed to load -- resolve
     /// to the in-game picker, the only surface the build gate covers.
     #[test]
@@ -1058,9 +1058,9 @@ mod tests {
             "backgrounds/load.png",
             std::path::Path::new("C:\\Games\\ELDEN RING\\Game"),
         );
-        // The join separator is the TARGET's, and this crate only ever builds for Windows -- the
+        // The join separator is the target's, and this crate only ever builds for Windows -- the
         // old literal `/` expectation was written against a host build and fails on the real
-        // target (verified by running the test exe). Separators INSIDE the configured relative
+        // target (verified by running the test exe). Separators inside the configured relative
         // path are deliberately left alone; Windows accepts both.
         assert_eq!(
             path.to_string_lossy(),

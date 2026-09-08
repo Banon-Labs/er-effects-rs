@@ -1,16 +1,16 @@
-//! Storing a build on the planner and getting a SHORT link back.
+//! Storing a build on the planner and getting a short link back.
 //!
 //! # Why this exists, when the `?i=` link needs no network at all
 //!
 //! The self-contained form carries the whole document in the URL, and a real inventory does not
 //! fit in one. Measured on a live character: 910 armaments (278 copies of one of them), 87 KB of
 //! JSON, a **22,663-character** link. The planner's own share links run two to five thousand, and
-//! the browser never even sends one that long. So a build past the safe length is STORED instead:
+//! the browser never even sends one that long. So a build past the safe length is stored instead:
 //! one `POST /inventories`, and the link becomes `?b=<14 hex>`.
 //!
 //! # This writes to somebody else's free service, so it is rationed
 //!
-//! The API mints an anonymous account per caller. This module makes exactly ONE and keeps it in a
+//! The API mints an anonymous account per caller. This module makes exactly one and keeps it in a
 //! file beside the game, so a player who presses the row a hundred times is a hundred builds under
 //! one account rather than a hundred accounts. The user agent identifies this mod by name. Nothing
 //! polls, nothing retries in a loop, and a build small enough for `?i=` never touches the network.
@@ -72,7 +72,7 @@ struct Session {
 impl Session {
     /// The authorization headers, in the shape the site sends them.
     ///
-    /// `Basic <uuid>` is NOT base64 of `user:password` -- it is literally the word `Basic`, a
+    /// `Basic <uuid>` is not base64 of `user:password` -- it is literally the word `Basic`, a
     /// space, and the session uuid, which is what the planner's `makeRequestInternal` builds.
     fn headers(&self) -> String {
         format!(
@@ -155,7 +155,7 @@ fn session() -> Result<Session, UploadError> {
 /// Blocking, and network-bound: worker thread only.
 pub fn store(doc: &BuildExportDoc) -> Result<String, UploadError> {
     let session = session()?;
-    // `id` MUST be a string and an empty one asks for a new build -- a null is refused outright
+    // `id` must be a string and an empty one asks for a new build -- a null is refused outright
     // (`400 "id" must be a string`, measured).
     let request = serde_json::json!({
         "id": "",

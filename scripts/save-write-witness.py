@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Read-only witness for "did ELDEN RING actually write a save file?".
 
-This is the OFFLINE half of the save-disable proof. The in-process half (RAM
+This is the offline half of the save-disable proof. The in-process half (RAM
 telemetry semaphores counting intercepted save requests) proves the game
 *believed* it saved; this proves no bytes reached the real save data.
 
@@ -13,7 +13,7 @@ Take a snapshot before a run and another after, then diff them::
     python3 scripts/save-write-witness.py diff before.json after.json
 
 ``diff`` exits 0 when nothing changed (save suppression held) and 1 when any
-save byte, size, or slot digest moved. mtime alone is reported but does NOT by
+save byte, size, or slot digest moved. mtime alone is reported but does not by
 itself fail the diff: a rewrite of identical bytes still means the game reached
 the disk, so content changes are the hard signal and an mtime-only change is
 surfaced as a distinct, still-failing category rather than being conflated with
@@ -23,14 +23,14 @@ Digests are taken per BND4 ``USER_DATA###`` entry as well as whole-file, so a
 diff names the exact character slot that moved instead of only saying "the
 container changed".
 
-Every path is env-overridable and derived from the current user's ``$HOME``;
+Every path is env-overridable and derived from the current user's ``$home``;
 nothing here is specific to one machine or account:
 
     STEAM_COMPAT_DATA_PATH  Proton compatdata dir for app 1245620
     APPDATA_ER_ROOT         .../AppData/Roaming/EldenRing
     ER_SAVE_DIRS            explicit ':'-separated dirs, overrides discovery
 
-This tool NEVER writes to, renames, or opens for writing anything under the
+This tool never writes to, renames, or opens for writing anything under the
 save root. It only reads.
 """
 from __future__ import annotations
@@ -260,7 +260,7 @@ def render_diff(result: dict[str, Any]) -> str:
 
 
 def selftest() -> int:
-    """Prove the witness detects each change class before anyone trusts a CLEAN."""
+    """Prove the witness detects each change class before anyone trusts a clean."""
     bnd4 = bytearray(b"BND4" + b"\x00" * 0x3C)
     bnd4[0x0C:0x10] = (1).to_bytes(4, "little")
     name_offset = 0x60
@@ -291,7 +291,7 @@ def selftest() -> int:
         if [e.get("name") for e in entries] != ["USER_DATA000"]:
             failures.append(f"bnd4: expected USER_DATA000, got {[e.get('name') for e in entries]}")
 
-        # (1) unchanged must read CLEAN
+        # (1) unchanged must read clean
         if not diff_snapshots(before, take_snapshot())["clean"]:
             failures.append("unchanged file reported as changed (false positive)")
 
@@ -319,7 +319,7 @@ def selftest() -> int:
         if diff_snapshots(before, take_snapshot())["clean"]:
             failures.append("file deletion NOT detected")
 
-        # (5) a settings-only change must stay CLEAN. GraphicsConfig.xml is graphics
+        # (5) a settings-only change must stay clean. GraphicsConfig.xml is graphics
         # configuration the game is supposed to keep writing; failing a run over it
         # would mark a perfectly working save-disable as broken.
         save.write_bytes(bytes(blob))

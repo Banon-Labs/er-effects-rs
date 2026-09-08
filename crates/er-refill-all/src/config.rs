@@ -9,7 +9,7 @@
 //! A hotkey read once at attach means restarting Elden Ring to change it -- a long way to go to
 //! find out you picked a combination another mod already took, and finding that out is exactly
 //! what makes someone want to change it. `er_hotkey_config::HotFile` re-reads about once a second
-//! and compares the file's TEXT, not its mtime, because mtime has one-second resolution on the
+//! and compares the file's text, not its mtime, because mtime has one-second resolution on the
 //! filesystems a Wine prefix sits on and a re-save moves it without changing anything.
 
 // Windows-only in practice; kept portable so the parser and the reload decision are covered by
@@ -78,7 +78,7 @@ refill_immediately = true
 pub(crate) struct RefillConfig {
     pub(crate) config_path: PathBuf,
     /// Not an `er_hotkey_config::Binding`: that type's parser must return `KeyParseError`, whose
-    /// `Unknown` message tells the reader to pick a KEY -- and listing keyboard names at someone
+    /// `Unknown` message tells the reader to pick a key -- and listing keyboard names at someone
     /// who mistyped a pad button is a worse answer than no message. The keep-the-last-working-value
     /// rule it exists to enforce is reimplemented below, which is the part that matters.
     pad: PadChord,
@@ -163,7 +163,7 @@ impl RefillConfig {
             match parsed {
                 Ok(chord) if chord == self.pad => {
                     // Record the spelling actually used, so the status line echoes their file
-                    // rather than the last spelling of the same chord. NOT a change.
+                    // rather than the last spelling of the same chord. Not a change.
                     self.pad_text = raw.to_owned();
                 }
                 Ok(chord) => {
@@ -172,7 +172,7 @@ impl RefillConfig {
                     self.pad_text = raw.to_owned();
                     update.pad_moved = Some((before, pad_chord_name(chord)));
                 }
-                // A REJECTION IS NOT A CHANGE, and the last working chord stays in force. Not the
+                // A rejection is not a change, and the last working chord stays in force. Not the
                 // shipped default -- that would drag someone back onto a collision they had just
                 // escaped -- and not nothing. Counting a rejection as a change would make a config
                 // with a permanent typo re-report, and re-prime the edge, on every single reload.

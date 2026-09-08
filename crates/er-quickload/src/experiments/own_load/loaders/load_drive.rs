@@ -1,9 +1,9 @@
 use super::*;
 
-/// SAVE-SAFE verify-only OWN-LOAD buffer-feed drive (one-shot, phased). Reads the .sl2 from disk,
+/// Save-safe verify-only own-load buffer-feed drive (one-shot, phased). Reads the .sl2 from disk,
 /// slices slot `want_slot`'s plaintext body, installs+arms the gated 0x67b100 hook, calls the native
-/// parser 0x67b290(slot) in-process so it parses OUR body, then reads back GameMan+0xc30 + the
-/// PlayerGameData fingerprint. NO SetState5, NO autosave, NO continue_confirm. Records presses==0.
+/// parser 0x67b290(slot) in-process so it parses our body, then reads back GameMan+0xc30 + the
+/// PlayerGameData fingerprint. No SetState5, no autosave, no continue_confirm. Records presses==0.
 pub(crate) unsafe fn own_load_drive(base: usize, gm: usize, owner: usize, want_slot: i32, n: u64) {
     const PHASE_INIT: usize = 0;
     const PHASE_DONE: usize = 1;
@@ -27,7 +27,7 @@ pub(crate) unsafe fn own_load_drive(base: usize, gm: usize, owner: usize, want_s
         return;
     }
     // (1) Read + slice the plaintext slot body. er_save_loader::bnd4 is the only glue: the engine's
-    // read path is FSM-gated, so OWN-LOAD must hand it the buffer itself (bd reuse-native-fns).
+    // read path is FSM-gated, so own-load must hand it the buffer itself (bd reuse-native-fns).
     // A prior unresolvable staged-source verdict is terminal for the process. Consume this driver's
     // phase exactly once instead of calling the resolver again and recreating the per-frame loop.
     if own_load_save_rejection_terminal() {
@@ -73,7 +73,7 @@ pub(crate) unsafe fn own_load_drive(base: usize, gm: usize, owner: usize, want_s
         return;
     }
     let c30_before = unsafe { *((gm + GAME_MAN_SAVED_MAP_C30_OFFSET) as *const i32) };
-    // (3) Set the gate, call native 0x67b290(slot) in-process, clear the gate. 0x67b290 does NOT
+    // (3) Set the gate, call native 0x67b290(slot) in-process, clear the gate. 0x67b290 does not
     // re-check b80 after the read (static-confirmed), so our al=1 + body flow into the native parse.
     OWN_LOAD_GATE.store(true, Ordering::SeqCst);
     let parser: unsafe extern "system" fn(i32) -> i32 = unsafe {
@@ -87,7 +87,7 @@ pub(crate) unsafe fn own_load_drive(base: usize, gm: usize, owner: usize, want_s
     let pret = unsafe { parser(want_slot) };
     OWN_LOAD_GATE.store(false, Ordering::SeqCst);
     let fed = OWN_LOAD_FED_BYTES.load(Ordering::SeqCst);
-    // (4) VERIFY (read-back only): GameMan+0xc30 (map id) + the PlayerGameData char fingerprint.
+    // (4) verify (read-back only): GameMan+0xc30 (map id) + the PlayerGameData char fingerprint.
     let c30 = unsafe { *((gm + GAME_MAN_SAVED_MAP_C30_OFFSET) as *const i32) };
     let ac0 = unsafe { *((gm + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) as *const i32) };
     let (fp_real, fp_level, fp_name_len) = unsafe { char_fingerprint(base) };
@@ -101,12 +101,12 @@ pub(crate) unsafe fn own_load_drive(base: usize, gm: usize, owner: usize, want_s
         er_game_base::mem::game_data_addr(base, DESERIALIZE_SLOT_RVA, "DESERIALIZE_SLOT_RVA")
     ));
     unsafe { dump_load_correctness(base, n) };
-    // OWNER DIAGNOSTIC (er-effects-rs-mr2, save-safe pure reads): the prior continue crash used the
-    // WRONG owner (*(GameDataMan+0x8)). Log EVERY continue_confirm owner candidate + each one's
-    // +0x284 (new-game flag) byte so a VERIFY-ONLY run reveals which is the SetState-able title
-    // owner BEFORE we ever fire continue_confirm. This is independent of the gated continue step.
+    // Owner diagnostic (er-effects-rs-mr2, save-safe pure reads): the prior continue crash used the
+    // wrong owner (*(GameDataMan+0x8)). Log every continue_confirm owner candidate + each one's
+    // +0x284 (new-game flag) byte so a verify-only run reveals which is the SetState-able title
+    // owner before we ever fire continue_confirm. This is independent of the gated continue step.
     //   title  = the threaded SetState-able title owner the caller validated (own_stepper_idx10),
-    //   recipe = *(base + CONTINUE_MANAGER_GLOBAL_RVA + 8)  (the native-fullread COMMIT recipe's literal),
+    //   recipe = *(base + CONTINUE_MANAGER_GLOBAL_RVA + 8)  (the native-fullread commit recipe's literal),
     //   mgr_vt = *(base + CONTINUE_MANAGER_GLOBAL_RVA)      (the manager object's vtable ptr),
     //   gdm8   = *(GameDataMan + 0x8)                       (the prior crash owner).
     let read284 = |obj: usize| -> u8 {
@@ -118,7 +118,7 @@ pub(crate) unsafe fn own_load_drive(base: usize, gm: usize, owner: usize, want_s
                 .unwrap_or(0)
         }
     };
-    // RESOLVED, through the INDEXED form. `GAME_DATA_MAN_GLOBAL_RVA` moved +0x4060 on 1.17
+    // Resolved, through the indexed form. `GAME_DATA_MAN_GLOBAL_RVA` moved +0x4060 on 1.17
     // (0x3d5df38 -> 0x3d61f98), so the raw read succeeded and handed back whatever now sits at the
     // old address + 8, which became the recipe owner. `game_data_addr_offset` keeps a refusal a
     // refusal: plain `+ FULLREAD_OWNER_GDM_08` would turn 0 into the address 8.
@@ -151,16 +151,16 @@ pub(crate) unsafe fn own_load_drive(base: usize, gm: usize, owner: usize, want_s
         read284(recipe_owner),
         read284(gdm8)
     ));
-    // (5) FINAL STEP. Two mutually-exclusive armed levers (both OFF by default; verify-only is the
-    // default). The LoadGame-JOB INSTALL lever (own_load_install_job) takes precedence: it is the
-    // SAVE-SAFE, NON-SetState5 path (build + install the LoadGame MenuJob into owner+0x130 so
+    // (5) final step. Two mutually-exclusive armed levers (both off by default; verify-only is the
+    // default). The LoadGame-job install lever (own_load_install_job) takes precedence: it is the
+    // save-safe, non-SetState5 path (build + install the LoadGame MenuJob into owner+0x130 so
     // STEP_MenuJobWait ticks it -> self-build -> deser -> world stream; no SetState5, no save write).
-    // Only if it is NOT armed do we fall back to the legacy GUARDED continue_confirm/SetState5 lever
-    // (own_load_continue), which is SAVE-WRITING (SetState5 autosaves) behind the hard c30/fp guard.
-    // PATH B (own_load_pump) takes precedence: BUILD the LoadGame job with REAL mss-derived ctx, then
+    // Only if it is not armed do we fall back to the legacy guarded continue_confirm/SetState5 lever
+    // (own_load_continue), which is save-writing (SetState5 autosaves) behind the hard c30/fp guard.
+    // Path B (own_load_pump) takes precedence: Build the LoadGame job with real mss-derived ctx, then
     // privately pump its Run every frame from the recurring game task to completion (deser -> m28 stream)
     // and drive the transition on Success. No owner+0x130 install, no queue, no dialog -- the proven
-    // menu-free "own the load". SAVE-SAFE at build (only the final SetState5 transition writes, gated).
+    // menu-free "own the load". Save-safe at build (only the final SetState5 transition writes, gated).
     if own_load_pump_enabled() {
         unsafe { own_load_pump_fire(base, owner, c30, c30_real, fp_real, fp_level, n) };
     } else if own_load_install_job_enabled() {
@@ -172,24 +172,24 @@ pub(crate) unsafe fn own_load_drive(base: usize, gm: usize, owner: usize, want_s
     OWN_LOAD_PHASE_PUB.store(PHASE_DONE + 1, Ordering::SeqCst);
 }
 
-/// OWN-LOAD FINAL STEP (er-effects-rs-mr2): after the PROVEN verify-only parse mounted a REAL c30 +
-/// real character, fire the GUARDED native `continue_confirm` 0x140b0e180 -> `SetState5` 0x140b0d960
-/// to stream the character into the PLAYABLE world. `continue_confirm` reads owner = [rcx+8] off
-/// the shim, reads GameMan+0xc30 (already REAL from our parse) into owner+0xbc, then
+/// Own-load final step (er-effects-rs-mr2): after the proven verify-only parse mounted a real c30 +
+/// real character, fire the guarded native `continue_confirm` 0x140b0e180 -> `SetState5` 0x140b0d960
+/// to stream the character into the playable world. `continue_confirm` reads owner = [rcx+8] off
+/// the shim, reads GameMan+0xc30 (already real from our parse) into owner+0xbc, then
 /// SetState(owner, 5) -> the per-frame title-flow step machine streams the world.
 ///
-/// OWNER (er-effects-rs-mr2 fix): the owner MUST be the SetState-able TITLE owner threaded in from
-/// `own_stepper_idx10` (the validated title-flow object), NOT *(GameDataMan+0x8). The prior crash
-/// passed *(GameDataMan+0x8) (a DIFFERENT object) into continue_confirm and crashed inside
-/// SetState5. The OWNER DIAGNOSTIC in the verify path logs all candidates for cross-checking.
+/// Owner (er-effects-rs-mr2 fix): the owner must be the SetState-able title owner threaded in from
+/// `own_stepper_idx10` (the validated title-flow object), not *(GameDataMan+0x8). The prior crash
+/// passed *(GameDataMan+0x8) (a different object) into continue_confirm and crashed inside
+/// SetState5. The owner diagnostic in the verify path logs all candidates for cross-checking.
 ///
-/// SAVE-SAFETY ABSOLUTE (SetState5 AUTOSAVES). HARD GUARD before firing -- ABORT with a logged
-/// no-write if ANY fails:
-///   * `c30_real` (c30 != 0xa010000 m10-default AND != 0xffffffff unset AND != 0): same flag the
+/// Save-SAFETY absolute (SetState5 AUTOSAVES). Hard guard before firing -- Abort with a logged
+/// no-write if any fails:
+///   * `c30_real` (c30 != 0xa010000 m10-default and != 0xffffffff unset and != 0): same flag the
 ///     verify path computed -- never fire SetState5 on an unverified/default c30 (the prior crash
 ///     cause -- real char streamed to the wrong map then autosaved over).
 ///   * `fp_real`: the PlayerGameData char fingerprint is real (level/stats non-default).
-///   * `title_owner` non-null AND title_owner+0x284 (new-game flag) == 0 (continue_confirm's LOAD
+///   * `title_owner` non-null and title_owner+0x284 (new-game flag) == 0 (continue_confirm's load
 ///     branch; non-zero would take the NewGame path -- fail closed).
 ///
 /// Keeps `simulated_button_presses_total = 0`: this is a pure in-process native call, no input.
@@ -202,8 +202,8 @@ pub(crate) unsafe fn own_load_continue_fire(
     fp_level: u32,
     n: u64,
 ) {
-    // CALLER-TRACE DIAG (2026-07-23, bd trace own_load arming): log the FULL runtime caller chain each
-    // time the continue actually fires, so the ACTUAL entry/arming path is captured from evidence (static
+    // Caller-trace DIAG (2026-07-23, bd trace own_load arming): log the full runtime caller chain each
+    // time the continue actually fires, so the actual entry/arming path is captured from evidence (static
     // tracing was repeatedly wrong -- own_load fired in run71 despite no autoload file + DIAG_NO_AUTOLOAD).
     append_autoload_debug(format_args!(
         "OWN_LOAD_CONTINUE_FIRE ENTRY c30_real={c30_real} fp_real={fp_real} own_load_continue_enabled={} CALLERS: {}",
@@ -212,11 +212,11 @@ pub(crate) unsafe fn own_load_continue_fire(
     ));
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     // Hard c30 + fingerprint guard (absolute save-safety backstop). NOTE: unlike the native-fullread
-    // COMMIT path (which needs a level>=10 floor to reject the level-9 NEW-GAME PREVIEW), OWN-LOAD has
-    // a STRONGER per-slot signal: `c30_real` means GameMan+0xc30 became the slot's REAL map
-    // (0x1c000000 etc.), NOT the new-game default 0xa010000 -- so a real save is proven directly.
-    // `fp_real` already requires level>=1 AND a non-empty name (see char_fingerprint), so it admits
-    // legitimate LOW-LEVEL real characters (e.g. a level-7 Hero-class save) that a >=10 floor would
+    // commit path (which needs a level>=10 floor to reject the level-9 new-game preview), own-load has
+    // a stronger per-slot signal: `c30_real` means GameMan+0xc30 became the slot's real map
+    // (0x1c000000 etc.), not the new-game default 0xa010000 -- so a real save is proven directly.
+    // `fp_real` already requires level>=1 and a non-empty name (see char_fingerprint), so it admits
+    // legitimate low-level real characters (e.g. a level-7 Hero-class save) that a >=10 floor would
     // wrongly reject. c30_real + fp_real is the correct, save-safe gate here.
     if !(c30_real && fp_real) {
         append_autoload_debug(format_args!(
@@ -224,7 +224,7 @@ pub(crate) unsafe fn own_load_continue_fire(
         ));
         return;
     }
-    // OWNER = the SetState-able TITLE owner threaded in from own_stepper_idx10 (NOT *(GameDataMan+0x8),
+    // Owner = the SetState-able title owner threaded in from own_stepper_idx10 (not *(GameDataMan+0x8),
     // which caused the prior crash). It is the validated title-flow object the DLL already SetState's.
     if title_owner == null {
         append_autoload_debug(format_args!(
@@ -249,7 +249,7 @@ pub(crate) unsafe fn own_load_continue_fire(
         ));
         return;
     }
-    // GUARD PASSED. Build the {[OWNER_IDX]=title_owner} shim and fire the native continue_confirm.
+    // Guard passed. Build the {[OWNER_IDX]=title_owner} shim and fire the native continue_confirm.
     let shim = &raw mut OWN_STEPPER_SHIM;
     unsafe { (*shim)[OWN_STEPPER_SHIM_OWNER_IDX] = title_owner };
     let shim_ptr = shim as usize;
@@ -271,9 +271,9 @@ pub(crate) unsafe fn own_load_continue_fire(
         format_args!("c30=0x{c30:x} level={fp_level}"),
     );
     unsafe { confirm(shim_ptr) };
-    // Cache the pointers the RECURRING world-stream observer needs, then arm it. own_stepper_idx10 (a
-    // TITLE-PHASE task) STOPS ticking once SetState5 starts this transition, so the title `owner` and
-    // its InGameStep (owner+0x2e8) will no longer be threaded in. Snapshot them HERE (InGameStep was
+    // Cache the pointers the recurring world-stream observer needs, then arm it. own_stepper_idx10 (a
+    // title-phase task) stops ticking once SetState5 starts this transition, so the title `owner` and
+    // its InGameStep (owner+0x2e8) will no longer be threaded in. Snapshot them here (InGameStep was
     // already non-null at frame 0) so the recurring game task can keep walking owner->InGameStep->
     // MoveMapStep through the whole loading screen. (own-load-stream-observer-must-be-recurring-task-2026-06-22)
     OWN_LOAD_OWNER_CACHED.store(title_owner, Ordering::SeqCst);
@@ -306,27 +306,27 @@ fn own_load_install_job_slot_snapshot(slot_addr: usize) -> (usize, usize, usize,
     (job, vtable, inner_seq, built_flag, current_job_index)
 }
 
-/// OWN-LOAD FINAL STEP -- LoadGame-JOB INSTALL lever (`own_load_install_job`). The SAVE-SAFE,
-/// NON-SetState5 alternative to `own_load_continue_fire`: after the PROVEN verify-only parse mounted a
-/// REAL c30 + real character, BUILD the native LoadGame `CS::MenuJobWithContext<LoadJobContext>` and
-/// INSTALL it into the title owner's `+0x130` MenuJob slot, replacing the idle `IfElseJob`.
+/// Own-load final step -- LoadGame-job install lever (`own_load_install_job`). The save-safe,
+/// non-SetState5 alternative to `own_load_continue_fire`: after the proven verify-only parse mounted a
+/// real c30 + real character, build the native LoadGame `CS::MenuJobWithContext<LoadJobContext>` and
+/// install it into the title owner's `+0x130` MenuJob slot, replacing the idle `IfElseJob`.
 /// `CS::TitleStep::STEP_MenuJobWait` already ticks `ExecuteMenuJob(&owner->+0x130)` every frame, so the
 /// installed job then self-builds (its `Run` builds the inner FixOrderJobSequence on the first tick:
-/// `+0x68`/`+0x70` flip), deserializes the save, and streams the world -- WITHOUT `SetState5`.
+/// `+0x68`/`+0x70` flip), deserializes the save, and streams the world -- Without `SetState5`.
 ///
-/// SAVE-SAFETY ABSOLUTE: NO `SetState5`, NO autosave, NO save write. The BUILD factory only allocates +
-/// copies a template; the first-tick deser step (`FUN_14082c330`) only READS the save
+/// Save-SAFETY ABSOLUTE: No `SetState5`, no autosave, no save write. The build factory only allocates +
+/// copies a template; the first-tick deser step (`FUN_14082c330`) only reads the save
 /// (`AllocateAligned` -> read -> `SetSaveSlot` -> decrypt -> `ReadBytes` -> dealloc) up to world-stream.
 /// Static-verified against the runtime dump. Same hard c30/fp guard as the continue lever is kept as a
 /// belt-and-braces precondition even though no write occurs. Keeps `simulated_button_presses_total = 0`.
 ///
-/// ARG SOURCING (static RE, 2026-06-22): the BUILD factory `FUN_140826510(out, ctx_parent, slot,
+/// ARG sourcing (static RE, 2026-06-22): the build factory `FUN_140826510(out, ctx_parent, slot,
 /// owner_ctx)` needs only `out` (our local) + `slot` (the int slot) for the deser/map self-build; the
-/// `ctx_parent`/`owner_ctx` args are the OUTER profile-selection UI context, stored as lambda captures
-/// whose every build-path deref is null-guarded -- so we pass them as 0. RESIDUAL RISK: if the engine's
-/// `EnableProfileSelection` release flag is set AND the outer sequence ticks the profile-selection
+/// `ctx_parent`/`owner_ctx` args are the outer profile-selection UI context, stored as lambda captures
+/// whose every build-path deref is null-guarded -- so we pass them as 0. Residual RISK: if the engine's
+/// `EnableProfileSelection` release flag is set and the outer sequence ticks the profile-selection
 /// sub-job, a captured-null deref could fault -- watch the install-fire log for that. The two native
-/// calls are wrapped in `catch_unwind` (catches a Rust-unwinding panic; a hardware AV is NOT caught).
+/// calls are wrapped in `catch_unwind` (catches a Rust-unwinding panic; a hardware AV is not caught).
 unsafe fn own_load_install_job_fire(
     base: usize,
     title_owner: usize,
@@ -360,7 +360,7 @@ unsafe fn own_load_install_job_fire(
         MENUJOB_IFELSE_VTABLE_DUMP_VA,
         er_game_base::mem::game_data_addr(base, LOADGAME_JOB_BUILD_RVA, "LOADGAME_JOB_BUILD_RVA"),
     ));
-    // (a) BUILD the LoadGame MenuJobWithContext into a local DLRefCountPtr (the factory writes the job
+    // (a) build the LoadGame MenuJobWithContext into a local DLRefCountPtr (the factory writes the job
     //     ptr into *out with refcount 1). Win64 fastcall (out, ctx_parent, save_slot, owner_ctx).
     // Justify the transmute: LOADGAME_JOB_BUILD_RVA is the prologue-grounded live entry of the menu-heap
     // LoadGame-job factory; the signature matches the static decompile of FUN_140826510.
@@ -400,9 +400,9 @@ unsafe fn own_load_install_job_fire(
         MENUJOB_LOADGAME_VTABLE_DUMP_VA,
         er_game_base::mem::game_data_addr(base, MENUJOB_ASSIGN_RVA, "MENUJOB_ASSIGN_RVA"),
     ));
-    // (b) APPEND our built job into the owner+0x130 MenuJobQueue via PushBackJob (NOT a slot-overwrite).
+    // (b) APPEND our built job into the owner+0x130 MenuJobQueue via PushBackJob (not a slot-overwrite).
     //     owner+0x130 is a CS::MenuJobQueue (active job +0x130, ring +0x138, count +0x178). The prior
-    //     move-assign overwrite ORPHANED the title IfElseJob's sibling CS::MenuWindowJobs -> AV at
+    //     move-assign overwrite orphaned the title IfElseJob's sibling CS::MenuWindowJobs -> AV at
     //     CS::DLFixedVector::push_back 0x140733fea. PushBackJob(queue_base=&owner+0x130, src=&built_job)
     //     appends behind the still-active IfElseJob (no tear, AtomicIncrements the job, does not zero
     //     src); STEP_MenuJobWait's ExecuteMenuJob then pops + ticks our queued job.
@@ -427,7 +427,7 @@ unsafe fn own_load_install_job_fire(
         ));
         return;
     }
-    // AFTER: the active job at owner+0x130 should be UNCHANGED (still the IfElseJob) -- our job is in the
+    // AFTER: the active job at owner+0x130 should be unchanged (still the IfElseJob) -- our job is in the
     // ring; the queue count at +0x178 should have grown by 1. Pure reads.
     let (a_job, a_vt, a_seq, a_built, a_idx) = own_load_install_job_slot_snapshot(slot_addr);
     let queue_count_after =
@@ -453,19 +453,19 @@ unsafe fn own_load_install_job_fire(
     let _ = (b_seq, b_idx, b_built, b_vt, b_job);
 }
 
-/// PATH B "OWN THE LOAD" -- BUILD the LoadGame job with REAL mss-derived ctx, store its pointer for the
-/// recurring per-frame private pump. The menu-free alternative to BOTH the owner+0x130 install (a
+/// Path B "OWN THE LOAD" -- Build the LoadGame job with real mss-derived ctx, store its pointer for the
+/// recurring per-frame private pump. The menu-free alternative to both the owner+0x130 install (a
 /// proven dead end) and the SetState5-only continue (reached the loading screen but never mounted m28).
 ///
-/// We BUILD via `FUN_140826510(out, ctx_parent=mss+0x50, save_slot, owner_ctx=*(mss+0xa38))` -- the REAL
+/// We build via `FUN_140826510(out, ctx_parent=mss+0x50, save_slot, owner_ctx=*(mss+0xa38))` -- the real
 /// non-null ctx from the golden Continue trace (the prior ctx=0 build AV'd when the outer
-/// profile-selection sub-job dereffed the captured null). We do NOT install the job anywhere (no
+/// profile-selection sub-job dereffed the captured null). We do not install the job anywhere (no
 /// owner+0x130, no MenuJobQueue, no CSMenuMan dialog). Instead the recurring game task ticks its `Run`
 /// privately every frame (see `own_load_pump_tick`) until it self-builds + deserializes + map-streams
 /// (m28 mount) and reaches `state==Success`, then drives the title->ingame transition once.
 ///
-/// SAVE-SAFETY ABSOLUTE: BUILD only allocates + copies a template (no save write); the first-tick deser
-/// step (`FUN_14082c330`) only READS the save up to world-stream. NO SetState5 here. The same hard
+/// Save-SAFETY ABSOLUTE: Build only allocates + copies a template (no save write); the first-tick deser
+/// step (`FUN_14082c330`) only reads the save up to world-stream. No SetState5 here. The same hard
 /// c30/fp guard as the other levers is kept as a belt-and-braces precondition even though no write
 /// occurs at build time. The transition (the only save-writing step) is separately gated in
 /// `own_load_pump_tick`. Keeps `simulated_button_presses_total = 0`.
@@ -496,9 +496,9 @@ unsafe fn own_load_pump_fire(
         // Already built+armed (own_load_drive is one-shot, but guard against a re-entrant fire).
         return;
     }
-    // CORRECTED ctx source (bd loadgame-owner-ctx-is-DIALOG-a38-not-mss-CORRECTION-2026-06-22): the
+    // Corrected ctx source (bd loadgame-owner-ctx-is-dialog-a38-not-mss-correction-2026-06-22): the
     // LoadGame factory's owner_ctx (r9) and ctx_parent (rdx) come from the live CS::TitleTopDialog,
-    // NOT from CSMenuSystemSaveLoad. The golden factory site reads `mov 0xa38(%r13),%r9` where r13 IS
+    // not from CSMenuSystemSaveLoad. The golden factory site reads `mov 0xa38(%r13),%r9` where r13 is
     // the dialog (the prior mss+0xa38 reading misidentified r13 as mss and read back garbage -> the AV).
     // Locate the live dialog at owner+0xe0 (vtable-gated, same recipe as locate_live_loadgame_node).
     let dialog = unsafe { safe_read_usize(title_owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }
@@ -529,9 +529,9 @@ unsafe fn own_load_pump_fire(
         return;
     }
     let ctx_parent = dialog + DIALOG_CTX_PARENT_50_OFFSET;
-    // owner_ctx = *(dialog+0xa38) = CS::TitleFlowContext (written UNCONDITIONALLY by the dialog ctor
+    // owner_ctx = *(dialog+0xa38) = CS::TitleFlowContext (written unconditionally by the dialog ctor
     // 0x1409a82d0, so it is valid at the settled press-any-button title -- unlike mss+0xa38 which read
-    // back uninitialized garbage). FAIL CLOSED (no build) if it is not a plausible heap pointer:
+    // back uninitialized garbage). Fail closed (no build) if it is not a plausible heap pointer:
     // passing NULL is exactly what AV'd before, and a real ctx is the whole point of the correction.
     let raw_owner_ctx =
         unsafe { safe_read_usize(dialog + DIALOG_OWNER_CTX_A38_OFFSET) }.unwrap_or(0);
@@ -551,7 +551,7 @@ unsafe fn own_load_pump_fire(
         DIALOG_CTX_PARENT_50_OFFSET,
         DIALOG_OWNER_CTX_A38_OFFSET,
     ));
-    // BUILD the LoadGame MenuJobWithContext into a local DLRefCountPtr (factory writes the job ptr into
+    // Build the LoadGame MenuJobWithContext into a local DLRefCountPtr (factory writes the job ptr into
     // *out with refcount 1). Win64 fastcall (out, ctx_parent, save_slot:i32, owner_ctx).
     // Justify the transmute: LOADGAME_JOB_BUILD_RVA is the prologue-grounded live entry of the menu-heap
     // LoadGame-job factory; the signature matches the static decompile of FUN_140826510.
@@ -588,7 +588,7 @@ unsafe fn own_load_pump_fire(
         .unwrap_or(0);
     // Arm the recurring private pump: publish the job ptr + cache owner/InGameStep (mirror the other
     // levers) so the recurring observer keeps logging through the loading screen, and set
-    // OWN_LOAD_CONTINUE_FIRED so own_load_stream_observe_recurring runs each frame. Do NOT install the
+    // OWN_LOAD_CONTINUE_FIRED so own_load_stream_observe_recurring runs each frame. Do not install the
     // job anywhere -- the recurring task pumps Run directly.
     OWN_LOAD_PUMP_JOB.store(built_job, Ordering::SeqCst);
     OWN_LOAD_OWNER_CACHED.store(title_owner, Ordering::SeqCst);
@@ -608,16 +608,16 @@ unsafe fn own_load_pump_fire(
     ));
 }
 
-/// PATH B per-frame PRIVATE PUMP (runs from the recurring game task each frame, gated). If a LoadGame
+/// Path B per-frame private pump (runs from the recurring game task each frame, gated). If a LoadGame
 /// job was built+armed by `own_load_pump_fire`, tick its `Run` exactly the way the native
 /// `ExecuteMenuJob` does -- a zero-init `MenuJobResult` and an `FD4Time` carrying the frame delta -- so
-/// the job self-builds, deserializes, and map-streams the world WITHOUT the menu system. When the job
-/// reaches `state==Success` (deser+map done, m28 mounted), drive the title->ingame transition ONCE via
+/// the job self-builds, deserializes, and map-streams the world without the menu system. When the job
+/// reaches `state==Success` (deser+map done, m28 mounted), drive the title->ingame transition once via
 /// the guarded `continue_confirm`/SetState5 (the same save-safe guard as `own_load_continue_fire`), then
 /// latch `OWN_LOAD_PUMP_DONE` so we never re-pump or re-transition.
 ///
-/// SAVE-SAFETY: the pump itself (build+deser+map-stream) is READ-only up to world-stream. The ONLY
-/// save-writing step is the final SetState5 transition, which stays HARD-gated on the verified parse
+/// Save-SAFETY: the pump itself (build+deser+map-stream) is read-only up to world-stream. The only
+/// save-writing step is the final SetState5 transition, which stays hard-gated on the verified parse
 /// (`c30_real && fp_real`, re-checked from the live GameMan+0xc30 and char fingerprint) + the title
 /// owner's new-game flag clear -- mirroring `own_load_continue_fire`. No save write before the world is
 /// confirmed loading. Every native call is wrapped in `catch_unwind` (a Rust panic is caught; a hardware
@@ -695,7 +695,7 @@ pub(crate) unsafe fn own_load_pump_tick(base: usize, gm: usize, frame_delta: f32
         // Still working (Continue) -- keep pumping next frame.
         return;
     }
-    // Terminal: Success (2) or Failed (3). Latch DONE so we stop pumping regardless of the transition.
+    // Terminal: Success (2) or Failed (3). Latch done so we stop pumping regardless of the transition.
     OWN_LOAD_PUMP_DONE.store(true, Ordering::SeqCst);
     if state == MENUJOB_STATE_FAILED {
         append_autoload_debug(format_args!(
@@ -704,7 +704,7 @@ pub(crate) unsafe fn own_load_pump_tick(base: usize, gm: usize, frame_delta: f32
         return;
     }
     // state == Success: the job deserialized + map-streamed (m28). Drive the title->ingame transition
-    // ONCE via the guarded SetState5. RE-VERIFY the parse from LIVE state (the build+pump can change
+    // once via the guarded SetState5. RE-verify the parse from live state (the build+pump can change
     // GameMan+0xc30) so the save-write transition is gated exactly like own_load_continue_fire.
     let owner = OWN_LOAD_OWNER_CACHED.load(Ordering::SeqCst);
     let c30_live = if gm != null && gm != 0 {
@@ -723,7 +723,7 @@ pub(crate) unsafe fn own_load_pump_tick(base: usize, gm: usize, frame_delta: f32
     // since it was introduced, so the branch never ran; it was deleted rather than left reading as
     // a live save-safety lever, which is the one thing a reader must not get wrong here.
     //
-    // The transition is the SAME guarded continue_confirm/SetState5 path the legacy lever uses; it
+    // The transition is the same guarded continue_confirm/SetState5 path the legacy lever uses; it
     // re-checks c30_real && fp_real + the owner new-game flag internally and ABORTs (no write) on any
     // failure. Pass the live-re-verified c30 so the guard reflects the post-pump state.
     unsafe {

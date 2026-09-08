@@ -1,22 +1,22 @@
-//! REFERENCE (not wired into any crate): minimal MSBE `POINT_PARAM_ST` reader, `InvasionPoint` only.
+//! Reference (not wired into any crate): minimal MSBE `POINT_PARAM_ST` reader, `InvasionPoint` only.
 //!
 //! Build/run standalone -- it is a single file with no dependencies:
 //!     rustc -O scripts/msbe_invasion_points_reference.rs -o /tmp/msbe_points
 //!     /tmp/msbe_points <decompressed .msb>
 //!
-//! Input is ALREADY-DECOMPRESSED MSB bytes (the DCX/KRAK wrapper must already be off).
+//! Input is already-DECOMPRESSED MSB bytes (the DCX/KRAK wrapper must already be off).
 //!
 //! Byte layout confirmed three independent ways:
 //!   (a) parsed against 8 shipped maps / 380 InvasionPoint regions and matched
 //!       `/home/banon/er-extract/invasion_points.20260804.jsonl` field-for-field;
 //!   (b) the game's own `CS::CSMsbPointShapeData` (Ghidra 1.16.2: `pointType@0x10`, `pos@0x14`,
 //!       `angle@0x20`, `mapStudioLayer@0x44`, `shapeData@0x48`), which the engine overlays
-//!       DIRECTLY on the file buffer -- `MsbResCap.pointParams` points into it;
+//!       directly on the file buffer -- `MsbResCap.pointParams` points into it;
 //!   (c) `fstools_formats::msb::point::Header` (already a git dep of er-flver/er-objectkit).
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InvasionPoint {
-    /// Entry `+0x0C`: the file's OWN per-subtype ordinal. Verified equal to the counted
+    /// Entry `+0x0C`: the file's own per-subtype ordinal. Verified equal to the counted
     /// file-order ordinal for all 3136 region entries across 8 maps, so the file states the
     /// index rather than the reader having to derive it.
     pub index: u32,
@@ -109,9 +109,9 @@ pub fn invasion_points(b: &[u8]) -> Result<Vec<InvasionPoint>, MsbError> {
         if wide_str_eq(b, name_offset, "POINT_PARAM_ST") {
             let mut out = Vec::new();
             for i in 0..entries {
-                // Entry offsets are ABSOLUTE file offsets. Everything INSIDE an entry
+                // Entry offsets are absolute file offsets. Everything inside an entry
                 // (nameOffset@0, shapeData@0x48, entityData@0x50, typeData@0x58, structS@0x60)
-                // is RELATIVE TO THE ENTRY START.
+                // is relative to the entry start.
                 let e = usize_at(b, sect + 0x10 + 8 * i)?;
                 if i32_at(b, e + 0x08)? != REGION_TYPE_INVASION_POINT {
                     continue;

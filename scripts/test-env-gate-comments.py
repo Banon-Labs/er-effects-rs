@@ -99,7 +99,7 @@ def main() -> int:
     write(".auto/env_gate_comment_policy.rego", valid_policy())
     write("src/new_gate.rs", GATE_SRC)
 
-    # 1. Any env gate not in diagnostic_gates is FORBIDDEN.
+    # 1. Any env gate not in diagnostic_gates is forbidden.
     write_baseline({})
     assert rules_for(checker) == {"env-gate-forbidden"}, rules_for(checker)
 
@@ -107,11 +107,11 @@ def main() -> int:
     write_baseline({KEY: "passive debug log only; no game behavior change."})
     assert rules_for(checker) == set(), rules_for(checker)
 
-    # 3. A diagnostic_gates entry with an EMPTY rationale is NOT enough -> still forbidden.
+    # 3. A diagnostic_gates entry with an empty rationale is not enough -> still forbidden.
     write_baseline({KEY: "   "})
     assert rules_for(checker) == {"env-gate-forbidden"}, rules_for(checker)
 
-    # 4. A key for a DIFFERENT location does not rescue this gate.
+    # 4. A key for a different location does not rescue this gate.
     write_baseline({f"{BRAND}@src/other.rs": "unrelated."})
     assert rules_for(checker) == {"env-gate-forbidden"}, rules_for(checker)
 

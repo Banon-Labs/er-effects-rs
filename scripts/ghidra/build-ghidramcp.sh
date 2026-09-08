@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the 13bm GhidraMCP server FROM SOURCE (both halves):
+# Build the 13bm GhidraMCP server from source (both halves):
 #   - the Go bridge   (mcp-bridge/mcp_bridge)   -- the native binary the plugin auto-launches
 #   - the Ghidra Java extension (dist/*.zip)     -- installed into Ghidra to expose 70 RE tools
 #
@@ -20,7 +20,7 @@ export PATH="$JAVA_HOME/bin:$PATH"
 
 cd "$MCP_SRC"
 
-# Reapply our local bridge patch (real-newline rendering + JP->EN translate) idempotently.
+# Reapply our local bridge patch (real-newline rendering + JP->en translate) idempotently.
 # A fresh clone won't have it; an already-patched tree is left untouched.
 if [[ -f "$PATCH" ]]; then
   if git -C "$MCP_SRC" apply --reverse --check "$PATCH" 2>/dev/null; then

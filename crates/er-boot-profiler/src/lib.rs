@@ -1,19 +1,19 @@
-//! Boot-sequence CPU profiler: an INDEPENDENT sampler thread that records, over the whole boot,
+//! Boot-sequence CPU profiler: an independent sampler thread that records, over the whole boot,
 //! per-thread CPU work (high-res cycles via `QueryThreadCycleTime` + absolute kernel/user time via
 //! `GetThreadTimes`) and, optionally, the instruction pointer of each thread (`GetThreadContext`).
 //!
-//! Why a standalone thread (not the game task): the ~10s engine-init gap happens BEFORE
+//! Why a standalone thread (not the game task): the ~10s engine-init gap happens before
 //! `CSTaskImp::instance()` resolves, i.e. before our recurring game task ticks. A separate sampler
 //! observes every OS thread regardless of our task state, so it sees the engine's own init threads
-//! during that gap. The per-thread cycle/CPU-time timeline is what reveals MISSED PARALLELISM: one
+//! during that gap. The per-thread cycle/CPU-time timeline is what reveals missed PARALLELISM: one
 //! thread pegged while N-1 cores sit idle for seconds is a serialized bottleneck.
 //!
 //! Two layers, separately gated:
-//!   * CPU-time sampling (DEFAULT when profiler on): NO thread suspension. Pure
+//!   * CPU-time sampling (default when profiler on): No thread suspension. Pure
 //!     `QueryThreadCycleTime` + `GetThreadTimes` reads -> safe, cannot perturb the game. This
 //!     answers "where does wall-clock go and is each phase CPU-bound or wait-bound, and is it
 //!     parallelized".
-//!   * RIP sampling (`ER_QUICKLOAD_PROFILE_RIP=1`, OFF by default): `SuspendThread`+`GetThreadContext`
+//!   * RIP sampling (`ER_QUICKLOAD_PROFILE_RIP=1`, off by default): `SuspendThread`+`GetThreadContext`
 //!     to capture each thread's Rip -> hot-function attribution (symbolized offline via the Ghidra
 //!     dump). Suspension is heavier and could be noticed by anti-tamper, so it is opt-in.
 //!
@@ -76,7 +76,7 @@ pub fn profiler_enabled() -> bool {
             .exists()
 }
 
-/// RIP-sampling sub-switch (suspends threads). OFF unless `ER_QUICKLOAD_PROFILE_RIP=1` or the file.
+/// RIP-sampling sub-switch (suspends threads). Off unless `ER_QUICKLOAD_PROFILE_RIP=1` or the file.
 pub(crate) fn profiler_rip_enabled() -> bool {
     matches!(
         std::env::var("ER_QUICKLOAD_PROFILE_RIP").as_deref(),
@@ -230,9 +230,9 @@ fn profiler_main(log: fn(std::fmt::Arguments<'_>)) {
     };
 
     let path = profile_path();
-    // FRESH PER RUN: opened through `er_game_base::log`, which truncates on this process's first
+    // Fresh per RUN: opened through `er_game_base::log`, which truncates on this process's first
     // write (previous run kept one generation as `.prev`). The offline renderer reads the header
-    // line below and then every sample after it as ONE run's timeline; a second run's header
+    // line below and then every sample after it as one run's timeline; a second run's header
     // appearing mid-file would be read as samples.
     let Some(mut file) = open_fresh_run_append(&path) else {
         log(format_args!("profiler: cannot open {path:?}"));

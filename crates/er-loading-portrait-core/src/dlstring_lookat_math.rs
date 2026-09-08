@@ -6,7 +6,7 @@ use crate::prelude::*;
 /// capacity and the heap pointer are both read through `safe_read_*`, so any value is
 /// safe to pass and a bad one yields the sentinel.
 ///
-/// The RETURNED value is likewise only an address, not a borrow -- it may already be
+/// The returned value is likewise only an address, not a borrow -- it may already be
 /// dangling by the time it is used, so it is only valid to feed back into the same
 /// fault-tolerant readers, never to dereference directly.
 pub unsafe fn read_native_dlstring_ascii_ptr(s: usize) -> usize {
@@ -97,7 +97,7 @@ pub unsafe fn copy_ascii_preview(ptr: usize, out: &mut [u8]) -> usize {
 
 /// # Safety
 ///
-/// THIS ONE WRITES INTO THE GAME'S HEAP, and the write is a plain `write_volatile` with
+/// This one writes into the game'S HEAP, and the write is a plain `write_volatile` with
 /// no fault guard. The caller must guarantee all of:
 ///
 /// * `s` really is a live native `DLString<char>` (the header layout at `+0x8`/`+0x18`/
@@ -158,7 +158,7 @@ unsafe fn sample_now_loading_helper(this: usize) {
 
 /// # Safety
 ///
-/// Do NOT call this directly. It is the detour body MinHook installs over the game's
+/// Do not call this directly. It is the detour body MinHook installs over the game's
 /// `CSNowLoadingHelperImp` constructor, so it may only be entered by that patched call site, on the
 /// game thread that made the call, with the arguments and `extern "system"` ABI the original
 /// declares.
@@ -189,7 +189,7 @@ pub unsafe extern "system" fn now_loading_helper_ctor_hook(this: usize) -> usize
 
 /// # Safety
 ///
-/// Do NOT call this directly. It is the detour body MinHook installs over the game's
+/// Do not call this directly. It is the detour body MinHook installs over the game's
 /// `CSNowLoadingHelperImp::Update`, so it may only be entered by that patched call site, on the
 /// game thread that made the call, with the arguments and `extern "system"` ABI the original
 /// declares.
@@ -283,7 +283,7 @@ unsafe fn sample_loading_screen_bar(this: usize) {
     if finish_sent != 0 && prev_finish_sent == 0 {
         let now_ms = crate::boot_view_epoch_ms().max(1) as usize;
         let hits = LOADING_SCREEN_CLOSE_SENT_HITS.fetch_add(1, Ordering::SeqCst) + 1;
-        // COMPLETED vs merely CLOSED, recorded at the only instant it can be read. A plate that
+        // Completed vs merely closed, recorded at the only instant it can be read. A plate that
         // finishes with its gauge still at frame 1 of 500 is a screen going away (the switch's
         // return-to-title teardown); a plate that finishes at 500/500 is a world having loaded.
         // The frame is already in this line's text, but the cover's release gate needs it as a
@@ -312,7 +312,7 @@ unsafe fn sample_loading_screen_bar(this: usize) {
 
 /// # Safety
 ///
-/// Do NOT call this directly. It is the detour body MinHook installs over the game's
+/// Do not call this directly. It is the detour body MinHook installs over the game's
 /// `CS::LoadingScreen::Update`, so it may only be entered by that patched call site, on the game
 /// thread that made the call, with the arguments and `extern "system"` ABI the original declares.
 ///
@@ -345,13 +345,13 @@ pub unsafe extern "system" fn loading_screen_update_hook(this: usize, dt: f32, p
 
 /// Is `this` the clip the game's own loading screen plays its authored fade-out on?
 ///
-/// THE WHOLE POINT OF THE NARROWING. The hooked Scaleform goto wrapper is generic -- every menu in
+/// The whole point of the narrowing. The hooked Scaleform goto wrapper is generic -- every menu in
 /// the game reaches it -- so the argument is the only thing that says who called. Two conditions,
 /// and both are needed:
 ///
 ///   * `LOADING_SCREEN_UPDATE_LAST_MS != 0` -- the loading screen has ticked since the current
 ///     cover window was armed. `boot_view_reset_native_loading_semaphores` zeroes that on every
-///     rearm, so a stale pointer left over from the PREVIOUS load (whose object is freed, and
+///     rearm, so a stale pointer left over from the previous load (whose object is freed, and
 ///     whose address some later allocation may reuse) can never match across a switch. Before the
 ///     incoming screen's first tick there is no loading screen to fade, which is exactly right:
 ///     a fade-out arriving then belongs to the outgoing load.
@@ -387,11 +387,11 @@ fn stamp_foreign_gfx_fadeout(this: usize, label: usize) {
     }
 }
 
-/// Stamp one Scaleform fade-out observation. `source` names WHICH hook saw it -- `label-goto` (the
+/// Stamp one Scaleform fade-out observation. `source` names which hook saw it -- `label-goto` (the
 /// timeline label detour) or `knowledge-method` (the loading screen's own GFx fade-out method) --
 /// and `this` is the movie instance the stamp came from.
 ///
-/// POST-RELEASE STAMPS ARE LOGGED UNCONDITIONALLY (2026-08-22). The rate limit below is right for
+/// Post-release stamps are logged unconditionally (2026-08-22). The rate limit below is right for
 /// the normal case: a loading screen produces a burst and only the shape matters. But it made this
 /// trace blind exactly where it was needed. In run br-20260822-184123-fa3d the counter went 90->102
 /// across the window where the user reported the loading screen reappearing, and because every one
@@ -400,9 +400,9 @@ fn stamp_foreign_gfx_fadeout(this: usize, label: usize) {
 /// released, so the game should not be fading anything out -- so logging all of them cannot storm
 /// the IO path, and each one carries the source and movie pointer needed to tell them apart.
 ///
-/// EVERY STAMP THAT REACHES HERE IS THE LOADING SCREEN'S OWN (narrowed 2026-09-05). It used to be
-/// the opposite: `scaleform_label_goto_hook` stamped on ANY timeline label merely CONTAINING
-/// "fadeout", on ANY movie, and 98 of the 106 vanilla menu `.gfx` files carry one -- so opening the
+/// Every stamp that reaches here is the loading screen'S own (narrowed 2026-09-05). It used to be
+/// the opposite: `scaleform_label_goto_hook` stamped on any timeline label merely containing
+/// "fadeout", on any movie, and 98 of the 106 vanilla menu `.gfx` files carry one -- so opening the
 /// pause menu refreshed a signal the cover's release gate reads. Measured on run
 /// br-20260905-221201-969c: all 129 stamps were foreign, not one of them the loading screen, and
 /// the cover stayed up ~15s past a playable world. The caller now compares `this` against
@@ -436,7 +436,7 @@ fn stamp_loading_gfx_fadeout(source: &str, this: usize, label: usize) {
 
 /// # Safety
 ///
-/// Do NOT call this directly. It is the detour body MinHook installs over the game's `Scaleform
+/// Do not call this directly. It is the detour body MinHook installs over the game's `Scaleform
 /// label-goto`, so it may only be entered by that patched call site, on the game thread that made
 /// the call, with the arguments and `extern "system"` ABI the original declares.
 ///
@@ -465,7 +465,7 @@ pub unsafe extern "system" fn scaleform_label_goto_hook(this: usize, label: usiz
 
 /// # Safety
 ///
-/// Do NOT call this directly. It is the detour body MinHook installs over the game's loading-screen
+/// Do not call this directly. It is the detour body MinHook installs over the game's loading-screen
 /// GFx fade-out method, so it may only be entered by that patched call site, on the game thread
 /// that made the call, with the arguments and `extern "system"` ABI the original declares.
 ///
@@ -473,7 +473,7 @@ pub unsafe extern "system" fn scaleform_label_goto_hook(this: usize, label: usiz
 /// `LOADING_SCREEN_GFX_FADEOUT_ORIG`; that static must hold the trampoline this detour was
 /// installed with, or the call transfers to an arbitrary address.
 pub unsafe extern "system" fn loading_screen_gfx_fadeout_hook(this: usize) {
-    // `this` IS NOT THE SCREEN AND IS NOT THE CLIP. This thunk's first instruction is
+    // `this` is not the screen and is not the clip. This thunk's first instruction is
     // `mov 0x8(%rcx),%rcx`, so what it is handed is the functor that captured the screen; the
     // screen is at +8 and the clip it fades is `screen + LOADING_SCREEN_FADEOUT_CLIP_OFFSET`.
     // Resolving it here makes this stamp's `this=` the same value the label-goto stamp prints,
@@ -493,35 +493,35 @@ pub unsafe extern "system" fn loading_screen_gfx_fadeout_hook(this: usize) {
 }
 
 // =================================================================================================
-// THE FIVE LOADING-SCREEN OBSERVER DETOURS -- EACH INSTALLED ON ITS OWN MERITS.
+// the five loading-screen observer DETOURS -- Each installed on its own merits.
 //
-// ONE REFUSED HOOK USED TO COST FOUR WORKING ONES. Until 2026-08-30 all five installs shared a
-// single `ok` flag and the function returned on `!ok` BEFORE `MH_ApplyQueued`, so the one address
+// One refused hook used to cost four working ones. Until 2026-08-30 all five installs shared a
+// single `ok` flag and the function returned on `!ok` before `MH_ApplyQueued`, so the one address
 // MinHook declined took the whole batch down with it: four detours created, queued, and never
 // applied. Those four are what the visible loading bar and the cover's release predicate are made
 // of, so `LOADING_SCREEN_UPDATE_HITS`, `LOADING_SCREEN_BAR_PROGRESS_PERMILLE` and
 // `LOADING_SCREEN_CLOSE_SENT_HITS` all stayed at 0, `BOOT_VIEW_RELEASE_NATIVE_DONE_SEEN` never
 // latched, and a user played for seven minutes under an opaque loading cover.
 //
-// IT COULD NOT SELF-HEAL, WHICH IS THE OTHER HALF. The aggregate latch was set only inside the
+// It could not self-heal, which is the other half. The aggregate latch was set only inside the
 // all-five success path, so the callers re-entered the installer every ~50-80ms, and from the
-// second pass on the four HEALTHY hooks failed `MH_ERROR_ALREADY_CREATED` against themselves --
+// second pass on the four healthy hooks failed `MH_ERROR_ALREADY_CREATED` against themselves --
 // the registry collision lines name the same detour address on both sides of the collision. One
 // session produced 8,430 refusal lines and a 1,018,993,636-byte debug log.
 //
 // So each hook now carries its own latch and its own terminal decision:
 //
-//   * a hook that cannot install logs ONCE and leaves the other four alone -- a missing hook must
+//   * a hook that cannot install logs once and leaves the other four alone -- a missing hook must
 //     cost one feature, never four;
 //   * a latched hook is never re-created, which is what makes `MH_ERROR_ALREADY_CREATED`
 //     structurally impossible rather than merely tolerated;
-//   * a permanently fatal status is terminal for THAT hook with no retry, because no retry can
+//   * a permanently fatal status is terminal for that hook with no retry, because no retry can
 //     change the answer: the build gate refusing an address, bytes that are not executable, and a
 //     target that is not there are all properties of the image, not of the moment;
 //   * only `MH_ERROR_NOT_INITIALIZED` and `MH_ERROR_MEMORY_ALLOC` leave a hook retryable, and even
 //     those are bounded by `OBSERVER_INSTALL_MAX_PASSES`, so the poll loop always terminates.
 //
-// The detours stay BARE `MhHook`, deliberately. `crate::mh::register_union_hook` would give
+// The detours stay bare `MhHook`, deliberately. `crate::mh::register_union_hook` would give
 // idempotency for free, but `UnionFn` is `extern "system" fn(usize, usize, usize, usize) -> usize`
 // and `loading_screen_update_hook` takes `dt: f32` in XMM1 -- routing the load-bearing hook of this
 // whole bug through the union dispatcher would silently drop the float. Per-hook latches are the
@@ -560,7 +560,7 @@ static NOW_LOADING_OBSERVER_PASSES: AtomicUsize = AtomicUsize::new(0);
 /// four, plus the latch that remembers how far it got.
 struct ObserverHook {
     /// Names this hook in every log line and in the `game_rva_named` refusal, so a reader can tell
-    /// WHICH observer went inert without counting arguments in a summary line.
+    /// which observer went inert without counting arguments in a summary line.
     what: &'static str,
     /// The 1.16.2 RVA, left untranslated on purpose: `MhHook::new` owns the detour-safe
     /// translation, and resolving one address twice is its own documented hazard.
@@ -575,7 +575,7 @@ struct ObserverHook {
 /// The five observers, in install order.
 ///
 /// `LOADING_SCREEN_GFX_FADEOUT_HOOK_INSTALLED` describes exactly the GFx fade-out hook here. It
-/// used to be set when EITHER that hook or the Scaleform label-goto resolved, which meant the
+/// used to be set when either that hook or the Scaleform label-goto resolved, which meant the
 /// label-goto installing could report the fade-out hook as live while it was refused -- the same
 /// conflation, one level down, as the shared `ok` flag. The label-goto now has its own latch.
 fn observer_hooks() -> [ObserverHook; OBSERVER_HOOK_COUNT] {
@@ -621,7 +621,7 @@ fn observer_hooks() -> [ObserverHook; OBSERVER_HOOK_COUNT] {
 /// Whether `status` could plausibly answer differently on a later pass.
 ///
 /// Only two can. `MH_ERROR_NOT_INITIALIZED` and `MH_ERROR_MEMORY_ALLOC` describe MinHook's own
-/// transient state. Every other status is a statement about the ADDRESS -- the build gate declining
+/// transient state. Every other status is a statement about the address -- the build gate declining
 /// to translate it, a target that is not a relocatable function entry, bytes that are not
 /// executable -- and no number of retries moves a function somewhere else. That is why the old hot
 /// loop logged 8,430 times and changed nothing.
@@ -702,7 +702,7 @@ fn latch_observer_terminal_state(hooks: &[ObserverHook], pass: usize) {
 ///
 /// Safe to call from every caller that wants the observers up -- the gated product tick and the
 /// ungated per-loading-window table build both land here, and the latch that stops the work is in
-/// THIS function, not in either caller.
+/// this function, not in either caller.
 pub fn install_now_loading_helper_observer_hooks() {
     if NOW_LOADING_HELPER_HOOKS_INSTALLED.load(Ordering::SeqCst) != OBSERVER_HOOK_NOT_ATTEMPTED {
         return;
@@ -738,13 +738,13 @@ pub fn install_now_loading_helper_observer_hooks() {
             _ => {}
         }
         let rva = hook.rva;
-        // UNRESOLVED, and `MhHook::new` below owns the single 1.16.2 -> 1.17 resolve. This used to
+        // Unresolved, and `MhHook::new` below owns the single 1.16.2 -> 1.17 resolve. This used to
         // be `game_rva_named`, which resolves too -- and resolving an already-resolved address is
         // not idempotent on a collision row (a 1.17 destination that is also some other row's
         // 1.16.2 source), where the second resolve silently returns a third, unrelated function.
         // Three live detours were measured landing that way on 2026-08-30.
         //
-        // WHERE THE ADDRESS REFUSAL WENT. It moved down one line, into `MhHook::new`, whose
+        // Where the address refusal went. It moved down one line, into `MhHook::new`, whose
         // `Err(status)` arm latches `OBSERVER_HOOK_PERMANENTLY_REFUSED` for exactly the statuses
         // that are statements about the address rather than about MinHook's own state -- see
         // `observer_status_is_retryable`. So a build that moved this function is still terminal on
@@ -786,7 +786,7 @@ pub fn install_now_loading_helper_observer_hooks() {
                 }
                 // The handle is deliberately dropped here without ceremony: `MhHook` is three raw
                 // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
-                // address -- so letting the handle go does NOT uninstall the hook. There is no
+                // address -- so letting the handle go does not uninstall the hook. There is no
                 // `MH_RemoveHook` anywhere in this workspace, so a created detour is permanent;
                 // that is why idempotency has to come from the latch above rather than from
                 // unwinding a partial install.
@@ -962,7 +962,7 @@ unsafe fn read_dlstring_u16(s: usize) -> Option<(Vec<u16>, u8)> {
 }
 
 /// Absolute address of the profile renderer table entry for `slot` (`DAT_143d6d8d0[slot]`, the
-/// `CSMenuProfModelRend*` for that ABSOLUTE save slot; offscreen tex index `slot*2`). Out-of-range
+/// `CSMenuProfModelRend*` for that absolute save slot; offscreen tex index `slot*2`). Out-of-range
 /// slots fall back to entry 0, preserving the historical table[0] behavior for `slot == 0` or unknown.
 pub fn portrait_renderer_table_entry(base: usize, slot: i32) -> usize {
     let idx = if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&slot) {
@@ -971,8 +971,8 @@ pub fn portrait_renderer_table_entry(base: usize, slot: i32) -> usize {
         0
     };
     // `_offset`, not `+`: on a refusal `game_data_addr` answers 0, and `0 + idx * 8` is a
-    // NON-zero address (24 for slot 3) that every caller's `!= 0` guard waves through -- including
-    // the teardown that WRITES a null into `table[slot]`. Adding the index inside the resolver
+    // non-zero address (24 for slot 3) that every caller's `!= 0` guard waves through -- including
+    // the teardown that writes a null into `table[slot]`. Adding the index inside the resolver
     // keeps a refusal answering 0 for every slot.
     er_game_base::mem::game_data_addr_offset(
         base,
@@ -1033,9 +1033,9 @@ unsafe fn sample_portrait_gxtexture(base: usize, slot: i32) -> usize {
 /// the GPU texture is uploaded, AddRef the `CSGxTexture` (+ its GPU child) so it survives, and cache
 /// it for the now-loading forge (the next MENU_Load rotation displays the real portrait). One-shot.
 /// Diagnostic: dump the captured portrait RGBA8 to `<debug-log-dir>/portrait-capture.bin`
-/// (header: b"ERPX", u32 LE width, u32 LE height, then width*height*4 RGBA8) so the agent can
+/// (header: b"ERPX", u32 le width, u32 le height, then width*height*4 RGBA8) so the agent can
 /// convert it to a PNG offline and visually confirm it is the loaded character's head (not the
-/// depth buffer / garbage). Best-effort; gated by the same default-OFF readback path.
+/// depth buffer / garbage). Best-effort; gated by the same default-off readback path.
 pub fn dump_portrait_rgba(slot: i32, width: u32, height: u32, px: &[u8]) {
     let dir = std::env::var("ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH")
         .ok()
@@ -1147,9 +1147,9 @@ pub fn maybe_capture_portrait_gxtexture(base: usize, slot: i32) {
     append_autoload_debug(format_args!(
         "loading-portrait: CAPTURED portrait CSGxTexture gx=0x{gx:x} gpu=0x{gpu:x} renderer=0x{renderer:x} -- kept alive for now-loading forge"
     ));
-    // REAL PIXELS (gated): D3D12-read the rendered offscreen render target into CPU RGBA8 once, so
+    // Real pixels (gated): D3D12-read the rendered offscreen render target into CPU RGBA8 once, so
     // the now-loading forge can build its TPF from the actual character head instead of the checker
-    // placeholder. Default OFF -> behavior is byte-identical to the proven checker path.
+    // placeholder. Default off -> behavior is byte-identical to the proven checker path.
     if portrait_real_pixels_enabled() {
         // Scan from the OFFSCREEN render object (renderer+0xa8), not the gx sub-nest -- the real RT
         // hangs off the offscreen; the gx sub-nest holds only 1x1 vkd3d dummy textures.
@@ -1162,14 +1162,14 @@ pub fn maybe_capture_portrait_gxtexture(base: usize, slot: i32) {
             LOADING_BG_PORTRAIT_DIMS.store(((w as usize) << 16) | (h as usize), Ordering::SeqCst);
             let bytes = px.len();
             dump_portrait_rgba(slot, w, h, &px);
-            // MASK GATE, same rule and same reason as the bake writer in `save_swap_profile_table.rs`
-            // (user 2026-08-21): this is another COLOUR-ONLY `readback_offscreen_rgba8`, so nothing on
+            // Mask gate, same rule and same reason as the bake writer in `save_swap_profile_table.rs`
+            // (user 2026-08-21): this is another colour-only `readback_offscreen_rgba8`, so nothing on
             // this path ever runs the depth key and the buffer is opaque everywhere. Publishing it would
             // put the character's scene background on the loading screen and pin the compositor's frozen
             // crop envelope at full size. Refuse instead of keying here -- the depth-keyed worker is the
             // one path that owns a matching depth readback.
             //
-            // This caller is default-OFF (`portrait_real_pixels_enabled`, diagnostic), so it is not the
+            // This caller is default-off (`portrait_real_pixels_enabled`, diagnostic), so it is not the
             // live defect; it is gated anyway because a bridge writer that can publish an unmasked buffer
             // is a live defect the moment someone turns the diagnostic on, and because the three writers
             // agreeing on one admission rule is what makes the rule readable at all.
@@ -1206,23 +1206,23 @@ pub fn maybe_capture_portrait_gxtexture(base: usize, slot: i32) {
     }
 }
 
-// FORCE LIVE PROFILE PORTRAIT RENDER (diagnostic, `force_profile_render_enabled`). Runs each
+// Force live profile portrait render (diagnostic, `force_profile_render_enabled`). Runs each
 // menu-phase frame (no local player). One-shot: mark the target slot used
-// (`MarkProfileIndexAsUsed` -- the ONLY gate the refresh checks per STEP-0 RE: it sets
+// (`MarkProfileIndexAsUsed` -- the only gate the refresh checks per step-0 RE: it sets
 // `ProfileSummary->saveSlotsStates[slot]=true` with no other side effect), then call the argless
 // profile-render refresh (`0x9aa680`), which equips ChrAsm + copies FaceData + kicks the async
-// character-model build that eventually sets `renderer+0x778`. The menu's OWN per-frame callbacks
+// character-model build that eventually sets `renderer+0x778`. The menu's own per-frame callbacks
 // then composite the live 3D head into the renderer's offscreen (no compositor call from us).
 // `maybe_capture_portrait_gxtexture` keeps the rendered gx once `+0x778` latches. Menu-phase only
 // (the user holds ProfileSelect; we never commit Continue) so there is no teardown/world-load crash
 // path -- this validates P1 (the model build) in isolation. Targets slot 0 (the staged single-profile
 // gold save's character). `slot` is the target save slot (0 for the staged single-profile gold
 // save; the autoload path passes its own target slot).
-// (Design note only: the function it described is gone, so this is NOT a doc comment -- as `///` it
+// (Design note only: the function it described is gone, so this is not a doc comment -- as `///` it
 // would silently attach to the next item.)
 // `read_cursor_normalized` lived here: an OS `GetCursorPos` reading normalized against the ER window
 // rect. Its last consumer was the System->Quit pointer band, a guessed screen rectangle that mapped
-// the lower half of the WINDOW onto the two added rows -- which is how a click on Return to Desktop
+// the lower half of the window onto the two added rows -- which is how a click on Return to Desktop
 // came to open the save picker. The row is now identified by the native grid's own cursor, which the
 // game itself writes from its hit test against each cell's display object, so there is no reason to
 // reimplement hit-testing from window geometry.
@@ -1297,7 +1297,7 @@ pub unsafe fn read_bone_name(ptr: usize) -> Option<String> {
 /// were mapped at that instant, not that they are the object this expects, and another
 /// thread may overwrite them immediately afterwards. Treat the result as a sample.
 ///
-/// The returned address is an OFFSET into a live Havok `PoseHolder` only for as long as
+/// The returned address is an offset into a live Havok `PoseHolder` only for as long as
 /// the renderer's model stays built; the engine rebuilds and frees these on its own
 /// schedule, so the value is a sample to be re-read through guarded readers, never a
 /// handle to retain across frames.
@@ -1319,7 +1319,7 @@ pub unsafe fn profile_pose_holder(renderer: usize) -> Option<usize> {
     Some(importer + PROFILE_LOOKAT_POSEHOLDER_OFFSET)
 }
 
-/// Enumerate the skeleton's bones, dump names+indices ONCE per slot (diagnostic), and resolve the
+/// Enumerate the skeleton's bones, dump names+indices once per slot (diagnostic), and resolve the
 /// Head/Neck/Spine2 indices by name. Returns `(head, neck, spine2)` indices (`-1` = not found).
 // No `expect(dead_code)` needed: its only caller, `apply_profile_lookat`, carries one, and an
 // allowed-dead item still counts as a live use of everything it calls.
@@ -1377,11 +1377,11 @@ unsafe fn apply_profile_lookat(renderer: usize, slot: i32) -> bool {
             // The engine refreshes a menu model's anim location-holder only intermittently (~6 Hz), so
             // `profile_pose_holder` returns None on ~89% of frames even though the model + its PoseHolder
             // persist. The caller only invokes us for a still-valid (vtable-checked) renderer, so a
-            // transient None here is just the throttle -- KEEP the last resolved holder registered so the
+            // transient None here is just the throttle -- Keep the last resolved holder registered so the
             // draw-phase task can keep the renderer metadata available, decoupled from the engine's
             // throttled pose update. A genuinely stale holder (model rebuilt/torn down)
             // is dropped explicitly: the force-rebuild path clears PROFILE_LOOKAT_HOLDERS, and the
-            // teardown spare hook owns post-Continue lifetime. Do NOT unregister on transient None.
+            // teardown spare hook owns post-Continue lifetime. Do not unregister on transient None.
             return false;
         }
     };

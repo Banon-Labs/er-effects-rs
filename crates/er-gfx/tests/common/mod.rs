@@ -1,7 +1,7 @@
 //! Shared corpus location for er-gfx integration tests.
 //!
 //! Game-derived `.gfx` bytes are never versioned in this repo; tests that need
-//! real movies read them from the local extraction corpus and SKIP when it is
+//! real movies read them from the local extraction corpus and skip when it is
 //! absent. The root is overridable via `ER_GFX_CORPUS_ROOT` so a moved or
 //! re-extracted corpus (the default path embeds an extraction timestamp) needs
 //! no source edit.
@@ -23,7 +23,7 @@ pub fn corpus_root() -> PathBuf {
 
 /// Read a known vanilla movie from the local corpus, or skip the caller's test
 /// when the corpus file is absent.
-// `mod common;` is compiled separately into EVERY integration-test binary, including the
+// `mod common;` is compiled separately into every integration-test binary, including the
 // ones that only want `corpus_root`, so this is unused in some of them by construction.
 #[allow(dead_code)]
 pub fn read_vanilla_or_skip(

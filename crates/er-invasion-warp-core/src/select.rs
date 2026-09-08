@@ -1,4 +1,4 @@
-//! Choosing WHICH invasion-spawn point to warp to.
+//! Choosing which invasion-spawn point to warp to.
 //!
 //! The catalog ([`crate::invasion_warp`]) answers "what points exist"; this module answers
 //! "which one does the player want". Both surfaces the feature can grow need exactly this:
@@ -7,7 +7,7 @@
 //!
 //! # Why this module is pure
 //!
-//! Everything here operates on [`ResolvedTarget`] -- a catalog target that has ALREADY been
+//! Everything here operates on [`ResolvedTarget`] -- a catalog target that has already been
 //! converted to physics-space coordinates. The conversion itself is an engine call
 //! (`ConvertBlockCoordsToPhysicsCoords` @ `0x14061e120`, byte-checked `MATCH ... shift 0`),
 //! because [`InvasionWarpTarget::world_position`] needs a block origin the crate cannot
@@ -79,7 +79,7 @@ pub fn distance_squared(a: [f32; 3], b: [f32; 3]) -> f32 {
 /// winner depend on iteration order.
 ///
 /// Ties break toward the lower index, which makes the result deterministic for a sorted
-/// catalog -- the catalog IS sorted, so a tie is two genuinely coincident points and the
+/// catalog -- the catalog is sorted, so a tie is two genuinely coincident points and the
 /// caller gets the same answer every run.
 #[must_use]
 pub fn nearest_from(resolved: &[ResolvedTarget], from: [f32; 3]) -> Option<usize> {
@@ -139,14 +139,14 @@ pub fn next_from(resolved: &[ResolvedTarget], current: Option<u64>) -> Option<us
     best.map(|(index, _)| index).or_else(|| lowest_id(resolved))
 }
 
-/// [`next_from`] over RAW catalog targets, which is the form that matters for crossing areas.
+/// [`next_from`] over raw catalog targets, which is the form that matters for crossing areas.
 ///
 /// The cycle orders by [`InvasionWarpTarget::stable_id`] and needs no world coordinates at all,
-/// so it must NOT be restricted to targets the engine could convert. Restricting it was a real
+/// so it must not be restricted to targets the engine could convert. Restricting it was a real
 /// bug: `ConvertBlockCoordsToPhysicsCoords` only resolves blocks in the player's currently
 /// resident area, so filtering the candidate set by it silently made every other area
 /// unreachable -- even though the warp itself never needs the conversion (the explicit-spawn
-/// slot takes BLOCK-LOCAL coordinates and `MoveMapStep` converts them after the destination
+/// slot takes block-local coordinates and `MoveMapStep` converts them after the destination
 /// loads).
 #[must_use]
 pub fn next_target_from(targets: &[InvasionWarpTarget], current: Option<u64>) -> Option<usize> {

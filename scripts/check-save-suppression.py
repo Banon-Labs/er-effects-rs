@@ -14,7 +14,7 @@ detectable contradiction:
 
   census says writes happened  + file changed      -> consistent (census is working)
   census says no writes        + file unchanged    -> consistent
-  census says no writes        + file CHANGED      -> COVERAGE GAP: the game reached
+  census says no writes        + file changed      -> coverage GAP: the game reached
                                                       disk by a route the census does
                                                       not hook. This is the failure
                                                       the census exists to catch, and
@@ -30,7 +30,7 @@ Usage::
         --telemetry "$GAME_DIR/er-save-disable-telemetry.json" \\
         --before before.json --after after.json
 
-Exit code 0 means the run's verdict is PASS, 1 means FAIL, 2 means the inputs were
+Exit code 0 means the run's verdict is pass, 1 means fail, 2 means the inputs were
 not usable (which is itself never a pass).
 """
 from __future__ import annotations
@@ -147,9 +147,9 @@ def evaluate(telemetry: dict[str, Any] | None, diff: dict[str, Any] | None) -> t
         reasons.extend(f"  changed: {entry['path']}: {entry['reason']}" for entry in changed)
         return False, "FAIL -- census blind spot", reasons
 
-    # The census seeing SOMETHING is not the same as it seeing EVERYTHING. Compare how many
+    # The census seeing something is not the same as it seeing everything. Compare how many
     # bytes the census accounts for against how many actually moved on disk. This check exists
-    # because the presence/absence test below reported PASS on a run where the census logged a
+    # because the presence/absence test below reported pass on a run where the census logged a
     # single 2359328-byte write while the offline diff found three changed slots totalling ~5.4MB
     # -- the missing bytes went out through CopyFileW, which was not hooked.
     changed_bytes, changed_names = changed_slot_bytes(diff)
@@ -166,7 +166,7 @@ def evaluate(telemetry: dict[str, Any] | None, diff: dict[str, Any] | None) -> t
         return False, "FAIL -- census under-counted the writes", reasons
 
     # Suppression-specific gates. A file-IO census cannot answer either of these, and
-    # letting it imply them is how a run gets called PASS on evidence it does not have.
+    # letting it imply them is how a run gets called pass on evidence it does not have.
     if phase != PHASE_CENSUS:
         swallowed = telemetry.get("suppress_submits_swallowed", 0) or 0
         passed = telemetry.get("suppress_submits_passed_through", 0) or 0
@@ -217,9 +217,9 @@ def evaluate(telemetry: dict[str, Any] | None, diff: dict[str, Any] | None) -> t
                 "wait job was released rather than spinning."
             )
         elif bc4_max > 0:
-            # NOT a failure on its own. bc4 == 3 is transient: it is set, consumed by the
+            # Not a failure on its own. bc4 == 3 is transient: it is set, consumed by the
             # wait job, and reset to 0 within the same quit sequence, so a sampled maximum
-            # of 2 is the NORMAL reading even on a quit that worked perfectly. Two runs
+            # of 2 is the normal reading even on a quit that worked perfectly. Two runs
             # with a user-confirmed working quit both read 2 here. The event counter above
             # is the authority.
             reasons.append(
@@ -227,9 +227,9 @@ def evaluate(telemetry: dict[str, Any] | None, diff: dict[str, Any] | None) -> t
                 "not evidence either way. See quit_phase_settle_events."
             )
 
-    # Blindness gates, applied to BOTH phases.
+    # Blindness gates, applied to both phases.
     #
-    # Each is a verified false-PASS path if left ungated: the counter moves, the real file
+    # Each is a verified false-pass path if left ungated: the counter moves, the real file
     # is unchanged, `escaped_write_sites` stays empty, and the verdict reads clean for a
     # run that never actually observed anything.
     #
@@ -360,7 +360,7 @@ def selftest() -> int:
     # The critical one: bytes landed, census saw nothing. Must never pass.
     check("blind census", blind_census, dirty, False, "blind spot")
     check("census observed writes", full_census, dirty, True, "census captured")
-    # Seeing SOME writes must not excuse missing most of them.
+    # Seeing some writes must not excuse missing most of them.
     check("census under-counted", full_census, under_counted, False, "under-counted")
     # The .bak mirror must not be double-counted into a false shortfall.
     counted, names = changed_slot_bytes(under_counted)
@@ -380,7 +380,7 @@ def selftest() -> int:
     # The one a file-IO census can never catch: everything on disk is clean and the
     # quit path is wedged.
     # The transient-value trap: a sampled max of 2 with the settle event present is a
-    # PASS, because bc4 == 3 never survives long enough to be sampled.
+    # pass, because bc4 == 3 never survives long enough to be sampled.
     check("sampled 2 but settle event fired", dict(armed, quit_phase_bc4_max_seen=2,
           quit_phase_settle_events=1), cleanfile, True, "fully suppressed")
     check("quit requested but never settled", dict(armed, quit_phase_bc4_max_seen=2,
@@ -388,9 +388,9 @@ def selftest() -> int:
     check("suppression leaking", leaking, cleanfile, False, "not fully suppressed")
     check("suppression clean census but file changed", suppressing, dirty, False, "blind spot")
 
-    # Verified false-PASS paths. Each looks IDENTICAL to a perfect run from the file's
+    # Verified false-pass paths. Each looks identical to a perfect run from the file's
     # point of view -- clean diff, empty escaped_write_sites -- so only the counter
-    # distinguishes them, and before these gates existed all of them returned PASS.
+    # distinguishes them, and before these gates existed all of them returned pass.
     check("site table overflowed, census blind", dict(armed, sites_dropped=1),
           cleanfile, False, "blind")
     check("handle table overflowed, census blind", dict(armed, handles_dropped=1),

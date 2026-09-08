@@ -1,7 +1,7 @@
 //! Tests for the local invasion filter.
 //!
 //! In their own file since 2026-09-02, when the parent crossed the 3200-line limit. That is not
-//! purely cosmetic: several of these tests read the parent's SOURCE with `include_str!` and assert
+//! purely cosmetic: several of these tests read the parent's source with `include_str!` and assert
 //! on what is and is not in a particular function's body, and a test that scans the file it lives
 //! in finds its own assertion text. That had already bitten twice, which is why the needles below
 //! are assembled at runtime rather than written out; from here the scanned file no longer contains
@@ -9,7 +9,7 @@
 
 use super::*;
 
-/// EVERY option that changes behaviour has to show up in the `config loaded` line.
+/// Every option that changes behaviour has to show up in the `config loaded` line.
 ///
 /// Not a style rule -- it is the difference between a hot-reload you can verify and one you can
 /// only hope about. Measured cost of the gap, 2026-08-06: `dll_users_only` was toggled mid-run,
@@ -19,7 +19,7 @@ use super::*;
 /// in force" is the one they do.
 ///
 /// Checked against the struct's real field list rather than a copy of it, so adding a field and
-/// forgetting the log line fails HERE instead of silently on someone's live run.
+/// forgetting the log line fails here instead of silently on someone's live run.
 #[test]
 fn every_behaviour_changing_option_is_named_in_the_config_line() {
     let config_source = include_str!("../../../er-invasion-warp-core/src/local_invasion.rs");
@@ -57,7 +57,7 @@ fn every_behaviour_changing_option_is_named_in_the_config_line() {
     let call_end = source[line_start..]
         .find("));")
         .expect("the log call must be closed");
-    // COMMENTS ARE STRIPPED, and the check is for the READ ITSELF rather than the bare name.
+    // Comments are stripped, and the check is for the read itself rather than the bare name.
     // Both guards earn their place: a first version of this test looked for the bare field name
     // anywhere in the call, and a negative control proved it toothless -- the explanatory
     // comment in the argument list mentions `dll_users_only`, so deleting the actual argument
@@ -69,7 +69,7 @@ fn every_behaviour_changing_option_is_named_in_the_config_line() {
         .collect::<Vec<_>>()
         .join("\n");
     for field in fields {
-        // The two keybinds are reported by NAME rather than by number, so they appear as
+        // The two keybinds are reported by name rather than by number, so they appear as
         // `key_name(outcome.config.mark_key)` -- still the read, just rendered for a human.
         assert!(
             call.contains(&format!("outcome.config.{field}")),
@@ -86,10 +86,10 @@ fn every_behaviour_changing_option_is_named_in_the_config_line() {
 fn a_dwell_at_a_normal_frame_rate_reports_that_frame_rate() {
     // 600 ticks over 10s -- the shape of the measured `0x11` retry dwell at 60fps.
     assert_eq!(implied_fps(600, 10_000), Some(60));
-    // The same wall-clock dwell at half the frame rate: HALF the ticks. This is the frame-vs-
+    // The same wall-clock dwell at half the frame rate: Half the ticks. This is the frame-vs-
     // clock discriminator in miniature -- if the retry is a clock, this is what the log shows.
     assert_eq!(implied_fps(300, 10_000), Some(30));
-    // The same TICK dwell at half the frame rate: twice the wall clock. If the retry is a frame
+    // The same tick dwell at half the frame rate: twice the wall clock. If the retry is a frame
     // counter, this is what the log shows instead. The two are distinguishable only because
     // both columns are recorded.
     assert_eq!(implied_fps(600, 20_000), Some(30));
@@ -105,7 +105,7 @@ fn an_interval_too_short_to_divide_reports_nothing_rather_than_zero() {
 }
 
 /// A dwell shorter than a millisecond per tick must not be reported as zero fps -- it is a very
-/// FAST interval, and zero would read as a stall.
+/// fast interval, and zero would read as a stall.
 #[test]
 fn a_sub_millisecond_dwell_never_reports_as_a_stalled_task() {
     assert_ne!(implied_fps(1, 1), Some(0));
@@ -120,7 +120,7 @@ fn the_default_mark_keys_are_insert_and_delete_and_are_distinct_from_the_warp_ke
     // Sharing a key with the warp driver would make the two pollers eat each other's
     // GetAsyncKeyState "pressed since last call" edge.
     //
-    // Only the DEFAULTS can be checked here: the keys are configurable now, so a player is free
+    // Only the defaults can be checked here: the keys are configurable now, so a player is free
     // to name a warp key and collide on purpose. That is their choice to make and the log line
     // reports which keys are live, but the shipped defaults must not collide out of the box.
     for warp_key in [
@@ -133,7 +133,7 @@ fn the_default_mark_keys_are_insert_and_delete_and_are_distinct_from_the_warp_ke
     }
 }
 
-/// A player who names a key must be able to SEE which key is live, or a typo that parsed into
+/// A player who names a key must be able to see which key is live, or a typo that parsed into
 /// some other valid key is indistinguishable from the feature being broken.
 #[test]
 fn the_configured_keys_render_names_a_player_would_recognise() {
@@ -151,7 +151,7 @@ fn the_configured_keys_render_names_a_player_would_recognise() {
 #[test]
 fn this_module_installs_exactly_three_detours_and_both_seamless_ones_are_read_only() {
     // The budget, made explicit so growing it is a decision rather than a drift:
-    //   ORIG_SET_JOIN_DATA    -- the GAME's SetMultiplayJoinData, where matches are judged.
+    //   ORIG_SET_JOIN_DATA    -- the game's SetMultiplayJoinData, where matches are judged.
     //   ORIG_SHOW             -- ersc's menu builder, observation only, because OSM has no
     //                            static to read it out of (see NEXT_OBJECT_OFFSET's docs).
     //   ORIG_BUILD_LOBBY_KEY  -- ersc's lobby-key builder, observation only. Grown from two to
@@ -160,7 +160,7 @@ fn this_module_installs_exactly_three_detours_and_both_seamless_ones_are_read_on
     //                            only as a stack `std::string` inside one function, and no
     //                            field holds it afterwards -- so there is nothing to read
     //                            passively and a hook is the only way to observe it.
-    // The two option ACTIONS are deliberately not hooked: they read `rcx` only, so calling
+    // The two option actions are deliberately not hooked: they read `rcx` only, so calling
     // them with `(OSM, 0, 1, 1)` needs no captured arguments and therefore no detour.
     let source = include_str!("../local_invasion_filter.rs");
     let orig_slots = source.matches("\nstatic ORIG_").count();
@@ -177,14 +177,14 @@ fn this_module_installs_exactly_three_detours_and_both_seamless_ones_are_read_on
     }
 }
 
-/// The lobby-key observer must stay an OBSERVER. Altering `lobby_key` changes what every other
+/// The lobby-key observer must stay an observer. Altering `lobby_key` changes what every other
 /// Seamless client's filter matches, which is not this DLL's to do.
 ///
-/// AMENDED 2026-08-06, deliberately and narrowly. The original banned `SetLobbyData(` and
+/// Amended 2026-08-06, deliberately and narrowly. The original banned `SetLobbyData(` and
 /// `AddRequestLobbyListStringFilter(` outright, which was broader than its own stated reason:
-/// the harm it names is to `lobby_key`, and publishing a SEPARATE namespaced key does not touch
+/// the harm it names is to `lobby_key`, and publishing a separate namespaced key does not touch
 /// it. Measured that day: a host publishes 7 keys and an invader filters on 5 of them, and a
-/// lobby lacking a filtered key is EXCLUDED (baseline 13 lobbies -> 0 with a filter on an
+/// lobby lacking a filtered key is excluded (baseline 13 lobbies -> 0 with a filter on an
 /// unpublished key, reproduced). So one extra key is exactly how a location filter can exist,
 /// and it is invisible to vanilla Seamless players -- they never query it, and their own
 /// matching is on `lobby_key`, which stays untouched.
@@ -194,7 +194,7 @@ fn this_module_installs_exactly_three_detours_and_both_seamless_ones_are_read_on
 #[test]
 fn the_lobby_key_is_never_published_or_altered() {
     let code = product_code();
-    // The keys that decide MUTUAL VISIBILITY. Writing or filtering on either changes what other
+    // The keys that decide mutual visibility. Writing or filtering on either changes what other
     // players match, so they stay banned by name rather than by call.
     for reserved in ["lobby_key", "lobby_type"] {
         assert!(
@@ -221,13 +221,13 @@ fn the_lobby_key_is_never_published_or_altered() {
     );
 }
 
-/// This module's SHIPPING code, with comments and the test module removed.
+/// This module's shipping code, with comments and the test module removed.
 ///
 /// Both exclusions are load-bearing and were learned by the guards failing on themselves:
-/// * COMMENTS, because these names appear throughout the documentation, where describing what
+/// * comments, because these names appear throughout the documentation, where describing what
 ///   Seamless does is the entire point. A check that cannot tell prose from a call site either
 ///   fails on its own docs or forces the docs to go quiet about the mechanism.
-/// * THE TEST MODULE, because a ban list is written in code -- `["lobby_key", ...]` is a string
+/// * the test module, because a ban list is written in code -- `["lobby_key", ...]` is a string
 ///   literal, so a guard scanning the whole file trips on the very list that defines it. Both
 ///   new guards failed exactly that way on first run.
 fn product_code() -> String {
@@ -242,30 +242,30 @@ fn product_code() -> String {
         .join("\n")
 }
 
-/// No invasion target may ever be chosen by WHO the other player is.
+/// No invasion target may ever be chosen by who the other player is.
 ///
 /// # The line, and why it is drawn here rather than left to judgement
 ///
-/// Measured 2026-08-06: a lobby query returns a real candidate SET (13 lobbies), ersc picks one
+/// Measured 2026-08-06: a lobby query returns a real candidate set (13 lobbies), ersc picks one
 /// (index 14, then 7), and `GetLobbyOwner` / `GetLobbyMemberByIndex` are both called on the
 /// result. So selecting a candidate by SteamID is not merely conceivable -- every primitive it
 /// needs is already in the process, it needs nothing from the host, and it would work today.
 ///
-/// That is exactly what makes it unacceptable. Its one advantage and its one abuse are the SAME
+/// That is exactly what makes it unacceptable. Its one advantage and its one abuse are the same
 /// property: needing nothing from the target. Any consent check would require the target to run
 /// this DLL, which removes the advantage entirely, so there is no version of it that is both
 /// useful and safe. And a location is somewhere a player chose to stand; an account is the
 /// player, everywhere, forever.
 ///
-/// The principle this encodes, which generalises past this one call: filtering may DECLINE, it
-/// may never SELECT A PERSON. Declining removes options from ourselves -- the worst case is not
+/// The principle this encodes, which generalises past this one call: filtering may decline, it
+/// may never select a person. Declining removes options from ourselves -- the worst case is not
 /// invading someone, which the user could do by hand. Selecting imposes on somebody who never
 /// opted in. `er_map` passes because a host is findable by location only if that host chose to
 /// broadcast it; consent is structural rather than a policy someone can quietly drop.
 #[test]
 fn no_invasion_target_is_ever_chosen_by_steam_id() {
     let code = product_code();
-    // The primitives that turn a candidate set into a named person. Reading an owner to LOG it
+    // The primitives that turn a candidate set into a named person. Reading an owner to log it
     // would be equally targetable once the value exists, so the call itself is the line.
     for banned in [
         "GetLobbyOwner",
@@ -299,7 +299,7 @@ fn no_invasion_target_is_ever_chosen_by_steam_id() {
 fn the_session_watch_window_covers_every_known_field() {
     let begin = SESSION_WATCH_BEGIN;
     let end = SESSION_WATCH_BEGIN + SESSION_WATCH_WORDS * 8;
-    // EVERY build's state field, not just the installed one's: the window is a compile-time
+    // Every build's state field, not just the installed one's: the window is a compile-time
     // constant and the same code traces whichever build is loaded, so a window that covers
     // a stale build's state offset but not the supported one's would trace nothing at all.
     for abi in ersc::SUPPORTED {
@@ -354,7 +354,7 @@ fn the_lobby_key_is_a_sha256_hex_digest_not_the_sixteen_char_intermediate() {
 
 /// `mov dword ptr [rdi + displacement], immediate` -- `C7 /0` with a disp32 on `rdi`.
 ///
-/// The option-action pins run through the state WRITE, so this is how a test asks "does the
+/// The option-action pins run through the state write, so this is how a test asks "does the
 /// pin actually encode the offset and the code this [`ersc::Abi`] claims". It is the check
 /// that keeps the table honest: the bytes come from `build.rs` and were ground-truthed against
 /// a real copy of that Seamless build, so a hand-edited field number stops agreeing with them.
@@ -509,12 +509,12 @@ fn the_pinned_abi_is_the_one_measured_out_of_the_supported_seamless_build() {
     }
 }
 
-/// Each pin has to identify a FUNCTION rather than a code shape.
+/// Each pin has to identify a function rather than a code shape.
 ///
 /// The cross-build half of this test went with the retired table -- there is no second build to
 /// tell this one apart from any more. What remains is the property the code still depends on, and
 /// the one the original fourteen-byte pins actually failed: five different option actions share
-/// those fourteen bytes, so a pin that stops near them proves only that SOME option action lives
+/// those fourteen bytes, so a pin that stops near them proves only that some option action lives
 /// at the address. The measurement that proves each pin unique needs the DLL and so cannot run
 /// here; what runs here is the shape requirement that makes such a pin possible.
 #[test]
@@ -587,7 +587,7 @@ fn an_unrecognised_seamless_build_is_refused_rather_than_guessed_at() {
 #[test]
 fn capturing_the_menu_object_is_not_gated_on_the_seamless_tag() {
     // Regression, 2026-08-05. `show_observer` used to store OSM only if `+0x68` held the ASCII
-    // `seamless` tag. The tag had been measured ONCE in one live frida session; as a
+    // `seamless` tag. The tag had been measured once in one live frida session; as a
     // precondition it never matched, OSM was never stored, and the feature failed exactly
     // where it was supposed to work -- the live log read `REJECT ...` immediately followed by
     // `cannot cancel -- session is not resolvable`. A single observation is evidence, not a
@@ -628,8 +628,8 @@ fn capturing_the_menu_object_is_not_gated_on_the_seamless_tag() {
 
 #[test]
 fn self_recovery_cannot_resume_a_search_after_a_kept_match() {
-    // THE HAZARD, and why this is a test rather than a comment. Restarting whenever the session
-    // is idle is what makes the loop survive a Seamless stall -- but a SUCCESSFUL invasion
+    // The hazard, and why this is a test rather than a comment. Restarting whenever the session
+    // is idle is what makes the loop survive a Seamless stall -- but a successful invasion
     // unwinds through exactly the same states as a failed one. Measured 2026-08-06: `KEEP` was
     // followed by `0x15 -> 0x22 -> 0x23 -> 0x00 IDLE`, identical to a rejection. So idle alone
     // cannot tell "the attempt died" from "you are standing in their world", and a restart on
@@ -672,7 +672,7 @@ fn self_recovery_cannot_resume_a_search_after_a_kept_match() {
 
 #[test]
 fn the_stall_detector_never_times_the_searching_state() {
-    // SEARCHING means "nobody has matched yet" and is unbounded by nature -- three consecutive
+    // Searching means "nobody has matched yet" and is unbounded by nature -- three consecutive
     // live queries on 2026-08-06 returned 0, 0 and 1 lobbies. Timing it would cancel a healthy
     // search in a quiet bracket, which is the single most obvious way to get a stall detector
     // wrong. The rule lives in `stall_watchdog::is_transient`; this pins that the caller does
@@ -694,7 +694,7 @@ fn the_stall_detector_never_times_the_searching_state() {
         watcher.contains("observe("),
         "the watcher feeds the detector rather than deciding staleness itself"
     );
-    // THE REGRESSION THIS PINS, 2026-08-06: the watchdog cancelled a match it had just KEPT,
+    // The regression this pins, 2026-08-06: the watchdog cancelled a match it had just kept,
     // five seconds after accepting it, because the session dwells in 0x15 while loading into
     // the host's world. No choice of timed states fixes that -- a successful join walks 0x22
     // and 0x23 exactly like a cancel does -- so the arming gate is the whole defence.
@@ -711,14 +711,14 @@ fn the_stall_detector_never_times_the_searching_state() {
 
 #[test]
 fn the_auto_search_arms_on_the_invade_transition_not_on_merely_being_busy() {
-    // Regression, 2026-08-05, caught live. Arming used to be "state != IDLE, so a search must
+    // Regression, 2026-08-05, caught live. Arming used to be "state != idle, so a search must
     // be running". That made standing down when the menu opened useless: you open the menu
-    // DURING a search, the loop stands down, and one frame later the session is still non-idle
+    // during a search, the loop stands down, and one frame later the session is still non-idle
     // so it re-arms. The log read `stood down` and then `0x11 -> 0x0d` with another automatic
     // restart immediately after.
     //
-    // Arming now keys on the transition into SEARCHING, which is sound because the static scan
-    // found `S+0x110 = 0x0d` written at exactly ONE site in the whole unpacked .text.
+    // Arming now keys on the transition into searching, which is sound because the static scan
+    // found `S+0x110 = 0x0d` written at exactly one site in the whole unpacked .text.
     let source = include_str!("../local_invasion_filter.rs");
     // Assembled, not written out: a test that scans its own file finds its own assertion text.
     // That has now bitten twice in this module, so every needle here is built at runtime.
@@ -759,7 +759,7 @@ fn the_auto_search_arms_on_the_invade_transition_not_on_merely_being_busy() {
 
 #[test]
 fn starting_or_ending_an_invasion_attempt_invalidates_the_pin_cache() {
-    // The coupling that makes the dim appear on a map that is ALREADY OPEN. `restyle_live_pins`
+    // The coupling that makes the dim appear on a map that is already open. `restyle_live_pins`
     // early-returns when this signature is unchanged, so without the attempt state mixed in the
     // pins would keep their idle frames for the whole search and only dim on the next map open
     // -- i.e. never, for the player who noticed by trying to click one.
@@ -787,7 +787,7 @@ fn starting_or_ending_an_invasion_attempt_invalidates_the_pin_cache() {
 #[test]
 fn nothing_writes_one_icon_id_across_every_param_row() {
     // Regression, 2026-08-05, caught live. The map's param rows are built with a per-location
-    // icon and were then re-stamped with a SINGLE id over every row, so the tiers were
+    // icon and were then re-stamped with a single id over every row, so the tiers were
     // computed correctly (`chosen=3` then `chosen=96` in the log as marks were added) and then
     // flattened before anything rendered. Every write of the icon field must come from the
     // per-appearance helper.
@@ -816,10 +816,10 @@ fn nothing_writes_one_icon_id_across_every_param_row() {
 #[test]
 fn the_recurring_build_fingerprint_never_reads_a_function_this_module_hooks() {
     // Regression, 2026-08-05. `resolve_session` fingerprinted ersc.dll by comparing `show`'s
-    // opening bytes -- and this module HOOKS `show`. MinHook overwrote those bytes with its
+    // opening bytes -- and this module hooks `show`. MinHook overwrote those bytes with its
     // jump, so from the first install onward the check compared Seamless against our own
     // detour, failed, and reported `ErscUnrecognised`. A live invasion was judged, rejected,
-    // and then NOT cancelled because of it. Whatever the recurring check reads must be
+    // and then not cancelled because of it. Whatever the recurring check reads must be
     // something nothing patches.
     let source = include_str!("../local_invasion_filter.rs");
     let resolver = source
@@ -859,7 +859,7 @@ fn the_ersc_action_prologues_are_the_bytes_read_out_of_the_shipped_dlls() {
                 abi.version
             );
         }
-        // The two functions this module does not CALL open with the eight callee-saved pushes
+        // The two functions this module does not call open with the eight callee-saved pushes
         // instead, so a pin swapped between the two groups fails here rather than at runtime.
         for (name, pin) in [
             ("show", abi.show_prologue),
@@ -927,7 +927,7 @@ fn the_measured_false_positive_is_not_a_plausible_session_pointer() {
 ///
 /// `identifies_a_session` answers "is this object a session", and until 2026-09-06 it only ever
 /// looked at what `+0x150` contained. Three false positives were each answered by narrowing the
-/// permitted VALUES -- zero, then any byte, then the four reversed codes -- and the third one
+/// permitted values -- zero, then any byte, then the four reversed codes -- and the third one
 /// proved the value was never the whole question, because the address it came from could not have
 /// held an object at all. If this call is ever dropped the scan is back to matching coincidences.
 #[test]
@@ -952,7 +952,7 @@ fn the_session_identity_check_rejects_implausible_pointers_first() {
 /// `scan_for_session` produces two shapes. The bare one -- a global pointing straight at something
 /// that identifies itself as a session -- names no owner, so it can only ever yield `owner: 0`, and
 /// `ersc_owner_or_refuse` then declines to drive Seamless for the rest of the process. The owned
-/// one additionally hands back the OSM, and it is the ONLY shape that lets a rejected match be
+/// one additionally hands back the OSM, and it is the only shape that lets a rejected match be
 /// cancelled.
 ///
 /// The owned arm used to carry `&& found.map(|(_, session)| session == next).unwrap_or(true)`: an
@@ -989,7 +989,7 @@ fn a_bare_session_find_cannot_veto_an_owner_find() {
     );
 }
 
-/// A rejection that was not enforced has to be COUNTED, not merely logged.
+/// A rejection that was not enforced has to be counted, not merely logged.
 ///
 /// The user-visible failure on 2026-09-06 was "I didn't only invade locally. It might be disabled?"
 /// -- and the filter was armed, judging correctly, and enforcing nothing. Every other state this

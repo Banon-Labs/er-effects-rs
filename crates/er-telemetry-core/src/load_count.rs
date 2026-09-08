@@ -1,7 +1,7 @@
-//! Load-count witnesses and the cross-check that makes them contradict each other OUT LOUD.
+//! Load-count witnesses and the cross-check that makes them contradict each other out loud.
 //!
-//! WHY THIS EXISTS. A captured 3-load session (boot Continue + two System->Quit->Load-Profile
-//! reloads of the SAME save slot) produced these numbers in one telemetry file:
+//! Why this exists. A captured 3-load session (boot Continue + two System->Quit->Load-Profile
+//! reloads of the same save slot) produced these numbers in one telemetry file:
 //!
 //! ```text
 //! system_quit_profile_load_activate_count  4   2 picker browse/pick steps + 2 slot arms
@@ -12,7 +12,7 @@
 //! oracle_switch_reload_committed           1   a BOOLEAN LATCH, reset per switch -- not a count
 //! ```
 //!
-//! Six fields, four values, all reachable when asking "how many loads". Every one was CORRECT for
+//! Six fields, four values, all reachable when asking "how many loads". Every one was correct for
 //! its own event class -- and precisely because each was individually correct, nothing in the run
 //! noticed that recovering the number 3 required already knowing all six definitions. Two
 //! independent hand-derivations from that file landed on 2 and on ">=3". Neither is the answer.
@@ -20,7 +20,7 @@
 //! No counter was under-reporting. There is no same-slot dedupe anywhere in the load path: nothing
 //! keys on the loaded identity, and the captured run proves it -- the same save file was picked
 //! twice, at `+39864ms` and `+66532ms`, with identical `len=28967888 hash=0x394158714daf526b`, and
-//! BOTH picks counted. The 2s are narrower event classes than the 3s, not lost loads.
+//! both picks counted. The 2s are narrower event classes than the 3s, not lost loads.
 //!
 //! `oracle_switch_reload_committed` deserves its own warning: it is a one-shot `compare_exchange(0,
 //! 1)` latch cleared at the start of every switch, so it can never exceed 1 and can never agree with
@@ -30,30 +30,30 @@
 //! statement of how the narrow counts compose into the total -- so the composition had to be
 //! reconstructed by hand, and a hand reconstruction is exactly what nobody audits.
 //!
-//! THE DECOMPOSITION. Every world load in a session is one forwarded `continue_confirm` call.
+//! The decomposition. Every world load in a session is one forwarded `continue_confirm` call.
 //! That hook classifies each forward into exactly one of three buckets:
 //!
 //!   * `switch_reload_commits` -- a System->Quit->Load-Profile reload committed a fresh deserialize
-//!     (the switch machine was mid-flight). This is the ONLY bucket the load epoch counts.
+//!     (the switch machine was mid-flight). This is the only bucket the load epoch counts.
 //!   * `non_switch_forwards`   -- a Continue outside the switch machine: the boot/title load.
 //!   * `world_up_forwards`     -- a confirm that arrived while the previous world was still up (a
-//!     state we never drive; previously logged and counted by NOTHING).
+//!     state we never drive; previously logged and counted by nothing).
 //!
 //! so `forwards == switch_commits + non_switch + world_up`, exactly, by construction. That identity
 //! is the load-count audit: violate it and a load landed in no bucket or was counted twice.
 //!
-//! THE EPOCH IS AN INDEX, NOT A COUNT. `oracle_current_load_epoch` is
-//! `SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT`, incremented ONLY inside the switch machine.
+//! The epoch is an index, not a count. `oracle_current_load_epoch` is
+//! `SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT`, incremented only inside the switch machine.
 //! The boot load does not increment it. So in a session whose loads are (boot, reload, reload) it
 //! reads 2 -- which is simultaneously "2 switch reloads committed" and "the current load is index 2,
-//! zero-based". `total = epoch + 1` therefore holds ONLY while a session performs exactly one
+//! zero-based". `total = epoch + 1` therefore holds only while a session performs exactly one
 //! non-switch load, and silently lies otherwise (a telemetry-only run with no character load, or any
 //! second non-switch Continue). Read [`LoadCountWitnesses::total_world_loads`] instead; it needs no
 //! such assumption.
 //!
-//! WHAT THE EPOCH STILL CANNOT TELL YOU: whether those loads SUCCEEDED. Two captured runs both read
+//! What the epoch still cannot tell YOU: whether those loads succeeded. Two captured runs both read
 //! `oracle_current_load_epoch = 2`; one reached world residency three times, the other reached it
-//! ONCE and softlocked. The epoch counts commits, not outcomes, so equal epochs across runs mean
+//! once and softlocked. The epoch counts commits, not outcomes, so equal epochs across runs mean
 //! "both reached a third load attempt" and nothing whatsoever about whether the worlds came up. Any
 //! cross-run claim resting on epoch equality alone is void.
 
@@ -70,7 +70,7 @@ impl LoadCountMismatch {
     /// `picker_activations + slot_activations != total_activations`. The two sub-counters are
     /// incremented on mutually exclusive branches of one hook, so they must partition the total.
     pub const ACTIVATION_SPLIT: u32 = 1 << 1;
-    /// `picks + pick_rejects + repopulates > picker_activations`, checked ONLY when
+    /// `picks + pick_rejects + repopulates > picker_activations`, checked only when
     /// `picker_activations > 0`. Each in-game-picker activation produces at most one of those
     /// outcomes, so their sum cannot exceed the activation count.
     ///
@@ -87,7 +87,7 @@ impl LoadCountMismatch {
     pub const COMMIT_WITHOUT_FORWARD: u32 = 1 << 3;
     /// `switch_commits > slot_activations`. A switch reload committed with no slot activation to arm
     /// it -- i.e. something armed the load without going through the user's pick. Fires on a
-    /// programmatic/autopilot arm, which is the point: that is NOT the user path under test.
+    /// programmatic/autopilot arm, which is the point: that is not the user path under test.
     pub const SLOT_ARM_DEFICIT: u32 = 1 << 4;
 
     const ALL: [(u32, &'static str); 5] = [
@@ -148,10 +148,10 @@ pub struct LoadCountWitnesses {
     pub non_switch_forwards: usize,
     /// Forwards that arrived while the previous world was still up.
     pub world_up_forwards: usize,
-    /// Confirms refused outright. These return early and are NOT forwards, so they are excluded
+    /// Confirms refused outright. These return early and are not forwards, so they are excluded
     /// from the decomposition on purpose.
     pub continue_confirm_blocks: usize,
-    /// ProfileLoadDialog activations routed to the save-file browser (browse steps AND file picks).
+    /// ProfileLoadDialog activations routed to the save-file browser (browse steps and file picks).
     pub picker_activations: usize,
     /// ProfileLoadDialog activations that armed a character slot load.
     pub slot_activations: usize,
@@ -168,7 +168,7 @@ pub struct LoadCountWitnesses {
 impl LoadCountWitnesses {
     /// The number this whole module exists to publish: world loads this session, boot included.
     ///
-    /// Do NOT derive this from the activation count. Activations are per browse step and per slot
+    /// Do not derive this from the activation count. Activations are per browse step and per slot
     /// arm, so `activations / 2` matches the load count only in a session with zero directory
     /// navigation -- true of the captured run by luck (`repopulates == 0`), false in general.
     pub fn total_world_loads(&self) -> usize {
@@ -176,7 +176,7 @@ impl LoadCountWitnesses {
     }
 
     /// Zero-based index of the load in flight, or `None` before the first load. This is the value
-    /// `oracle_current_load_epoch` is usually MEANT to be; it differs from the epoch by exactly the
+    /// `oracle_current_load_epoch` is usually meant to be; it differs from the epoch by exactly the
     /// non-switch (boot) loads the epoch skips.
     pub fn current_load_index(&self) -> Option<usize> {
         self.continue_confirm_forwards.checked_sub(1)
@@ -239,7 +239,7 @@ impl LoadCountWitnesses {
 mod tests {
     use super::*;
 
-    /// The captured 3-load session, in witness form: boot Continue + two reloads of the SAME save
+    /// The captured 3-load session, in witness form: boot Continue + two reloads of the same save
     /// slot through the in-game picker. Ground truth for these numbers is the run captured in
     /// `er-quickload-telemetry.json` / `er-quickload-autoload-debug.log`, whose log carries three
     /// `+0x35(phase)=10` world-residency transitions, four ProfileLoadDialog `ACTIVATE` lines (two
@@ -289,7 +289,7 @@ mod tests {
         );
     }
 
-    /// The point of the fix: loading the SAME slot again moves the total. Nothing keys on the loaded
+    /// The point of the fix: loading the same slot again moves the total. Nothing keys on the loaded
     /// identity, so a repeat is a first-class load.
     #[test]
     fn repeat_load_of_the_same_slot_increments_the_total() {
@@ -336,7 +336,7 @@ mod tests {
     }
 
     /// The regression this module is armed against: the continue_confirm hook used to increment its
-    /// allow counter TWICE for one call on the `!native_slot_proven` branch. That inflated the
+    /// allow counter twice for one call on the `!native_slot_proven` branch. That inflated the
     /// total-load witness by one per unproven reload. The decomposition catches it.
     #[test]
     fn double_counted_forward_trips_the_decomposition_check() {
@@ -412,7 +412,7 @@ mod tests {
     /// The OS-native picker surface: picks arrive from an OS file dialog, never through the
     /// ProfileLoadDialog activate hook, so `picker_activations` is 0 while `picks` is not. Taken from
     /// a captured run (`oracle_save_picker_surface = 1`, picks 2, activations 0 of 2 total, all
-    /// slot). Must NOT fire -- an unconditional check here would alarm on every OS-picker run.
+    /// slot). Must not fire -- an unconditional check here would alarm on every OS-picker run.
     #[test]
     fn os_picker_picks_without_in_game_activations_do_not_fire() {
         let os_surface = LoadCountWitnesses {

@@ -8,7 +8,7 @@
 //!
 //! # The rule every field here follows
 //!
-//! A value that does not parse KEEPS THE ONE ALREADY IN FORCE and says so. Not the built-in
+//! A value that does not parse keeps the one already in force and says so. Not the built-in
 //! default -- that silently drags someone back off a setting they had deliberately moved -- and
 //! not zero. It is the same rule `er_hotkey_config::Binding` enforces for keys, applied to the
 //! scalars, because a typo in `speed_scale` is exactly as invisible as a typo in `hotkey`.
@@ -104,7 +104,7 @@ fn parse_i32(raw: &str) -> Option<i32> {
     raw.trim().parse::<i32>().ok()
 }
 
-/// How the DLL decides WHICH character to possess.
+/// How the DLL decides which character to possess.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum TargetMode {
     /// Whatever the player is locked on to.
@@ -116,7 +116,7 @@ pub(crate) enum TargetMode {
     Crosshair,
     /// The literal [`TargetSettings::chr_id`], ignoring where the player is looking.
     ChrId,
-    /// CREATE the creature `[spawn]` names and possess that, rather than finding one.
+    /// Create the creature `[spawn]` names and possess that, rather than finding one.
     ///
     /// The only mode that puts something in the world rather than borrowing something already
     /// there, and therefore the only one with a teardown that has to remove what it made. See
@@ -146,28 +146,28 @@ impl TargetMode {
         }
     }
 
-    /// Does this mode CREATE a character, and therefore owe the world a despawn?
+    /// Does this mode create a character, and therefore owe the world a despawn?
     pub(crate) const fn creates(self) -> bool {
         matches!(self, Self::Spawn)
     }
 }
 
-/// `[target]`. THE ONLY TABLE THAT IS NOT LIVE.
+/// `[target]`. The only table that is not live.
 ///
 /// Every other setting here takes effect on the next reload, roughly a second after the file is
 /// saved. This one cannot: it decides who you are, and swapping that out from under an in-flight
 /// possession would mean the mapping, the camera and the moveset all belonging to a different
-/// character than the body on screen. An edit is STAGED and adopted at the next possession.
+/// character than the body on screen. An edit is staged and adopted at the next possession.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct TargetSettings {
     pub(crate) mode: TargetMode,
-    /// Used only when `mode == ChrId`. An `NpcParam` ROW, matched against a loaded character's
+    /// Used only when `mode == ChrId`. An `NpcParam` row, matched against a loaded character's
     /// `npc_param_id` or `npc_id` -- so `45000000` for a Flying Dragon, not `4500` and not `45000`.
     /// `[spawn].chr_id` is the other kind of number and is deliberately a different field.
     pub(crate) chr_id: i32,
     pub(crate) release_on_death: bool,
-    /// `[spawn]`. Carried inside `[target]` rather than beside it, because it decides WHO YOU
-    /// BECOME and therefore has to be staged with the rest of that decision -- an edit adopted
+    /// `[spawn]`. Carried inside `[target]` rather than beside it, because it decides who you
+    /// become and therefore has to be staged with the rest of that decision -- an edit adopted
     /// mid-possession would mean the roster slot being torn down at release was chosen under
     /// different rules than the one that was created.
     pub(crate) spawn: SpawnSettings,
@@ -187,7 +187,7 @@ impl Default for TargetSettings {
 /// `[spawn]`. Read with `[target]` and staged with it; see [`TargetSettings::spawn`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SpawnSettings {
-    /// The MODEL number: `4500` becomes `c4500`. Used only when `mode = "spawn"`.
+    /// The model number: `4500` becomes `c4500`. Used only when `mode = "spawn"`.
     pub(crate) chr_id: u32,
     /// The `NpcParam` row, or `0` to derive `chr_id * 10000` -- the row whose moveset the shipped
     /// table is keyed by, so the easy configuration and the moveset agree.
@@ -204,13 +204,13 @@ pub(crate) struct SpawnSettings {
     pub(crate) distance_m: f32,
     /// How long to wait for it to become drivable before giving up and removing it.
     ///
-    /// THE ONLY THING THAT ENDS A BAD PICK. There is no error edge anywhere in the `ChrRes` or
+    /// The only thing that ends a bad pick. There is no error edge anywhere in the `ChrRes` or
     /// `EneDat` state machines, so a chr id with no assets waits forever; this is the deadline that
     /// turns that into a message.
     pub(crate) readiness_ms: u32,
     /// Take the creature away again when the possession ends.
     ///
-    /// ON by default. Leaving it is not free: it is a live NPC that nothing else will ever remove,
+    /// On by default. Leaving it is not free: it is a live NPC that nothing else will ever remove,
     /// and the buddy roster has fourteen slots the game's own spawner shares.
     pub(crate) despawn_on_release: bool,
 }
@@ -218,7 +218,7 @@ pub(crate) struct SpawnSettings {
 impl Default for SpawnSettings {
     fn default() -> Self {
         Self {
-            // A REAL CREATURE, not zero. `mode = "spawn"` with a default of `c0000` would ask for a
+            // A real creature, not zero. `mode = "spawn"` with a default of `c0000` would ask for a
             // model that does not exist, and the game does not fail that request -- it waits, until
             // the deadline removes it. So the default id has to be one that works, and c4500 is in
             // the shipped moveset table, which makes the first press do something rather than
@@ -330,7 +330,7 @@ impl SpawnSettings {
 
 impl TargetSettings {
     /// Read `[target]` out of a document. Named `apply_from` rather than `apply` because the
-    /// caller does NOT apply the result to what is in force -- it stages it. See
+    /// caller does not apply the result to what is in force -- it stages it. See
     /// `crate::config::PossessConfig::adopt_staged_target`.
     pub(crate) fn apply_from(&mut self, doc: &Document, rejections: &mut Rejections) {
         let s = TARGET_SECTION;
@@ -351,7 +351,7 @@ impl TargetSettings {
             rejections,
             parse_bool,
         );
-        // `[spawn]` is read HERE, inside `[target]`'s reader, because it is staged with it. A
+        // `[spawn]` is read here, inside `[target]`'s reader, because it is staged with it. A
         // separate live table would let the roster slot be chosen under one set of rules and torn
         // down under another.
         self.spawn.apply(doc, rejections);
@@ -379,7 +379,7 @@ pub(crate) enum MappingModel {
     /// per-input meaning that survives a character with thirty attacks and four buttons.
     #[default]
     Context,
-    /// The range band picks a contiguous THIRD of the bucket's rank order rather than filtering
+    /// The range band picks a contiguous third of the bucket's rank order rather than filtering
     /// by reach: close gets the low ranks, far the high ones. More predictable than
     /// [`Self::Context`] and less situationally right.
     Layered,
@@ -445,21 +445,21 @@ pub(crate) struct MappingSettings {
     pub(crate) bands_m: (f32, f32),
     /// Offer the possessed creature's grabs.
     ///
-    /// ON by default, and this reversed once the corpus was actually measured. The old default
+    /// On by default, and this reversed once the corpus was actually measured. The old default
     /// was `false` on the reasoning that a grab is unfair; the reasoning was about the wrong
     /// direction of the interaction (you are the one grabbing) and the scope was wrong too --
     /// grabs are the signature move of most bosses, not a niche category.
     ///
-    /// **IT NOW GATES 153 REAL MOVES ACROSS 78 CREATURES.** It used to gate nothing, and the
+    /// **it now gates 153 real moves across 78 creatures.** It used to gate nothing, and the
     /// reason it did is worth keeping written down, because the mistake was in the model rather
     /// than in the data. A grab is not a 4000-band animation and it is not TimeAct event 304: it
-    /// is an ORDINARY, already-fireable attack whose `AtkParam_Npc` row has `throwTypeId != 0`.
+    /// is an ordinary, already-fireable attack whose `AtkParam_Npc` row has `throwTypeId != 0`.
     /// `ApplyDamage` reads that column off the hit that landed and calls
     /// `CSChrThrowModule::InitThrow` before calculating any damage; the throw system then drives
     /// both parties into the 4000-band clips through the bare behaviour names `W_ThrowAtk` and
     /// `W_ThrowDef`. So the old sweep's finding was true and pointed at the wrong half -- no event
     /// name in the 4000 band has a transition behind it because those clips are never addressed by
-    /// id at all. Marking THOSE as the grabs is what left this flag matching nothing.
+    /// id at all. Marking those as the grabs is what left this flag matching nothing.
     ///
     /// Every initiator is in the 3000 band, and every one of them was already being offered as a
     /// plain attack, so turning this off now genuinely removes something.
@@ -469,8 +469,8 @@ pub(crate) struct MappingSettings {
     ///
     /// Not [`Self::combo_window_ms`], and the two are next to each other in the config file
     /// precisely because they read alike and mean different things. The combo window is about
-    /// WHICH attack a press gives you -- it decides when the rank cursor falls back to the first
-    /// move of the bucket. This one is about WHEN a press happens at all: a press that lands
+    /// which attack a press gives you -- it decides when the rank cursor falls back to the first
+    /// move of the bucket. This one is about when a press happens at all: a press that lands
     /// mid-swing is held rather than allowed to cancel the swing, and this is how long it is held
     /// for before the player is assumed to have given up on it. Reusing the combo window for both
     /// would silently redefine a number somebody may have tuned for the other meaning.
@@ -588,7 +588,7 @@ impl MappingSettings {
 }
 
 /// The bucket an input draws its attack from. Identical on every character, which is the point:
-/// the same button means the same KIND of thing whoever you are wearing.
+/// the same button means the same kind of thing whoever you are wearing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Bucket {
     Light,
@@ -625,14 +625,14 @@ pub(crate) struct ButtonSettings {
     pub(crate) r2: Bucket,
     pub(crate) l1: Bucket,
     pub(crate) l2: Bucket,
-    /// Page the LEFT hand's two buttons (`l1`/`l2`) onto the next move of their buckets.
+    /// Page the left hand's two buttons (`l1`/`l2`) onto the next move of their buckets.
     ///
     /// Left arrow by default because that is the key vanilla binds to the left-hand armament
     /// swap: a possessed creature has no armaments and no `PlayerGameData` to swap them in, so
     /// the two swap keys are free, and they are already the gesture a player reaches for when
     /// they want a button to do something else. `None` is unbound, which is a real setting.
     pub(crate) page_left: Option<Chord>,
-    /// ...and the RIGHT hand's (`r1`/`r2`), on the right arrow.
+    /// ...and the right hand's (`r1`/`r2`), on the right arrow.
     pub(crate) page_right: Option<Chord>,
     /// The pad spelling of the same two, defaulting to the d-pad for the same reason.
     pub(crate) pad_page_left: PadChord,
@@ -720,7 +720,7 @@ impl ButtonSettings {
 ///   turning is the locomotion executor's job and this crate only names the direction. There is no
 ///   snap available to write.
 /// * Root motion is the only mechanism there is. The engine's move vector is a normalised
-///   DIRECTION handed to `CSChrActionRequestModule` -- the player's own request module -- and the
+///   direction handed to `CSChrActionRequestModule` -- the player's own request module -- and the
 ///   behaviour graph moves the body with locomotion clips. Nothing on the path takes a velocity.
 ///
 /// An old config that still names them is unaffected: the parser only reads keys it asks for, so
@@ -733,7 +733,7 @@ pub(crate) struct MovementSettings {
     pub(crate) speed_scale: f32,
     /// The keyboard fallback for the left stick. `None` is unbound, which is a real setting.
     ///
-    /// A creature is driven by a STICK -- a direction and a magnitude -- and a keyboard has
+    /// A creature is driven by a stick -- a direction and a magnitude -- and a keyboard has
     /// neither, so these four keys are synthesised into one. They exist because the alternative
     /// measured worse than "no controller, no movement": with no pad attached `XInputGetState`
     /// returns nothing, the intent is empty every frame, and the creature stands still while
@@ -794,7 +794,7 @@ impl MovementSettings {
     }
 }
 
-/// `[camera]`. Live -- but only read at possession START, because the row patch and the
+/// `[camera]`. Live -- but only read at possession start, because the row patch and the
 /// `ChrExFollowCam+0x468` write both happen once and are undone once.
 ///
 /// See [`crate::camera`] for what each of these actually moves.
@@ -804,9 +804,9 @@ pub(crate) struct CameraSettings {
     /// anything large means inside the model.
     pub(crate) enabled: bool,
     /// Which `LockCamParam` row to patch in memory. It must exist and nothing in the regulation
-    /// may reference it; both are checked against the LIVE param tables at possession start.
+    /// may reference it; both are checked against the live param tables at possession start.
     pub(crate) param_row: u32,
-    /// A TASTE KNOB over the framing law, not the law: `3.8 * (H / 1.5) ^ exponent`. `1.0` is
+    /// A taste KNOB over the framing law, not the law: `3.8 * (H / 1.5) ^ exponent`. `1.0` is
     /// the law -- distance scaling with height, which is what holds the player's framing at every
     /// size -- and is the default for that reason rather than as a preference. `0.0` pins the
     /// distance at the player's own; anything below `1.0` is a deliberately tighter shot on big
@@ -828,11 +828,11 @@ impl Default for CameraSettings {
             // all of 1000-1099 are among them -- and re-checked live so a regulation mod that
             // uses it gets a refusal rather than a stolen camera.
             param_row: 1000,
-            // 1.0, NOT 0.7, and the difference is the whole of "the big ones get clipped".
+            // 1.0, not 0.7, and the difference is the whole of "the big ones get clipped".
             //
             // The camera's job is to hold a framing, and with a fixed vertical FOV holding a
             // framing means distance scales LINEARLY with subject height. Any exponent below 1
-            // makes the shot TIGHTER the bigger the creature -- the framing degrades in exactly
+            // makes the shot tighter the bigger the creature -- the framing degrades in exactly
             // the direction the size increases, which is the worst possible place to be sublinear.
             //
             // Measured in the live game 2026-09-02, and reported by the user before the number was
@@ -842,12 +842,12 @@ impl Default for CameraSettings {
             // screen" while big avatars "get clipped by the camera because it doesn't travel far
             // enough away from the target".
             distance_exponent: 1.0,
-            // DERIVED, not picked -- see `camera::geometry::MAX_FRAMING_DISTANCE`. Every ceiling
+            // Derived, not picked -- see `camera::geometry::MAX_FRAMING_DISTANCE`. Every ceiling
             // this setting has had was chosen first and then cropped a real creature: 40 m cropped
             // everything above 3.8 m tall, and the 120 m that replaced it still cropped the 59 m
             // Walking Mausoleum (`c4450`), whose framing distance is 149.5 m. A nonsense height
             // from a modded `NpcParam` is already caught one step earlier and better, by clamping
-            // the HEIGHT -- which keeps the distance and the pivot consistent with each other,
+            // the height -- which keeps the distance and the pivot consistent with each other,
             // where clamping only the distance breaks the composition. So the default is the
             // distance the law asks for at that height clamp, and cannot fire on its own. It is
             // still a real knob for anyone who wants their camera closer than the framing wants.
@@ -856,7 +856,7 @@ impl Default for CameraSettings {
     }
 }
 
-/// `[picker]`. LIVE -- the in-game creature list and the keys that drive it.
+/// `[picker]`. Live -- the in-game creature list and the keys that drive it.
 ///
 /// # Why the bindings live in a table instead of beside `hotkey`
 ///
@@ -864,36 +864,36 @@ impl Default for CameraSettings {
 /// `config::PossessConfig`'s keep-the-last-working-value machinery, which exists so a typo in the
 /// key you possess with does not leave you unable to possess. These six are not load-bearing in
 /// that way: a typo in `next_group` costs you one direction of a list you can still step through,
-/// and the `[picker]` table is LIVE, so the fix is to correct the line and save. Routing them
+/// and the `[picker]` table is live, so the fix is to correct the line and save. Routing them
 /// through six more `Binding` fields plus six more `ConfigUpdate` variants would have doubled the
 /// config's moving parts for a strictly smaller failure.
 ///
-/// # Why every pad binding ships EMPTY
+/// # Why every pad binding ships empty
 ///
 /// This crate claims no game prologue -- specifically not the DirectInput `GetDeviceState` one
-/// that three other shells in this profile already share -- so it can SEE a press but cannot
+/// that three other shells in this profile already share -- so it can see a press but cannot
 /// take it away from the game. See the `er-npc-possess` entry in
 /// `scripts/me3-dll-conflicts.toml`. A controller has few buttons and Elden Ring uses them, so a
 /// shipped pad default for "move the picker cursor down" would very likely also swap the
 /// player's spell every time it was pressed -- and a default that misbehaves out of the box is
 /// worse than no default.
 ///
-/// THAT IS NOT A MEASUREMENT. Elden Ring's own binding table was not read; it is a judgement
+/// That is not a measurement. Elden Ring's own binding table was not read; it is a judgement
 /// about where a collision is likely, and every one of these keys is rebindable while the game
 /// runs precisely because the judgement may be wrong for a given setup.
 ///
-/// # Why the keyboard defaults are the ARROWS and not the keypad
+/// # Why the keyboard defaults are the arrows and not the keypad
 ///
 /// The keypad was the first choice, for being the cluster least likely to be in the way. It was
 /// wrong for a reason that has nothing to do with collisions: `KP_8` parses to `VK_NUMPAD8`, and
-/// with NUMLOCK OFF the numpad's 8 key does not produce `VK_NUMPAD8` at all -- it produces
+/// with NUMLOCK off the numpad's 8 key does not produce `VK_NUMPAD8` at all -- it produces
 /// `VK_UP`. [`crate::input::chord_held`] reads the virtual key, so all four navigation defaults
 /// would have been silently dead for anyone with NumLock off or no numpad at all, on a feature
 /// with no runtime proof. A key that does nothing and says nothing is a worse default than a key
 /// that collides, because a collision is visible and this is not.
 ///
 /// `Up`/`Down`/`Left`/`Right` produce `VK_UP`/`VK_DOWN`/`VK_LEFT`/`VK_RIGHT` from the arrow
-/// cluster AND from the numpad with NumLock off, so both work. `KP_*` spellings still parse and
+/// cluster and from the numpad with NumLock off, so both work. `KP_*` spellings still parse and
 /// are still a fine thing to bind -- they just need NumLock on, which the shipped config says.
 ///
 /// Binding a pad button here is supported and is a real choice a player may want; it is just not
@@ -927,10 +927,10 @@ pub(crate) const MOVE_DEFAULT_BACK: &str = "S";
 pub(crate) const MOVE_DEFAULT_LEFT: &str = "A";
 pub(crate) const MOVE_DEFAULT_RIGHT: &str = "D";
 
-/// THE ATTACK-SET PAGE KEYS, spelled once for the parser, the shipped config comment and the
+/// The attack-set page keys, spelled once for the parser, the shipped config comment and the
 /// tests.
 ///
-/// Left and right arrow because vanilla binds those to the LEFT-HAND and RIGHT-HAND armament swap
+/// Left and right arrow because vanilla binds those to the left-hand and right-hand armament swap
 /// -- the gesture a player already has in their fingers for "make this button do something else".
 /// A possessed creature has no armaments and no `PlayerGameData` to swap them in, so both keys are
 /// dead weight during a possession and there is nothing to collide with. The pad spelling is the
@@ -991,7 +991,7 @@ impl CameraSettings {
             s,
             "distance_exponent",
             rejections,
-            // Negative would make bigger creatures CLOSER, which is the one shape this setting
+            // Negative would make bigger creatures closer, which is the one shape this setting
             // must not be able to express.
             |raw| parse_f32(raw).filter(|v| (0.0..=2.0).contains(v)),
         );
@@ -1090,11 +1090,11 @@ impl PickerSettings {
 
 /// `[hud]`. Live.
 ///
-/// TWO SWITCHES, and they are two rather than one because they are two SURFACES, not two tastes
+/// Two switches, and they are two rather than one because they are two surfaces, not two tastes
 /// about one. [`Self::enabled`] retargets bars the game already draws; [`Self::pages`] adds a
 /// panel the game does not have. Neither implies the other -- a player who wants the creature's
 /// HP but not a second panel in the corner, or the panel but their own bars, is asking for a
-/// coherent thing in both directions. WITHIN each surface there is still deliberately no
+/// coherent thing in both directions. Within each surface there is still deliberately no
 /// per-element knob, because "show the creature's HP but the player's stamina" is not a thing
 /// anyone wants and every extra knob is another state nobody tests. What the FP and stamina bars
 /// do when the creature has no such pool is decided by evidence rather than by configuration --
@@ -1110,7 +1110,7 @@ pub(crate) struct HudSettings {
     pub(crate) enabled: bool,
     /// Draw the attack-set panel while something is possessed.
     ///
-    /// Defaults ON, and that default is not a preference: the attack-set page is a MODE with no
+    /// Defaults on, and that default is not a preference: the attack-set page is a mode with no
     /// other indicator anywhere on screen, and a mode nobody can see is a mode nobody can use.
     /// Shipping it off would recreate the exact defect it was written to close -- a live session
     /// on 2026-09-02 paged the right hand through seventeen sets, logged every one of them, and
@@ -1172,7 +1172,7 @@ pub(crate) fn binding_text(chord: Option<Chord>, pad: PadChord) -> String {
     format!("{}/{}", chord_text(chord), pad_chord_name(pad))
 }
 
-/// One `[chr.cXXXX]` table. Live, and open-ended: the parser reports the ids the FILE contains
+/// One `[chr.cXXXX]` table. Live, and open-ended: the parser reports the ids the file contains
 /// rather than looking up a list this build was compiled knowing.
 ///
 /// Every field is optional because an override is a delta. `speed_scale` absent here means "use
@@ -1188,7 +1188,7 @@ pub(crate) struct ChrOverride {
     pub(crate) pin: Vec<(String, i32)>,
     /// Animation ids this character must never be given.
     pub(crate) unusable: Vec<i32>,
-    /// Animation ids to force back IN, overriding the auto-classifier's verdict.
+    /// Animation ids to force back in, overriding the auto-classifier's verdict.
     pub(crate) usable: Vec<i32>,
 }
 
@@ -1258,7 +1258,7 @@ pub(crate) struct Tables {
 }
 
 impl Tables {
-    /// Apply a whole document. `[target]` is deliberately NOT here -- it is staged separately
+    /// Apply a whole document. `[target]` is deliberately not here -- it is staged separately
     /// because it is the one table that must not move mid-possession.
     pub(crate) fn apply(&mut self, doc: &Document, rejections: &mut Rejections) {
         self.mapping.apply(doc, rejections);
@@ -1268,7 +1268,7 @@ impl Tables {
         self.hud.apply(doc, rejections);
         self.picker.apply(doc, rejections);
 
-        // REPLACED, not merged. A `[chr.cXXXX]` table the player DELETED has to stop applying,
+        // Replaced, not merged. A `[chr.cXXXX]` table the player deleted has to stop applying,
         // and merging into what is already in force would make deletion a no-op -- the one edit
         // that is impossible to debug, because the file no longer mentions the setting that is
         // still in effect.
@@ -1373,7 +1373,7 @@ enabled = false
 
     /// `[camera]` values that would break the size law are rejected rather than taken.
     ///
-    /// A negative exponent would make a dragon's camera CLOSER than a rat's, and a negative row id
+    /// A negative exponent would make a dragon's camera closer than a rat's, and a negative row id
     /// cannot be a param row at all -- both are the kind of value that produces a camera nobody
     /// can explain, so both keep the working value and name themselves.
     #[test]
@@ -1391,12 +1391,12 @@ enabled = false
     }
 
     /// The shipped default is the row this crate proved free offline, and the exponent that holds
-    /// a FRAMING rather than the one that fitted under a ceiling.
+    /// a framing rather than the one that fitted under a ceiling.
     ///
     /// The old default was `0.7`, and this comment used to justify it as "the exponent that keeps
     /// the biggest shipped creature inside the ceiling" -- which is the reasoning backwards. The
     /// ceiling was picked first, the exponent was bent until the giants fitted under it, and what
-    /// the bending actually did was crop them: below 1.0 the shot gets TIGHTER as the subject gets
+    /// the bending actually did was crop them: below 1.0 the shot gets tighter as the subject gets
     /// bigger, because distance grows slower than the thing it is framing.
     ///
     /// Reported by the user from a live run 2026-09-02, before anyone looked at the number: a
@@ -1420,7 +1420,7 @@ enabled = false
             crate::camera::geometry::MAX_FRAMING_DISTANCE
         );
 
-        // THE PROPERTY THE NUMBER IS FOR. Doubling the subject's height must double the framing
+        // The property the number is for. Doubling the subject's height must double the framing
         // distance, or the headroom above its head shrinks as it grows. `powf` is the law in
         // `camera::geometry::shape`; this asserts the exponent the law is fed keeps it linear.
         let at = |scale: f32| scale.powf(camera.distance_exponent);
@@ -1434,7 +1434,7 @@ enabled = false
         );
 
         // The ceiling must not be what decides the shot for a real creature. The tallest
-        // possessable subject is NOT the 29 m Fire Giant -- it is `c4450`, the Walking Mausoleum,
+        // possessable subject is not the 29 m Fire Giant -- it is `c4450`, the Walking Mausoleum,
         // at 59 m, which linear framing puts 149.5 m out. The 120 m ceiling that first replaced
         // the 40 m one still cropped it, which is why this asserts against the real maximum rather
         // than against the biggest creature anyone happened to name.
@@ -1497,10 +1497,10 @@ despawn_on_release = false
         assert_eq!(target.spawn.resolved_npc_param_id() / 10_000, 4500);
     }
 
-    /// EVERY `[spawn]` BOUND IS ENFORCED AT PARSE TIME, so a bad number is reported next to the
+    /// Every `[spawn]` bound is enforced at PARSE time, so a bad number is reported next to the
     /// line it was typed on rather than as a hotkey press that quietly does nothing. Zero is
     /// rejected with the out-of-range ids: `c0000` is not a creature, and the game answers a
-    /// request for a model that does not exist by WAITING rather than by failing -- so accepting it
+    /// request for a model that does not exist by waiting rather than by failing -- so accepting it
     /// would buy a five-second timeout instead of a message.
     #[test]
     fn out_of_range_spawn_values_are_rejected_and_the_working_ones_stay() {
@@ -1538,7 +1538,7 @@ readiness_ms = 500
         assert_eq!(zeroed.spawn.chr_id, SpawnSettings::default().chr_id);
     }
 
-    /// The HUD retarget is ON unless the file says otherwise. It is the behaviour the layer
+    /// The HUD retarget is on unless the file says otherwise. It is the behaviour the layer
     /// exists for, so defaulting it off would ship a feature nobody sees without editing a file
     /// they have no reason to open.
     #[test]
@@ -1551,7 +1551,7 @@ readiness_ms = 500
         assert!(rejections.is_empty(), "{}", rejections.summary());
         assert!(!tables.hud.enabled);
 
-        // ...and a misspelling is a REJECTION, not an off switch -- the same rule as every other
+        // ...and a misspelling is a rejection, not an off switch -- the same rule as every other
         // boolean here. "enabled = flase" reading as false is indistinguishable, from the
         // player's chair, from the retarget being broken.
         let doc = Document::parse("[hud]\nenabled = \"flase\"\n");
@@ -1563,7 +1563,7 @@ readiness_ms = 500
     }
 
     /// The attack-set panel obeys the same three rules as the bar retarget beside it, and -- the
-    /// part worth a test rather than a reading -- the two keys are INDEPENDENT.
+    /// part worth a test rather than a reading -- the two keys are independent.
     ///
     /// One `[hud]` table holding two switches is exactly the shape where a copy-pasted `take`
     /// silently points both at one field, and the symptom would be that turning off the bars also
@@ -1589,7 +1589,7 @@ readiness_ms = 500
             "...and turning the bar retarget off must not take the panel with it"
         );
 
-        // A misspelling is a REJECTION, not an off switch. Same rule as every other boolean here.
+        // A misspelling is a rejection, not an off switch. Same rule as every other boolean here.
         let doc = Document::parse("[hud]\npages = \"of\"\n");
         let mut hud = HudSettings::default();
         let mut rejections = Rejections::default();
@@ -1598,7 +1598,7 @@ readiness_ms = 500
         assert_eq!(rejections.summary(), "hud.pages=\"of\"");
     }
 
-    /// THE RULE. Junk keeps the value that was working and names itself, so the player can find
+    /// The rule. Junk keeps the value that was working and names itself, so the player can find
     /// the line. It does not reset to the built-in default and it does not read as zero/false.
     #[test]
     fn a_junk_value_keeps_the_one_in_force_and_names_itself() {

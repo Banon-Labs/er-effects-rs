@@ -1,16 +1,16 @@
 use crate::prelude::*;
 
-/// DEPTH-KEYED TRANSPARENT BACKGROUND: read back the offscreen scene's depth plane and set the color
-/// buffer's per-pixel alpha to 0 for every BACKGROUND pixel. The portrait depth is BIMODAL -- the model
-/// (head+shoulders) forms one cluster and the dark IBL surround another, separated by an empty depth GAP
-/// (the "air" between the model and the backdrop). We histogram the depth, put the threshold in the WIDEST
-/// empty gap, and KEEP whichever cluster the COLOUR-classified head sits in, cutting the other. Keying on
+/// Depth-KEYED transparent BACKGROUND: read back the offscreen scene's depth plane and set the color
+/// buffer's per-pixel alpha to 0 for every background pixel. The portrait depth is BIMODAL -- the model
+/// (head+shoulders) forms one cluster and the dark IBL surround another, separated by an empty depth gap
+/// (the "air" between the model and the backdrop). We histogram the depth, put the threshold in the widest
+/// empty gap, and keep whichever cluster the colour-classified head sits in, cutting the other. Keying on
 /// the head's own cluster (not an assumed clear value) makes this robust to the engine's Z direction and to
-/// the fact that the corners are NOT all background (a portrait's shoulders fill the bottom corners), and
+/// the fact that the corners are not all background (a portrait's shoulders fill the bottom corners), and
 /// deriving the head reference from the colour buffer (not the geometric centre) makes it robust to where
-/// the head sits in the frame (er-effects-rs-y134). FAIL-OPEN on
+/// the head sits in the frame (er-effects-rs-y134). Fail-open on
 /// every uncertainty (no depth buffer, dims mismatch, no separable gap) -> the color buffer is left fully
-/// opaque, exactly the pre-existing display, so this can only ADD the cutout, never regress the head. Emits
+/// opaque, exactly the pre-existing display, so this can only add the cutout, never regress the head. Emits
 /// a one-shot `depth-key` diagnostic and drives the `oracle_depth_key_*` RAM semaphores. `cpx` is the
 /// tightly-packed RGBA8 the caller is about to publish (mutated in place).
 pub fn apply_depth_alpha_key(
@@ -27,18 +27,18 @@ pub fn apply_depth_alpha_key(
     if cpx.len() < w * h * 4 {
         return;
     }
-    // (1) RECALCULATE the mask from the CURRENT depth buffer (captured coherently on the render thread
+    // (1) RECALCULATE the mask from the current depth buffer (captured coherently on the render thread
     //     and passed in as a plain Vec<f32>, so this whole pass runs on the worker thread with no game
     //     pointer or D3D12 object).
     let fresh = compute_depth_mask(depth, dw, dh, w, h, cpx);
-    // (2) On a fresh mask, CACHE it; on a dead frame (depth read back cleared -> no gap), REUSE the last
+    // (2) On a fresh mask, cache it; on a dead frame (depth read back cleared -> no gap), reuse the last
     //     cached mask so the cutout stays stable. Recalculated whenever fresh depth is available (tracks a
     //     genuine re-render), cached only for the frames in between -- never a frozen one-shot.
     let mask = if let Some(m) = fresh {
         DEPTH_KEY_FRESH.fetch_add(1, Ordering::SeqCst);
         // Tag the cache with the character it was computed for, so a later cross-character reuse is
-        // detectable (the stale-reuse desync semaphore below). This uses the FRAME's incarnation (snapshot
-        // on the render thread and passed in), NOT a live read -- so the mask cache is tagged/compared
+        // detectable (the stale-reuse desync semaphore below). This uses the frame's incarnation (snapshot
+        // on the render thread and passed in), not a live read -- so the mask cache is tagged/compared
         // against the character this frame belongs to, not whatever is rendering now (the 2nd-character
         // desync safety fix under the worker offload).
         LAST_DEPTH_MASK_INCARNATION.store(incarnation, Ordering::SeqCst);
@@ -52,8 +52,8 @@ pub fn apply_depth_alpha_key(
             _ => None,
         });
         if reused.is_some() {
-            // FAIL-FAST desync semaphore: this depth was dead (no fresh gap) so we are reusing the cached
-            // mask -- but if it was computed for a DIFFERENT character incarnation than the one rendering
+            // Fail-fast desync semaphore: this depth was dead (no fresh gap) so we are reusing the cached
+            // mask -- but if it was computed for a different character incarnation than the one rendering
             // now, its silhouette will not match this head (the 2nd-character depth-mask desync). Detect
             // it as a run-stopping RAM oracle rather than only seeing it on screen.
             let cur = incarnation;
@@ -65,9 +65,9 @@ pub fn apply_depth_alpha_key(
                         "MASK-STALE-REUSE-DESYNC: reusing depth mask from portrait incarnation {cached} on incarnation {cur} (prior character's silhouette on the new head) -- #{}",
                         n + 1
                     ));
-                    // HARD FAIL-FAST during the diagnostic repro ONLY: abort the process the instant the
+                    // Hard fail-fast during the diagnostic repro ONLY: abort the process the instant the
                     // desync is detected so the run stops in ~40s instead of six minutes. A fast crash ==
-                    // the semaphore caught the stale-reuse; no crash == the desync is NOT stale-reuse (a
+                    // the semaphore caught the stale-reuse; no crash == the desync is not stale-reuse (a
                     // different mechanism) and the hypothesis is refuted. Never fires in product (gated on
                     // the System-Quit repro being active), so it cannot crash a real player session.
                     if system_quit_repro_enabled() {
@@ -95,7 +95,7 @@ pub fn apply_depth_alpha_key(
     if masked > 0 {
         DEPTH_KEY_APPLIED.fetch_add(1, Ordering::SeqCst);
         DEPTH_KEY_BG_PCT.store(masked * 100 / (w * h), Ordering::SeqCst);
-        // FAIL-FAST mask/head coherence (2nd-character desync): does the KEPT cutout match THIS head?
+        // Fail-fast mask/head coherence (2nd-character desync): does the kept cutout match this head?
         let iou = mask_head_iou(&mask, cpx, w, h);
         PROFILE_MASK_HEAD_IOU_LAST.store(iou, Ordering::SeqCst);
         if iou < MASK_HEAD_IOU_MIN {
@@ -106,7 +106,7 @@ pub fn apply_depth_alpha_key(
                     "MASK-HEAD-MISMATCH: IoU={iou}% < {MASK_HEAD_IOU_MIN}% (kept cutout vs colour head) streak={streak} -- fresh-but-wrong depth silhouette on this head"
                 ));
             }
-            // Abort only on a SUSTAINED gross mismatch (a whole loading screen desyncs; a transient
+            // Abort only on a sustained gross mismatch (a whole loading screen desyncs; a transient
             // build glitch is a few frames), and only during the repro (never a real player session).
             if streak >= MASK_HEAD_ABORT_STREAK && system_quit_repro_enabled() {
                 append_autoload_debug(format_args!(
@@ -122,8 +122,8 @@ pub fn apply_depth_alpha_key(
 
 /// Foreground colour classification bar: a pixel is "head" when its sum-abs channel distance (0..765)
 /// from the corner-background colour exceeds this. Shared by the IoU oracle (`mask_head_iou`) and the
-/// head-cluster foreground reference (`color_head_median_depth`) so the mask is SELECTED by the same
-/// criterion it is later SCORED against.
+/// head-cluster foreground reference (`color_head_median_depth`) so the mask is selected by the same
+/// criterion it is later scored against.
 const FG_DIST: i32 = 90;
 
 /// Mean RGB of the four 8x8 corner patches -- the portrait backdrop colour reference shared by the IoU
@@ -150,7 +150,7 @@ fn corner_bg_rgb(cpx: &[u8], w: usize, h: usize) -> Option<(i32, i32, i32)> {
     Some(((br / bn) as i32, (bgc / bn) as i32, (bb / bn) as i32))
 }
 
-/// Median depth of the COLOUR-head pixels -- the pixels the IoU oracle classifies as head (far from the
+/// Median depth of the colour-head pixels -- the pixels the IoU oracle classifies as head (far from the
 /// corner-background colour), subsampled by 2 on both axes. Used as `compute_depth_mask`'s foreground
 /// reference: comparing this median against a threshold is a majority vote of the head's own pixels, so
 /// the kept cluster is the one that actually overlaps the head, wherever the head sits in the frame
@@ -195,17 +195,17 @@ fn color_head_median_depth(depth: &[f32], cpx: &[u8], w: usize, h: usize) -> Opt
     Some(*med)
 }
 
-/// Mask/head coherence score (0..100) of the depth cutout's KEPT region (mask==0) vs the colour's OWN
+/// Mask/head coherence score (0..100) of the depth cutout's kept region (mask==0) vs the colour's own
 /// head (pixels whose colour is clearly far from the corner background). ~high when the mask matches the
-/// head; low when a fresh mask of the WRONG depth silhouette is applied to this head (the 2nd-character
+/// head; low when a fresh mask of the wrong depth silhouette is applied to this head (the 2nd-character
 /// desync). Subsampled by 2 for cost; 100 (perfect) on any degenerate input so it never false-trips.
 ///
 /// Two regimes (er-effects-rs-y134): symmetric IoU assumes the colour-head and the kept region have
-/// comparable sizes, but a DARK character on the dark IBL backdrop clears FG_DIST on only a sliver of
-/// its pixels (Sacred Bean: 2.6% of the frame vs a 19% kept cluster), so even a PERFECT mask is capped
+/// comparable sizes, but a dark character on the dark IBL backdrop clears FG_DIST on only a sliver of
+/// its pixels (Sacred Bean: 2.6% of the frame vs a 19% kept cluster), so even a perfect mask is capped
 /// at |head|/|kept| ~= 14% and the gate held every frame (clean=0, no portrait/stats). When that
 /// best-possible IoU (min/max of the two class sizes) cannot clear the bar with headroom even for a
-/// perfect mask, IoU is meaningless -- score COVERAGE instead (kept ∩ head / head: are the provably-
+/// perfect mask, IoU is meaningless -- score coverage instead (kept ∩ head / head: are the provably-
 /// character bright pixels kept?). Coverage >= IoU always, so bright characters (whose ceiling is high)
 /// keep the stricter symmetric IoU and no previously-clean character can regress. Wrong-side and
 /// missing-head masks still score ~0 in both regimes; near-empty colour-heads fall through to the
@@ -281,7 +281,7 @@ fn compute_depth_mask(
     cpx: &[u8],
 ) -> Option<Vec<u8>> {
     if dw != w || dh != h || depth.len() < w * h {
-        // At higher-res (1024) the depth sibling MUST match the color RT or the mask can't align.
+        // At higher-res (1024) the depth sibling must match the color RT or the mask can't align.
         if DEPTH_KEY_NOGAP_LOGGED.swap(1, Ordering::SeqCst) == 0 {
             append_autoload_debug(format_args!(
                 "depth-key: SKIP dims-mismatch color={w}x{h} depth={dw}x{dh} depthlen={}",
@@ -302,10 +302,10 @@ fn compute_depth_mask(
     }
     let range = dmax - dmin;
 
-    // FOREGROUND reference = the COLOUR head's depth: the median depth of the pixels the IoU oracle
-    // classifies as head (far from the corner-background colour). We KEEP the cluster this belongs to
-    // and CUT the other -- so the cut is robust to the engine's Z direction (we never assume near/far
-    // == 0) AND to where the head sits in the frame. The old CENTRAL-PATCH median broke on Sacred Bean
+    // Foreground reference = the colour head's depth: the median depth of the pixels the IoU oracle
+    // classifies as head (far from the corner-background colour). We keep the cluster this belongs to
+    // and cut the other -- so the cut is robust to the engine's Z direction (we never assume near/far
+    // == 0) and to where the head sits in the frame. The old central-patch median broke on Sacred Bean
     // (er-effects-rs-y134): at the 6.0x head-and-torso framing this model's pose put the geometric
     // centre off the head, the patch sampled the wrong cluster, and every fresh silhouette missed the
     // head (IoU=14% < 25% -> zero clean publishes, no portrait/stats). The central patch survives only
@@ -338,7 +338,7 @@ fn compute_depth_mask(
         }
     };
 
-    // Histogram over [dmin,dmax]; the threshold is the midpoint of the WIDEST run of near-empty bins --
+    // Histogram over [dmin,dmax]; the threshold is the midpoint of the widest run of near-empty bins --
     // i.e. the gap between the background cluster and the foreground cluster.
     const NB: usize = 128;
     let mut hist = [0u32; NB];
@@ -370,7 +370,7 @@ fn compute_depth_mask(
     }
     let gap_mid_bin = best_lo as f32 + best_len as f32 * 0.5;
     let threshold = dmin + (gap_mid_bin / NB as f32) * range;
-    // Require a REAL gap (>= ~4% of the range empty) and a valid foreground reference, else no separable
+    // Require a real gap (>= ~4% of the range empty) and a valid foreground reference, else no separable
     // background this frame -> return None (caller reuses the cached mask; a unimodal depth would slice
     // the head).
     let have_gap = range > 0.0 && (best_len as f32 / NB as f32) >= 0.04 && fg_ref.is_finite();
@@ -392,11 +392,11 @@ fn compute_depth_mask(
             }
         }
     }
-    // DEGENERATE-MASK REJECTION (er-effects-rs-hi2): a fresh mask cutting under the publish floor is
-    // not a real bg/head separation -- accepting it used to CACHE it, and every later gapless frame
+    // Degenerate-mask rejection (er-effects-rs-hi2): a fresh mask cutting under the publish floor is
+    // not a real bg/head separation -- accepting it used to cache it, and every later gapless frame
     // reused the poisoned cache, so a whole window sat in the lowmask band (run 2026-07-03 ~21:17,
     // window slot4: lowmask=203 clean=0, prior head stuck on screen ~30s). Reject it (None) so the
-    // cache keeps the last REAL mask and later frames retry fresh.
+    // cache keeps the last real mask and later frames retry fresh.
     let share_pct = masked * 100 / (w * h).max(1);
     let degenerate = !have_gap || share_pct < PORTRAIT_MIN_TRANSPARENT_PCT;
     let first_diag = DEPTH_KEY_DIAG_LOGGED.swap(1, Ordering::SeqCst) == 0;
@@ -421,17 +421,17 @@ fn compute_depth_mask(
         ));
     }
     if !degenerate {
-        // A clean bimodal bg/head separation confirms this depth buffer belongs to OUR portrait scene.
+        // A clean bimodal bg/head separation confirms this depth buffer belongs to our portrait scene.
         // (The depth candidate is now resolved + pinned on the render-thread coherent readback; the worker
         // no longer sees the candidate pointer, so PROFILE_DEPTH_PIN is not written here anymore.)
         return Some(mask);
     }
-    // SECOND PASS (backdrop-geometry recovery -- er-effects-rs-hi2 root fix, runs 2026-07-03).
-    // Some characters' portrait scenes render backdrop GEOMETRY at a depth just behind the head
+    // Second pass (backdrop-geometry recovery -- er-effects-rs-hi2 root fix, runs 2026-07-03).
+    // Some characters' portrait scenes render backdrop geometry at a depth just behind the head
     // (observed: box ~0.0199 vs head ~0.0210) plus a sliver of true cleared depth (exact dmin=0).
-    // The widest histogram gap is then the WRONG gap (cleared..geometry, bins 1..112), so the "bg"
+    // The widest histogram gap is then the wrong gap (cleared..geometry, bins 1..112), so the "bg"
     // cut is only the cleared sliver (~0%) and the whole window starves (slot4 Speed Bean
-    // unkeyed=204, slot9 Moonsent Bean unkeyed=260). Excluding the BIT-EXACT extreme values (the
+    // unkeyed=204, slot9 Moonsent Bean unkeyed=260). Excluding the bit-exact extreme values (the
     // clear planes) and re-running the same histogram over the interior geometry makes the real
     // head/backdrop air gap dominant; excluded extremes are then classified by the same threshold
     // (cleared lands on the bg side). Only runs when the validated first pass failed.
@@ -458,9 +458,9 @@ fn compute_depth_mask(
                     hist2[bi as usize] += 1;
                 }
             }
-            // VALLEY, not empty run (run 7: the model's own body fills intermediate depths, so no
-            // EMPTY bins exist between the backdrop and head clusters at any binning -- the empty-
-            // run second pass never fired). A LOW-DENSITY run (<= 0.5% of the frame per bin, vs the
+            // Valley, not empty run (run 7: the model's own body fills intermediate depths, so no
+            // empty bins exist between the backdrop and head clusters at any binning -- the empty-
+            // run second pass never fired). A low-density run (<= 0.5% of the frame per bin, vs the
             // first pass's 0.05%) between the two dominant clusters is the real separator; min run
             // 2% of bins so single noisy bins can't split a cluster.
             let low_thresh = ((w * h) / 200).max(1) as u32;
@@ -506,7 +506,7 @@ fn compute_depth_mask(
                 }
             }
             // Ground-truth dump, once per run, when even the valley pass fails: the compact
-            // interior histogram (nonzero-bin runs) is the evidence for the NEXT split design.
+            // interior histogram (nonzero-bin runs) is the evidence for the next split design.
             if DEPTH_KEY_HIST_DUMPED.swap(1, Ordering::SeqCst) == 0 {
                 let mut runs = String::new();
                 let mut b = 0usize;
@@ -537,7 +537,7 @@ fn compute_depth_mask(
 /// texture behind `dst_gpu_child` (offscreen+0x10's CSGxTexture, what the loading-screen forge binds and
 /// GFx samples). The engine's own per-frame resolve almost never fires post-Continue (RT has content, SRV
 /// stays black), so we do the copy ourselves every render-thread frame. Returns true on a completed copy
-/// (or when src==dst so no copy is needed). Same safety contract as the readback: our OWN
+/// (or when src==dst so no copy is needed). Same safety contract as the readback: our own
 /// queue/allocator/list/fence, game resources borrowed (never Released), never panics/crashes.
 ///
 /// # Safety
@@ -548,7 +548,7 @@ fn compute_depth_mask(
 /// The caller owns LIFETIME: resolving each side ends in a `QueryInterface`, which faults
 /// uncatchably against a freed COM object, so both offscreen renderers must still be
 /// alive (vtable-validated by the caller) for the duration of the call. The copy uses our
-/// OWN queue/allocator/list/fence, shared without locking -- render thread only. The
+/// own queue/allocator/list/fence, shared without locking -- render thread only. The
 /// game's resources are borrowed and never Released.
 pub unsafe fn copy_offscreen_rt_to_srv(src_gpu_child: usize, dst_gpu_child: usize) -> bool {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
@@ -558,8 +558,8 @@ pub unsafe fn copy_offscreen_rt_to_srv(src_gpu_child: usize, dst_gpu_child: usiz
 }
 
 unsafe fn copy_offscreen_rt_to_srv_inner(src_gpu_child: usize, dst_gpu_child: usize) -> bool {
-    // Resolve the SRV (dst) first from its OWN single-texture nest -> deterministic, plus its candidate
-    // pointer. Then resolve the source as the largest texture in the offscreen nest EXCLUDING that SRV,
+    // Resolve the SRV (dst) first from its own single-texture nest -> deterministic, plus its candidate
+    // pointer. Then resolve the source as the largest texture in the offscreen nest excluding that SRV,
     // so we never pick the (black) SRV as the source and self-skip.
     let Some((dst, dst_v)) = (unsafe { find_d3d12_resource_ex(dst_gpu_child, 0, false, 0) }) else {
         return false;
@@ -576,7 +576,7 @@ unsafe fn copy_offscreen_rt_to_srv_inner(src_gpu_child: usize, dst_gpu_child: us
     let sd: D3D12_RESOURCE_DESC = unsafe { src.GetDesc() };
     let dd: D3D12_RESOURCE_DESC = unsafe { dst.GetDesc() };
     // One-shot diagnostic: are src (RT) and dst (SRV) distinct resources, and do their descs match? If
-    // find_d3d12_resource returns the SAME resource for both starts (RT==SRV by BFS), the copy is a
+    // find_d3d12_resource returns the same resource for both starts (RT==SRV by BFS), the copy is a
     // self-skip and can never populate the SRV -- the signature of the BFS "largest texture" ambiguity.
     if PROFILE_RT_SRV_COPY_DIAGGED.fetch_add(1, Ordering::SeqCst) < 6 {
         append_autoload_debug(format_args!(
@@ -631,7 +631,7 @@ unsafe fn copy_offscreen_rt_to_srv_inner(src_gpu_child: usize, dst_gpu_child: us
     }) else {
         return false;
     };
-    // src (RT): COMMON -> COPY_SOURCE; dst (SRV): COMMON -> COPY_DEST; copy; both back to COMMON.
+    // src (RT): Common -> COPY_SOURCE; dst (SRV): Common -> COPY_DEST; copy; both back to common.
     unsafe {
         record_transition(
             &list,
@@ -696,7 +696,7 @@ unsafe fn copy_offscreen_rt_to_srv_inner(src_gpu_child: usize, dst_gpu_child: us
 }
 
 /// Record + submit a CopyTextureRegion of a tightly-packed RGBA8 buffer (`w`x`h`, must match `dst`'s
-/// dims) into subresource 0 of an already-resolved game texture `dst`, on our OWN queue with a CPU fence
+/// dims) into subresource 0 of an already-resolved game texture `dst`, on our own queue with a CPU fence
 /// wait. `dst` is borrowed (never Released). `false` on any COM failure or dim mismatch. Never Releases
 /// the game resource; the barrier clone is balanced by `record_transition`.
 #[expect(
@@ -741,7 +741,7 @@ unsafe fn copy_rgba_into_resource(dst: &ID3D12Resource, w: u32, h: u32, pixels: 
     if total_bytes == 0 || footprint.Footprint.RowPitch == 0 {
         return false;
     }
-    // UPLOAD-heap buffer sized to the footprint; fill it with the RGBA rows at the 256-aligned pitch.
+    // Upload-heap buffer sized to the footprint; fill it with the RGBA rows at the 256-aligned pitch.
     let heap_props = D3D12_HEAP_PROPERTIES {
         Type: D3D12_HEAP_TYPE_UPLOAD,
         CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
@@ -800,7 +800,7 @@ unsafe fn copy_rgba_into_resource(dst: &ID3D12Resource, w: u32, h: u32, pixels: 
         }
     }
     unsafe { upload.Unmap(0, None) };
-    // Record list: dst COMMON -> COPY_DEST, CopyTextureRegion(upload -> dst sub 0), dst back to COMMON.
+    // Record list: dst common -> COPY_DEST, CopyTextureRegion(upload -> dst sub 0), dst back to common.
     let queue_desc = D3D12_COMMAND_QUEUE_DESC {
         Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
         Priority: 0,
@@ -889,14 +889,14 @@ unsafe fn copy_rgba_into_resource(dst: &ID3D12Resource, w: u32, h: u32, pixels: 
     true
 }
 
-/// Create a persistent DEFAULT-heap R8G8B8A8 TEXTURE2D, upload `pixels` into it via a one-shot private
+/// Create a persistent default-heap R8G8B8A8 TEXTURE2D, upload `pixels` into it via a one-shot private
 /// queue, and leave it in `COPY_SOURCE` so the per-frame composite can use it as a `CopyTextureRegion`
 /// source. Returns the texture (the temp queue/allocator/list/upload-buffer are released here). `None` on
 /// any failure -- never panics.
 ///
-/// RETAINED FOR REFERENCE: the alpha-honoring composite now blends the portrait onto the backbuffer on the
+/// Retained for REFERENCE: the alpha-honoring composite now blends the portrait onto the backbuffer on the
 /// CPU (see `blend_portrait_over_backbuffer`), so this GPU upload path is currently unused. Kept as the
-/// proven RGBA->DEFAULT-heap upload for a future GPU-draw composite.
+/// proven RGBA->default-heap upload for a future GPU-draw composite.
 #[allow(dead_code)]
 unsafe fn create_portrait_source_texture(
     device: &ID3D12Device,

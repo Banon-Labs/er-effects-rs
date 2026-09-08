@@ -16,7 +16,7 @@ Modes:
     --artifacts    ->  er_quickload.dll er_armament_icons.dll ...
     --pairs        ->  er-quickload:er_quickload ...   (one per line)
 
-Note the artifact name is NOT the package name with dashes swapped for
+Note the artifact name is not the package name with dashes swapped for
 underscores -- four crates override `[lib] name` (er-better-refills produces
 er_better_refills.dll, and so on), which is why the array stores both halves.
 """

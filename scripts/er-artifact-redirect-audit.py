@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Which per-run artifact does a run write, where does it go, and does it survive the NEXT run?
+"""Which per-run artifact does a run write, where does it go, and does it survive the next run?
 
-THE FAILURE THIS EXISTS TO REFUSE
+The failure this exists to refuse
 ---------------------------------
-A game-directory artifact is SINGLE-SLOT, not a log that accumulates. `er_game_base::log::
-begin_fresh_run` renames `<name>` to `<name>.prev` and truncates, ONE generation, on the first
+A game-directory artifact is single-slot, not a log that accumulates. `er_game_base::log::
+begin_fresh_run` renames `<name>` to `<name>.prev` and truncates, one generation, on the first
 write of each process. Two launches and run N-2 is gone. Several sessions launch concurrently in
 this repo, so that is the normal case, not a race.
 
@@ -13,20 +13,20 @@ belonging to the 09:07 run, whose evidence nobody had read. The launcher redirec
 debug log and the crash log out of GAME_DIR and not the continue trace, so the trace fell back to
 the shared path. One line of env, missing from one array.
 
-There is a SECOND destroyer, and it is worse: a harness that runs `rm -f "$GAME_DIR"/er-quickload-*.log`
-before launching deletes the previous run's live file AND -- because `begin_fresh_run` unconditionally
+There is a second destroyer, and it is worse: a harness that runs `rm -f "$GAME_DIR"/er-quickload-*.log`
+before launching deletes the previous run's live file and -- because `begin_fresh_run` unconditionally
 removes `<name>.prev` when the live file is absent -- the generation behind it. That drops two runs
 at once, and it is another run's evidence, not the deleting run's.
 
-WHY NOT COPY THE FILES OUT AFTER THE RUN
+Why not copy the files out after the run
 ----------------------------------------
-Because by teardown the damage is done: this run clobbered the previous one's file at LAUNCH, before
+Because by teardown the damage is done: this run clobbered the previous one's file at launch, before
 any copy could happen. A post-run copy preserves only your own output. It also never runs at all when
 the run crashes or is killed -- which is exactly when the evidence matters most. Redirecting the
 writer at launch, into a directory unique to the run, means two runs never share a path to begin with,
 and a run that dies mid-write still leaves everything it wrote where it wrote it.
 
-WHAT THIS SCRIPT CHECKS
+What this script checks
 -----------------------
 The knob table is read out of the Rust sources, not restated here, so it cannot rot: every
 `std::env::var[_os]("ER_QUICKLOAD_*_PATH")` that selects an output file is a knob a launcher must set.
@@ -38,7 +38,7 @@ in its own text with a reason:
     # er-artifact-redirect: library                     -- the caller owns the redirect
     # er-artifact-redirect: single-slot -- <why>        -- deliberately writes into GAME_DIR
 
-An exemption is a STATED gap, which is the point: a run that does not preserve something must say so
+An exemption is a stated gap, which is the point: a run that does not preserve something must say so
 rather than read as "we captured everything".
 
 `single-slot` is the strongest form of that and the newest (2026-08-31). The shipped end-user
@@ -72,7 +72,7 @@ EXIT_BROKEN = 2
 
 MARKER = "er-artifact-redirect:"
 
-# Knobs that name an INPUT the DLL reads (a driver command channel, an autoload request), not an
+# Knobs that name an input the DLL reads (a driver command channel, an autoload request), not an
 # artifact it writes. A launcher is not required to redirect these; losing one loses nothing.
 INPUT_CHANNEL_KNOBS = frozenset(
     {
@@ -83,12 +83,12 @@ INPUT_CHANNEL_KNOBS = frozenset(
     }
 )
 
-# Artifacts with NO env override: the writer resolves a fixed name against the game directory or the
-# process CWD, so a launcher CANNOT move them and the next run destroys them. Each row names the
+# Artifacts with no env override: the writer resolves a fixed name against the game directory or the
+# process CWD, so a launcher cannot move them and the next run destroys them. Each row names the
 # source file and a literal that must still be present there, so this list goes red rather than
 # quietly describing a crate that has moved on.
 #
-# EMPTY SINCE 2026-08-31. Every artifact is redirectable; each one that was not is frozen in
+# Empty since 2026-08-31. Every artifact is redirectable; each one that was not is frozen in
 # `RECOVERED_KNOBS` below so the fix cannot be undone silently. No count is written here on
 # purpose -- the list is the count, and a number in prose beside a list is a number that goes
 # stale the next time somebody appends a row.
@@ -96,7 +96,7 @@ NO_KNOB_ARTIFACTS: tuple[tuple[str, str, str, str, int], ...] = ()
 
 # The artifacts that had no knob until 2026-08-31, and the knob each must now resolve to.
 #
-# WHY THIS OUTLIVES THE FIX. Deleting the rows would make the audit shrink quietly if a knob were
+# Why this OUTLIVES the fix. Deleting the rows would make the audit shrink quietly if a knob were
 # ever removed: the artifact would stop being demanded of launchers, every gap involving it would
 # vanish from the report, and a file writing into the single-slot game directory would look like
 # progress. Each pair is checked against the knobs parsed out of the Rust, so losing one is a
@@ -109,35 +109,35 @@ RECOVERED_KNOBS: tuple[tuple[str, str], ...] = (
     ("er-diag-harness.log", "ER_QUICKLOAD_DIAG_HARNESS_PATH"),
     ("er-telemetry-timeseries.jsonl", "ER_QUICKLOAD_TIMESERIES_PATH"),
     # Found while wiring the five above: an undeclared artifact this inventory had never listed,
-    # written with a bare `fs::write` so it kept ZERO previous generations.
+    # written with a bare `fs::write` so it kept zero previous generations.
     ("er-cpu-profile.txt", "ER_QUICKLOAD_CPU_PROFILE_PATH"),
-    # The badge shell's log, added 2026-08-31 for the same reason and one worse: BOTH of its
+    # The badge shell's log, added 2026-08-31 for the same reason and one worse: Both of its
     # launchers deleted it from the game directory before launching, which takes the `.prev` with
     # the live file -- two prior runs' evidence, neither of them the deleting run's.
     ("er-armament-icons.log", "ER_QUICKLOAD_ARMAMENT_ICONS_PATH"),
     # The standalone portrait shell's two files, the last artifacts in the repo with no knob. Both
     # resolved against the process CWD rather than even the game directory, so no launcher could
-    # move them, and `run-portrait-dll-standalone-smoke.sh` `rm -f`'d BOTH before launching --
+    # move them, and `run-portrait-dll-standalone-smoke.sh` `rm -f`'d both before launching --
     # dropping the live file and the `.prev` behind it, two prior runs at once. They get one knob
-    # EACH because that smoke reads them for different verdicts (attach/Present out of the run log,
+    # each because that smoke reads them for different verdicts (attach/Present out of the run log,
     # "did anything fault" out of the crash log); a single shared knob would move whichever the
     # launcher named and leave the other where the next launch destroys it.
     ("er-loading-portrait.log", "ER_QUICKLOAD_LOADING_PORTRAIT_PATH"),
     ("er-loading-portrait-crash-log.txt", "ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH"),
     # The save-census shell's two files, and the last artifacts in the repo without a knob. The
-    # telemetry is the one that matters: it is the RUN-STOPPING ORACLE of a save-suppression proof
+    # telemetry is the one that matters: it is the run-stopping oracle of a save-suppression proof
     # (`escaped_write_sites` must be empty), and it publishes with a write-tmp-then-rename, so it
-    # kept ZERO previous generations -- the last run's verdict was gone the instant this run
-    # installed, with no `.prev` behind it. `run-save-census-probe.sh` `rm -f`'d BOTH out of the
+    # kept zero previous generations -- the last run's verdict was gone the instant this run
+    # installed, with no `.prev` behind it. `run-save-census-probe.sh` `rm -f`'d both out of the
     # game directory before launching, which also takes the `.prev` behind the live file. They get
-    # one knob EACH because that probe reads them for different things (the text log for what the
+    # one knob each because that probe reads them for different things (the text log for what the
     # DLL did, the JSON for the verdict); a single shared knob would move whichever the launcher
     # named and leave the other where the next launch destroys it.
     ("er-save-disable.log", "ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH"),
     ("er-save-disable-telemetry.json", "ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH"),
 )
 
-# Artifacts that a knob moves WITHOUT naming, because the writer derives their directory from
+# Artifacts that a knob moves without naming, because the writer derives their directory from
 # another knob's parent. Recording this is the difference between "the portrait dumps are lost" and
 # "the portrait dumps follow the autoload debug log", which is a 63 MB difference per run.
 DERIVED_ARTIFACTS: tuple[tuple[str, str, str, str, int], ...] = (
@@ -150,7 +150,7 @@ DERIVED_ARTIFACTS: tuple[tuple[str, str, str, str, int], ...] = (
     ),
 )
 
-# A writer that opens with `fs::write` (or write-tmp-then-rename) keeps NO previous generation: the
+# A writer that opens with `fs::write` (or write-tmp-then-rename) keeps no previous generation: the
 # run before this one is gone the instant this one starts, with no `.prev` to fall back on.
 NO_ROTATION_KNOB_ARTIFACTS = frozenset(
     {
@@ -161,7 +161,7 @@ NO_ROTATION_KNOB_ARTIFACTS = frozenset(
         "er-cpu-profile.txt",
         # `er-save-disable/src/telemetry.rs` publishes to a per-serial tmp file and renames over
         # the target, so nothing is ever rotated aside. This is the run-stopping oracle of a
-        # save-suppression proof, and it was the LEAST recoverable artifact in the table.
+        # save-suppression proof, and it was the least recoverable artifact in the table.
         "er-save-disable-telemetry.json",
     }
 )
@@ -182,10 +182,10 @@ class Launcher:
     sets: set[str] = field(default_factory=set)
     exempt: dict[str, str] = field(default_factory=dict)
     delegates_to: str | None = None
-    # A sourced helper that runs the me3 command on a CALLER's behalf. It has no run of its own and
+    # A sourced helper that runs the me3 command on a caller's behalf. It has no run of its own and
     # no artifact dir; the caller owns the redirect, and each caller is audited separately.
     is_library: bool = False
-    # A launcher that DELIBERATELY leaves its artifacts single-slot in the game directory, with a
+    # A launcher that deliberately leaves its artifacts single-slot in the game directory, with a
     # stated reason. Not the same as clean and not the same as a gap: see `SINGLE_SLOT` below.
     single_slot: str | None = None
 
@@ -205,14 +205,14 @@ def _rust_sources() -> list[Path]:
 ENV_LOOKUP = re.compile(r'env::var(?:_os)?\(\s*"(ER_QUICKLOAD_[A-Z0-9_]+)"')
 # The fallback the resolver hands back when the env var is unset. Either a literal filename or a
 # `const` naming one -- both forms are in the tree, and reading only the literal form picked up an
-# unrelated string from a NEIGHBOURING function and reported it as a knob's default.
+# unrelated string from a neighbouring function and reported it as a knob's default.
 FALLBACK = re.compile(
     r'(?:join|PathBuf::from)\(\s*(?:"(?P<literal>[A-Za-z0-9._-]+\.(?:log|jsonl|json|txt|bin))"'
     r"|(?P<ident>[A-Z][A-Z0-9_]{3,}))\s*\)"
 )
 CONST_STR = r'const\s+{name}\s*:\s*&(?:\'static\s+)?str\s*=\s*"([^"]+)"'
 
-# THE SECOND SHAPE, AND THE REASON THERE IS ONE. Five writers had no knob at all, and the obvious
+# The second shape, and the reason there is one. Five writers had no knob at all, and the obvious
 # fix -- paste `input_trace_path()`'s six lines into each -- would have put five copies of the
 # GAME_DIR fallback in five crates, which is the duplication `er_game_base::log` exists to end.
 # They call the shared resolver instead, naming their own env var and default:
@@ -220,7 +220,7 @@ CONST_STR = r'const\s+{name}\s*:\s*&(?:\'static\s+)?str\s*=\s*"([^"]+)"'
 #     er_game_base::log::redirected_artifact_path("ER_QUICKLOAD_RELOAD_TRACE_PATH", LOG_PATH)
 #
 # It is also what keeps `er-reload-trace` inside `.auto/reload_trace_policy.rego`, which forbids
-# that crate from reading the environment itself. The knob is still declared AT THE WRITER, so this
+# that crate from reading the environment itself. The knob is still declared at the writer, so this
 # parse still reads the table out of the code rather than out of a list someone must remember to
 # update. A trailing comma is optional because rustfmt adds one whenever the call wraps.
 SHARED_RESOLVER = re.compile(
@@ -233,7 +233,7 @@ SHARED_RESOLVER = re.compile(
 def _resolver_body(text: str, start: int) -> str:
     """The rest of the function containing `start` -- up to the next column-0 `}`.
 
-    Bounding the search to ONE function is the whole correctness of this parse. An unbounded window
+    Bounding the search to one function is the whole correctness of this parse. An unbounded window
     reads across into the next function's string literals: it is how `ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH`
     came back with a default of `portrait-capture.bin`, which belongs to a different writer entirely.
     """
@@ -262,7 +262,7 @@ def _const_value(text: str, ident: str) -> str | None:
 
 
 def discover_knobs() -> list[Knob]:
-    """Every `ER_QUICKLOAD_*` env var the DLLs consult for an OUTPUT path, from the code itself."""
+    """Every `ER_QUICKLOAD_*` env var the DLLs consult for an output path, from the code itself."""
     found: dict[str, Knob] = {}
     for source in _rust_sources():
         text = source.read_text(encoding="utf-8", errors="replace")
@@ -291,8 +291,8 @@ def discover_knobs() -> list[Knob]:
     return sorted(found.values(), key=lambda knob: knob.env)
 
 
-# A LAUNCH IS A COMMAND, NOT A MENTION. Every shape below requires the me3 binary or the user
-# launcher to appear as something the shell RUNS -- `"$ME3" ... launch`, `"$PRODUCT_LAUNCHER"`,
+# A launch is a command, not a mention. Every shape below requires the me3 binary or the user
+# launcher to appear as something the shell runs -- `"$ME3" ... launch`, `"$PRODUCT_LAUNCHER"`,
 # `bash .../launch.sh`. Matching the bare words `launch -g eldenring` instead pulled in a usage
 # comment in a release-staging script and a printed hint string in a read-only diagnostic, and a
 # report padded with files that write nothing is how a real finding gets scrolled past.
@@ -306,7 +306,7 @@ LAUNCH_SHAPES = (
     re.compile(r"\slaunch\s[^\n]*(?:--steam-dir|-g\s+eldenring)|--steam-dir[^\n]*\slaunch\s"),
     re.compile(r'"\$(?:PRODUCT_LAUNCHER|LAUNCHER)"'),
     re.compile(r"(?:bash|exec|sh)\s+[^\n]*launch\.sh"),
-    # THE SHAPE THAT WAS MISSING. `scripts/me3-launch-lib.sh` exists so a caller does not have to
+    # The shape that was missing. `scripts/me3-launch-lib.sh` exists so a caller does not have to
     # spell the me3 command itself, and the effect was that three real launchers -- run-golden-
     # observe.sh, run-portrait-dll-standalone-smoke.sh, smoke-save-picker-dll.sh -- ran the game
     # through `me3_launch "$PROFILE"` and were invisible to this audit entirely. Not "reported and
@@ -314,14 +314,14 @@ LAUNCH_SHAPES = (
     # library's own `me3_launch() {` definition from matching its own helper.
     re.compile(r"^\s*me3_launch\s+[\"'$]"),
 )
-# THE SHELLS THAT WRITE A KNOBBED ARTIFACT. A launcher that loads none of them is not asked to
+# The shells that write a KNOBBED artifact. A launcher that loads none of them is not asked to
 # redirect anything: demanding it from a vanilla trace run or a release-staging script produces a
 # wall of findings about files those runs never create, and a wall of irrelevant findings is how a
 # real one gets skipped.
 #
 # It was `er_quickload.dll` alone until 2026-08-31, which was correct only while the product was the
 # only shell with redirect knobs. Giving the reload trace, both input-harness files, the diag harness
-# and the telemetry timeseries their own knobs made four MORE shells artifact writers, and
+# and the telemetry timeseries their own knobs made four more shells artifact writers, and
 # `run-armament-icons-smoke.sh` -- which loads the harness and telemetry DLLs and never mentions the
 # product -- was invisible to this audit until the list grew with them.
 ARTIFACT_WRITING_SHELLS = (
@@ -333,10 +333,10 @@ ARTIFACT_WRITING_SHELLS = (
     "er_diag_harness.dll",
 )
 
-# A `#` comment only TALKS about a launch.
+# A `#` comment only talks about a launch.
 NOT_A_COMMAND = re.compile(r"^\s*(?:#|//)")
 
-# ...and so does a HEREDOC BODY, which is data the script prints, not a command it runs.
+# ...and so does a HEREDOC body, which is data the script prints, not a command it runs.
 # `stage-autoload-release.sh` stages a release payload and launches nothing; it was reported for
 # all fourteen knobs because its `usage()` heredoc prints the line
 #
@@ -345,14 +345,14 @@ NOT_A_COMMAND = re.compile(r"^\s*(?:#|//)")
 # for the human reading `--help`. Fourteen findings about a script that writes no artifact is the
 # padding this file's own comment warns about: it is how a real finding gets scrolled past.
 #
-# Only LAUNCH DETECTION strips heredocs. `read_launcher` still reads the whole text for env
-# assignments, because a script that GENERATES a launcher writes that launcher's redirect lines
+# Only launch detection strips heredocs. `read_launcher` still reads the whole text for env
+# assignments, because a script that generates a launcher writes that launcher's redirect lines
 # inside a heredoc, and those are real.
 HEREDOC_START = re.compile(r"<<-?\s*(?P<quote>['\"]?)(?P<tag>[A-Za-z_][A-Za-z0-9_]*)(?P=quote)")
 
 
 def strip_heredoc_bodies(text: str) -> str:
-    """`text` with every heredoc BODY blanked, terminators and all other lines kept."""
+    """`text` with every heredoc body blanked, terminators and all other lines kept."""
     out: list[str] = []
     terminator: str | None = None
     for line in text.splitlines():
@@ -369,9 +369,9 @@ def strip_heredoc_bodies(text: str) -> str:
     return "\n".join(out)
 
 # Python launchers do not match the shell shapes: they spawn the launcher through `subprocess`, and
-# its path is a STRING LITERAL (`Path.home() / "Elden" / "launch.sh"`), so neither stripping string
+# its path is a string literal (`Path.home() / "Elden" / "launch.sh"`), so neither stripping string
 # literals nor keeping them classifies these correctly by regex. Ask the syntax tree instead: a
-# `subprocess` call whose arguments name the launcher IS the launch, and a docstring that mentions
+# `subprocess` call whose arguments name the launcher is the launch, and a docstring that mentions
 # `~/Elden/launch.sh` is not.
 SUBPROCESS_CALL = re.compile(r"^subprocess\.(?:Popen|run|call|check_call|check_output)$")
 LAUNCH_TARGET = re.compile(r"\bLAUNCHER\b|launch\.sh|\bME3_BIN\b")
@@ -397,7 +397,7 @@ def _python_launches(path: Path, text: str) -> bool:
 
 
 def is_launcher(text: str, path: Path | None = None) -> bool:
-    """Does this script start a run that WRITES these artifacts?
+    """Does this script start a run that writes these artifacts?
 
     Two conditions, both required, because either alone is wrong. It must start the game -- matched
     on the launch command, never on a filename, since a name rule ("anything called run-*.sh") both
@@ -425,8 +425,8 @@ def is_launcher(text: str, path: Path | None = None) -> bool:
     return any(shell in text for shell in ARTIFACT_WRITING_SHELLS)
 
 
-# THE SHARED PYTHON TABLE. Five Python launchers would otherwise each carry their own copy of a
-# fourteen-line env dict, and the bug that started all of this WAS a table with one line missing --
+# The shared Python table. Five Python launchers would otherwise each carry their own copy of a
+# fourteen-line env dict, and the bug that started all of this was a table with one line missing --
 # copying it five more times sets the same trap five more times. A launcher that uses
 # `scripts/er_artifact_env.py` gets credit for every knob in it, and `verify_shared_table` below
 # requires that table to cover every knob the DLLs honour, so the credit can never exceed the truth.
@@ -462,9 +462,9 @@ def read_launcher(path: Path) -> Launcher:
     launcher = Launcher(path=path)
     if path.suffix == ".py" and SHARED_TABLE_USE.search(text):
         launcher.sets |= shared_table_knobs()
-    # A knob counts as SET when it is assigned in a shell env (`X=...`), named as a Python mapping
+    # A knob counts as set when it is assigned in a shell env (`X=...`), named as a Python mapping
     # key (`"X": ...`), or exported into a PowerShell env (`$env:X = ...`). Comment lines are
-    # excluded: a script that only DISCUSSES a knob has not redirected anything.
+    # excluded: a script that only discusses a knob has not redirected anything.
     commands = "\n".join(
         line for line in text.splitlines() if not NOT_A_COMMAND.match(line)
     )
@@ -547,7 +547,7 @@ def inventory_rows(knobs: list[Knob]) -> list[tuple[str, str, str, str, str]]:
 def verify_recovered_knobs(knobs: list[Knob]) -> list[str]:
     """The artifacts that used to be unmovable must still have their knob.
 
-    Positive control on the fix itself. Without it, deleting a resolver would REDUCE the reported
+    Positive control on the fix itself. Without it, deleting a resolver would reduce the reported
     gap count -- the artifact stops being demanded of launchers, its rows drop out of the report --
     and a file writing back into the single-slot game directory would read as progress.
     """
@@ -686,7 +686,7 @@ def selftest() -> int:
     )
     for problem in recovered:
         print("         " + problem)
-    # NON-VACUITY. The check above must be capable of failing, or it is decoration on the one fact
+    # Non-VACUITY. The check above must be capable of failing, or it is decoration on the one fact
     # this whole task turned on. Drop a knob and it must go red.
     check(
         len(verify_recovered_knobs([k for k in knobs if k.default_name != "er-reload-trace.log"]))
@@ -728,7 +728,7 @@ def selftest() -> int:
         "the audit does not audit itself",
     )
 
-    # A launcher missing a knob must be REPORTED, and the same launcher with an exemption must not.
+    # A launcher missing a knob must be reported, and the same launcher with an exemption must not.
     synthetic = Launcher(path=Path("synthetic.sh"), sets=set())
     check(
         len(audit(knobs, [synthetic])) == len(knobs),
@@ -751,7 +751,7 @@ def selftest() -> int:
         "a delegates-to pointing at nothing is a failure, not a free pass",
     )
 
-    # THE SWEPT LAUNCHERS MUST STAY SWEPT. Frozen by name, because a regression here is silent:
+    # The swept launchers must stay swept. Frozen by name, because a regression here is silent:
     # dropping one env line puts that artifact back in the single-slot game directory and nothing
     # else in the repo notices.
     clean = {
@@ -770,15 +770,15 @@ def selftest() -> int:
         "run-product-continue-direct-probe.sh",
         "run-windows-proof-render-smoke.sh",
         # Added with the two loading-portrait knobs (2026-08-31): the smoke that reads them is the
-        # one launcher whose PASS bar depends on finding those exact two files.
+        # one launcher whose pass bar depends on finding those exact two files.
         "run-portrait-dll-standalone-smoke.sh",
         # Twenty-plus launches in one `--all` sweep, each of which used to write over the last.
         "sweep-dll-1170-runtime.py",
     ):
         check(expected in clean, f"{expected} still redirects every artifact out of GAME_DIR")
 
-    # THE STATED SINGLE-SLOT LAUNCHER. The shipped end-user helper deliberately redirects nothing,
-    # and until 2026-08-31 that was INVISIBLE here -- the generator writes its `me3 launch` inside
+    # The stated single-slot launcher. The shipped end-user helper deliberately redirects nothing,
+    # and until 2026-08-31 that was invisible here -- the generator writes its `me3 launch` inside
     # a heredoc string, so no launch shape matched and it appeared in no report at all. Absence
     # reads as compliance. It is now a declared exemption with a reason, which is a different thing
     # from clean and must keep printing as such.
@@ -805,9 +805,9 @@ def selftest() -> int:
         "...and an UNSTATED one still raises one per knob, so the marker is what does the work",
     )
 
-    # THE BACKLOG IS EMPTY, AND THAT HAS TO BE PROVEN RATHER THAN ASSUMED. It held 98 rows across
+    # The backlog is empty, and that has to be proven rather than assumed. It held 98 rows across
     # 13 launchers until 2026-08-31. A baseline that silently absorbed everything would turn this
-    # audit into a no-op, so an empty file is only acceptable while the STRICT audit -- the one that
+    # audit into a no-op, so an empty file is only acceptable while the strict audit -- the one that
     # ignores the baseline entirely -- also comes back with nothing.
     recorded = read_baseline()
     live_gaps = gap_keys(knobs, launchers)
@@ -837,7 +837,7 @@ def selftest() -> int:
     )
 
     # ---------------------------------------------------------------------------------------
-    # TWO CONSECUTIVE RUNS. The whole point, reduced to something that needs no game.
+    # Two consecutive runs. The whole point, reduced to something that needs no game.
     # ---------------------------------------------------------------------------------------
     with tempfile.TemporaryDirectory() as raw:
         root = Path(raw)
@@ -859,7 +859,7 @@ def selftest() -> int:
             "unredirected: run 1 is GONE after the second following launch -- the reported bug",
         )
 
-        # (b) THE HARNESS `rm -f`, which is worse: it drops TWO generations at once, because
+        # (b) the harness `rm -f`, which is worse: it drops two generations at once, because
         #     `begin_fresh_run` removes a stale `.prev` when the live file is absent.
         (game_dir / "er-quickload-continue-trace.log").unlink()
         simulate_run(game_dir, None, "RUN-4 EVIDENCE\n")
@@ -868,7 +868,7 @@ def selftest() -> int:
             "a pre-launch `rm -f` of the live file destroys the surviving `.prev` too",
         )
 
-        # (c) REDIRECTED, the fix. Two runs, two directories, nothing shared, nothing lost.
+        # (c) redirected, the fix. Two runs, two directories, nothing shared, nothing lost.
         run_one = root / "artifacts" / "run-1"
         run_two = root / "artifacts" / "run-2"
         simulate_run(game_dir, run_one, "RUN-1 EVIDENCE\n")
@@ -884,7 +884,7 @@ def selftest() -> int:
             "redirected: run 1's file was never rotated, because run 2 never touched its path",
         )
 
-        # (d) A CRASHED OR KILLED RUN. Nothing runs at teardown -- no copy, no reaper, no trap.
+        # (d) a crashed or killed run. Nothing runs at teardown -- no copy, no reaper, no trap.
         #     Redirected, everything written before the crash is already in the right place.
         run_three = root / "artifacts" / "run-3"
         simulate_run(game_dir, run_three, "RUN-3 PARTIAL EVIDENCE, then SIGKILL\n")
@@ -897,8 +897,8 @@ def selftest() -> int:
             "a crashed run's partial evidence survives the next launch with no teardown step",
         )
 
-        # (e) THE WHOLE INVENTORY, NOT ONE LOG. The counter this task is scored on is "how many of
-        #     a run's artifacts can the NEXT launch destroy", and the answer has to be zero for
+        # (e) the whole inventory, not one log. The counter this task is scored on is "how many of
+        #     a run's artifacts can the next launch destroy", and the answer has to be zero for
         #     every row of the table, not for the one file the original bug happened to be about.
         #     Three launches -- two normal, one killed mid-write with no teardown of any kind --
         #     and then every artifact of all three is read back.
@@ -954,17 +954,17 @@ def selftest() -> int:
             )
 
     # ---------------------------------------------------------------------------------------
-    # THE READER HALF, WHICH THE REDIRECT MAKES DANGEROUS.
+    # The reader half, which the redirect makes dangerous.
     #
     # Once nothing deletes the game-directory copy, it sits there complete and readable -- the
-    # PREVIOUS run's file. A monitor that resolves by existence at t=0 binds to it, counts its
+    # previous run's file. A monitor that resolves by existence at t=0 binds to it, counts its
     # lines, and scores a finished run as this one's; and because a stale file's mtime never
     # changes, a freshness check downstream then calls a perfectly healthy game frozen. Measured
     # 2026-08-31: a watcher did exactly this, declared world-stable at elapsed 0.0 s and tore down
     # a game that had not finished booting. So the mtime floor is not a refinement, it is the
     # other half of the fix, and it is exercised here in all four states a reader can meet.
     #
-    # `run-save-census-probe.sh resolve` is the SHELL path, not a re-implementation of the Python
+    # `run-save-census-probe.sh resolve` is the shell path, not a re-implementation of the Python
     # one: the launcher passes its redirects with an `env VAR=... me3` prefix, which never enters
     # the launcher's own environment, so its reader has to be handed the run directory explicitly.
     # Driving the real subcommand is what proves that wiring, quoting and argument order included.
@@ -1003,34 +1003,34 @@ def selftest() -> int:
             return out.stdout.strip()
 
         name = "er-save-disable-telemetry.json"
-        # (1) REDIRECT PENDING. The DLL has not written yet. The honest answer is the run
+        # (1) redirect pending. The DLL has not written yet. The honest answer is the run
         #     directory's not-yet-existing path: the caller reads nothing and waits.
         check(
             resolved(name) == str(run_dir / name),
             "reader, redirect pending: resolves to this run's path, which does not exist yet",
         )
-        # (2) STALE ONLY. The game directory holds the previous run's file and nothing else.
+        # (2) stale only. The game directory holds the previous run's file and nothing else.
         #     Returning it would score an ended run as this one -- the measured teardown bug.
         write(game_dir / name, '{"escaped_write_site_count": 3}\n', stale)
         check(
             resolved(name) == str(run_dir / name),
             "reader, stale only: the PREVIOUS run's game-directory file is refused, not read",
         )
-        # (3) ENV LOST. The redirect did not survive me3 -> Proton, so the DLL fell back to the
-        #     game directory -- and that file is THIS run's, by its mtime. Ignoring it would
+        # (3) ENV lost. The redirect did not survive me3 -> Proton, so the DLL fell back to the
+        #     game directory -- and that file is this run's, by its mtime. Ignoring it would
         #     report a healthy run as silent, which reads exactly like a broken feature.
         write(game_dir / name, '{"escaped_write_site_count": 0}\n', fresh)
         check(
             resolved(name) == str(game_dir / name),
             "reader, env-lost fallback: a game-directory file newer than the launch IS this run's",
         )
-        # (4) REDIRECT LIVE. Once the run directory has it, it wins outright.
+        # (4) redirect live. Once the run directory has it, it wins outright.
         write(run_dir / name, '{"escaped_write_site_count": 0}\n', fresh)
         check(
             resolved(name) == str(run_dir / name),
             "reader, redirect live: the run directory wins over the game directory",
         )
-        # NON-VACUITY on the floor itself: drop `newer_than` and state (2) silently returns the
+        # Non-VACUITY on the floor itself: drop `newer_than` and state (2) silently returns the
         # previous run's verdict. That is the whole bug, so the check must be able to fail.
         (run_dir / name).unlink()
         write(game_dir / name, '{"escaped_write_site_count": 3}\n', stale)
@@ -1182,7 +1182,7 @@ def main() -> int:
     new_gaps = [key for key in keys if key not in baseline]
     resolved = sorted(baseline - set(keys))
 
-    # THE BACKLOG IS PRINTED EVEN WHEN IT PASSES. A gate that says "ok" while 40 launchers still
+    # The backlog is printed even when it passes. A gate that says "ok" while 40 launchers still
     # write into a directory the next launch clears is the exact silence this audit was written to
     # break: it would read as "we captured everything".
     carried = sorted(key for key in keys if key in baseline)
@@ -1220,7 +1220,7 @@ def main() -> int:
             f"{len(resolved)} baseline entr(y/ies) no longer leak; drop them with "
             f"--write-baseline: {', '.join(resolved)}"
         )
-    # PRINTED ON SUCCESS, LIKE THE BACKLOG ABOVE, AND FOR THE SAME REASON. A stated single-slot
+    # Printed on success, like the backlog above, and for the same reason. A stated single-slot
     # launcher is not a clean one: its runs still overwrite each other beside `eldenring.exe`. It
     # was invisible here until 2026-08-31 -- absent from the report entirely, which reads as
     # compliance rather than as a decision somebody made.

@@ -1,17 +1,17 @@
 //! Detects a Seamless connection that has stopped progressing, so the reject loop can recover.
 //!
-//! POLICY (user, 2026-08-06, verbatim intent): the reject loop "never stops until they use the
+//! Policy (user, 2026-08-06, verbatim intent): the reject loop "never stops until they use the
 //! lynchpin again, and it should self recover from seamless connection stalls. Invasion connections
 //! should be reliably quick and for some reason, seamless doesn't auto-cancel its own connections
 //! during these edge cases."
 //!
-//! So this is a STALL DETECTOR, never a cap. It counts no attempts, bounds no total time, and has
+//! So this is a stall detector, never a cap. It counts no attempts, bounds no total time, and has
 //! no notion of giving up. The only thing it can conclude is "this particular handshake step has sat
 //! still far longer than one ever does", and the only thing it can ask for is the cancel the player
 //! could have pressed by hand -- after which the existing auto-search rearm carries on exactly as
 //! before. A watchdog that could end the loop would be the wrong shape whatever its threshold.
 //!
-//! WHICH STATES ARE TIMED, AND WHY THAT IS THE WHOLE DESIGN
+//! Which states are timed, and why that is the whole design
 //! -------------------------------------------------------
 //! Observed session walk for an invader:
 //!
@@ -20,13 +20,13 @@
 //!             -> 0x22 CANCELLING -> 0x23 -> 0x00 IDLE -> restart
 //! ```
 //!
-//! `SEARCHING` is UNBOUNDED BY NATURE -- it means "looking, nobody matched yet", and a player in a
+//! `SEARCHING` is UNBOUNDED by nature -- it means "looking, nobody matched yet", and a player in a
 //! quiet bracket can legitimately sit there for many minutes. Measured 2026-08-06: three consecutive
 //! filtered queries returned 0, 0, then 1 lobby. Timing that state would fire a stall on an
 //! perfectly healthy empty search, which is the single most obvious way to get this wrong.
 //!
 //! The handshake states are the opposite: measured `0x0d -> 0x15` in under 1s (n=10) and
-//! `0x22 -> 0x00` in 2s or less (n=8), with exactly ONE outlier where cancelling hung for 30s. That
+//! `0x22 -> 0x00` in 2s or less (n=8), with exactly one outlier where cancelling hung for 30s. That
 //! outlier is the failure this exists for, and the gap between 2s and 30s is where the threshold
 //! goes.
 //!
@@ -39,12 +39,12 @@ pub mod state {
     pub const IDLE: u32 = 0x00;
     pub const SEARCHING: u32 = 0x0d;
     /// Seamless's own "nobody matched, go round again" step. Part of the healthy idle cycle
-    /// `0x0e -> 0x11 -> 0x0d`, NOT a handshake -- see [`TIMED_STATES`] for what timing it cost.
+    /// `0x0e -> 0x11 -> 0x0d`, not a handshake -- see [`TIMED_STATES`] for what timing it cost.
     pub const RETRYING: u32 = 0x11;
     pub const CANCELLING: u32 = 0x22;
 }
 
-/// The ONLY states this detector times, listed because each one was measured to be brief.
+/// The only states this detector times, listed because each one was measured to be brief.
 ///
 /// # This is an allowlist, and it is an allowlist because a blocklist shipped and broke a live run
 ///
@@ -75,12 +75,12 @@ const TIMED_STATES: [u32; 5] = [
     0x23, // cancel settling
 ];
 
-// 0x15 (join data arrived) is DELIBERATELY ABSENT, and it used to be here.
+// 0x15 (join data arrived) is deliberately absent, and it used to be here.
 //
-// Judgement happens synchronously the moment join data lands, so a REJECT leaves 0x15 in zero
-// ticks. The only way the session dwells there is AFTER a match was KEPT -- and that dwell is the
+// Judgement happens synchronously the moment join data lands, so a reject leaves 0x15 in zero
+// ticks. The only way the session dwells there is after a match was kept -- and that dwell is the
 // player loading into the host's world, which takes far longer than any handshake. Timing it
-// cancelled a successful invasion five seconds after accepting it: the log read `KEEP 0x3c2a2400
+// cancelled a successful invasion five seconds after accepting it: the log read `keep 0x3c2a2400
 // (ExactBlock)` and then `connection stalled at state 0x15 for 5000ms -- cancelled it`, and from
 // the player's seat the invasion appeared and dismissed itself instantly (2026-08-06).
 //
@@ -90,7 +90,7 @@ const TIMED_STATES: [u32; 5] = [
 
 /// Whether a state is one we have measured to be brief, and may therefore time.
 ///
-/// Fails CLOSED on anything unrecognised: not timed, never cancelled.
+/// Fails closed on anything unrecognised: not timed, never cancelled.
 fn is_transient(state: u32) -> bool {
     TIMED_STATES.contains(&state)
 }
@@ -121,7 +121,7 @@ pub struct StallWatchdog {
     /// The state currently being timed, and the timestamp it was entered. `None` while resting in
     /// an untimed state.
     timing: Option<(u32, u64)>,
-    /// Set once a stall has been reported for the CURRENT entry into a state, so a single stall
+    /// Set once a stall has been reported for the current entry into a state, so a single stall
     /// produces a single cancel rather than one per poll. Cleared by any state change, because a
     /// state change is progress and the next stall is a new event.
     reported: bool,
@@ -141,7 +141,7 @@ impl StallWatchdog {
     /// Feed one observation. `now_ms` is any monotonic millisecond clock.
     ///
     /// Returns `Some(action)` exactly once per stalled state entry. Re-entering the same state
-    /// later is a NEW entry and can stall again -- which is the point, since a repeatedly stalling
+    /// later is a new entry and can stall again -- which is the point, since a repeatedly stalling
     /// handshake must be repeatedly recovered, not silently tolerated after the first time.
     pub fn observe(&mut self, state: u32, now_ms: u64) -> Option<StallAction> {
         match self.timing {
@@ -218,7 +218,7 @@ mod tests {
         );
     }
 
-    /// THE MOST OBVIOUS WAY TO GET THIS WRONG. `SEARCHING` means "nobody matched yet" and is
+    /// The most obvious way to get this wrong. `SEARCHING` means "nobody matched yet" and is
     /// unbounded; three consecutive live queries returned 0, 0, 1 on 2026-08-06. Timing it would
     /// fire on a healthy quiet bracket and cancel a search the player wanted to continue.
     #[test]
@@ -233,10 +233,10 @@ mod tests {
         }
     }
 
-    /// THE REGRESSION THIS MODULE SHIPPED, 2026-08-06, caught only by a live run.
+    /// The regression this module shipped, 2026-08-06, caught only by a live run.
     ///
     /// `0x11` is Seamless's own "found nobody, go round again" step -- the `0x0e -> 0x11 -> 0x0d`
-    /// cycle. The first version timed it because it was neither IDLE nor SEARCHING, cancelled it
+    /// cycle. The first version timed it because it was neither idle nor searching, cancelled it
     /// 31 times in one session, and the player could not match anyone at all while that build was
     /// loaded. The detector was worse than not existing.
     #[test]
@@ -252,7 +252,7 @@ mod tests {
     }
 
     /// The property, not the three states I happened to think of. Anything unmeasured must fail
-    /// closed -- the previous test suite asserted only that IDLE and SEARCHING were exempt, which
+    /// closed -- the previous test suite asserted only that idle and searching were exempt, which
     /// is precisely the belief that was wrong, so it passed while the bug shipped.
     #[test]
     fn every_state_outside_the_measured_set_is_left_alone() {
@@ -285,7 +285,7 @@ mod tests {
         }
     }
 
-    /// THE SECOND REGRESSION, 2026-08-06: a KEPT match was cancelled 5s after being accepted.
+    /// The second regression, 2026-08-06: a kept match was cancelled 5s after being accepted.
     ///
     /// `0x15` is where the session sits while the player loads into the host's world, which is far
     /// longer than any handshake. It must never be timed.
@@ -342,7 +342,7 @@ mod tests {
         }
     }
 
-    /// A step that is slow but still MOVING must not fire. The clock restarts on every transition,
+    /// A step that is slow but still moving must not fire. The clock restarts on every transition,
     /// so total elapsed across a handshake is irrelevant -- only time in one state matters. This is
     /// what makes the detector a stall detector rather than a disguised total-time cap.
     #[test]
@@ -355,7 +355,7 @@ mod tests {
         }
     }
 
-    /// One stall produces ONE cancel, not one per poll. The poll runs every frame; without this a
+    /// One stall produces one cancel, not one per poll. The poll runs every frame; without this a
     /// single stall would drive dozens of cancels.
     #[test]
     fn a_stall_fires_once_per_entry() {
@@ -371,7 +371,7 @@ mod tests {
         }
     }
 
-    /// ...but a LATER entry into the same state is a new event. A handshake that stalls every time
+    /// ...but a later entry into the same state is a new event. A handshake that stalls every time
     /// must be recovered every time; suppressing the second one would strand the player after the
     /// first recovery, which is exactly the "never stops" policy being violated.
     #[test]

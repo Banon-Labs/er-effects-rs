@@ -1,5 +1,5 @@
 // Loading-cover oracles: the stats panel, the portrait camera lever, the display/keepalive path,
-// swapchain-find attribution, the native-Windows overlay, and the BOOT-PROGRESS VIEW semaphores --
+// swapchain-find attribution, the native-Windows overlay, and the boot-progress view semaphores --
 // the cover window, its release, its absolute backstop, and the loading-screen portrait defect
 // detectors.
 //
@@ -23,13 +23,13 @@ fn boot_view_present_cover_failed(
 }
 
 fn write_loading_cover_oracles(body: &mut String) {
-    // REMOVED 2026-07-31 (er-effects-rs-56fx): oracle_tpf_texture_registered / _last_rescap /
+    // Removed 2026-07-31 (er-effects-rs-56fx): oracle_tpf_texture_registered / _last_rescap /
     // _bound / _failures / _last_error. All five counters had zero writers -- the TPF cover
     // texture path never reports through them -- and three carried sentinel initialisers
     // (ER_TPF_COVER_ERR_NONE and friends), so they emitted a plausible-looking value forever
     // rather than an obviously-absent 0. `oracle_tpf_texture_key` stays: it is a static string,
-    // not a counter. Re-add these WITH writers at the register/bind sites if that path is built.
-    // Stats-panel neutral-background wire-up oracles (memory-read telemetry, NOT screenshot). A
+    // not a counter. Re-add these with writers at the register/bind sites if that path is built.
+    // Stats-panel neutral-background wire-up oracles (memory-read telemetry, not screenshot). A
     // runtime watcher confirms the character render is blanked, each per-slot neutral bg registered
     // into the repos, and each visible face bind redirected to our key -- all without an image.
     // `stats_panel_enabled` == the render-blank / stats-panel product mode is active.
@@ -64,9 +64,9 @@ fn write_loading_cover_oracles(body: &mut String) {
         "oracle_stats_panel_last_error",
         STATS_PANEL_LAST_ERROR.load(Ordering::SeqCst),
     );
-    // Stats-panel NATIVE TEXT oracles (row-populate push design): native row fills observed,
+    // Stats-panel native text oracles (row-populate push design): native row fills observed,
     // successful ErStats pushes, and rejected pushes. subs>0 == the attribute line reached the
-    // GFX-edit `ErStats` field (rendered in MenuFont_01) in its OWN field; failures>0 with
+    // GFX-edit `ErStats` field (rendered in MenuFont_01) in its own field; failures>0 with
     // subs==0 == the 05_010 edit was not live (field missing) or SetText rejected the value.
     push_json_usize(
         body,
@@ -121,7 +121,7 @@ fn write_loading_cover_oracles(body: &mut String) {
         PROFILE_STATS_PUSH_STALE_LAST_VT.load(Ordering::SeqCst),
     );
     // Per-slot save-stats cache (bd er-effects-rs-l90): cache_state 1 == the live `.sl2` was read
-    // and parsed (each row shows ITS OWN character's attributes); 2 == read failed (fell back to
+    // and parsed (each row shows its own character's attributes); 2 == read failed (fell back to
     // the loaded character). decoded == how many of the 10 save slots held a real character.
     push_json_usize(
         body,
@@ -138,8 +138,8 @@ fn write_loading_cover_oracles(body: &mut String) {
         "oracle_profile_player_name_slot_decoded",
         PROFILE_SLOT_NAMES_DECODED.load(Ordering::SeqCst),
     );
-    // Bit N set == save slot N has a NAME but no decoded stat block, i.e. its Load Character row
-    // renders the merged header with an empty attribute line and no `WL`. Non-zero is a DEFECT,
+    // Bit N set == save slot N has a name but no decoded stat block, i.e. its Load Character row
+    // renders the merged header with an empty attribute line and no `WL`. Non-zero is a defect,
     // not a state: it is the semaphore for the 2026-09-01 report ("the row for the slot we
     // currently have loaded shows none of the stats"), which reached the user as a visual
     // observation because `decoded`/`named` were published as two independent counts and nothing
@@ -149,14 +149,14 @@ fn write_loading_cover_oracles(body: &mut String) {
         "oracle_stats_text_slot_named_without_stats_mask",
         PROFILE_SLOT_STATS_NAMED_WITHOUT_STATS_MASK.load(Ordering::SeqCst),
     );
-    // Bit N set == live `CS::ProfileSummary` slot N was marked OCCUPIED while holding something
+    // Bit N set == live `CS::ProfileSummary` slot N was marked occupied while holding something
     // that is not a character, sampled at a moment when no save picker owned the rows. That is the
     // RAM signature of `er-effects-rs-fmy6`: the in-game picker renders by writing its browse-row
-    // labels INTO these game-owned records, and a restore that does not run leaves `[..] EldenRing`
+    // labels into these game-owned records, and a restore that does not run leaves `[..] EldenRing`
     // / `[ new ]` where a character name belongs -- which the user then reads off a loading screen.
-    // Non-zero is a DEFECT, not a state, and it is STICKY (`fetch_or`) because the per-frame sweep
+    // Non-zero is a defect, not a state, and it is sticky (`fetch_or`) because the per-frame sweep
     // heals an orphaned stomp within a frame: a clearable counter would read 0 in the very run that
-    // proved the bug. Read it WITH `..._scans`, which distinguishes "checked and clean" from
+    // proved the bug. Read it with `..._scans`, which distinguishes "checked and clean" from
     // "never checked".
     push_json_usize(
         body,
@@ -232,8 +232,8 @@ fn write_loading_cover_oracles(body: &mut String) {
         "oracle_profile_cam_last_matrix_ok",
         PROFILE_CAM_LAST_MATRIX_OK.load(Ordering::SeqCst) != 0,
     );
-    // DISPLAY path (keepalive): the loading-screen image refreshes per-frame only if the
-    // DISPLAY path (keepalive): the loading-screen image follows the cursor per-frame only if the
+    // Display path (keepalive): the loading-screen image refreshes per-frame only if the
+    // display path (keepalive): the loading-screen image follows the cursor per-frame only if the
     // Present overlay composites + re-uploads each frame. present_hook_hits = Present detour frames;
     // overlay_draw_hits = backbuffer composites; overlay_reuploads = per-frame texture rebuilds from a
     // version-bumped LOADING_BG_PORTRAIT_RGBA (the displayed portrait refreshed, not frozen).
@@ -255,7 +255,7 @@ fn write_loading_cover_oracles(body: &mut String) {
     // Swapchain-find reject attribution (present_overlay.rs FIND_STAGE_*): stage 1-4 = chain link
     // null, 5-9 = candidate rejected (6=vt not module-backed, 7=vt in game exe, 8=stability wait,
     // 9=QI rejected), 10/11 = accepted (exact vtable match / QI fallback). Added after the
-    // 2026-07-15 native-Windows runs where an opaque "chain miss" hid WHICH predicate refused the
+    // 2026-07-15 native-Windows runs where an opaque "chain miss" hid which predicate refused the
     // real swapchain for three full probes.
     push_json_usize(
         body,
@@ -307,7 +307,7 @@ fn write_loading_cover_oracles(body: &mut String) {
         "oracle_present_backbuffer_format",
         PRESENT_BACKBUFFER_FORMAT.load(Ordering::SeqCst),
     );
-    // Presents where we skipped ALL compositing because the now-loading display window had not opened
+    // Presents where we skipped all compositing because the now-loading display window had not opened
     // yet -- the pure-passthrough gate that keeps our GPU work out of the fragile early-boot crash
     // window on native Windows (er-effects-rs-n4x). High during boot, stops once now-loading opens.
     push_json_usize(
@@ -316,7 +316,7 @@ fn write_loading_cover_oracles(body: &mut String) {
         PRESENT_COMPOSITE_EARLY_SKIPS.load(Ordering::SeqCst),
     );
     // Native-Windows loading overlay (separate window + own D3D12 device, er-effects-rs-8jz):
-    // stage = how far init got (10 = render loop live); frames = frames presented on OUR swapchain
+    // stage = how far init got (10 = render loop live); frames = frames presented on our swapchain
     // (proof the isolated overlay is rendering); show = current visibility request from loading state.
     push_json_usize(
         body,
@@ -352,10 +352,10 @@ fn write_loading_cover_oracles(body: &mut String) {
     // rendered with. Split into `portrait_framing_oracles.rs` because this file has no room left
     // under the hard size gate; see that file's header for what each key answers.
     write_portrait_framing_oracles(body);
-    // BOOT-PROGRESS VIEW semaphores: draw_hits = strip composites actually reaching the backbuffer
+    // Boot-progress view semaphores: draw_hits = strip composites actually reaching the backbuffer
     // (the pre-Continue black frames are covered); last_permille = displayed progress; milestone_mask/
-    // idx = which boot semaphores latched (bit order: BOOT, GAME, OFFLINE, TITLE, MENU, CONTINUE,
-    // LOADING); stopped = the handoff to the loading-portrait window fired.
+    // idx = which boot semaphores latched (bit order: Boot, game, offline, title, menu, continue,
+    // loading); stopped = the handoff to the loading-portrait window fired.
     push_json_usize(
         body,
         "oracle_boot_view_draw_hits",
@@ -376,7 +376,7 @@ fn write_loading_cover_oracles(body: &mut String) {
         "oracle_boot_view_milestone_idx",
         BOOT_VIEW_MILESTONE_IDX.load(Ordering::SeqCst),
     );
-    // LOAD EPOCH identity (bd er-effects-rs-ok8d): seq increments on every bar rearm, kind selects
+    // Load epoch identity (bd er-effects-rs-ok8d): seq increments on every bar rearm, kind selects
     // which phase sequence the bar publishes (0 = process boot, 1 = character reload). Together
     // they make "did the bar actually start a fresh epoch, with the right phase set?" a RAM oracle
     // instead of something only inferable from the debug log.
@@ -430,15 +430,15 @@ fn write_loading_cover_oracles(body: &mut String) {
         BOOT_VIEW_DARK_GAP_LAST_NATIVE_HITS.load(Ordering::SeqCst),
     );
     // Cover-window measurability (bd er-effects-rs-dpf6 Phase 1): why the cover last stopped
-    // (0 armed/none, 1 release-fade, 2 fps-bail, 3 can-move world handoff, 4 ABSOLUTE
+    // (0 armed/none, 1 release-fade, 2 fps-bail, 3 can-move world handoff, 4 absolute
     // BACKSTOP), the last window's rearm->stop duration, and how many times the fps-bail was
-    // resumed by a fresh publish. Reason 4 is the cover having FAILED, not having worked.
+    // resumed by a fresh publish. Reason 4 is the cover having failed, not having worked.
     push_json_usize(
         body,
         "oracle_boot_view_stop_reason",
         er_telemetry_core::counters::BOOT_VIEW_STOP_REASON.load(Ordering::SeqCst),
     );
-    // ABSOLUTE COVER BACKSTOP (user report 2026-08-30). `releases` MUST stay 0: any nonzero
+    // Absolute cover BACKSTOP (user report 2026-08-30). `releases` must stay 0: any nonzero
     // value means a cover window had no reachable exit and had to be torn down by force, which
     // is a defect to investigate (start at the CS::LoadingScreen hook install, not the cover).
     // `trigger` 1 = the world was demonstrably live under an opaque cover, 2 = the window
@@ -458,8 +458,8 @@ fn write_loading_cover_oracles(body: &mut String) {
         "oracle_boot_view_backstop_trigger",
         er_telemetry_core::counters::BOOT_VIEW_BACKSTOP_TRIGGER.load(Ordering::SeqCst),
     );
-    // Cover END-CONDITION health (er-effects-rs-drb7). semantic_releases should equal the load
-    // window count; the two latches say WHICH half is missing when it does not.
+    // Cover end-condition health (er-effects-rs-drb7). semantic_releases should equal the load
+    // window count; the two latches say which half is missing when it does not.
     push_json_usize(
         body,
         "oracle_boot_view_semantic_releases",
@@ -481,7 +481,7 @@ fn write_loading_cover_oracles(body: &mut String) {
         er_telemetry_core::counters::BOOT_VIEW_RELEASE_READY_MS.load(Ordering::SeqCst),
     );
     // q6vk character-load gate. held_for_confirm > 0 proves the gate engaged on a switch;
-    // before_confirm MUST stay 0 -- a release without its character load is the defect back.
+    // before_confirm must stay 0 -- a release without its character load is the defect back.
     push_json_usize(
         body,
         "oracle_boot_view_release_held_for_confirm",
@@ -737,7 +737,7 @@ fn write_loading_cover_oracles(body: &mut String) {
         "oracle_loading_bg_portrait_rgba_version",
         LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst),
     );
-    // LOADING-SCREEN PORTRAIT BUG SEMAPHORES (2026-07-04). Detection runs at CAPTURE time
+    // Loading-screen portrait bug SEMAPHORES (2026-07-04). Detection runs at capture time
     // (`note_ls_portrait_capture`, called wherever a portrait RGBA is stored) so a transient
     // wrong-source frame -- our neutral texture (RGB 30,28,26) flashing in right after Continue (Bug
     // B), or a too-small 256px head (Bug A) -- cannot slip between telemetry writes. Here we just
@@ -772,10 +772,10 @@ fn write_loading_cover_oracles(body: &mut String) {
         "oracle_ls_portrait_rejected_publishes",
         LS_PORTRAIT_REJECTED_PUBLISHES.load(Ordering::SeqCst),
     );
-    // Reject ATTRIBUTION (er-effects-rs-k979). The bare count above cannot say whether the
+    // Reject attribution (er-effects-rs-k979). The bare count above cannot say whether the
     // neutral gate was doing its job or the pipeline broke. `_after_window_publish` is the one
     // a proof should gate on; `_before_window_publish` is warm-up and expected. Both are scoped
-    // to the CURRENT window -- the version counter they derive from is process-cumulative.
+    // to the current window -- the version counter they derive from is process-cumulative.
     push_json_usize(
         body,
         "oracle_ls_portrait_rejects_before_window_publish",

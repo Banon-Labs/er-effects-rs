@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Bracket an unmapped 1.16.2 RVA between its nearest MAPPED neighbours in the signature map.
+"""Bracket an unmapped 1.16.2 RVA between its nearest mapped neighbours in the signature map.
 
 `map-rvas-1162-to-1170.py` answers "where does this signature re-occur"; when the body changed
 enough that no signature is unique, it says nothing at all. But 1.17 moved code in RUNS: a
 contiguous stretch of functions shifts by one delta, because the insertion that moved them sits
-before the whole run. So a target with mapped neighbours on BOTH sides at the SAME delta is
+before the whole run. So a target with mapped neighbours on both sides at the same delta is
 bracketed: the only way for the target to sit elsewhere is for the patch to have moved it out of
 its own neighbourhood and moved something else in, which the .pdata ordering would show.
 
-A bracket is a CANDIDATE like any other -- it must still be byte-verified. What it buys is a
+A bracket is a candidate like any other -- it must still be byte-verified. What it buys is a
 single address to verify instead of nine shape matches to choose between.
 
-USAGE
+Usage
     python3 scripts/bracket-rva-1170.py 0x14067a1c0 [0x...]
     python3 scripts/bracket-rva-1170.py --neighbours 6 0x14067a1c0
 """

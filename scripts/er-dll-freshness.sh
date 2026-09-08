@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # "Is this DLL the code I am about to test?" -- the launch-time half of er-dll-provenance.py.
 #
-# WHY `[[ -f "$DLL" ]]` WAS NEVER A GATE
+# Why `[[ -f "$DLL" ]]` was never a gate
 # --------------------------------------
 # Every .me3 profile in this repo points its `[[natives]]` entries straight at
-# target/<triple>/release/*.dll. There is no staging copy anywhere, so "staging" IS "building",
+# target/<triple>/release/*.dll. There is no staging copy anywhere, so "staging" is "building",
 # and the only thing between a run and week-old code is a check made at launch time. Existence
 # is not that check, because the stale DLL from last week exists. `cargo xwin build --release`
 # honours `default-members = ["crates/er-quickload"]`, so it exits 0 in a fraction of a second
@@ -12,9 +12,9 @@
 # evidence for code that is not in the tree, which is indistinguishable from the feature not
 # working. That is worse than not running at all, so this refuses.
 #
-# WHY NOT MTIME / THE PE TIMESTAMP
+# Why not MTIME / the PE TIMESTAMP
 # --------------------------------
-# Because cargo is RIGHT to skip relinking a crate whose forward dependency closure has not
+# Because cargo is right to skip relinking a crate whose forward dependency closure has not
 # changed: a DLL two days older than its siblings can be perfectly current. A timestamp
 # comparison therefore manufactures false staleness, and a gate that cries wolf is a gate people
 # learn to route around -- the exact failure this exists to prevent. The sound test is a content
@@ -25,11 +25,11 @@
 #     source "$REPO_ROOT/scripts/er-dll-freshness.sh"
 #     require_fresh_dlls "$PRODUCT_DLL" "$HARNESS_DLL" || exit 3
 #
-# Callers pass PATHS. The cargo package each artifact belongs to is resolved from
+# Callers pass paths. The cargo package each artifact belongs to is resolved from
 # scripts/me3-dll-list.py -- the single source of truth for which cdylibs this workspace ships --
 # so no caller keeps a second copy of the package->filename map (four crates override [lib] name,
 # so that map cannot be derived by swapping dashes for underscores). An artifact this workspace
-# does not build is a REFUSAL rather than a skip: guessing which crate a stray DLL came from is
+# does not build is a refusal rather than a skip: guessing which crate a stray DLL came from is
 # how an unchecked binary gets into a run.
 #
 # There is deliberately no bypass flag. The only way past this is to rebuild:
@@ -66,7 +66,7 @@ er_dll_package_for() {
 	printf '%s\n' "$pkg"
 }
 
-# require_fresh_dlls <path>... -> 0 only when EVERY artifact verifies against this tree.
+# require_fresh_dlls <path>... -> 0 only when every artifact verifies against this tree.
 # On any failure it prints one loud block naming every offender and the exact rebuild command,
 # then returns 3 (matching er-dll-provenance.py's "stale is a verdict, not an error" status).
 require_fresh_dlls() {
@@ -115,7 +115,7 @@ require_fresh_dlls() {
 }
 
 # ---------------------------------------------------------------------------------------------
-# Executed directly: self-test. Exercises BOTH verdicts against copies in a temp dir, so it needs
+# Executed directly: self-test. Exercises both verdicts against copies in a temp dir, so it needs
 # neither a game nor cargo, and never touches the real target/ sidecars. A gate nobody has
 # watched refuse is not a gate.
 # ---------------------------------------------------------------------------------------------
@@ -126,7 +126,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 	}
 
 	_erdf_ok=1
-	# Assertions are FUNCTIONS so their status is a command status. Chaining bare `[[ ]]` and
+	# Assertions are functions so their status is a command status. Chaining bare `[[ ]]` and
 	# then reading `$?` is shellcheck SC2319, and it is a real trap rather than pedantry: `$?`
 	# silently becomes the status of the last condition instead of the whole assertion.
 	_erdf_is() { [[ "$1" == "$2" ]]; }
@@ -142,12 +142,12 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 	}
 
 	# er-crash-logging has the smallest forward closure of the shipped shells, so its source
-	# hash is the cheapest to recompute; any built DLL would do. A REAL one is required, and a
+	# hash is the cheapest to recompute; any built DLL would do. A real one is required, and a
 	# placeholder file was tried and does not work: `er-dll-provenance.py write` fingerprints the
-	# artifact's CODE through `dll-code-fingerprint.py`, which parses the PE header and raises on
+	# artifact's code through `dll-code-fingerprint.py`, which parses the PE header and raises on
 	# anything that is not one.
 	#
-	# SO THE ORDER MATTERS, and check.sh now runs this AFTER `check-rust-build.sh` links the 26
+	# So the order matters, and check.sh now runs this after `check-rust-build.sh` links the 26
 	# shells rather than ~900 lines before it. Measured 2026-09-01: in a fresh agent worktree --
 	# empty target/, nothing built yet -- this exited 1 with "no built DLL" while the change under
 	# test was fine, red at check.sh line 1643 for want of an artifact produced at line 1660. A
@@ -187,7 +187,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 	require_fresh_dlls "$_erdf_copy" >/dev/null 2>&1
 	_erdf_check "$?" "the same DLL PROCEEDS once its provenance matches the tree"
 
-	# 4. Staleness forged through the provenance mechanism itself: move the RECORDED source hash
+	# 4. Staleness forged through the provenance mechanism itself: move the recorded source hash
 	#    off the tree. Deleting the DLL would only re-prove the existence check being replaced.
 	python3 -c 'import json,sys
 p = sys.argv[1]

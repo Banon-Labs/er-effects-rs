@@ -2,21 +2,21 @@
 """What would the generated 1.16.2 -> 1.17 address map contain if a ledger row changed?
 
 `crates/er-game-base/build.rs` turns four TSV ledgers into two tables -- `VERIFIED_1162_TO_1170`
-(may be CALLed or READ) and `DETOUR_SAFE_1162_TO_1170` (may additionally be hooked). The rules it
-applies are not obvious: most verdicts that fall short of a detour are dropped from BOTH tables
+(may be CALLed or read) and `DETOUR_SAFE_1162_TO_1170` (may additionally be hooked). The rules it
+applies are not obvious: most verdicts that fall short of a detour are dropped from both tables
 rather than merely denied one, `CALLABLE_ONLY_VERDICTS` is the single exception that reaches the
-CALL map alone, and one `DIVERGES` row is subtracted from both tables ACROSS ledgers.
+call map alone, and one `DIVERGES` row is subtracted from both tables across ledgers.
 
 So "what does this ledger edit actually do" cannot be answered by reading the diff, and answering
 it by rebuilding means a cross-compile per scenario -- and mutating a tracked ledger to measure.
 This re-implements `emit_address_map` and counts, which makes a verdict-policy decision measurable
 before it is taken.
 
-IT IS NOT TRUSTED ON ITS OWN SAY-SO. `--against <address_map_1170.rs>` compares the simulation to
+It is not trusted on its own say-so. `--against <address_map_1170.rs>` compares the simulation to
 a table cargo really generated and fails on any difference, so a drift in build.rs's rules shows
 up as a red comparison rather than as a confident wrong number.
 
-USAGE
+Usage
     python3 scripts/simulate-1170-address-map.py
     python3 scripts/simulate-1170-address-map.py --verified <alternative verified.tsv>
     python3 scripts/simulate-1170-address-map.py --against target/.../out/address_map_1170.rs
@@ -34,9 +34,9 @@ BUILD_RS = os.path.join(ROOT, "crates", "er-game-base", "build.rs")
 
 
 def build_rs_rules(path=BUILD_RS):
-    """The admission rules READ OUT OF `build.rs`, not transcribed from it.
+    """The admission rules read out of `build.rs`, not transcribed from it.
 
-    Transcribing them is how this tool would lie. MEASURED 2026-08-30, within an hour of the first
+    Transcribing them is how this tool would lie. Measured 2026-08-30, within an hour of the first
     version being written: a sibling added the verdicts `IDENTICAL-WHOLE` and `IDENTICAL-LEAF`, and
     a hard-coded copy of the old list silently dropped 295 rows and reported the detour map as 42
     instead of 374 -- a confident number, wrong by nine-fold, out of a tool whose whole job is to be
@@ -46,8 +46,8 @@ def build_rs_rules(path=BUILD_RS):
     floor = re.search(r"MIN_VERIFIED_INSNS: u32 = (\d+)", text)
     exhaustive = re.search(r"EXHAUSTIVE_VERDICTS: \[&str; \d+\] = \[([^\]]*)\]", text)
     patch_site = re.search(r"PATCH_SITE_VERDICTS: \[&str; \d+\] = \[([^\]]*)\]", text)
-    # REQUIRED, not optional-with-a-default. A missing list read as an empty one would silently
-    # simulate the world as it was before the CALL-only verdict existed -- the same class of
+    # Required, not optional-with-a-default. A missing list read as an empty one would silently
+    # simulate the world as it was before the call-only verdict existed -- the same class of
     # confident wrong number the hard-coded verdict list produced within an hour of this file
     # being written. Failing closed makes a build.rs rename a red tool, not a quiet undercount.
     callable_only = re.search(r"CALLABLE_ONLY_VERDICTS: \[&str; \d+\] = \[([^\]]*)\]", text)
@@ -94,7 +94,7 @@ def rows(path):
 
 
 def detourable_pairs(path):
-    """Rows good enough to carry a detour -- and, from the verified table, to seed the CALL map."""
+    """Rows good enough to carry a detour -- and, from the verified table, to seed the call map."""
     out = []
     for line in rows(path):
         fields = line.split("\t")
@@ -124,7 +124,7 @@ def detourable_pairs(path):
 
 
 def callable_only_pairs(path):
-    """Rows a verdict table admits to the CALL map and to NOTHING else.
+    """Rows a verdict table admits to the call map and to nothing else.
 
     Its own function, mirroring `build.rs::callable_only_pairs` -- which is also its own function
     there, and for the same reason: the detour set must be reachable only through
@@ -169,9 +169,9 @@ def quarantined(path):
 
 def emit(verified=VERIFIED):
     """`(call_rows, detour_rows)`, each sorted and deduplicated by source RVA."""
-    # `detour` is taken from `detourable_pairs` BEFORE the callable-only rows join `call`. The
+    # `detour` is taken from `detourable_pairs` before the callable-only rows join `call`. The
     # old `list(call)` was correct only while the two seeds were the same set; they are not, and
-    # copying `call` after the extend below would hand every CALL-only row a detour.
+    # copying `call` after the extend below would hand every call-only row a detour.
     detour = detourable_pairs(verified) + detourable_pairs(NEEDED_VERIFIED)
     call = detourable_pairs(verified) + callable_only_pairs(verified)
     seeded = {old for old, _ in call}

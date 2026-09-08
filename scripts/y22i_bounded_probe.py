@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""y22i (native Windows) agent-owned BOUNDED probe. User authorized self-driving 2026-07-15.
+"""y22i (native Windows) agent-owned bounded probe. User authorized self-driving 2026-07-15.
 
 Launches me3 offline, waits for in-world autoload of char #1, watches for PAB->run_post
-activity, then HARD-tears-down at the cap. RAM/log oracles only; no fabricated input here.
-Direct me3 launch (like the live launcher), NOT the autoresearch run_experiment path.
+activity, then hard-tears-down at the cap. RAM/log oracles only; no fabricated input here.
+Direct me3 launch (like the live launcher), not the autoresearch run_experiment path.
 
 Readiness is process-exit driven (no time.sleep): each poll blocks on the me3 handle with a
-bounded <=30s timeout, so it returns EARLY the instant me3/game exits and otherwise paces the
+bounded <=30s timeout, so it returns early the instant me3/game exits and otherwise paces the
 loop deterministically. Every subprocess call carries an explicit <=30s timeout.
 
 Usage: python3 scripts/y22i_bounded_probe.py [hard_cap_seconds]
@@ -32,15 +32,15 @@ GAMEDIR = os.environ.get(
     str(Path.home() / ".local/share/Steam/steamapps/common/ELDEN RING/Game"),
 )
 
-# WHERE THIS RUN'S ARTIFACTS ACTUALLY ARE.
+# Where this run'S artifacts actually are.
 #
-# Launchers redirect the DLL's per-run artifacts into the run's OWN directory (`ER_QUICKLOAD_*_PATH`)
-# because a game-directory artifact is SINGLE-SLOT: `er_game_base::log::begin_fresh_run` renames
+# Launchers redirect the DLL's per-run artifacts into the run's own directory (`ER_QUICKLOAD_*_PATH`)
+# because a game-directory artifact is single-SLOT: `er_game_base::log::begin_fresh_run` renames
 # `<name>` to `<name>.prev` on the first write of each process, so two launches lose the run before
-# last. A reader pinned to the game directory therefore finds NOTHING for a redirected run and
+# last. A reader pinned to the game directory therefore finds nothing for a redirected run and
 # reports a perfectly healthy run as silent -- a false negative indistinguishable from a broken
 # feature, which is the more dangerous half of that change. `resolve_artifact` looks in the run
-# directory first and falls back to the game directory, by EXISTENCE, so both cases are read.
+# directory first and falls back to the game directory, by existence, so both cases are read.
 
 
 def LOG():
@@ -93,7 +93,7 @@ print(f"me3 launched pid={p.pid}; bounded cap={HARD_CAP}s", flush=True)
 
 t0 = time.time(); in_world_at = None; appeared = False; base_off = run_start_offset()
 try:
-    # Phase 1: wait for eldenring.exe to APPEAR; capture the fresh log run offset once it does.
+    # Phase 1: wait for eldenring.exe to appear; capture the fresh log run offset once it does.
     while time.time() - t0 < min(40, HARD_CAP):
         paced_wait(p, POLL_SECS)
         if up("eldenring.exe"):

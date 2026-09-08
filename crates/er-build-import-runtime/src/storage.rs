@@ -4,7 +4,7 @@
 //!
 //! Two reasons, and only the second one is about pots.
 //!
-//! **The build is a statement about the CHARACTER, not about the backpack.** A grant reconciles
+//! **The build is a statement about the character, not about the backpack.** A grant reconciles
 //! to a target -- "this character has three Fire Pots" -- by measuring what is held and adding the
 //! shortfall. Until now "what is held" meant the carried inventory alone, so an item sitting in
 //! the player's storage box was invisible and a second copy was minted beside it. Asking the box
@@ -37,7 +37,7 @@
 //! # The two ways this corrupts a save if it is written carelessly
 //!
 //! 1. **`reassignQuickSlot` is directional.** When set, the tail of
-//!    `TransferItemBetweenInventoryDatas` writes the DESTINATION index into the main player's
+//!    `TransferItemBetweenInventoryDatas` writes the destination index into the main player's
 //!    quick-slot table. Setting it while depositing points the player's quickbar at a
 //!    storage-box index, and that dangling reference persists into the save. It is `false` for
 //!    [`Storage::deposit`] and `true` for [`Storage::pull`], and the two are separate functions
@@ -47,8 +47,8 @@
 //!    method here re-resolves `GetItemInventoryIdx` immediately before its own transfer and never
 //!    accepts an index from a caller.
 //!
-//! And one that does not corrupt a save but does lose an item's slot: an EQUIPPED entry is never
-//! deposited. `EquipGameData.equipmentItemIdxList` (`+0x8`, `int[22]`) holds inventory INDICES,
+//! And one that does not corrupt a save but does lose an item's slot: an equipped entry is never
+//! deposited. `EquipGameData.equipmentItemIdxList` (`+0x8`, `int[22]`) holds inventory indices,
 //! so removing an entry a ChrAsm slot still names leaves that slot pointing at a shifted or freed
 //! one. `Storage::is_equipped_index` is the same scan `er-better-refills` runs before its own
 //! deposit.
@@ -63,22 +63,22 @@ use er_game_base::rva::{
 /// `GameDataMan::main_player_game_data`, read as a raw pointer rather than the typed `OwnedPtr`
 /// upstream declares, because before a character is loaded the slot really is null.
 ///
-/// MEASURED, not taken from that declaration. `CS::GameDataMan::GetMainPlayerGameData`
+/// Measured, not taken from that declaration. `CS::GameDataMan::GetMainPlayerGameData`
 /// (`0x140e9fc30`) is a twelve-byte leaf whose whole body is
 /// `mov rax,[rip+GLOBAL_GameDataMan] ; mov rax,[rax+0x8] ; ret` -- the field's identity in one
 /// instruction. It has not moved: `CS::GameData::GameData(GameDataMan*)`, the constructor
 /// (`0x140254680`, 1.17 `0x140254650`), aligns 351/351 instructions across the two de-Arxan'd
-/// images with 45 `this`-relative offsets and ZERO moved, `0x8` among them; `~GameDataMan`
+/// images with 45 `this`-relative offsets and zero moved, `0x8` among them; `~GameDataMan`
 /// (`0x140254d40`, 1.17 `0x140254d10`) aligns 359/359 and agrees. Re-measured every run by
 /// `scripts/check-object-field-offsets-1170.py`.
 ///
 /// Same value and same reason as `grant::GAME_DATA_MAN_PLAYER_OFFSET`; it is repeated here rather
-/// than shared because this module's use of it is a NULL CHECK on the engine's behalf --
+/// than shared because this module's use of it is a NULL check on the engine's behalf --
 /// `GetMainPlayerStorageBoxInventory` dereferences the slot without checking it -- not a walk to
 /// `EquipGameData`.
 const GAME_DATA_MAN_PLAYER_OFFSET: usize = 0x08;
 
-/// `EquipGameData.equipmentItemIdxList: int[22]` -- INVENTORY INDICES of the worn loadout.
+/// `EquipGameData.equipmentItemIdxList: int[22]` -- Inventory indices of the worn loadout.
 ///
 /// Confirmed in the 1.16.2 dump's `EquipGameData` structure (`equipmentItemIdxList int[22]` at
 /// offset 8, in a 0x4b0-byte object). `er-better-refills` has shipped the same constant since its
@@ -118,7 +118,7 @@ impl Storage {
     /// Resolve every native and both inventory pointers, or refuse.
     ///
     /// `None` means the storage rungs are inert for this session and the caller should say so
-    /// rather than guessing -- it does NOT mean the grant cannot proceed.
+    /// rather than guessing -- it does not mean the grant cannot proceed.
     ///
     /// # Two DLPanics this rules out before calling, rather than after
     ///
@@ -137,7 +137,7 @@ impl Storage {
             return None;
         }
 
-        // ALL SEVEN BEFORE ANY OF THEM RUNS. This module moves items between two inventories, and
+        // All seven before any of them runs. This module moves items between two inventories, and
         // a half-finished move is worse than none: the source has already been decremented.
         let resolved = crate::native::resolve_all(
             module_base,
@@ -252,7 +252,7 @@ impl Storage {
         })
     }
 
-    /// How many of `item_id` the CARRIED inventory would actually accept right now.
+    /// How many of `item_id` the carried inventory would actually accept right now.
     ///
     /// This is the question a pot cap answers `0` to while every other signal says the add will
     /// work. `EquipInventoryDat::GetAddOrRemoveAmount` is a pure query -- it reads the entry and
@@ -268,7 +268,7 @@ impl Storage {
         unsafe { (self.get_add_or_remove_amount)(self.carried, &raw mut id, wanted) }
     }
 
-    /// How many of `item_id` the CARRIED inventory holds. Negative answers mean "cannot say".
+    /// How many of `item_id` the carried inventory holds. Negative answers mean "cannot say".
     ///
     /// # Safety
     ///
@@ -279,7 +279,7 @@ impl Storage {
         unsafe { (self.get_quantity)(self.carried, &raw mut id) }.max(0)
     }
 
-    /// How many of `item_id` the STORAGE BOX holds.
+    /// How many of `item_id` the storage box holds.
     ///
     /// The same `GetQuantityByItemId` the carried inventory uses: it takes an
     /// `EquipInventoryData*` and does not care which one.
@@ -293,10 +293,10 @@ impl Storage {
         unsafe { (self.get_quantity)(self.box_inventory, &raw mut id) }.max(0)
     }
 
-    /// Take up to `wanted` of `item_id` OUT of the box. Returns how many actually arrived,
+    /// Take up to `wanted` of `item_id` out of the box. Returns how many actually arrived,
     /// measured from the carried quantity before and after rather than from the call's return.
     ///
-    /// `reassignQuickSlot` is `true` here: the item is moving INTO the pockets, so pointing the
+    /// `reassignQuickSlot` is `true` here: the item is moving into the pockets, so pointing the
     /// player's quickbar at its new carried index is the correct thing for the engine to do (and
     /// is what it skips anyway when the destination already holds a stack of the same id).
     ///
@@ -316,7 +316,7 @@ impl Storage {
             return 0;
         }
         let mut id = item_id as i32;
-        // RE-RESOLVED HERE, not earlier. Any transfer since the last lookup could have reindexed
+        // RE-resolved here, not earlier. Any transfer since the last lookup could have reindexed
         // the box: the call ends in `AdjustQuantityBy` and then `RemoveItem`.
         // Safety: engine-owned inventory pointer, read only.
         let index = unsafe { (self.get_item_idx)(self.box_inventory, &raw mut id) };
@@ -331,20 +331,20 @@ impl Storage {
         (unsafe { self.carried_quantity(item_id) } - before).max(0)
     }
 
-    /// Put up to `wanted` of `item_id` INTO the box. Returns how many actually moved, measured
+    /// Put up to `wanted` of `item_id` into the box. Returns how many actually moved, measured
     /// from the carried quantity before and after.
     ///
     /// Three refusals, in the order they matter:
     ///
-    /// * the box is asked FIRST, with `ChangeAmountInBox` -- a pure query that applies both the
+    /// * the box is asked first, with `ChangeAmountInBox` -- a pure query that applies both the
     ///   `CanDepositItemToStorageBox` eligibility gate and the box's own `maxRepositoryNum`
     ///   capacity, and answers with a number that may be smaller than `wanted`. That number is
     ///   honoured exactly; transferring more than the box said it would take is how an item goes
     ///   missing;
-    /// * an EQUIPPED entry is left alone entirely. Its index is named by
+    /// * an equipped entry is left alone entirely. Its index is named by
     ///   `EquipGameData.equipmentItemIdxList`, and removing it leaves that slot pointing at a
     ///   shifted or freed entry;
-    /// * `reassignQuickSlot` is `false`. Setting it here would write the BOX's index into the
+    /// * `reassignQuickSlot` is `false`. Setting it here would write the box's index into the
     ///   player's quickbar, and that dangling reference survives into the save.
     ///
     /// # Safety
@@ -367,7 +367,7 @@ impl Storage {
         if accepted <= 0 {
             return 0;
         }
-        // RE-RESOLVED IMMEDIATELY BEFORE THE TRANSFER, for the same reason as in `pull`.
+        // RE-resolved immediately before the transfer, for the same reason as in `pull`.
         // Safety: engine-owned inventory pointer, read only.
         let index = unsafe { (self.get_item_idx)(self.carried, &raw mut id) };
         if index < 0 {
@@ -378,7 +378,7 @@ impl Storage {
             return 0;
         }
         // Safety: game thread, both inventories engine-owned, index resolved two lines above,
-        // and `false` because the destination is the BOX (see the doc comment).
+        // and `false` because the destination is the box (see the doc comment).
         unsafe { (self.transfer)(index, self.carried, self.box_inventory, accepted, false) };
         // Safety: keeps achievement state in step with what the inventory now holds, exactly as
         // `er-better-refills` does after its own deposit.
@@ -390,7 +390,7 @@ impl Storage {
     /// Whether a ChrAsm slot names this inventory index.
     ///
     /// The same scan `er-better-refills::is_equipped_item_idx` runs, and for the same reason: the
-    /// list holds INDICES, not item ids, so an entry removed from under one leaves the slot
+    /// list holds indices, not item ids, so an entry removed from under one leaves the slot
     /// naming whatever slid into its place.
     ///
     /// # Safety

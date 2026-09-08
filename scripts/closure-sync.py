@@ -2,19 +2,19 @@
 """Copy a candidate closure's paths from the main checkout into a pinned worktree.
 
 Reads newline-separated repo-relative paths on stdin (blank lines and `#` comments ignored),
-resets the worktree to its pinned HEAD, then copies each path in. A path that is DELETED in the
+resets the worktree to its pinned head, then copies each path in. A path that is deleted in the
 main checkout is deleted in the worktree too. Prints a sha256 for each copied file so the caller
 can re-verify the same bytes at commit time.
 
 The source checkout is the repo this script lives in (`$ER_MODS_ROOT` overrides), not a
 hard-coded home directory -- a literal `/home/<someone>` here silently resolves to nothing
-under a different user and the copy loop then reports every path DELETED, which reads as
+under a different user and the copy loop then reports every path deleted, which reads as
 "the closure is empty" rather than "you looked in the wrong checkout".
 
-The target MUST be a linked `git worktree`, and that is checked rather than trusted: this
+The target must be a linked `git worktree`, and that is checked rather than trusted: this
 script runs `git checkout -- .` and `git clean -fdq` on it, so pointing it at a main
 checkout by mistake would destroy exactly the uncommitted pile it exists to help land. A
-linked worktree's `.git` is a FILE containing a `gitdir:` pointer; a main checkout's is a
+linked worktree's `.git` is a file containing a `gitdir:` pointer; a main checkout's is a
 directory. That is the whole discriminator, and it is cheap.
 """
 import hashlib
@@ -70,7 +70,7 @@ def main() -> int:
             continue
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         shutil.copy(src, dst)
-        # Deliberately NOT copy2: preserving the source mtime lets cargo call a freshly
+        # Deliberately not copy2: preserving the source mtime lets cargo call a freshly
         # swapped-in file "fresh" and skip recompiling it, which reads exactly like a green
         # check of code that was never compiled.
         os.utime(dst, None)

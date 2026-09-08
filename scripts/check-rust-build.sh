@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Rust format + build gate. Catches pre-existing rust breakage (format drift AND a broken
+# Rust format + build gate. Catches pre-existing rust breakage (format drift and a broken
 # cross-compile of the actual DLL), not just the static python checks. Runs:
 #   1. `cargo fmt --all -- --check`  (formatting must be clean)
-#   2. a Windows-target BUILD of the injectable DLL, cross-compiled from Linux via cargo-xwin
+#   2. a Windows-target build of the injectable DLL, cross-compiled from Linux via cargo-xwin
 #      (preferred; falls back to a plain `cargo build` for the target only if cargo-xwin is
-#      unavailable -- that path needs an MSVC toolchain on PATH and will otherwise fail at the
+#      unavailable -- that path needs an MSVC toolchain on path and will otherwise fail at the
 #      C-dependency link step).
 #   3. a Windows-target `cargo check --tests` of the DLL crate, so its `#[cfg(test)]` modules are
 #      compiled (a cdylib build alone never touches them)
-#   4. the resulting Windows unit-test binaries, RUN under wine when wine is installed
+#   4. the resulting Windows unit-test binaries, run under wine when wine is installed
 #
-# A BUILD (not just `cargo check`) is used deliberately so the produced
+# A build (not just `cargo check`) is used deliberately so the produced
 # `target/x86_64-pc-windows-msvc/<profile>/er_quickload.dll` is proven to link, catching
 # codegen/link regressions a metadata-only check would miss.
 #
@@ -20,7 +20,7 @@ set -euo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 
-# This gate builds AND relinks every shell, then re-attests provenance for all of them. Same
+# This gate builds and relinks every shell, then re-attests provenance for all of them. Same
 # reason as the compile gate: yield from inside rather than trusting the caller to wrap it.
 # shellcheck source=lib/cpu-courtesy.sh
 # shellcheck disable=SC1091  # sourced at run time; shellcheck -x is not how this suite is linted.
@@ -45,26 +45,26 @@ else
 	cargo build "${profile_flag[@]}" --manifest-path "$repo_root/Cargo.toml" --target "$target"
 fi
 
-# The DLL crate's own unit tests are NOT built by the step above: a lib/cdylib build never
+# The DLL crate's own unit tests are not built by the step above: a lib/cdylib build never
 # compiles `#[cfg(test)]`, so until this step existed nothing in any gate had ever compiled --
 # let alone run -- them. They rot silently when it does not. Compile them every run so a test
 # module can never drift out of the build.
-# CLIPPY ON THE WINDOWS TARGET. `cargo clippy` on the host CANNOT see a windows-only module: a
+# CLIPPY on the Windows target. `cargo clippy` on the host cannot see a windows-only module: a
 # `#[cfg(windows)]` file is not compiled there, so it is not linted there either, and a lint that
 # only exists on the target the module actually builds for reaches CI untouched. That is exactly
 # how `clippy::manual_is_multiple_of` in er-refill-all's runtime.rs got through a clean local run
 # and failed CI (2026-08-25). Workspace-wide, because the gap applies to every DLL crate.
 #
-# --all-targets ADDED 2026-09-03, CLOSING A GAP IN THE OPPOSITE DIRECTION. Without it this
+# --all-targets added 2026-09-03, closing a gap in the opposite direction. Without it this
 # line lints lib and bin targets only, so `#[cfg(test)]` modules, benches and examples were
-# linted by NOTHING -- and the moment scripts/check-committed-compiles.sh started linting
+# linted by nothing -- and the moment scripts/check-committed-compiles.sh started linting
 # with --all-targets at pre-push, it found three lint errors sitting on a green main that
 # this gate had never been able to see: needless_update in er-build-export's test helper,
 # manual_contains and assertions_on_constants in er-game-base.
 #
 # That is the worse shape of the two failures described above. Those are "CI catches what a
 # local run misses"; this was "neither catches it, and the suite reports green". It also
-# inverted the contract between the two: a pre-push hook is meant to be the fast SUBSET of
+# inverted the contract between the two: a pre-push hook is meant to be the fast subset of
 # CI, never the only place a whole class of defect can be found.
 if command -v cargo-xwin >/dev/null 2>&1; then
 	echo "[check-rust-build] cargo xwin clippy --workspace --all-targets --target $target"
@@ -76,10 +76,10 @@ fi
 if command -v cargo-xwin >/dev/null 2>&1; then
 	echo "[check-rust-build] cargo xwin check --tests --target $target"
 	cargo xwin check --tests --manifest-path "$repo_root/Cargo.toml" --target "$target"
-	# er-telemetry-core is a workspace member but NOT a default-member, so the line above (which
+	# er-telemetry-core is a workspace member but not a default-member, so the line above (which
 	# honours default-members = er-quickload) never compiles its test modules. It owns the
 	# load-count consistency logic, so keep its tests building for the shipping target; check.sh
-	# RUNS them on the host.
+	# runs them on the host.
 	echo "[check-rust-build] cargo xwin check --tests -p er-telemetry-core --target $target"
 	cargo xwin check --tests -p er-telemetry-core --manifest-path "$repo_root/Cargo.toml" --target "$target"
 	# The Scaleform hook owner is a library, not a default member and not yet linked by a
@@ -110,18 +110,18 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	cargo xwin check --tests \
 		-p er-invasion-warp-core -p er-invasion-warp \
 		--manifest-path "$repo_root/Cargo.toml" --target "$target"
-	# LINK the cdylib, do not merely type-check it. `cargo xwin check` stops at metadata and
+	# Link the cdylib, do not merely type-check it. `cargo xwin check` stops at metadata and
 	# never invokes the linker, so a shell that cannot link -- a missing `#[no_mangle]`
 	# DllMain, a bad crate-type, an unresolved import from a `cfg(windows)` block -- passed
 	# every gate above while being unloadable. Found when the DLL had to be built by hand
 	# with an ad-hoc `-p` invocation to run it at all (bd er-effects-rs-5es review).
 	# `er-invasion-warp` is not a default-member and nothing depends on it, so this is
 	# the only step in any gate that produces the artifact a profile can load.
-	# EVERY ME3-LOADABLE SHELL MUST LINK. `cargo xwin check` stops at metadata and never
+	# Every ME3-LOADABLE shell must link. `cargo xwin check` stops at metadata and never
 	# invokes the linker, and the bare `cargo xwin build` above builds only `default-members`
 	# (= crates/er-quickload). So before this step, 13 of the 15 cdylibs that export a
 	# `DllMain` -- i.e. every DLL a user can list in an me3 `[[natives]]` entry except the
-	# product itself -- were never linked by ANY gate. A shell that cannot link (missing
+	# product itself -- were never linked by any gate. A shell that cannot link (missing
 	# `#[no_mangle] DllMain`, wrong crate-type, an unresolved import inside a `cfg(windows)`
 	# block) passed the whole suite while being unloadable. Found when er-invasion-warp
 	# had to be built by hand with an ad-hoc `-p` to run it at all (bd er-effects-rs-5es).
@@ -130,7 +130,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	# a second per shell incrementally, which is cheap enough to run unconditionally. (The
 	# count is deliberately not written here any more -- it said "all 13" while the list held
 	# 22, and the echo below prints `${#me3_shells[@]}` at runtime anyway.)
-	# `package:artifact`. Since the `-dll` suffix removal every ER shell's artifact IS its
+	# `package:artifact`. Since the `-dll` suffix removal every ER shell's artifact is its
 	# package name with dashes swapped for underscores -- but the pair is still written out
 	# rather than derived, because `mushroom-man-runtime` produces mushroom_man.dll and
 	# er-ags-stub produces amd_ags_x64.dll. Deriving the filename would silently skip those,
@@ -172,7 +172,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	cargo xwin build --release "${shell_pkg_args[@]}" \
 		--manifest-path "$repo_root/Cargo.toml" --target "$target"
 	# Assert the artifact exists. `cargo build` succeeding is not by itself proof the cdylib
-	# was produced -- and note a bare `rm` of the artifact does NOT force a relink, because
+	# was produced -- and note a bare `rm` of the artifact does not force a relink, because
 	# cargo restores it from `target/.../deps` with its original mtime. Use
 	# `cargo clean -p <crate> --release --target <target>` to force a genuine link locally.
 	for shell in "${me3_shells[@]}"; do
@@ -184,13 +184,13 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	done
 	echo "[check-rust-build] linked ${#me3_shells[@]} me3 shells + the product DLL"
 
-	# RE-ATTEST WHAT WE JUST RELINKED. This step overwrites the very artifacts every `.me3`
+	# RE-attest what we just RELINKED. This step overwrites the very artifacts every `.me3`
 	# profile's `[[natives]]` entries point at (they reference target/$target/release/*.dll
 	# directly -- there is no separate staging copy), so leaving their `.provenance.json`
-	# sidecars behind describing the PREVIOUS bytes turns `er-dll-provenance.py verify` into a
+	# sidecars behind describing the previous bytes turns `er-dll-provenance.py verify` into a
 	# liar in the safe direction: every DLL reads STALE/"ARTIFACT REPLACED" even though it was
 	# just built from this exact tree. Measured 2026-08-31: sidecars said built=17:23 while the
-	# binaries' PE stamps said 17:36, and all 26 shells verified STALE purely because the gate
+	# binaries' PE stamps said 17:36, and all 26 shells verified stale purely because the gate
 	# had relinked them. `er-run-branch.py` refuses to launch on that, so the gate was training
 	# everyone to distrust or bypass the freshness check that exists to stop a stale-DLL run.
 	# Writing provenance here is the same call `er-build-dlls.sh` makes after its own cargo
@@ -208,9 +208,9 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	fi
 	echo "[check-rust-build] recorded provenance for $(( ${#me3_shells[@]} + 1 )) artifacts"
 
-	# LINT PARITY WITH ../fromsoftware-rs (2026-08-21). The parent project's entire
+	# LINT parity with ../fromsoftware-rs (2026-08-21). The parent project's entire
 	# strictness is `RUSTFLAGS=-Dwarnings` around `cargo clippy --all-targets`, and the
-	# user requires this workspace be AT LEAST as strict. The root `[workspace.lints]`
+	# user requires this workspace be at least as strict. The root `[workspace.lints]`
 	# table carries the deny levels, but a `cargo build` only enforces the RUSTC half --
 	# clippy's own lints exist only under `cargo clippy`, so without this step the clippy
 	# half of parity is declared in the manifest and never actually run.
@@ -226,8 +226,8 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	echo "[check-rust-build] cargo xwin clippy --all-targets (lint parity with ../fromsoftware-rs)"
 	cargo xwin clippy --release "${shell_pkg_args[@]}" -p er-quickload --all-targets \
 		--manifest-path "$repo_root/Cargo.toml" --target "$target"
-	# FEATURE MATRIX. `er-quit-menu-core` takes `er-save-picker-core` with `default-features = false`
-	# so a standalone quit-menu DLL links the OS-native fallback surface WITHOUT the boot
+	# Feature matrix. `er-quit-menu-core` takes `er-save-picker-core` with `default-features = false`
+	# so a standalone quit-menu DLL links the OS-native fallback surface without the boot
 	# missing-save flow. Cargo unifies features across a build graph, so the line above
 	# only ever exercises the union of the two; this one proves the reduced build compiles
 	# on its own and cannot rot.
@@ -236,18 +236,18 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 		--manifest-path "$repo_root/Cargo.toml" --target "$target"
 fi
 
-# RUN them when a Windows-binary runner is available. The tests are pure logic (row math, config
+# Run them when a Windows-binary runner is available. The tests are pure logic (row math, config
 # parsing, path mapping) with no game dependency, so wine executes them fine; skip cleanly where
 # wine is absent rather than failing a gate on an optional tool. Running them on the real target
-# matters: the first run of this step found a config-path assertion that only held under HOST
+# matters: the first run of this step found a config-path assertion that only held under host
 # `std::path` separator semantics, never under the windows target the crate actually ships to.
 if command -v cargo-xwin >/dev/null 2>&1 && command -v wine >/dev/null 2>&1; then
 	echo "[check-rust-build] cargo xwin test --lib --target $target (via wine)"
 	# `-p` is explicit rather than relying on default-members (= er-quickload): the
-	# ProfileSummary crate's windows-only tests moved OUT of er-quickload, and a bare
+	# ProfileSummary crate's windows-only tests moved out of er-quickload, and a bare
 	# `--lib` would have quietly stopped running them.
-	# THE LIST IS THE GATE. `-p` is explicit rather than relying on default-members
-	# (= er-quickload), and every crate here is one whose tests CANNOT run on the host:
+	# The list is the gate. `-p` is explicit rather than relying on default-members
+	# (= er-quickload), and every crate here is one whose tests cannot run on the host:
 	# they live under `#[cfg(windows)]`, so a host `cargo test` compiles them out of
 	# existence and then reports OK over the ones that remain. Measured 2026-08-31, before
 	# the six additions below -- each pair is (what the host runs / what actually exists):

@@ -1,14 +1,14 @@
-//! Stub `amd_ags_x64.dll` for RenderDoc capture runs (bd RENDERDOC-ags-fix-is-STUB-amd-ags-dll).
+//! Stub `amd_ags_x64.dll` for RenderDoc capture runs (bd RENDERDOC-ags-fix-is-stub-amd-ags-dll).
 //!
-//! ER links AMD's AGS 5.x (`agsInit`/`agsDeInit` + `agsDriverExtensionsDX*`). RenderDoc BLOCKS the real
+//! ER links AMD's AGS 5.x (`agsInit`/`agsDeInit` + `agsDriverExtensionsDX*`). RenderDoc blocks the real
 //! old-AGS driver-extension init (it uses a driver escape that conflicts with RenderDoc's D3D12 hooking)
 //! which device-removes ER; a newer AGS 6.x DLL drops the 5.x export names so ER won't even load. This
-//! stub exports EVERY name ER's real DLL exports (so imports bind) but does nothing real: `agsInit`
+//! stub exports every name ER's real DLL exports (so imports bind) but does nothing real: `agsInit`
 //! returns `AGS_NO_AMD_DRIVER_INSTALLED` (6) -- the exact result ER gets on an NVIDIA/Intel machine -- so
 //! ER takes its well-tested non-AGS path (plain D3D12, no driver escape). Nothing here reads/writes ER's
 //! structs, so there is no layout risk. Swapped in only for the capture; ER's real DLL is restored after.
 //!
-//! AGSReturnCode: SUCCESS=0, FAILURE=1, ..., NO_AMD_DRIVER_INSTALLED=6, EXTENSION_NOT_SUPPORTED=7.
+//! AGSReturnCode: Success=0, failure=1, ..., NO_AMD_DRIVER_INSTALLED=6, EXTENSION_NOT_SUPPORTED=7.
 //! Every export is `extern "C" -> i32` (AGSReturnCode); the x64 ABI passes args in registers, so a
 //! no-arg stub validly ignores them and returns the code in eax. On failure ER never reads the out
 //! params, so returning a code is sufficient.
@@ -19,7 +19,7 @@ const AGS_NO_AMD_DRIVER_INSTALLED: i32 = 6;
 
 macro_rules! ags_export {
     ($name:ident => $ret:expr) => {
-        // The export NAME is the ABI: ER's import table asks the loader for `agsInit`,
+        // The export name is the ABI: ER's import table asks the loader for `agsInit`,
         // `agsDriverExtensionsDX12_Init`, ... verbatim, so these are AMD's spelling and not a
         // style choice -- renaming one to snake_case unbinds ER's import and the game fails to
         // start. Scoped to the generated item rather than the crate so a genuinely
@@ -41,7 +41,7 @@ ags_export!(agsInit => AGS_NO_AMD_DRIVER_INSTALLED);
 ags_export!(agsDeInit => AGS_SUCCESS);
 
 // Everything else: ER should not call these once init reported no driver, but export them (so imports
-// bind) returning FAILURE so any stray call is a clean no-op.
+// bind) returning failure so any stray call is a clean no-op.
 ags_export!(agsGetCrossfireGPUCount => AGS_FAILURE);
 ags_export!(agsSetDisplayMode => AGS_FAILURE);
 ags_export!(agsDriverExtensionsDX12_Init => AGS_FAILURE);

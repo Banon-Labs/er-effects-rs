@@ -21,7 +21,7 @@ use prologue_build::{
 const SUPPORT: &str = "../../build-support/prologue_build.rs";
 
 /// `GLOBAL_CSGameMan`, at its 1.17 address. The two retractions load it RIP-relative; naming the
-/// ABSOLUTE address lets iced compute each site's displacement instead of transcribing it.
+/// absolute address lets iced compute each site's displacement instead of transcribing it.
 ///
 /// 1.16.2 had it at `0x143d69918`; 1.17 moved it `+0x4070`, along with most of `.data`. That is
 /// carried in `docs/recon/rva-map-1162-to-1170.data.tsv` as `GAME_MAN_SINGLETON_RVA` on 136 of
@@ -29,7 +29,7 @@ const SUPPORT: &str = "../../build-support/prologue_build.rs";
 /// load it (`0x140679560`, `0x140679590`, `0x14067ae80`) resolve to `0x143d6d988`.
 ///
 /// It is spelled at the 1.17 address because the constants it produces are compared against the
-/// bytes of the RUNNING game. See [`Image::EldenRing1170`] for why a mapped RVA does not make a
+/// bytes of the running game. See [`Image::EldenRing1170`] for why a mapped RVA does not make a
 /// 1.16.2 signature usable.
 const GAME_MAN_SINGLETON_VA: u64 = 0x143d6d988;
 /// `GameMan+0xb72` / `+0xb73`, the two save-request flags the retractions clear.
@@ -46,7 +46,7 @@ const MENU_JOB_EMIT_RESULT_VA: u64 = 0x140746e80;
 /// `mov rax,[rip+disp]; mov byte [rax+0xb7x],0; ret`, and the field offsets `+0xb72`/`+0xb73` are
 /// unchanged -- only `disp` moved, because the singleton did.
 ///
-/// The SITE address matters as much as the target: a RIP displacement is the distance between
+/// The site address matters as much as the target: a RIP displacement is the distance between
 /// them, so generating the signature at the 1.16.2 site would encode the wrong four bytes even
 /// with the target corrected.
 const SAVE_REQUEST_RETRACT_B72_VA: u64 = 0x140679590;

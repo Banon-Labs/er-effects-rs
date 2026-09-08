@@ -1,4 +1,4 @@
-//! EVERY GAME STRUCT OFFSET THE CAMERA LAYER TOUCHES, and the build gate over them.
+//! Every game STRUCT offset the camera layer touches, and the build gate over them.
 //!
 //! Same shape and same reasons as [`crate::possess::layout`]: a table of constants rather than
 //! typed field access, because the answer for a build nobody has measured has to be **`None`**
@@ -12,7 +12,7 @@
 //!
 //! * **`WorldChrMan+0x1ece0 chrCam`** -- the 1.16.2 named dump types the field. `FUN_1404a6c30`
 //!   (92 bytes: `UpdateRecursive`, then `GLOBAL_WorldChrMan`, then `[+0x1ece0]`, then a 4x4 matrix
-//!   copy) matches UNIQUELY in the 1.17 image at `0x1404a7190` with the displacement still
+//!   copy) matches uniquely in the 1.17 image at `0x1404a7190` with the displacement still
 //!   `0x1ece0`, off the 1.17 `GLOBAL_WorldChrMan` at `0x143d69ff8`.
 //! * **`ChrCam+0x60 chrExFollowCam`** -- `CS::ChrCam::Update` matches uniquely in 1.17 at
 //!   `0x1403b11d0` (its 0x60-byte prologue is byte-identical bar one rip-relative operand), and
@@ -55,39 +55,39 @@ pub(crate) mod chr_cam {
 
 /// `ChrExFollowCam` -- the third-person follow camera, and the only thing this layer writes.
 pub(crate) mod chr_ex_follow_cam {
-    /// `ChrExFollowCam+0x468` -- THE LEVER, and the reason this layer needs no detour.
+    /// `ChrExFollowCam+0x468` -- The lever, and the reason this layer needs no detour.
     ///
     /// `CS::ChrExFollowCam::ApplyZoomLerp` (1.17 `0x1403b7570`) runs every frame out of
-    /// `ChrExFollowCam::Update` and opens its param-id resolution by loading THIS field, before
+    /// `ChrExFollowCam::Update` and opens its param-id resolution by loading this field, before
     /// the branch that picks lock-on or normal framing. It is first in both chains:
     ///
     /// * normal: `+0x468` -> `GameMan+0x40` -> `GameMan+0x48` -> `GameMan+0x4c` -> `+0x464` -> 0
     /// * lock-on: `+0x468` -> `GameMan+0x44` -> `GameMan+0x54` -> `+0x464` -> 0
     ///
     /// **Nothing in the game ever writes it.** A byte scan of the whole camera code range
-    /// (`0x1403b0000`-`0x1403c0000`) in the 1.17 image finds exactly ONE access at displacement
+    /// (`0x1403b0000`-`0x1403c0000`) in the 1.17 image finds exactly one access at displacement
     /// `0x468` and it is the `MOV EAX,[RBX+0x468]` load at `0x1403b766a`; image-wide there are
     /// only eight 32-bit stores at that displacement and every one is in unrelated code far
     /// outside the camera module (several are `[RBP+0x468]` stack frames). The constructor sets it
     /// with a single qword store covering `+0x464|+0x468` -- `MOV qword [RDI+0x464],-1` at 1.17
     /// `0x1403b3b94` -- and never touches it again.
     ///
-    /// `+0x464` is NOT free and must not be used instead: `FUN_1403b1140` writes it from the map
+    /// `+0x464` is not free and must not be used instead: `FUN_1403b1140` writes it from the map
     /// region (`MOV [RCX+0x464],EDX` at 1.17 `0x1403b5950`).
     pub(crate) const LOCK_CAM_PARAM_OVERRIDE: usize = 0x468;
     /// `ChrExFollowCam+0x460` -- the id `ApplyZoomLerp` actually resolved last frame, mirrored out
     /// for free (`MOV [RBX+0x460],EDX` at 1.17 `0x1403b76da`).
     ///
     /// Read once at possession start to learn which row the camera was using a frame ago, so the
-    /// fields the size law does NOT decide can be copied from it rather than from a guess.
+    /// fields the size law does not decide can be copied from it rather than from a guess.
     pub(crate) const RESOLVED_LOCK_CAM_PARAM: usize = 0x460;
 
-    /// `ChrExFollowCam+0x150 anglesEuler` -- the camera's own Euler angles. `x` is the PITCH.
+    /// `ChrExFollowCam+0x150 anglesEuler` -- the camera's own Euler angles. `x` is the pitch.
     ///
     /// Named here only so [`ANGLES_EULER_YAW`] can say what it is one float past. Nothing reads
     /// the pitch: the body turns about Y only.
     pub(crate) const ANGLES_EULER: usize = 0x150;
-    /// `ChrExFollowCam+0x154 anglesEuler.y` -- WHERE THE PLAYER IS LOOKING, as one float.
+    /// `ChrExFollowCam+0x154 anglesEuler.y` -- Where the player is looking, as one float.
     ///
     /// # What the number is, exactly
     ///
@@ -107,18 +107,18 @@ pub(crate) mod chr_ex_follow_cam {
     ///
     /// # Why the angle and not the two coordinate fields
     ///
-    /// Because `targetCoordinates` is differenced against the smoothed PIVOT above, not against
+    /// Because `targetCoordinates` is differenced against the smoothed pivot above, not against
     /// `cameraCoordinates(+0x110)`. Subtracting those two points would produce a
     /// plausible-looking direction that the engine never actually computes. This is the engine's
     /// own answer, in one read.
     ///
     /// # Sign
     ///
-    /// A CHARACTER's yaw is `atan2(-d.x, -d.z)` for the direction `d` it faces -- two independent
+    /// A character's yaw is `atan2(-d.x, -d.z)` for the direction `d` it faces -- two independent
     /// proofs in [`crate::possess::intent`] -- so the body heading for this look direction is this
-    /// field PLUS PI. [`crate::possess::intent::aim`] is the one place that conversion happens.
+    /// field plus PI. [`crate::possess::intent::aim`] is the one place that conversion happens.
     ///
-    /// Byte-proven: the 73-byte window carrying `+0xe0`, `+0x150` and `+0x154` matches UNIQUELY in
+    /// Byte-proven: the 73-byte window carrying `+0xe0`, `+0x150` and `+0x154` matches uniquely in
     /// both images -- 1.16.2 `0x1403b62c9`, 1.17 `0x1403b62d9`.
     pub(crate) const ANGLES_EULER_YAW: usize = ANGLES_EULER + core::mem::size_of::<f32>();
 }
@@ -138,7 +138,7 @@ pub(crate) mod chr_physics_module {
     pub(crate) const HIT_RADIUS: usize = 0x344;
 }
 
-/// The offsets FOR THE RUNNING BUILD, or `None` on one nobody has measured.
+/// The offsets for the running build, or `None` on one nobody has measured.
 ///
 /// Every field is the same on both measured builds, which is exactly why this returns a struct
 /// rather than a bool: when one of them does move, the difference belongs here and every caller
@@ -207,9 +207,9 @@ mod tests {
         );
     }
 
-    /// The camera yaw is the SECOND float of the Euler vector; the one beside it is the PITCH.
+    /// The camera yaw is the second float of the Euler vector; the one beside it is the pitch.
     ///
-    /// Reading `+0x150` instead would aim the body with the camera's ELEVATION, which shows up as
+    /// Reading `+0x150` instead would aim the body with the camera's elevation, which shows up as
     /// "the creature spins when I look up" rather than as anything that looks like an offset bug.
     #[test]
     fn the_camera_yaw_is_the_y_component_and_the_pitch_is_the_x() {

@@ -26,7 +26,7 @@ pub struct EditTextLayout {
 /// One glyph `SHAPE` inside a [`Tag::DefineFont3`]. Unlike a `SHAPEWITHSTYLE` it
 /// carries no fill/line style arrays -- just its own starting `NumFillBits`/
 /// `NumLineBits` (stored verbatim) and the SHAPERECORD stream (terminated by its
-/// [`ShapeRecord::End`]), reusing the Tier-3 edge machinery. A glyph SHAPE never
+/// [`ShapeRecord::End`]), reusing the Tier-3 edge machinery. A glyph shape never
 /// carries a StateNewStyles record (it has no style arrays); one would fall the
 /// owning font back to [`Tag::Unknown`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -260,7 +260,7 @@ fn decode_define_edit_text(body: Vec<u8>, force_long: bool) -> Tag {
 /// Read one glyph `SHAPE` (a `SHAPE`, not `SHAPEWITHSTYLE`): a `NumFillBits`/
 /// `NumLineBits` header then the SHAPERECORD stream, byte-aligning at its end (the
 /// font offset table packs glyphs on byte boundaries). Passes `version = 1` so a
-/// StateNewStyles record (invalid in a styleless glyph SHAPE) errors out and
+/// StateNewStyles record (invalid in a styleless glyph shape) errors out and
 /// falls the font back to [`Tag::Unknown`]; `rgba` is irrelevant without styles.
 fn read_glyph_shape(br: &mut BitReader) -> Result<GlyphShape, GfxError> {
     const CTX: &str = "GLYPH";

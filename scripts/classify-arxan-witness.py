@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
-"""Classify a 1.16.2 witness address by HOW the image reaches the instruction at it.
+"""Classify a 1.16.2 witness address by how the image reaches the instruction at it.
 
-TWO WAYS A STRUCT-FIELD "MOVE" CAN BE FABRICATED IN AN ARXAN-REWRITTEN IMAGE
+Two ways a STRUCT-field "MOVE" can be fabricated in an ARXAN-rewritten image
 ---------------------------------------------------------------------------
-1. ARXAN FILLER.  Arxan steals a function's opening bytes, parks a 5-byte `jmp` there, and
+1. ARXAN filler.  Arxan steals a function's opening bytes, parks a 5-byte `jmp` there, and
    REUSES the freed tail bytes to hold an unrelated hoisted instruction.  Those bytes are dead
    in the host's own control flow, so "which function contains this address" is answered by
    physical placement and is wrong.  Pairing two builds' trampolines then pairs two unrelated
    fillers, and any displacement difference between them is an artifact.
 
-2. UNWIND FUNCLET.  An MSVC x64 unwind funclet is called as `f(void*, void* rdx = framePtr)`.
-   Inside one, `[rdx+N]` is a STACK SLOT, not a structure field -- but `rdx` is not in the
+2. Unwind FUNCLET.  An MSVC x64 unwind funclet is called as `f(void*, void* rdx = framePtr)`.
+   Inside one, `[rdx+N]` is a stack slot, not a structure field -- but `rdx` is not in the
    drift scanner's STACK_BASES ({rsp,esp,rbp,ebp}), so a frame offset is reported as a field.
 
 Both are detectable statically:
     FUNCLET      the address (or the trampoline that jumps to it) appears as an `action` RVA in
                  some FuncInfo's unwind map -> report the owning function and the state index.
-    ARXAN-JUMP   the .pdata extent's first instruction is a 5-byte jmp that lands outside the
+    ARXAN-jump   the .pdata extent's first instruction is a 5-byte jmp that lands outside the
                  extent, and the queried address is past it.
 
-USAGE
+Usage
     python3 scripts/classify-arxan-witness.py 1162 0x142968e30 0x140533e20 ...
 """
 import bisect

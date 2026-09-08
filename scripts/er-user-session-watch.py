@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Watch a user-driven Elden Ring session: no teardown, observation only.
 
-Unlike er-readiness-watch.py this owns NO process teardown and injects nothing;
+Unlike er-readiness-watch.py this owns no process teardown and injects nothing;
 it is for no-auto-teardown user play sessions where the agent only needs to know
 when the game exits and to collect a semaphore timeline for post-run analysis.
 
@@ -24,12 +24,12 @@ import shutil
 import sys
 import time
 
-# WHERE THE WATCHED FILES LIVE, AND WHY IT IS NO LONGER JUST THE GAME DIRECTORY.
+# Where the watched files live, and why it is no longer just the game directory.
 #
 # Launchers now redirect the DLL's per-run artifacts into the run's own directory
-# (`ER_QUICKLOAD_*_PATH`), because a game-directory artifact is SINGLE-SLOT: the DLL rotates
+# (`ER_QUICKLOAD_*_PATH`), because a game-directory artifact is single-SLOT: the DLL rotates
 # `<name>` to `<name>.prev` on its first write, so the next launch destroys the run before last.
-# A watcher pinned to the game directory therefore sees NOTHING for such a run and records a
+# A watcher pinned to the game directory therefore sees nothing for such a run and records a
 # session of flat, unchanging files -- which reads as "the DLL wrote nothing", not as "you are
 # watching the wrong directory".
 #
@@ -52,7 +52,7 @@ SOURCE_DIRS = [d for d in (_REDIRECTED, GAME) if d]
 def resolve(name):
     """This run's copy of `name`: the redirect if it exists, else the game-directory fallback.
 
-    Existence, not configuration, decides. The redirect is set from OUR side of the launch; whether
+    Existence, not configuration, decides. The redirect is set from our side of the launch; whether
     the DLL honoured it depends on the environment surviving launch.sh -> me3 -> the compat tool.
     Returning a path that is not there would make a healthy run look silent.
     """
@@ -116,7 +116,7 @@ def blank_detected_count():
     # in er-quickload-telemetry.json. Non-visual; fires the instant the blank Game Options pane reproduces.
     try:
         d = json.load(open(resolve("er-quickload-telemetry.json")))
-        # REAL signal: healthy pane seen THEN went hidden (cannot false-fire on boot/preload).
+        # Real signal: healthy pane seen then went hidden (cannot false-fire on boot/preload).
         return int(d.get("oracle_optionsetting_real_blank_detected_count", 0))
     except (OSError, ValueError, json.JSONDecodeError):
         return 0
@@ -155,7 +155,7 @@ try:
     _libc = ctypes.CDLL("libc.so.6", use_errno=True)
     _inotify_fd = _libc.inotify_init1(0)
     if _inotify_fd >= 0:
-        # EVERY candidate directory, because the artifacts may be in either one and a watch on the
+        # Every candidate directory, because the artifacts may be in either one and a watch on the
         # wrong one blocks for the full slice while the interesting file is being written elsewhere.
         for _directory in SOURCE_DIRS:
             _libc.inotify_add_watch(
@@ -168,7 +168,7 @@ except OSError:
 
 
 def wait_for_change(timeout):
-    # Return when a game-dir file changes OR the timeout safety cap elapses, then the loop re-checks
+    # Return when a game-dir file changes or the timeout safety cap elapses, then the loop re-checks
     # process liveness + the blank semaphore. Readiness is the inotify event; the cap only bounds it.
     watch = [_inotify_fd] if _inotify_fd >= 0 else []
     ready, _, _ = select.select(watch, [], [], timeout)

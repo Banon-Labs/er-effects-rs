@@ -29,7 +29,7 @@ pub mod loading_cover_host;
 #[cfg(windows)]
 pub use loading_cover_host::{LoadingCoverHost, install_loading_cover_host};
 
-// Deliberately NOT glob-re-exported at the crate root. The root DLL keeps a same-named facade fn
+// Deliberately not glob-re-exported at the crate root. The root DLL keeps a same-named facade fn
 // for `install_window_reconfig_observer_hooks` (it installs the seam before delegating), and two
 // globs carrying one name is an ambiguity error at every use site. Consumers name the module.
 #[cfg(windows)]
@@ -46,7 +46,7 @@ pub mod bridge;
 pub use bridge::*;
 
 pub mod layout;
-/// Is the game's own loading screen still MAKING PROGRESS, or frozen? Pure predicate over the
+/// Is the game's own loading screen still making progress, or frozen? Pure predicate over the
 /// Gauge_3 samples `dlstring_lookat_math` already takes, used by the cover's composite-cap backstop.
 /// Un-gated so its regression tests run on the host.
 pub mod native_loading_progress;
@@ -90,7 +90,7 @@ pub mod portrait_semaphores;
 #[cfg(windows)]
 pub use portrait_semaphores::*;
 
-// Pure identity-decision logic for the portrait semaphores. Deliberately NOT windows-gated: the
+// Pure identity-decision logic for the portrait semaphores. Deliberately not windows-gated: the
 // rules that decide "is the portrait showing the right character" are the ones a wrong-face bug
 // hides in, so they must be reachable by a host `cargo test` rather than only by a game launch.
 pub mod portrait_identity;
@@ -101,7 +101,7 @@ pub mod resource_readback;
 #[cfg(windows)]
 pub use resource_readback::*;
 
-// Deliberately NOT glob-re-exported at the crate root: these are D3D12 plumbing helpers whose
+// Deliberately not glob-re-exported at the crate root: these are D3D12 plumbing helpers whose
 // names (`create_overlay_pso`, `execute_and_wait`, ...) would collide with the root DLL's own
 // present-overlay copies if they entered its flat namespace through the `er_loading_portrait_core::*`
 // shims. Consumers name the module.

@@ -46,8 +46,8 @@ pub(crate) fn load_title_scaleform_memory_gfx() {
     ));
 }
 
-/// DIAGNOSTIC detour for the dialog builder 0x1409275b0 (4 register args rcx/rdx/r8/r9 -> dialog
-/// in rax). Calls the original, then (pre-world, capped) logs the BUILT dialog's vtable/class +
+/// Diagnostic detour for the dialog builder 0x1409275b0 (4 register args rcx/rdx/r8/r9 -> dialog
+/// in rax). Calls the original, then (pre-world, capped) logs the built dialog's vtable/class +
 /// the 4 args (the FMG message id is one of them) + caller, so we can identify the actual
 /// connection-error dialog without guessing. Read-only; never mutates the dialog.
 pub(crate) unsafe fn policy_tos_record_fields(record: usize) -> (usize, usize, usize) {
@@ -71,19 +71,19 @@ pub(crate) unsafe fn policy_tos_record_fields(record: usize) -> (usize, usize, u
 /// build and returns null, so the unnecessary startup ToS modal is never constructed -- no
 /// input, no auto-accept of an un-accepted policy, no MessageBox.
 ///
-/// SEAMLESS CO-OP (2026-07-06): auto-enabled under Seamless when the product autoload is armed.
+/// Seamless co-OP (2026-07-06): auto-enabled under Seamless when the product autoload is armed.
 /// ERSC re-establishes the game's online service after our offline patches, so ~1.4s after the
 /// forced Continue the base game builds the online-service ToS (`06_000_TermOfService_BNE`,
 /// TosTitle ctor 0x1409b5970) -- gated by a "ToS-accepted" flag our offline forcing never touches
 /// (GameMan+0xBC8 only gates connection-loss popups). With no path past it the zero-input autoload
 /// stalls forever at the title. Suppressing the redundant re-prompt (the user's profile has already
-/// accepted the ToS) lets the autoload reach Continue and load the .co2 save. Evaluated PER-CALL at
+/// accepted the ToS) lets the autoload reach Continue and load the .co2 save. Evaluated per-call at
 /// build time (~+16.9s), so it does not depend on the early-DllMain Seamless false-negative. This is
 /// tied to existing autoload state (no new env/file gate); the env/file switch remains for diagnostics.
 pub(crate) fn policy_tos_suppress_enabled() -> bool {
-    // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): the env/marker force-on override
-    // is removed (env/marker feature gates forbidden). Suppression is tied ONLY to the genuine
-    // runtime condition -- product autoload armed AND Seamless Co-op present -- exactly as the
+    // De-gated (deprecate-env-marker-gate-allowlists-2026-07-19): the env/marker force-on override
+    // is removed (env/marker feature gates forbidden). Suppression is tied only to the genuine
+    // runtime condition -- product autoload armed and Seamless Co-op present -- exactly as the
     // product path already used it.
     product_autoload_enabled() && crate::telemetry::seamless_coop_loaded()
 }
@@ -391,17 +391,17 @@ pub(crate) fn install_policy_tos_title_hook() {
             return;
         }
     }
-    // ONE ROW PER HOOK, AND A REFUSAL SKIPS ONLY ITS OWN ROW (2026-08-30).
+    // One row per hook, and a refusal skips only its own row (2026-08-30).
     //
     // This was six sequential `let Ok(addr) = game_rva(..) else { log; return; }` blocks, so a
     // single unmapped address on 1.17 took the other five down with it -- the whole Privacy/ToS
-    // surface oracle, which exists to say a run's proof is INVALID, going dark because one of its
+    // surface oracle, which exists to say a run's proof is invalid, going dark because one of its
     // six functions moved. Same shape and same fix as `er-better-refills` and the System->Quit
     // installer; see bd `one-refused-hook-must-not-abort-the-installer-2026-08-30`.
     //
-    // ARMED / REFUSED / FAILED are three different outcomes and are logged as three different
-    // words: REFUSED means the 1.17 map has no row for that RVA (a migration gap, fix the map),
-    // FAILED means MinHook would not take the address it was given (a different problem entirely).
+    // Armed / refused / failed are three different outcomes and are logged as three different
+    // words: Refused means the 1.17 map has no row for that RVA (a migration gap, fix the map),
+    // failed means MinHook would not take the address it was given (a different problem entirely).
     let plan: [(&str, u32, *mut c_void, &AtomicUsize); 6] = [
         (
             "ToS ctor wrapper",
@@ -641,9 +641,9 @@ pub(crate) unsafe fn read_dlw_string(s: usize, max_chars: usize) -> Option<Strin
     Some(String::from_utf16_lossy(&buf))
 }
 
-/// Diagnostic: dump a builder argument to NAME the modal. Pass BOTH `r8` and `r9`: the wrapper
+/// Diagnostic: dump a builder argument to name the modal. Pass both `r8` and `r9`: the wrapper
 /// `FUN_1407b03f0` (1.16.2) / `FUN_1407b1270` (1.17) calls `builder(dialog, sfObj, param_3, text)`,
-/// so `r8` is `param_3` and the MESSAGE is `r9` -- dumping only `r8` is why run
+/// so `r8` is `param_3` and the message is `r9` -- dumping only `r8` is why run
 /// br-20260831-160354-2513 logged a suppressed build with no `spec #0:` line. Tries the reported
 /// MenuString offset (+0x8e0) plus a scan of early offsets. Read-only; logs each decoded string.
 pub(crate) unsafe fn dump_msgbox_spec(c: usize, n: usize, reg: &str) {
@@ -680,7 +680,7 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
     // SAVE-FLOW CONFIRM BOX (save-game-flow WP2) -- checked FIRST, before any suppression.
     // `save_flow_submit_box` tags the box id here immediately before submitting its MenuJob,
     // so this build is the dialog the user must answer. Forward it unconditionally and stash
-    // the pointer in the flow's OWN slot: `MSGBOX_LAST_DIALOG`/`CONNECTION_ERROR_DIALOG` feed
+    // the pointer in the flow's own slot: `MSGBOX_LAST_DIALOG`/`CONNECTION_ERROR_DIALOG` feed
     // the startup auto-accept, which must never reach a user-facing save confirm. Running
     // ahead of the suppression branch is what keeps a latched
     // `SYSTEM_QUIT_PROFILE_SELECT_WINDOW`/`PROFILE_LOAD_FLOW_ACTIVE` from eating our box.
@@ -695,7 +695,7 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
             null
         };
         let base = game_module_base().unwrap_or(null);
-        // STRUCTURAL identity, not a single vtable equality (2026-07-28): the box must be
+        // Structural identity, not a single vtable equality (2026-07-28): the box must be
         // recognised by every vtable it can legitimately carry -- the base
         // `CS::MessageBoxDialog` and every subclass/wrapper-swapped vtable -- so the same
         // check the decision poll uses also gates the capture.
@@ -712,7 +712,7 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
             append_autoload_debug(format_args!(
                 "save-flow-box: expected build for {} produced dialog=0x{ret:x} vt=0x{vt:x} vt[2]=0x{update_slot:x} (want vt[2]=0x{:x}) -- NOT captured",
                 save_flow_box_label(expected_box),
-                // The SAME address `save_flow_box_identity` compared against, resolved for the
+                // The same address `save_flow_box_identity` compared against, resolved for the
                 // running build. `base.wrapping_add(MSGBOX_DIALOG_UPDATE_RVA)` printed the 1.16.2
                 // slot while the check used the 1.17 one, so the line reporting a mismatch named
                 // a value that was not the one it wanted -- and `.wrapping_add` kept it out of
@@ -726,11 +726,11 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
         }
         return ret;
     }
-    // Scope the blanket product msgbox suppression to the SENSITIVE windows only (er-effects-rs-qwj):
-    // boot autoload (pre-world -- connection-error / EULA / warning popups) and an ACTIVE
-    // System->Quit->Load-Profile switch (any stray ProfileSelect load-confirm). Do NOT suppress during
+    // Scope the blanket product msgbox suppression to the sensitive windows only (er-effects-rs-qwj):
+    // boot autoload (pre-world -- connection-error / EULA / warning popups) and an active
+    // System->Quit->Load-Profile switch (any stray ProfileSelect load-confirm). Do not suppress during
     // free in-world play: the user's own menu confirmations -- notably the Quit Game / Return-to-Desktop
-    // "are you sure?" dialog -- are legitimate product UI and MUST render, else those rows silently do
+    // "are you sure?" dialog -- are legitimate product UI and must render, else those rows silently do
     // nothing because the suppression ate their confirmation MessageBox (observed: Quit Game / Return to
     // Desktop dead on the 2nd quit menu; a msgbox-skip fired ~18ms after the forwarded click). The
     // character-load zero-MessageBox proof is unaffected: boot + switch still suppress, and the quit
@@ -764,14 +764,14 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
             unsafe { dump_msgbox_spec(c, n, "r8") };
             unsafe { dump_msgbox_spec(d, n, "r9") };
         }
-        // SEAMLESS post-PAB popup: the box is nulled (never shown), but the MenuWindowJob whose Run is
+        // Seamless post-PAB popup: the box is nulled (never shown), but the MenuWindowJob whose Run is
         // building it would then sit on MenuJobResult(Continue) forever (ERSC's post-PAB MessageBox
         // stall). The latch that was meant to record that job read CURRENT_MENU_WINDOW_JOB_RUN_JOB,
-        // which was ONLY ever written by system_quit_menu_window_job_run_hook -- a detour whose only
+        // which was only ever written by system_quit_menu_window_job_run_hook -- a detour whose only
         // address-taker (install_system_quit_menu_window_job_run_hook) had no callers, so rustc never
         // codegen'd it and the counter read 0 in every shipped build. The latch could therefore never
         // fire; removing it changes nothing at runtime. Re-arming the stall fix means writing the job
-        // from the detour that ACTUALLY wins MenuWindowJob::Run (the PAB one in
+        // from the detour that actually wins MenuWindowJob::Run (the PAB one in
         // product_core_own_stepper.rs) -- tracked separately, not done here.
         return null;
     }
@@ -800,9 +800,9 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
                 "MSGBOX_DIALOG_VTABLE_RVA",
             );
         let in_world = IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
-        // CAPTURE the startup MessageBoxDialog (connection-error / EULA / warning) pre-world so
+        // Capture the startup MessageBoxDialog (connection-error / EULA / warning) pre-world so
         // the game task can dismiss it via the real OK handler. Post-load/in-world dialogs are
-        // NEVER auto-dismissed; they are only latched for telemetry so the oracle fails instead of
+        // never auto-dismissed; they are only latched for telemetry so the oracle fails instead of
         // reporting a false 1400 when a blocking popup remains on screen.
         if is_msgbox {
             MSGBOX_LAST_DIALOG.store(ret, Ordering::SeqCst);

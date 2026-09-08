@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Second opinion on a 1.16.2 -> 1.17 pair, from Ghidra's analysis of BOTH runtime dumps.
+"""Second opinion on a 1.16.2 -> 1.17 pair, from Ghidra's analysis of both runtime dumps.
 
-WHY A SECOND OPINION IS WORTH ANYTHING HERE. `map-rvas-1162-to-1170.py` finds where a masked
+Why a second opinion is worth anything here. `map-rvas-1162-to-1170.py` finds where a masked
 signature re-occurs and `verify-rva-map-1170.py` decodes both bodies and compares them. Both read
 the same two flat images, with the same decoder, under the same normalisation -- so they share a
 failure mode: if a wrong destination happens to decode into a stream shaped like the right one,
@@ -11,42 +11,42 @@ The two Ghidra dumps are genuinely independent of that. They were analysed by Gh
 disassembler and function-boundary analysis, from the runtime images rather than the de-Arxan'd
 files, months apart, and this asks them three questions the byte tools cannot ask at all:
 
-    ENTRY   does each dump declare a function to START at its half of the pair? A destination
+    Entry   does each dump declare a function to start at its half of the pair? A destination
             0x10 bytes into a function reads as live and detours into the middle of one. A
-            declared entry at the WRONG address is the hard failure; NO declared entry is not one,
+            declared entry at the wrong address is the hard failure; No declared entry is not one,
             because that is the ordinary condition of a leaf.
-    CALLEES do the two functions call the SAME functions, carried forward? Topology, which no byte
+    CALLEES do the two functions call the same functions, carried forward? Topology, which no byte
             signature over a 40-byte prologue can see. 1.17's dump carries no names -- everything
             is `FUN_<addr>` -- but its call graph is there, so each 1.16.2 callee can be matched to
             a 1.17 callee at a plausible forward delta. A wrong destination carries almost none of
             them; a right one carries nearly all. Where a dump has no call graph for a function at
             all, the question is vacuous rather than answered.
-    SIZE    do the two dumps declare the same body length? Reported, never fatal. A body that GREW
+    Size    do the two dumps declare the same body length? Reported, never fatal. A body that grew
             is what `PATCH-SITE-IDENTICAL` exists to describe, and refusing it here would
             contradict the verifier's own vocabulary.
 
-WHAT THE CALLEE TOLERANCE IS FOR, measured rather than chosen. `0x1409a4ed0 -> 0x1409a6070` --
+What the CALLEE tolerance is for, measured rather than chosen. `0x1409a4ed0 -> 0x1409a6070` --
 `PROFILE_LOAD_DIALOG_LIST_REBUILD_RVA`, verified `IDENTICAL-WHOLE` over its whole 261-byte body --
 carries four of its five callees and loses one, because 1.17's dump does not split out a function
 where 1.16.2's does. Requiring all five would refuse a pair the instruction comparison proves. So
-a quarter of them, and never fewer than one, may fail to carry. The four that DO carry are worth
+a quarter of them, and never fewer than one, may fail to carry. The four that do carry are worth
 seeing: two of them cross out of this region entirely, `0x875590 -> 0x876580` at +0xff0 and
 `0x739e20 -> 0x73ac70` at +0xe50, each landing on the delta its own region is known to have.
 
 None of that is a hook licence; `.pdata` entry evidence and the instruction comparison remain the
-licence. This is the check that catches a plausible WRONG address before it becomes an anchor and
+licence. This is the check that catches a plausible wrong address before it becomes an anchor and
 spreads its delta over a whole region.
 
-WHAT IT SAYS ABOUT THE CURATED LEDGER, run over all 111 rows of
+What it says about the curated ledger, run over all 111 rows of
 `docs/recon/rva-map-1162-to-1170.verified.tsv` on 2026-09-01: 111/111, no contradictions -- 55
-CONFIRMED, 55 CONFIRMED-THIN (leaves, where one dump has no call graph to compare), 1
-NO-DUMP-OPINION (a 3-byte leaf neither dump declares at all). The two rows that DID come back
+confirmed, 55 confirmed-thin (leaves, where one dump has no call graph to compare), 1
+no-dump-opinion (a 3-byte leaf neither dump declares at all). The two rows that did come back
 refused on the first pass were both correct, and both loosenings in `judge` are named after them.
 
 Both dump VAs are shift-0: dump VA == deobf VA == runtime VA on 1.16.2 and on 1.17 alike, so the
 addresses here need no translation in either direction.
 
-USAGE
+Usage
     python3 scripts/confirm-1170-pair-in-dumps.py 0x1409a4670:0x1409a5810
     python3 scripts/confirm-1170-pair-in-dumps.py --tsv docs/recon/rva-map-1162-to-1170.verified.tsv
     python3 scripts/confirm-1170-pair-in-dumps.py --tsv <pairs.tsv> --quiet
@@ -76,7 +76,7 @@ QUERY_TIMEOUT_SECONDS = 20
 # for the shared menu layer, +0xe80 around 0x814ed0, +0xff0 across 0x87xxxx, +0x11a0 across both
 # 0x92xxxx and 0x9axxxx, +0x13a0 out in 0x141ebxxxx.
 MAX_CALLEE_DRIFT = 0x8000
-# How many callees must carry before a DIFFERING declared size is treated as a real 1.17 edit
+# How many callees must carry before a differing declared size is treated as a real 1.17 edit
 # rather than as the wrong destination. See the clause in `judge` that uses it; three is the point
 # at which the match stops being something two arbitrary entries could produce.
 CORROBORATING_CALLEES = 3
@@ -153,11 +153,11 @@ def pairs_from_tsv(path):
     return rows
 
 
-# The controls, and the gate cannot be trusted without them. Each ACCEPT is one of the eight
-# anchors added for er-effects-rs-4uw5.13; each REFUSE is one of those same pairs with a
+# The controls, and the gate cannot be trusted without them. Each accept is one of the eight
+# anchors added for er-effects-rs-4uw5.13; each refuse is one of those same pairs with a
 # destination that is wrong in a specific way, so a refusal names a clause rather than a mood.
 #
-# The swapped cases are here because they CAUGHT SOMETHING. Before `CORROBORATING_CALLEES` existed,
+# The swapped cases are here because they caught something. Before `CORROBORATING_CALLEES` existed,
 # three of the four swaps came back CONFIRMED: the callee tolerance forgives one loss, so a
 # function with one callee or none passed against any address that merely declared an entry, and
 # only the differing size objected -- silently, since a differing size was not fatal. A gate that
@@ -208,23 +208,23 @@ def judge(query, old_va, new_va, args):
     old_entry, old_size, old_callees = describe(query, old_va, args.port_1162)
     new_entry, new_size, new_callees = describe(query, new_va, args.port_1170)
     notes = []
-    # A DECLARED ENTRY AT THE WRONG ADDRESS IS THE REFUSAL. "No function here at all" is NOT, and
+    # A declared entry at the wrong address is the refusal. "No function here at all" is not, and
     # the difference is what the ledger taught this tool on its first full pass over it: two of its
-    # 111 rows came back CONTRADICTED and both were correct. `0x1407add70 -> 0x1407aebf0` is a
-    # 3-byte IDENTICAL-LEAF-NOPATCH, and a leaf has no `.pdata` record, which is exactly why
+    # 111 rows came back contradicted and both were correct. `0x1407add70 -> 0x1407aebf0` is a
+    # 3-byte identical-leaf-NOPATCH, and a leaf has no `.pdata` record, which is exactly why
     # neither dump declares a function at it. Refusing a row for being a leaf would refuse the
-    # class of row the verifier invented IDENTICAL-LEAF to admit.
+    # class of row the verifier invented identical-leaf to admit.
     if old_entry is not None and old_entry != old_va:
         notes.append(f"1.16.2 entry is {old_entry:#x}, not the pair's")
     if new_entry is not None and new_entry != new_va:
         notes.append(f"1.17 entry is {new_entry:#x}, not the pair's")
     matched = carried(old_callees, new_callees)
-    # AND THE CALL GRAPH CAN BE THE DUMP'S GAP RATHER THAN THE PAIR'S PROBLEM. The ledger's other
+    # And the call graph can be the dump'S gap rather than the pair'S problem. The ledger's other
     # false refusal was `0x140249a50 -> 0x140249a50` -- byte-identical over its whole 0x3d leaf
     # extent, tail-jumping the same callee in both images -- where 1.16.2's dump lists three
-    # callees and 1.17's lists NONE. That is Ghidra having no references for a function it barely
+    # callees and 1.17's lists none. That is Ghidra having no references for a function it barely
     # analysed, not a function that stopped calling anything, and there is nothing to compare when
-    # one side is empty. Such a pair is reported CONFIRMED-THIN, never confirmed outright.
+    # one side is empty. Such a pair is reported confirmed-thin, never confirmed outright.
     topology_available = bool(old_callees) and bool(new_callees)
     # A quarter of them may fail to carry, and never fewer than one -- see the tolerance note in
     # the module docstring, which is a measured allowance rather than a chosen number.
@@ -237,7 +237,7 @@ def judge(query, old_va, new_va, args):
             + (" ..." if len(lost) > 4 else "")
         )
     resized = old_size is not None and new_size is not None and old_size != new_size
-    # A DIFFERENT SIZE NEEDS THE TOPOLOGY TO SPEAK FOR IT, and this clause is here because the
+    # A different size needs the topology to speak for it, and this clause is here because the
     # negative control caught its absence -- see SELFTEST_CASES.
     if resized and len(matched) < CORROBORATING_CALLEES:
         notes.append(
@@ -247,16 +247,16 @@ def judge(query, old_va, new_va, args):
         verdict = "CONTRADICTED"
     elif old_entry is None and new_entry is None:
         # Neither dump declares a function at either half, which is the ordinary condition of a
-        # leaf. There is no opinion here to agree or disagree with, and saying CONFIRMED would
+        # leaf. There is no opinion here to agree or disagree with, and saying confirmed would
         # manufacture one.
         verdict = "NO-DUMP-OPINION"
     elif resized:
-        # A body that GREW is what PATCH-SITE-IDENTICAL exists to describe, so it gets its own
+        # A body that grew is what patch-site-identical exists to describe, so it gets its own
         # word rather than a refusal.
         verdict = "CONFIRMED-RESIZED"
     elif not topology_available:
         # Entry and size agree and there is no call graph to ask on at least one side. Said out
-        # loud rather than printed as a plain CONFIRMED, because the strongest of the three
+        # loud rather than printed as a plain confirmed, because the strongest of the three
         # questions was vacuous here and the reader cannot tell that from a carried ratio.
         verdict = "CONFIRMED-THIN"
     else:

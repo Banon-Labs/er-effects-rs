@@ -1,26 +1,26 @@
 use crate::prelude::*;
 
 // ---------------------------------------------------------------------------------------------------
-// CAMERA LEVER (custom profile-portrait viewport). VERIFIED RE 2026-06-29 -- bd
+// Camera lever (custom profile-portrait viewport). Verified RE 2026-06-29 -- bd
 // `camera-lever-RE-VERIFIED-offsets-and-call-addrs-2026-06-29`. The interactive-face roadmap's camera
 // function addresses were garbled (dump-vs-deobf space confusion); these are ground-truthed against the
 // Ghidra runtime dump (`pc_eldenring_runtime.1.16.1.exe`) + `scripts/dump-deobf-shift.py`.
 //
-// The `CSMenuProfModelRend` ctor (dump 0x140bbe010) sets the orbit camera ONCE from `MenuOffscrRendParam`
+// The `CSMenuProfModelRend` ctor (dump 0x140bbe010) sets the orbit camera once from `MenuOffscrRendParam`
 // via `FUN_140bbe190`, which (a) writes the orbit fields below, (b) builds a view matrix into `+0x9e0`
 // via `FUN_140bbe480`, (c) pushes the CSPersCam (`+0x9d0`) into the offscreen render via `FUN_140bba550`.
-// We replicate steps (b)+(c) AFTER writing our own orbit fields, and never call `FUN_140bbe190` itself
+// We replicate steps (b)+(c) after writing our own orbit fields, and never call `FUN_140bbe190` itself
 // (it re-reads the param and clobbers the orbit fields).
 //
-// All offsets are BYTE offsets from the renderer (CSMenuProfModelRend) base.
+// All offsets are byte offsets from the renderer (CSMenuProfModelRend) base.
 /// Orbit target point, `Vec3` (x@+0x9b4, y@+0x9b8, z@+0x9bc); `w`@+0x9c0 is 1.0.
 pub const PROFILE_CAM_TARGET_OFFSET: usize = 0x9b4;
 pub const PROFILE_CAM_TARGET_W_OFFSET: usize = 0x9c0;
 /// Orbit distance (f32). Consumed sign-flipped by the matrix builder (camera sits behind the target);
-/// a SMALLER value = closer.
+/// a smaller value = closer.
 pub const PROFILE_CAM_DISTANCE_OFFSET: usize = 0x9c4;
 /// Orbit yaw (f32, radians) -- horizontal turn (Y-axis rotation in the matrix builder). Confirmed by
-/// the 2026-06-29 runtime smoke: a large delta on the OTHER field (+0x9cc) shifted the framing
+/// the 2026-06-29 runtime smoke: a large delta on the other field (+0x9cc) shifted the framing
 /// vertically, so +0x9c8 is yaw and +0x9cc is pitch (corrects the initial swapped labels).
 pub const PROFILE_CAM_YAW_OFFSET: usize = 0x9c8;
 /// Orbit pitch (f32, radians) -- vertical tilt (X-axis rotation in the matrix builder).
@@ -49,19 +49,19 @@ pub const PROFILE_CAM_PUSH_RVA: usize = 0xbba460;
 /// tilted portrait framing vs the engine's straight-on default. These exact values are the framing the
 /// user approved in the 2026-06-29 runtime smoke (a tight zoom with a strong upward pitch into the
 /// face); the deltas are correctly named after the pitch/yaw fix and remain free knobs to retune.
-// ZOOM-OUT (2026-06-30, user: loading-screen face was way too zoomed -- only forehead/eyes visible).
-// Pull the camera BACK past the engine baseline (>1.0) to a head-and-shoulders product shot, and drop the
+// Zoom-out (2026-06-30, user: loading-screen face was way too zoomed -- only forehead/eyes visible).
+// Pull the camera back past the engine baseline (>1.0) to a head-and-shoulders product shot, and drop the
 // strong upward pitch that framed the forehead. Free knobs -- retune from the user's image.
-// ZOOM-OUT AGAIN (2026-07-06, user): a character with a massive-head helmet FILLED the entire frame at
-// 1.7, leaving NO background -- so the depth mask cut nothing (unkeyed) and every frame was rejected, i.e.
+// Zoom-out again (2026-07-06, user): a character with a massive-head helmet filled the entire frame at
+// 1.7, leaving no background -- so the depth mask cut nothing (unkeyed) and every frame was rejected, i.e.
 // the render was fine but the framing starved the keyer. Pull back generously so even the biggest head
 // leaves background margin for the depth key. The overlay aspect-covers the keyed RT, so a smaller head
 // in the RT still composites; a head with no surrounding background does not.
-// ZOOM OUT FOR THE BODY (2026-09-07, user: "All I wanted to do was see more of the character's
+// Zoom out for the body (2026-09-07, user: "All I wanted to do was see more of the character's
 // legs"). At 6.0 the character's alpha filled 1540 of the offscreen render's 1542 rows (measured:
 // `box=(270,0)-(1167,1539)` in a 1542-square RT), so the legs were not merely mis-composited -- they
 // were outside the render entirely and no amount of blit arithmetic could recover them. This is the
-// only knob that changes what the RT CONTAINS.
+// only knob that changes what the RT contains.
 pub const PROFILE_CAM_DISTANCE_SCALE: f32 = 8.0;
 /// Slight vertical tilt only (was 0.40 = a forehead close-up).
 pub const PROFILE_CAM_PITCH_DELTA_RAD: f32 = 0.05;
@@ -69,7 +69,7 @@ pub const PROFILE_CAM_PITCH_DELTA_RAD: f32 = 0.05;
 /// straight-on (was -0.06, a slight off-axis turn).
 pub const PROFILE_CAM_YAW_DELTA_RAD: f32 = 0.0;
 pub const PROFILE_CAM_FOV_SCALE: f32 = 1.0;
-/// Per-slot latched baseline orbit, captured ONCE (before the first override write) so every per-tick
+/// Per-slot latched baseline orbit, captured once (before the first override write) so every per-tick
 /// override is derived from an immutable baseline -- drift-free and clobber-proof even if a refresh
 /// re-runs the engine camera setup. `Copy` so the array-repeat initializer below is const.
 #[derive(Clone, Copy, Debug)]
@@ -89,8 +89,8 @@ pub use er_telemetry_core::counters::PROFILE_CAM_LATCHED_MASK;
 pub static PROFILE_CAM_LAST_SLOT: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub use er_telemetry_core::counters::PROFILE_CAM_LAST_MATRIX_OK;
 
-/// The camera VALUES the last apply actually wrote, as `f32` bits (see the counters' own docs for the
-/// transport). The mask/apply counters above prove the override RAN; these say what it ran WITH, which
+/// The camera values the last apply actually wrote, as `f32` bits (see the counters' own docs for the
+/// transport). The mask/apply counters above prove the override ran; these say what it ran with, which
 /// is the only way an artifact set can answer "is the portrait camera identical for every character?".
 /// The engine baseline they derive from comes from `MenuOffscrRendParam` row 20 for all ten slots, so
 /// the expectation is that every slot reports the same seven numbers -- and a slot that does not is
@@ -103,7 +103,7 @@ pub use er_telemetry_core::counters::PROFILE_CAM_LAST_TARGET_Y_BITS;
 pub use er_telemetry_core::counters::PROFILE_CAM_LAST_TARGET_Z_BITS;
 pub use er_telemetry_core::counters::PROFILE_CAM_LAST_YAW_BITS;
 /// Offscreen render camera-params POD (the ~0xc4-byte block `FUN_140cca450` blits, dump 0x140cca450).
-/// VERIFIED RE 2026-06-29. Reached via the camera push: `FUN_140bba550` -> `FUN_140bb7da0` ->
+/// Verified RE 2026-06-29. Reached via the camera push: `FUN_140bba550` -> `FUN_140bb7da0` ->
 /// `FUN_141ad94e0` -> `FUN_140cca450(dst = *(offscreenRend+0x20) + 0xd0, src = *(offscreenRend+0x28))`.
 /// The leading 4x4 view matrix at +0x00 is written by `FUN_141a536b0` (copies exactly 0x40 bytes); the
 /// 1280x720 (0x500x0x2d0) viewport rects and the fov/aspect copies are written by `FUN_140b12260`.
@@ -134,7 +134,7 @@ pub struct OffscreenRenderCamParams {
     pub field_0x68: u32,
     /// +0x6c: aspect ratio (copied from view-state+0x54 by `FUN_140b12260`).
     pub aspect_ratio: f32,
-    /// +0x70: unknown (NOT copied by `FUN_140cca450`; present in the layout).
+    /// +0x70: unknown (not copied by `FUN_140cca450`; present in the layout).
     pub field_0x70: u32,
     /// +0x74..+0x9c: unknown.
     pub field_0x74: u32,

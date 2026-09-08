@@ -1,21 +1,21 @@
-//! Generate a SYNTHETIC menu mod for compatibility smoke-testing the armament badge.
+//! Generate a synthetic menu mod for compatibility smoke-testing the armament badge.
 //!
 //! # Why this exists
 //!
-//! Users install a menu/HUD `.gfx` mod ON DISK (an me3 package). The badge DLL must hook
-//! THAT file, not vanilla. Testing against a real third-party mod works, but a downloaded mod
+//! Users install a menu/HUD `.gfx` mod on disk (an me3 package). The badge DLL must hook
+//! that file, not vanilla. Testing against a real third-party mod works, but a downloaded mod
 //! also drags in its own version skew -- the Minimal HUD run on 2026-07-28 shipped March-2022
 //! (~ER 1.02) movies onto 1.16.2 and rendered tofu in surfaces we never touch, which is noise
-//! for OUR question.
+//! for our question.
 //!
-//! So this builds the mod from the CURRENT corpus instead. Same game version, one controlled
+//! So this builds the mod from the current corpus instead. Same game version, one controlled
 //! variable: every item tile's furniture is scaled by `--scale`. If the badge is genuinely
 //! derived from the user's movie rather than from vanilla assumptions, it scales with it.
 //!
 //! # The boundary this tool respects
 //!
-//! * THIS TOOL writes `.gfx` files to disk and does nothing at runtime.
-//! * THE DLL modifies `.gfx` only in memory (it swaps the Scaleform `MemoryFile`'s data
+//! * this tool writes `.gfx` files to disk and does nothing at runtime.
+//! * the DLL modifies `.gfx` only in memory (it swaps the Scaleform `MemoryFile`'s data
 //!   pointer) and never writes a `.gfx` to disk.
 //!
 //! Output goes under `target/` (gitignored) by default: game-derived bytes are never
@@ -74,7 +74,7 @@ fn scale_matrix(m: &mut Matrix, k: f32) {
     m.scale_y = (m.scale_y as f32 * k) as i32;
     m.translate_x = (m.translate_x as f32 * k) as i32;
     m.translate_y = (m.translate_y as f32 * k) as i32;
-    // `*_nbits` carry the SOURCE bit widths and are written back verbatim, so a widened value
+    // `*_nbits` carry the source bit widths and are written back verbatim, so a widened value
     // needs a widened field or the writer emits a truncated matrix.
     m.scale_nbits = m.scale_nbits.max(sbits(m.scale_x)).max(sbits(m.scale_y));
     m.translate_nbits = m

@@ -1,10 +1,10 @@
-//! In-world menu drive via the CS VIRTUAL-KEY layer (bd MENU-INPUT-LAYER-virtual-key-array-source-plus-
+//! In-world menu drive via the CS virtual-key layer (bd menu-input-layer-virtual-key-array-source-plus-
 //! 0x88). The per-key array lives at `FD4PadDevice+0x88`, where the device is
 //! `*(*(base+0x485dc20) + 0x18 + dev*8)` -- `FD4PadManager::padDevices[dev]`; index = `id-1000`, ids
-//! 1000..1080, a `1` byte = "down this frame". It is rebuilt EVERY frame from GLOBAL_DLUserInputManager
+//! 1000..1080, a `1` byte = "down this frame". It is rebuilt every frame from GLOBAL_DLUserInputManager
 //! by the builders
-//! (deobf FUN_140240f20/FUN_1402411e0 dump = deobf 0x140240e70/0x140241130, CORRECTED 2026-07-23). Raw pad buttons (+0x890/+0x9f0) and inputmgr+0x90 are BOTH
-//! off the read path (proven at runtime across 3 cycles). So we MinHook the builders and, AFTER the
+//! (deobf FUN_140240f20/FUN_1402411e0 dump = deobf 0x140240e70/0x140241130, corrected 2026-07-23). Raw pad buttons (+0x890/+0x9f0) and inputmgr+0x90 are both
+//! off the read path (proven at runtime across 3 cycles). So we MinHook the builders and, after the
 //! original rebuilds the array, write our desired key id into `padDevices[dev]+0x88` (a pre-original write is
 //! wiped by the rebuild). Edge-triggered: hold `1` one frame then `0` >=1 frame.
 //!
@@ -19,20 +19,20 @@ use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 
 use crate::log::harness_log;
 
-// CORRECTED 2026-07-23 (bd ROOTCAUSE-padinject-builder-RVAs-are-wrong / CORRECTED-inworld-input-writer):
-// the prior RVAs (0x240dc0/0x241080/0x2634b0) were WRONG -- they pointed at neighboring thunk stubs, so
+// Corrected 2026-07-23 (bd ROOTCAUSE-padinject-builder-RVAs-are-wrong / corrected-inworld-input-writer):
+// the prior RVAs (0x240dc0/0x241080/0x2634b0) were wrong -- they pointed at neighboring thunk stubs, so
 // the MinHook detour never fired in-world (probe run4: builder_fires=0) and no injected input reached the
 // menu. Recovered from the Ghidra dump: the writer 0x1426634a0's callers are the real builders
 // 0x140240e70 / 0x140241130. Each builder loops ids 1000..0x438 and, for each down key, calls the
 // writer with (device = padDevices[dev], id).
 //
-// RE-CONFIRMED 2026-08-31 against the 1.16.2 dump on :8765, which is what the MCP now serves; the
+// RE-confirmed 2026-08-31 against the 1.16.2 dump on :8765, which is what the MCP now serves; the
 // old "dump = deobf, shifted" bookkeeping above and the `dump-deobf-shift` reference that used to
 // stand here are both obsolete (that tool was cross-version and has been deleted -- for 1.16.2 the
 // dump VA, the deobf VA and the runtime VA are the same address). The three entries below are byte
 // checks in `eldenring-deobf.bin` (builder prologue `mov [rsp+8],rcx; push rbp/rsi/rdi/r12`; writer
-// `lea eax,[rdx-0x3e8]; cmp eax,0x50` = id-1000 bounds-checked 0..80), and all three carry HELD on
-// 1.17: the builders sit at the SAME addresses with 195/195 instructions aligned, and the writer
+// `lea eax,[rdx-0x3e8]; cmp eax,0x50` = id-1000 bounds-checked 0..80), and all three carry held on
+// 1.17: the builders sit at the same addresses with 195/195 instructions aligned, and the writer
 // pairs to 0x142665cb0 byte-for-byte.
 const BUILDER_A_RVA: usize = 0x240e70; // rebuilds padDevices[dev]+0x88, loops ids 1000..1080
 const BUILDER_B_RVA: usize = 0x241130; // FUN_1402411e0 (dump): twin builder (second device/slot)
@@ -43,12 +43,12 @@ const FD4_PAD_MANAGER_RVA: usize = 0x485dc20;
 ///
 /// The `DLFixedVector` accessor emits an alignment fudge, `(-(u32)(manager + 0x18)) & 7`, before the
 /// index; `manager` is 8-byte-aligned heap, so that term is always 0 and the address really is
-/// `manager + 0x18 + dev*8`. Witnessed HELD on 1.17 by builder A (0x140240e70, 195/195 instructions
+/// `manager + 0x18 + dev*8`. Witnessed held on 1.17 by builder A (0x140240e70, 195/195 instructions
 /// aligned, base rsi/rcx = the manager).
 const PAD_MGR_DEVICES_18_OFFSET: usize = 0x18;
 /// `FD4PadManager::padDevices.count`. `padDevices` is 0x30 bytes at +0x18, so its count sits at
 /// +0x40 -- which is where the game itself bounds-checks (`cmp rbp, [rcx+0x40]` at the head of every
-/// builder). Also witnessed HELD on 1.17 by that same alignment.
+/// builder). Also witnessed held on 1.17 by that same alignment.
 const PAD_DEVICES_COUNT_40_OFFSET: usize = 0x40;
 /// Highest device index the fixed vector can hold, per its `DLFixedVector<...,4>` declaration. Used
 /// only to clamp a count read out of live memory.
@@ -56,20 +56,20 @@ const PAD_DEVICES_MAX: usize = 4;
 /// The per-key "down this frame" array on `FD4::FD4PadDevice`; entry `id-1000` is at
 /// `device + 0x88 + (id-1000)*2` (2-byte stride, low byte written).
 ///
-/// OWNER AND VALUE BOTH RE-MEASURED 2026-08-31 (bd
+/// Owner and value both RE-measured 2026-08-31 (bd
 /// `vk-array-88-owner-is-FD4PadDevice-not-CSInGamePad-and-held-on-1170-2026-08-31`).
 ///
-/// * The offset did NOT move on 1.17. The one function that writes this array, 1.16.2 0x1426634a0,
+/// * The offset did not move on 1.17. The one function that writes this array, 1.16.2 0x1426634a0,
 ///   pairs to 1.17 0x142665cb0 and is byte-identical -- `mov byte [rcx+rdx*2+0x88],1` after a
 ///   `cmp eax,0x50` bound on `id-1000` -- so 0x88 is measured in both images, not carried.
-/// * The OWNER is `FD4::FD4PadDevice`, not `CS::CSInGamePad`. All FOUR call sites of that writer
+/// * The owner is `FD4::FD4PadDevice`, not `CS::CSInGamePad`. All four call sites of that writer
 ///   (0x140240e70, 0x140241130, 0x140e321b0, 0x140e32470) load `rcx` from `padDevices[dev]`, with no
 ///   exception; `FD4PadManager::Init` fills that array with `HeapAlloc(0x3c0)` + `FD4PadDevice::
 ///   FD4PadDevice` + `FD4PadDevice::vftable`. `FD4PadDevice`'s constructor (0x142663880 ->
-///   0x142666090) aligns 168/168 with ZERO moved offsets and its allocation size is still 0x3c0.
+///   0x142666090) aligns 168/168 with zero moved offsets and its allocation size is still 0x3c0.
 ///
-/// The `padMaps` accessor FUN_1402413f0 is deliberately NOT declared here any more: it returns the
-/// CSInGamePad, which merely HOLDS the device at `+0x10` (Ghidra names the type `CSInGamePad0x10`
+/// The `padMaps` accessor FUN_1402413f0 is deliberately not declared here any more: it returns the
+/// CSInGamePad, which merely holds the device at `+0x10` (Ghidra names the type `CSInGamePad0x10`
 /// after that field, and its constructor 0x1426647a0 does `param_1[2] = padDevices[dev]`), so it is
 /// one indirection away from this array rather than a route to it.
 ///
@@ -90,7 +90,7 @@ static ORIG_BUILDER_A: AtomicUsize = AtomicUsize::new(0);
 static ORIG_BUILDER_B: AtomicUsize = AtomicUsize::new(0);
 static ORIG_WRITER: AtomicUsize = AtomicUsize::new(0);
 static HOOKS_ACTIVE: AtomicUsize = AtomicUsize::new(0);
-// Instrumentation (bd PROCESS-instrument-autonomously): did the hooks fire, and does my computed source
+// Instrumentation (bd process-instrument-autonomously): did the hooks fire, and does my computed source
 // match the game's real writer source? Answers the "wrong function / wrong object" questions with no
 // user input.
 static BUILDER_FIRES: AtomicU32 = AtomicU32::new(0);
@@ -119,15 +119,15 @@ pub fn pad_snapshot() -> (u32, u32, usize, usize, [u32; 3]) {
     )
 }
 
-/// Probe API: inject a RAW virtual-key id (1000..1080) into `padDevices[dev]+0x88` each frame (0 = release).
+/// Probe API: inject a raw virtual-key id (1000..1080) into `padDevices[dev]+0x88` each frame (0 = release).
 ///
-/// This stays a RAW-id API on purpose. A typed `PadButton` wrapper used to sit in front of it and was
+/// This stays a raw-id API on purpose. A typed `PadButton` wrapper used to sit in front of it and was
 /// removed 2026-08-21: the planned `padDevices[dev]+0x88` id -> action map was never recovered, so every one of
 /// its variants mapped to id `0` and the enum carried no reverse-engineered information at all.
 ///
 /// The evidence behind that is negative and specific (bd
 /// `DECISIVE-source88-does-NOT-drive-pausemenu-fullsweep`): ids 1000..1080 were swept against the
-/// in-world pause menu and NONE produced a reproducible job/flags/tab/return-title response. The menu
+/// in-world pause menu and none produced a reproducible job/flags/tab/return-title response. The menu
 /// is driven through `inputmgr+0x90+eventId` (`crate::input_inject::tap_menu_event`) instead. This entry
 /// point survives only for explicit raw-id diagnostics, should a later RE pass find the real consumer.
 pub fn set_vk_id(id: u32) {
@@ -136,15 +136,15 @@ pub fn set_vk_id(id: u32) {
 
 /// After a builder rebuilds `padDevices[dev]+0x88`, stamp the desired key id down. `manager` is the builder's
 /// first arg (GLOBAL_FD4PadManager); `dev` is its device index (edx).
-/// `FD4PadDevice + 0x78` -- the pointer EVERY menu-input read dereferences. It is a different struct
+/// `FD4PadDevice + 0x78` -- the pointer every menu-input read dereferences. It is a different struct
 /// from the `+0x88` per-virtual-key array below, which is why sweeping ids 1000..1080 against the
-/// pause menu drove nothing (bd DECISIVE-source88-does-NOT-drive-pausemenu-fullsweep): that sweep was
+/// pause menu drove nothing (bd decisive-source88-does-not-drive-pausemenu-fullsweep): that sweep was
 /// the right idea aimed at the wrong field. Every reader on `CS::CSEzMenuViewerPad` goes through it --
 /// `FUN_140e34fb0` reads `+0x08`, `FUN_140e35040` reads `+0x10`, `FUN_140e35080` reads `+0x28`.
 const PAD_MENU_STATE_78_OFFSET: usize = 0x78;
 /// The menu's list-scroll AXIS inside that struct. `FUN_140e35080` returns `*(int*)(state+0x28) /
 /// 0x78`, so scrolling is an analog MAGNITUDE, not a button edge -- one row per `0x78` of value.
-/// `FUN_14075d8f0` turns the result into a repeat count, and `FUN_140756000` picks the SIGN from the
+/// `FUN_14075d8f0` turns the result into a repeat count, and `FUN_140756000` picks the sign from the
 /// CSPcKeyConfig binding id (9 = list down, 10 = list up, both measured live), so a single signed
 /// write drives either direction.
 const PAD_MENU_SCROLL_AXIS_28_OFFSET: usize = 0x28;
@@ -153,13 +153,13 @@ pub const PAD_MENU_SCROLL_UNIT: i32 = 0x78;
 
 /// Raw axis value to stamp into the menu scroll field each frame (0 = neutral).
 static DESIRED_MENU_AXIS: AtomicU32 = AtomicU32::new(0);
-/// Last value observed in the axis field BEFORE we wrote it, so a run reports the game's own resting
+/// Last value observed in the axis field before we wrote it, so a run reports the game's own resting
 /// value rather than leaving the field's meaning assumed. Local to this DLL (it does not link
 /// er-telemetry-core), read back through `menu_axis_observed()`.
 static PAD_MENU_AXIS_OBSERVED: AtomicU32 = AtomicU32::new(0);
 
 // `menu_axis_observed()` is gone: it reported the value at padDevices[dev]+0x78+0x28, and that walk
-// is the WRONG OBJECT for menu input -- it returned 0x401c0000, an IEEE float, where the reader does
+// is the wrong object for menu input -- it returned 0x401c0000, an IEEE float, where the reader does
 // an integer divide. `menu_scroll_reader_state()` replaces it by reporting the device the reader
 // itself dereferenced, which needs no reimplementation of FUN_1402414a0's red-black walk.
 
@@ -217,30 +217,30 @@ unsafe fn inject_vk(manager: usize, dev: usize) {
     }
 }
 
-/// PER-FRAME DIRECT stamp of `id` into `FD4PadDevice+0x88`, resolving the device from the game base
-/// (bd DECISIVE-builder-not-perframe-in-menu-need-perframe-direct-stamp). The builder that
-/// `builder_*_hook` stamps after does NOT run per-frame while a menu is open (builder_fires stuck), so
+/// Per-frame direct stamp of `id` into `FD4PadDevice+0x88`, resolving the device from the game base
+/// (bd decisive-builder-not-perframe-in-menu-need-perframe-direct-stamp). The builder that
+/// `builder_*_hook` stamps after does not run per-frame while a menu is open (builder_fires stuck), so
 /// builder-hook injection is too sparse to drive the menu; the array is read every frame, so the drive
-/// must WRITE it every frame. `id`=0 (or out of range) is a no-op release. Guarded by HEAP_LO on every
+/// must write it every frame. `id`=0 (or out of range) is a no-op release. Guarded by HEAP_LO on every
 /// deref; never panics.
 ///
-/// THE DEVICE IS `padDevices[dev]`, NOT THE `padMaps` CSInGamePad. Between 2026-07-23 and 2026-08-31
-/// this walked `padMaps` (+0x48) for a `CS::CSInGamePad_UserInput1` by TypeID and stamped THAT object's
+/// The device is `padDevices[dev]`, not the `padMaps` CSInGamePad. Between 2026-07-23 and 2026-08-31
+/// this walked `padMaps` (+0x48) for a `CS::CSInGamePad_UserInput1` by TypeID and stamped that object's
 /// +0x88. Every one of the four call sites of the game's own writer 0x1426634a0 loads `rcx` from
 /// `manager + 0x18 + dev*8` instead, so the array is a field of `FD4::FD4PadDevice` and the tree-walk
 /// was aimed at the wrong object -- one that is only `HeapAlloc(0x98)` = 152 bytes, so ids from 1008 up
-/// wrote PAST THE END of a live game allocation. It never fired in practice (the TypeID needles are
+/// wrote past the end of a live game allocation. It never fired in practice (the TypeID needles are
 /// `.data` RVAs with no 1.17 mapping, so `game_data_addr` refused them and the search matched nothing),
 /// which is the only reason the overrun was never observed rather than a reason it was safe.
 /// `CS::CSEzMenuViewerPad` list-scroll axis reader -- 1.16.2 `0x140e35080`, 1.17 `0x140e36e80`
 /// (mapped +0x1e00, unique 40-byte signature, and the 1.17 body was read: same
-/// `*(int*)(*(this+0x10)+0x78)+0x28) / 0x78` shape). Hooking it is INPUT DELIVERY at the boundary the
+/// `*(int*)(*(this+0x10)+0x78)+0x28) / 0x78` shape). Hooking it is input delivery at the boundary the
 /// game reads, the same shape as stamping the DInput keyboard buffer -- not a write of the outcome
 /// the game would have computed.
 const MENU_SCROLL_AXIS_READER_RVA: usize = 0xe35080;
 static ORIG_MENU_SCROLL_READER: AtomicUsize = AtomicUsize::new(0);
 /// The device pointer the reader dereferenced (`*(this+0x10)`), captured so the padMaps object the
-/// menu actually uses can be identified WITHOUT reimplementing FUN_1402414a0's red-black walk.
+/// menu actually uses can be identified without reimplementing FUN_1402414a0's red-black walk.
 static MENU_PAD_DEVICE_SEEN: AtomicUsize = AtomicUsize::new(0);
 /// Raw value the reader found in the axis field, before any override.
 static MENU_AXIS_RAW_SEEN: AtomicU32 = AtomicU32::new(0);
@@ -284,9 +284,9 @@ unsafe extern "system" fn menu_scroll_reader_hook(this: usize) -> i32 {
     unsafe { f(this) }
 }
 
-/// POINTER POSITION, the fourth and last thing `CS::CSEzMenuViewerPad` exposes. `FUN_140e34ff0`
+/// Pointer position, the fourth and last thing `CS::CSEzMenuViewerPad` exposes. `FUN_140e34ff0`
 /// (1.17 `0x140e36df0`, body read: identical) returns `*(int*)(*(this+0x10)+0x78)+0x20)` as X and
-/// `+0x24` as Y. It needs NO hook of its own: those two ints live in the SAME struct as the buttons
+/// `+0x24` as Y. It needs no hook of its own: those two ints live in the same struct as the buttons
 /// and the axis, so once the device is known the whole menu input state is writable directly.
 ///
 /// This is the field CS::GridControl actually consults. Its input wrappers (`FUN_140758a10`,
@@ -357,7 +357,7 @@ pub fn sample_pointer_correction(base: usize) {
     }
 }
 
-/// Sample the menu input struct on the device the axis reader captured. READ-ONLY: it reports what
+/// Sample the menu input struct on the device the axis reader captured. Read-ONLY: it reports what
 /// the game has, which is the prerequisite for choosing coordinates instead of guessing them -- the
 /// caller of `FUN_140e34ff0` subtracts `g_GxDrawContext+0x128 +0x110/+0x114` from the pair, so the
 /// space these ints live in has to be observed, not assumed to be screen pixels.
@@ -379,10 +379,10 @@ pub fn sample_menu_pointer() {
     }
 }
 
-/// Inject a virtual-key id into the MENU's own pad device, not `padDevices`.
+/// Inject a virtual-key id into the menu's own pad device, not `padDevices`.
 ///
-/// WHY A SECOND INJECTOR EXISTS. `set_vk_id` writes `padDevices[dev]+0x88`, which is the right array
-/// and the WRONG device for menus: this repo already measured that the menu's device is not in
+/// Why a second INJECTOR exists. `set_vk_id` writes `padDevices[dev]+0x88`, which is the right array
+/// and the wrong device for menus: this repo already measured that the menu's device is not in
 /// `padDevices` (`manager+0x18`) at all -- `FUN_1402414a0` resolves it by a red-black walk over
 /// `padMaps` (`manager+0x48`). Injecting into `padDevices` therefore cannot reach a menu, and a
 /// sweep of all 81 ids through it produced no cursor movement in the save-file picker while proving
@@ -420,11 +420,11 @@ const VK_ID_SPAN: usize = 0x50;
 
 /// Write the menu pointer the pause-menu cursor follows, and report whether the write landed.
 ///
-/// PROVEN TO BE THE RIGHT FIELD BY STIMULUS, not by inference (2026-09-05, br-20260905-174357-df99).
+/// Proven to be the right field by stimulus, not by inference (2026-09-05, br-20260905-174357-df99).
 /// While the user nudged a real mouse across the open pause menu, `CS::GridControl` `0x8b370ab8`'s
 /// selected cell at `+0xd4` tracked it through 5, 6, 1, 2, 4, 3, 2, 17 -- and every other live
 /// GridControl in the process held still across all 30 samples. So the pause menu is
-/// POINTER-DRIVEN: the cursor is a hit-test of this coordinate pair, not a list index that a
+/// pointer-DRIVEN: the cursor is a hit-test of this coordinate pair, not a list index that a
 /// direction key increments. That is why every axis and button write this module made was ignored.
 ///
 /// The coordinates are in the same space `sample_menu_pointer` reads back, which is why the read
@@ -445,7 +445,7 @@ pub fn write_menu_pointer(x: i32, y: i32) -> bool {
     wrote_x && wrote_y
 }
 
-/// The two `CS::CSEzMenuViewerPad` BUTTON readers, beside the axis one. 1.16.2 -> 1.17 pairs are in
+/// The two `CS::CSEzMenuViewerPad` button readers, beside the axis one. 1.16.2 -> 1.17 pairs are in
 /// the verified map and both 1.17 bodies were read: identical `*(byte*)(*(this+0x10)+0x78)+off)`
 /// shape, sizes 49/49. `+0x08` is the one `FUN_14075d6e0` folds into bit 1 of its result and `+0x10`
 /// into bit 4 -- which of those the menu treats as confirm is not assumed here; both are drivable and
@@ -523,24 +523,24 @@ pub fn install_menu_scroll_hook(base: usize) {
     }
 }
 
-// DELETED 2026-09-05: `stamp_menu_scroll_direct`. It resolved every device out of
-// `FD4PadManager.padDevices` and wrote the scroll axis into each one -- and MEASURED on
+// Deleted 2026-09-05: `stamp_menu_scroll_direct`. It resolved every device out of
+// `FD4PadManager.padDevices` and wrote the scroll axis into each one -- and measured on
 // br-20260905-234626-ce9a that write reaches nothing the menu reads: `menu_scroll_reader_hook`
 // reported `raw_axis=0` on all 1,553 of its calls while the stamp ran every frame. The menu's device
 // comes from the padMaps tree, not padDevices (bd
 // menu-pad-device-comes-from-the-padmaps-tree-not-paddevices-2026-09-05), so the two were never the
 // same object. What actually delivered the scroll was the `set_menu_scroll` call the function made on
-// its way in, whose value the reader hook RETURNS to the game. Callers therefore got input by side
+// its way in, whose value the reader hook returns to the game. Callers therefore got input by side
 // effect while believing it came from the write, which is the worst shape a helper can have. Call
-// `set_menu_scroll` directly, and note that it is a HELD state: it is returned on every read until
+// `set_menu_scroll` directly, and note that it is a held state: it is returned on every read until
 // something sets it back to 0, so a caller that never releases is holding the direction down.
 
 pub unsafe fn stamp_vk_direct(base: usize, id: u32, val: u8) {
     if !(VK_ID_MIN..=VK_ID_MAX).contains(&id) || base < HEAP_LO {
         return;
     }
-    // FAULT-SAFE reads (ReadProcessMemory pseudo-handle) so a wrong offset returns None instead of
-    // CRASHING the game (raw derefs froze run10/run11).
+    // Fault-safe reads (ReadProcessMemory pseudo-handle) so a wrong offset returns None instead of
+    // crashing the game (raw derefs froze run10/run11).
     let rd = |p: usize| -> Option<usize> {
         if p < HEAP_LO {
             None
@@ -549,8 +549,8 @@ pub unsafe fn stamp_vk_direct(base: usize, id: u32, val: u8) {
         }
     };
     let off = VK_ARRAY_88_OFFSET + ((id - VK_ID_MIN) as usize) * 2;
-    // CACHE the resolved device (bd BISECT-stamp_vk_direct-stops-drive): per-frame RPM walking stalls
-    // the CSTaskImp task and STOPS the drive. Resolve once, then do ONE fault-safe write per frame.
+    // Cache the resolved device (bd BISECT-stamp_vk_direct-stops-drive): per-frame RPM walking stalls
+    // the CSTaskImp task and stops the drive. Resolve once, then do one fault-safe write per frame.
     let cached = CACHED_PAD.load(Ordering::SeqCst);
     if cached >= HEAP_LO {
         unsafe {
@@ -589,7 +589,7 @@ pub unsafe fn stamp_vk_direct(base: usize, id: u32, val: u8) {
     report_inert("no usable padDevices entry under the manager");
 }
 
-/// Say ONCE that the in-world virtual-key drive could not resolve a device. A drive that quietly
+/// Say once that the in-world virtual-key drive could not resolve a device. A drive that quietly
 /// does nothing is indistinguishable from a drive whose input the game ignored, and this path has
 /// already produced that exact confusion once.
 fn report_inert(why: &str) {

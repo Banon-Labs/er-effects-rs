@@ -2,16 +2,16 @@
 """Adaptive, fleet-portable process detector.
 
 Replaces the fragile single-boundary `pgrep -x <name>` used in runtime preflights.
-The problem it solves: this repo runs on several machines with DIFFERENT process
+The problem it solves: this repo runs on several machines with different process
 topologies, so no single command reliably answers "is Steam up?" / "is the game up?":
 
   * canonical Linux box   -- Steam + Proton game are native Linux procs; `pgrep` works.
   * WSL2 / nested-container box -- the shell lives in a sysbox Docker container whose PID
-    namespace sees ~70 infra procs and NONE of Steam/the game; Steam is a *Windows*
+    namespace sees ~70 infra procs and none of Steam/the game; Steam is a *Windows*
     process (visible only via Windows interop `tasklist.exe`), and the Proton game runs
     in a Linux session in a different, unreachable namespace.
 
-So a robust detector must probe EVERY boundary that exists on the current box and report
+So a robust detector must probe every boundary that exists on the current box and report
 which one (if any) saw the target. This script does that with zero third-party deps:
 
   boundaries (each used only if available):
@@ -27,8 +27,8 @@ Usage:
     detect-proc.py --json steam
     detect-proc.py --list-boundaries    # show which boundaries this box exposes
 
-Exit code = number of requested targets NOT found on any boundary (0 == all present).
-Targets are matched as case-insensitive regexes against process/image/window names AND
+Exit code = number of requested targets not found on any boundary (0 == all present).
+Targets are matched as case-insensitive regexes against process/image/window names and
 full command lines, so `steam`, `eldenring`, `steam_app_1245620` all work.
 """
 from __future__ import annotations
@@ -60,7 +60,7 @@ def _run(cmd: list[str]) -> str | None:
     """Run a helper command, returning decoded stdout or None on any failure.
 
     Never raises: a missing/blocked boundary must degrade to "not probed", not crash the
-    whole detector, so the boundaries that DO work still answer.
+    whole detector, so the boundaries that do work still answer.
     """
     try:
         out = subprocess.run(
@@ -99,9 +99,9 @@ def boundary_local_proc() -> list[tuple[str | None, str, str]] | None:
                 comm = fh.read().strip()
         except OSError:
             continue
-        # Use argv[0] (the actual executable path), NOT the full command line: matching a
+        # Use argv[0] (the actual executable path), not the full command line: matching a
         # generic word like "steam" against the whole cmdline catches any shell that merely
-        # MENTIONS it (e.g. this detector's own invocation). argv[0] is the real binary, and
+        # mentions it (e.g. this detector's own invocation). argv[0] is the real binary, and
         # a path-anchored game exe (".../eldenring.exe") still matches; a wine-reparented
         # process whose argv[0] was rewritten is still caught by `comm` above.
         argv0 = comm
@@ -170,7 +170,7 @@ BOUNDARIES = {
 # "Is Steam up?" is the wrong question for a runtime preflight. The right question is: is
 # there a Steam that is (1) running, (2) signed in, and (3) has the target game installed --
 # because that is the Steam the game actually launches against. On a mixed box (Windows
-# Steam + WSL) the answer must pick the READY one, not just any process named steam.
+# Steam + WSL) the answer must pick the ready one, not just any process named steam.
 
 ER_APPID = "1245620"
 

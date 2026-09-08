@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail when two ME3-loadable DLLs detour the same address without a conflict-table entry.
 
-WHY THIS GATE EXISTS
+Why this gate exists
 --------------------
 Two MinHook instances on one prologue overwrite each other's trampolines. The DLL that loses
 does not crash, does not log an error, and reports its hook as installed -- it simply never
@@ -15,11 +15,11 @@ strip, stats panel and both text-input movies were all silently inert. Loaded al
 build reported 113 hits and derived its movie correctly. The whole day's symptom was a loader
 bug wearing a feature bug's clothes.
 
-WHY GREPPING FOR ADDRESSES WOULD NOT HAVE CAUGHT IT
+Why GREPPING for addresses would not have caught it
 --------------------------------------------------
-Both sides referenced the same NAMED constant (`er_game_base::rva::TITLE_SCALEFORM_FILE_OPEN_RVA`)
+Both sides referenced the same named constant (`er_game_base::rva::TITLE_SCALEFORM_FILE_OPEN_RVA`)
 rather than a literal, so searching the tree for `0x11ced80` finds only its single definition.
-This gate therefore matches on the NAME as well as on literal addresses.
+This gate therefore matches on the name as well as on literal addresses.
 
 ...AND WHY MATCHING ON THE NAME WAS ONLY HALF THE ANSWER (fixed 2026-08-30)
 --------------------------------------------------------------------------
@@ -29,8 +29,8 @@ name and the other under a bare literal -- keyed differently and never collided.
 printed `2 shared and all declared`, which is a statement about spellings presented as a statement
 about addresses.
 
-MEASURED on this tree the same day: keying on the resolved VALUE instead finds 37 shared addresses
-where the name key found 2, and TWO of them are undeclared pairs the name key could not see:
+Measured on this tree the same day: keying on the resolved value instead finds 37 shared addresses
+where the name key found 2, and two of them are undeclared pairs the name key could not see:
 
     0x836f30  er-diag-harness  DLC_ROOTS_JOB_RVA   (installs a detour: `install_one_dlc_roots_hook`)
               er-reload-trace  rva: 0x836f30       (installs a detour: `hook_map_request_do`)
@@ -43,44 +43,44 @@ entry asserted of that address that "No other shell in this table names any of t
 er-reload-trace spells it as a bare `rva:` field in a `HookSpec` table, with no constant name at
 all, so nothing keyed on names could ever have contradicted the claim.
 
-BOTH WERE CLOSED THE SAME DAY, and they turned out to be different KINDS of finding -- which is why
+Both were closed the same day, and they turned out to be different kinds of finding -- which is why
 this paragraph keeps them apart rather than calling both "collisions":
 
-  0x836f30 WAS a real two-instance collision, and a LIVE one: `~/Elden/group-1170.me3` co-loads
+  0x836f30 was a real two-instance collision, and a live one: `~/Elden/group-1170.me3` co-loads
   er_quickload, er_diag_harness, er_reload_trace and er_armament_icons together, so the closure
   generator's `[[conflict]]` ranking never got a vote. er-diag-harness held the private `MhHook`
   and moved to `er_hook::register_shared_hook` with a `UnionFn`-shaped handler (the target takes
-  four INTEGER args and returns one, checked against er-hook's "no float/>4-stack-arg" constraint
+  four integer args and returns one, checked against er-hook's "no float/>4-stack-arg" constraint
   before proposing it). One instance now owns the prologue; the pair is a [[shared]] row.
 
-  0x733150 was NEVER a MinHook collision -- er-armament-icons only CALLS that predicate, and the
+  0x733150 was never a MinHook collision -- er-armament-icons only calls that predicate, and the
   two crates that really detour it (er-quickload and er-reload-trace) were already chained on the
   product's single instance and already declared. The gate reported the wrong pair because an
-  ALIAS-shaped `const NAME: usize = <addr>;` is indistinguishable from a hook target by text alone;
-  a proximity rule that tried to tell them apart was tested and REJECTED, because it also stopped
+  alias-shaped `const NAME: usize = <addr>;` is indistinguishable from a hook target by text alone;
+  a proximity rule that tried to tell them apart was tested and rejected, because it also stopped
   seeing er-diag-harness's genuine claim on 0x836f30 above. er-reload-trace's observer there was
   removed on its own merits instead (duplicative of an always-on product hook, and it mislabelled
   er-armament-icons' per-tile calls) -- see the comment where that HookSpec row used to be.
 
-So the key is now the RESOLVED VALUE, through `scripts/rva_symbols.py` -- the same resolver
+So the key is now the resolved value, through `scripts/rva_symbols.py` -- the same resolver
 `check-stale-rva-calls.py` and `check-1170-translation-collisions.py` use, which reads enum
 discriminants, aliases, `use ... as ...` renames and const arithmetic rather than one regex shape.
-A token whose value CANNOT be resolved keeps its name as the key: an unreadable claim must stay a
+A token whose value cannot be resolved keeps its name as the key: an unreadable claim must stay a
 claim, because dropping it would turn "I could not resolve this" into "this collides with
 nothing", and those are the two answers this whole family of gates exists to keep apart.
 
-WHAT IT DOES
+What it does
 ------------
 For every cdylib crate (the ME3-loadable shells), collect the hook targets it names: shared RVA
 constants from `er_game_base::rva`, bare `0x1xxxxxxx`-shaped literals on lines that look like hook
 installation, and bare `rva:` / `address:` / `prologue:` table fields (`HookSpec { rva: 0x836f30,
-detour: .. }`), which name an address with no constant at all. Each is resolved to a VALUE. Any
+detour: .. }`), which name an address with no constant at all. Each is resolved to a value. Any
 address claimed by two or more cdylibs must appear in `scripts/me3-dll-conflicts.toml`, either
 as a `[[conflict]]` pair (they must never share a profile) or as a `[[shared]]` pair (they may,
-because both route through ONE MinHook instance via the hook union), or this fails.
+because both route through one MinHook instance via the hook union), or this fails.
 
 Being listed as a conflict is not a fix -- it is a decision, recorded where the profile generator
-can act on it. `[[shared]]` IS the fix, and this gate proves it rather than taking its word: each
+can act on it. `[[shared]]` is the fix, and this gate proves it rather than taking its word: each
 side names its detour (`handler_a` / `handler_b`), and that symbol must be handed to a union
 registrar and must never appear in an `MhHook::new(...)` call. Reverting either side to a private
 MinHook instance is then a red gate, not another silent session.
@@ -106,9 +106,9 @@ import tomllib
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-# ONE RESOLVER, NOT A FOURTH REGEX. `rva_symbols` turns a token into the number it denotes,
+# One RESOLVER, not a fourth REGEX. `rva_symbols` turns a token into the number it denotes,
 # reading every declaration form this tree uses -- enum discriminants, `use ... as ...` renames,
-# const arithmetic, array elements, range bands -- which is what makes a VALUE key possible at all.
+# const arithmetic, array elements, range bands -- which is what makes a value key possible at all.
 try:  # noqa: E402 - repo-local; the sys.path line above is what makes it work
     import rva_symbols
     from rva_symbols import code_only
@@ -128,11 +128,11 @@ IMAGE_BASE = 0x140000000
 # below it is the DOS stub and the PE headers, whose layout the format fixes -- and the largest
 # RVA in `er_game_base::rva` is 0x48464a8, so 0x6000000 is a generous ceiling.
 #
-# THIS IS A FLOOR AND A CEILING, NOT A CLAIM THAT IT CAN TELL AN ADDRESS FROM A LENGTH. A round
+# This is a floor and a ceiling, not a claim that it can tell an address from a length. A round
 # `0x10000` sits inside the band and would be admitted if it appeared as an `rva:` field. Measured
 # on this tree: all 53 bare fields fall between 0x679180 and 0x8865a0, and none is below 0x100000,
 # so the band is doing the job it is here for -- keeping a sub-.text offset (`rva: 0x8`, which
-# `er_game_base::rva` really does contain) out -- and the field NAME is what makes the rest of the
+# `er_game_base::rva` really does contain) out -- and the field name is what makes the rest of the
 # shape trustworthy. If a length ever does get written into an `rva:` field, this will report it,
 # which is the right direction to fail in.
 RVA_BAND = (0x1000, 0x6000000)
@@ -146,20 +146,20 @@ RVA_NAME = re.compile(r"\b([A-Z][A-Z0-9_]*_(?:RVA|ADDRESS|PROLOGUE))\b")
 # written both ways in this tree, so accept either shape.
 RVA_LITERAL = re.compile(r"\b0x1[0-9a-fA-F]{6,8}\b")
 
-# AN ADDRESS WITH NO CONSTANT NAME AT ALL. `er-reload-trace` keeps its 40-odd detours in a table of
+# An address with no constant name at all. `er-reload-trace` keeps its 40-odd detours in a table of
 # `HookSpec { name: "child_teardown_eb54c0", rva: 0x836f30, detour: hook_map_request_do, .. }`, and
 # most of those `rva:` fields are bare literals. `RVA_NAME` cannot see them (no name), `RVA_LITERAL`
 # cannot see them (it requires the leading digit to be `1`, so it matches the VA spelling and RVAs
 # that happen to start with 1, and misses 0x836f30 / 0x733150 / 0xb0d400 entirely), and the
-# install-line rule cannot see them (the `detour:` field is usually on the NEXT line). Three
+# install-line rule cannot see them (the `detour:` field is usually on the next line). Three
 # separate reasons for one blind spot, which is why it survived: 53 fields, and two of them are
 # the undeclared collisions in the module doc.
 #
-# Band-limited by VALUE rather than by digit count, for the same reason every other exclusion in
+# Band-limited by value rather than by digit count, for the same reason every other exclusion in
 # this family is: what makes 0x10000 not an address is its value, not its spelling.
 RVA_FIELD_LITERAL = re.compile(r"\b(?:rva|address|prologue)\s*:\s*(0x[0-9a-fA-F][0-9a-fA-F_]*)")
 
-# Lines that plausibly INSTALL a hook rather than merely mention an address. Without this a
+# Lines that plausibly install a hook rather than merely mention an address. Without this a
 # comment quoting an address would be read as a claim on it.
 INSTALLS = re.compile(
     r"mh_install|MH_CreateHook|create_hook|install_hook|detour|hook_once|\bhooked\b", re.I
@@ -172,8 +172,8 @@ INSTALLS = re.compile(
 # was written for -- a false green of exactly the kind that already cost this project a day.
 ALIAS = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:const|static)\s+[A-Z][A-Z0-9_]*\s*:")
 
-# Names that are READ, never detoured: singleton pointers, vtables, data blobs. Any number of
-# DLLs may read the same global; only a shared PROLOGUE corrupts anything. Without this the gate
+# Names that are read, never detoured: singleton pointers, vtables, data blobs. Any number of
+# DLLs may read the same global; only a shared prologue corrupts anything. Without this the gate
 # reported 14 collisions of which 13 were harmless, and a gate that cries wolf gets muted.
 READ_ONLY = re.compile(r"GLOBAL|SINGLETON|VTABLE|_DATA_|REPOSITORY")
 
@@ -207,7 +207,7 @@ def hook_targets(crate_dir: Path) -> dict[str, str]:
             raw = source.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        # Comments and string bodies are blanked through the SHARED reader rather than by a
+        # Comments and string bodies are blanked through the shared reader rather than by a
         # `startswith("//")` test, which sees neither a block comment nor a trailing one. A
         # `// rva: 0x836f30` in a paragraph explaining the collision is prose, and counting it
         # would make the gate assert whatever its own documentation last mentioned.
@@ -223,12 +223,12 @@ def hook_targets(crate_dir: Path) -> dict[str, str]:
                     continue
                 if RVA_BAND[0] <= normalise(value) <= RVA_BAND[1]:
                     targets.setdefault(literal.lower(), where)
-            # A CLAIM IS AN INSTALL, NOT A MENTION.
+            # A claim is an install, not a mention.
             #
             # The first version counted every `*_RVA` name anywhere in a crate, and reported 14
             # collisions of which 13 were harmless: `GAME_DATA_MAN_GLOBAL_RVA`,
             # `CS_MENU_MAN_GLOBAL_RVA`, `SCALEFORM_MEMORY_FILE_VTABLE_RVA` and friends are
-            # singleton pointers and vtables that DLLs merely READ. Any number of DLLs can read
+            # singleton pointers and vtables that DLLs merely read. Any number of DLLs can read
             # the same global; only detouring the same prologue corrupts anything. A gate that
             # cries wolf 13 times out of 14 gets muted, which would cost more than it saves.
             if not (INSTALLS.search(line) or ALIAS.match(line)):
@@ -249,7 +249,7 @@ def normalise(value: int) -> int:
 def constant_values() -> dict[str, int | None]:
     """`{simple name: value}` for every constant `rva_symbols` could evaluate, `None` if ambiguous.
 
-    Ambiguity is UNRESOLVED, not a guess: a name two crates declare with different values keys on
+    Ambiguity is unresolved, not a guess: a name two crates declare with different values keys on
     its spelling rather than on one of the two numbers, which is what `resolve_targets` does with
     every name it cannot read.
     """
@@ -268,8 +268,8 @@ def constant_values() -> dict[str, int | None]:
 def resolve_targets(targets: dict[str, str], values: dict) -> dict:
     """`{address-or-unresolved-name: (spelling, where)}`.
 
-    THE FIX OF 2026-08-30. A hex literal keys on its own value; a name keys on the value
-    `rva_symbols` resolves it to. A name that CANNOT be resolved keys on itself -- never dropped,
+    The fix of 2026-08-30. A hex literal keys on its own value; a name keys on the value
+    `rva_symbols` resolves it to. A name that cannot be resolved keys on itself -- never dropped,
     because "I could not read this claim" and "this claim collides with nothing" are the two
     answers this family of gates exists to keep apart, and only one of them is safe to act on.
     """
@@ -321,23 +321,23 @@ def declared_pairs() -> set[frozenset[str]]:
 # A line that hands a detour to a union registrar -- the product's own union, the cross-DLL helper,
 # or the product's C export resolved from a companion image.
 UNION_REGISTER = re.compile(r"register_union_hook|register_shared_hook|er_effects_union_register")
-# A line that creates a PRIVATE MinHook detour. On a `[[shared]]` handler this is the regression the
+# A line that creates a private MinHook detour. On a `[[shared]]` handler this is the regression the
 # whole entry exists to prevent, so its presence is a failure rather than a warning.
 BARE_HOOK = re.compile(r"MhHook::new|MH_CreateHook")
 
 
 # How far from a handler mention to look for the call that installs it. rustfmt splits a
 # three-argument register call across four lines, so a same-line rule reports "never reaches a union
-# registrar" for code that plainly does -- a false RED, which erodes a gate as fast as a false green.
+# registrar" for code that plainly does -- a false red, which erodes a gate as fast as a false green.
 HANDLER_CALL_WINDOW = 5
 
 
 def crate_hook_mechanism(crate_dir: Path) -> tuple[bool, bool]:
-    """`(installs a BARE MinHook anywhere, calls a union registrar anywhere)` over a crate's CODE.
+    """`(installs a BARE MinHook anywhere, calls a union registrar anywhere)` over a crate's code.
 
     Comments and string bodies are blanked through the shared reader, because `er-reload-trace`'s
-    own module header NAMES `MH_CreateHook` and `MhHook::new` in a paragraph explaining that it
-    STOPPED using them. Reading that prose as an install site would invert this answer -- the same
+    own module header names `MH_CreateHook` and `MhHook::new` in a paragraph explaining that it
+    stopped using them. Reading that prose as an install site would invert this answer -- the same
     failure `hook_targets` avoids by blanking comments before it counts a claim.
     """
     bare = union = False
@@ -354,22 +354,22 @@ def crate_hook_mechanism(crate_dir: Path) -> tuple[bool, bool]:
 
 
 def table_registered_sites(crate_dir: Path, handler: str) -> list[str]:
-    """`handler`'s hook-table rows -- but ONLY when the crate has no private MinHook to reach.
+    """`handler`'s hook-table rows -- but only when the crate has no private MinHook to reach.
 
-    WHY THIS EXISTS. `er-reload-trace` keeps its ~40 detours in a table of
-    `HookSpec { name, rva, detour: hook_map_request_do, original }` rows and installs them in ONE
+    Why this exists. `er-reload-trace` keeps its ~40 detours in a table of
+    `HookSpec { name, rva, detour: hook_map_request_do, original }` rows and installs them in one
     generic loop that names `spec.detour` -- never the handler symbol. So the proximity rule above
-    finds NOTHING for a handler that is in fact union-registered, and a `[[shared]]` row naming it
-    fails with "never reaches a union registrar" for code that plainly does. That is a false RED,
+    finds nothing for a handler that is in fact union-registered, and a `[[shared]]` row naming it
+    fails with "never reaches a union registrar" for code that plainly does. That is a false red,
     and a false red pushes the next agent toward declaring a `[[conflict]]` that is not true, or
     toward deleting a working observer -- both worse than the collision being described.
 
-    WHY IT IS SOUND RATHER THAN CONVENIENT. It applies only when the crate contains NO bare-hook
-    construction ANYWHERE in its code. With no `MhHook::new` and no `MH_CreateHook` in the whole
+    Why it is sound rather than convenient. It applies only when the crate contains no bare-hook
+    construction anywhere in its code. With no `MhHook::new` and no `MH_CreateHook` in the whole
     crate there is no private MinHook instance for a table row to reach, so the union registrar the
     crate does call is the only consumer a `detour:` field can have. Add one bare hook to that crate
     and this stops applying and the handler goes back to needing proximity -- which is the direction
-    a proof is allowed to fail in. It never marks anything BARE and never clears a `bare` finding,
+    a proof is allowed to fail in. It never marks anything bare and never clears a `bare` finding,
     so it cannot turn a real private instance green.
     """
     bare, union = crate_hook_mechanism(crate_dir)
@@ -419,7 +419,7 @@ def handler_sites(crate_dir: Path, handler: str) -> tuple[list[str], list[str]]:
                 unioned.append(where)
             if BARE_HOOK.search(window):
                 bare.append(where)
-    # LAST RESORT, and only when the proximity rule found the handler NEITHER way: a table-driven
+    # Last resort, and only when the proximity rule found the handler neither way: a table-driven
     # registrant in a crate that provably owns no private MinHook instance. Consulted after the
     # loop so a handler with a real bare-hook site keeps that finding.
     if not unioned and not bare:
@@ -428,9 +428,9 @@ def handler_sites(crate_dir: Path, handler: str) -> tuple[list[str], list[str]]:
 
 
 def shared_mechanism_failures(crates: dict[str, Path]) -> list[str]:
-    """Prove every `[[shared]]` row's claim that both detours go through ONE MinHook instance.
+    """Prove every `[[shared]]` row's claim that both detours go through one MinHook instance.
 
-    A `[[shared]]` row is the ONLY thing that lets two DLLs co-load on one prologue, so it may not
+    A `[[shared]]` row is the only thing that lets two DLLs co-load on one prologue, so it may not
     be a promise. Each side names its detour symbol; that symbol must reach a union registrar and
     must never reach `MhHook::new`. Without this the table could keep asserting the pair is safe
     long after someone reinstated a private instance -- which is the exact failure mode (silent,
@@ -473,15 +473,15 @@ def collide(per_crate: dict) -> list:
     return [(key, who) for key, who in owners.items() if len(who) > 1]
 
 
-# THE KEY THIS GATE USED, frozen as a LITERAL: the matched TOKEN, compared as a string. Kept so
+# The key this gate used, frozen as a LITERAL: the matched token, compared as a string. Kept so
 # `--selftest` can prove the value key is load-bearing -- a control the old key also joins would
 # pass on the broken gate and prove nothing.
 #
-# WRITTEN OUT, NOT CALLING `collide`. A frozen control that delegates to the live function is not
+# Written out, not calling `collide`. A frozen control that delegates to the live function is not
 # frozen: it inherits every future change, and "the old key does not join these" silently becomes
 # a claim about the new one. `check-stale-rva-calls.py` was nearly caught by exactly that.
 def LEGACY_COLLIDE(per_crate: dict) -> list:  # noqa: N802 - a frozen artefact, named as one
-    """The pre-2026-08-30 key: two crates collide only if they SPELL the address identically."""
+    """The pre-2026-08-30 key: two crates collide only if they spell the address identically."""
     owners: dict = {}
     for crate_name, targets in per_crate.items():
         for token in targets:
@@ -519,7 +519,7 @@ def selftest() -> int:
     case("a bare hook line is recognised", BARE_HOOK.search("MhHook::new(addr, detour)") is not None)
     case("a union line is not a bare hook", BARE_HOOK.search("register_union_hook(a, f, &O)") is None)
 
-    # END-TO-END NEGATIVE CONTROL. The regex cases above prove the patterns; these prove the SCAN
+    # End-to-end negative control. The regex cases above prove the patterns; these prove the scan
     # built on them still separates the two shapes across the multi-line calls rustfmt actually
     # produces. Without this the mechanism check could quietly stop finding anything and report
     # every [[shared]] row as verified -- the same false green this file already shipped once.
@@ -542,16 +542,16 @@ def selftest() -> int:
         unioned, bare = handler_sites(fixture, "my_detour")
         case("a multi-line union registration passes", unioned and not bare)
 
-    # THE TABLE-DRIVEN REGISTRANT (2026-08-30). `er-reload-trace` names its handlers ONLY in
+    # The table-driven REGISTRANT (2026-08-30). `er-reload-trace` names its handlers only in
     # `HookSpec { .., detour: hook_map_request_do, .. }` rows and installs them in one generic loop
-    # that says `spec.detour`, so the proximity rule finds such a handler NEITHER unioned NOR bare.
+    # that says `spec.detour`, so the proximity rule finds such a handler neither unioned nor bare.
     # A [[shared]] row naming it then fails with "never reaches a union registrar" for code that
-    # plainly does -- a false RED, which pushes the next agent toward declaring a conflict that is
+    # plainly does -- a false red, which pushes the next agent toward declaring a conflict that is
     # not true or deleting a working observer.
     with tempfile.TemporaryDirectory() as raw:
         fixture = Path(raw)
         (fixture / "src").mkdir()
-        # The table and the registrar live in DIFFERENT files, so the ±5-line window genuinely
+        # The table and the registrar live in different files, so the ±5-line window genuinely
         # cannot join them -- otherwise this control would pass on the old code and prove nothing.
         (fixture / "src" / "table.rs").write_text(
             "static SPECS: &[HookSpec] = &[\n"
@@ -570,13 +570,13 @@ def selftest() -> int:
             "a table-driven handler in a bare-hook-free crate IS union-registered",
             proximity_only == ["src/table.rs:2"] or bool(proximity_only),
         )
-        # NON-VACUITY: the window alone must not already join them, or the case above is free.
+        # Non-VACUITY: the window alone must not already join them, or the case above is free.
         window_join = re.search(
             r"register_shared_hook",
             (fixture / "src" / "table.rs").read_text(encoding="utf-8"),
         )
         case("...and the proximity window alone could NOT have joined them", window_join is None)
-        # NEGATIVE CONTROL: ONE bare hook anywhere in the crate withdraws the inference, so this
+        # Negative CONTROL: One bare hook anywhere in the crate withdraws the inference, so this
         # can never launder a crate that really does own a private MinHook instance.
         (fixture / "src" / "other.rs").write_text(
             "fn elsewhere() { let h = MhHook::new(addr, other_detour); }\n", encoding="utf-8"
@@ -587,13 +587,13 @@ def selftest() -> int:
             not withdrawn and not still_bare,
         )
 
-    # ------------------------------------------------------------------ THE VALUE KEY
-    # THE CONTROL THIS FIX EXISTS FOR, and the one address in this tree that proves it. 0xb0d400
-    # is declared ONLY as an enum discriminant -- `MenuJobWait = 0x00b0d400` inside
+    # ------------------------------------------------------------------ The value key
+    # the control this fix exists for, and the one address in this tree that proves it. 0xb0d400
+    # is declared only as an enum discriminant -- `MenuJobWait = 0x00b0d400` inside
     # `#[repr(u32)] pub enum MenuTraceRva` -- and reached as
     # `pub const TITLE_MENU_JOB_WAIT_RVA: usize = MenuTraceRva::MenuJobWait as usize;`. So a crate
-    # that claims it by NAME and a crate that claims it as a bare `rva:` table field share one
-    # address and NO spelling, which is exactly the pair the old key could not join. Note the
+    # that claims it by name and a crate that claims it as a bare `rva:` table field share one
+    # address and no spelling, which is exactly the pair the old key could not join. Note the
     # literal form is `0x00b0d400`: `RVA_LITERAL` requires the leading digit to be `1`, so the
     # old matcher did not even record it as a target.
     values = constant_values()
@@ -620,12 +620,12 @@ def selftest() -> int:
         }
     )
     case("a VA and its RVA are one key", [k for k, _ in va_form] == [0xB0D400])
-    # A name nothing declares must NOT collapse onto some other name. Unresolved keys on itself.
+    # A name nothing declares must not collapse onto some other name. Unresolved keys on itself.
     unknown = resolve_targets({"NEVER_DECLARED_ANYWHERE_RVA": "a.rs:1"}, values)
     case("an unresolvable name keeps its spelling as the key",
          list(unknown) == ["NEVER_DECLARED_ANYWHERE_RVA"])
 
-    # THE BARE TABLE FIELD, on the scan rather than on the key. `er-reload-trace` writes 40-odd of
+    # The bare table field, on the scan rather than on the key. `er-reload-trace` writes 40-odd of
     # these and the old scan recorded none of them.
     with tempfile.TemporaryDirectory() as raw:
         fixture = Path(raw)
@@ -654,8 +654,8 @@ def selftest() -> int:
         )
         case("a sub-.text offset in an rva: field is excluded by value", hook_targets(fixture) == {})
 
-    # ------------------------------------------------------------------ THE REAL TREE
-    # THE REGRESSION THIS GATE IS NAMED FOR -- and a NEGATIVE CONTROL for the gate itself.
+    # ------------------------------------------------------------------ The real tree
+    # the regression this gate is named for -- and a negative control for the gate itself.
     # Asserting only that the table lists the pair would pass even if the scan stopped finding
     # it, which is precisely how the first narrowing shipped green while detecting nothing.
     measured = frozenset({"er-quickload", "er-armament-icons"})
@@ -674,8 +674,8 @@ def selftest() -> int:
         and {resolved[0x11CED80][c][0] for c in ("er-quickload", "er-armament-icons")}
         == {"TITLE_SCALEFORM_FILE_OPEN_RVA", "FILE_OPEN_RVA"},
     )
-    # NON-VACUITY OF THE INPUTS. Every set the verdict rests on is asserted non-empty and of the
-    # right order of magnitude BEFORE anything is concluded from it: `0 shared and all declared`
+    # Non-VACUITY of the inputs. Every set the verdict rests on is asserted non-empty and of the
+    # right order of magnitude before anything is concluded from it: `0 shared and all declared`
     # is what a broken walk prints, and it is indistinguishable from good news otherwise.
     case(f"only {len(crates)} cdylib crates found; the manifest walk is broken", len(crates) > 10)
     total_spellings = len({s for found in spellings.values() for s in found})
@@ -693,7 +693,7 @@ def selftest() -> int:
          f"{legacy_shared}; if they are equal the fix is doing nothing",
          shared_now > legacy_shared)
 
-    # The pair is declared SHARED (co-loadable), not merely declared -- and the mechanism holds.
+    # The pair is declared shared (co-loadable), not merely declared -- and the mechanism holds.
     shared_pairs = {
         frozenset({row["a"], row["b"]}) for row in load_table().get("shared", [])
     }
@@ -760,7 +760,7 @@ def main() -> int:
             file=sys.stderr,
         )
         for target, (a, b), owners in undeclared:
-            # THE SPELLINGS ARE PART OF THE FINDING. Both sides naming one address under one
+            # The SPELLINGS are part of the finding. Both sides naming one address under one
             # constant is the easy case; the pairs this gate could not see until 2026-08-30 are
             # the ones where the two names differ, or where one side has no name at all.
             spell_a, where_a = owners[a]

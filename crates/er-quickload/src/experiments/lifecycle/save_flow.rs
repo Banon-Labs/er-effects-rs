@@ -3,55 +3,55 @@
 use super::*;
 
 // === SAVE-FLOW state machine (save-game-flow WP1 + WP2 + WP3, 2026-07-28) ===
-// Drives the System->Quit "Save Game" row's destination pick and CLOSE-THEN-FIRE commit.
+// Drives the System->Quit "Save Game" row's destination pick and close-then-fire commit.
 // Stage map lives on `er_telemetry_core::counters::SAVE_FLOW_STAGE` (oracle_save_flow_stage):
-// 0 IDLE, 3 DEST_BROWSE, 4 OVERWRITE_CONFIRM, 5 CLOSING_ABORT, 6 CLOSING_COMMIT,
-// 7 FIRE_GATE_WAIT, 8 COMMIT_WAIT. Ids 1 and 2 are RETIRED (see `autoload_state.rs`).
+// 0 idle, 3 DEST_BROWSE, 4 OVERWRITE_CONFIRM, 5 CLOSING_ABORT, 6 CLOSING_COMMIT,
+// 7 FIRE_GATE_WAIT, 8 COMMIT_WAIT. Ids 1 and 2 are retired (see `autoload_state.rs`).
 //
-// THE ROW PRESS OPENS THE LIST (stage 3) AND ASKS NOTHING. It used to open two confirms
+// The row press opens the list (stage 3) and asks nothing. It used to open two confirms
 // first -- "Are you sure you want to save?" then "Overwrite your loaded save?" (which
 // DEFAULTED to Yes) -- which made the user commit to a destination before seeing one.
 // Reviewer report, 2026-07-31: "I'd prefer it if when you clicked Save game it took you
 // straight to a list of save files ... Prompting to overwrite the current file or not
 // every time up front seems like it will lead to more mistakes."
 //
-// So there is exactly ONE question left, stage 4, and it is asked about a file the user
+// So there is exactly one question left, stage 4, and it is asked about a file the user
 // has already pointed at: "Are you sure you want to overwrite this file?", default No. A
-// destination whose name is FREE is written with no question at all. `[ new ]` is not
-// exempt: it computes a leaf, and if that leaf is already taken the pick IS an overwrite
+// destination whose name is free is written with no question at all. `[ new ]` is not
+// exempt: it computes a leaf, and if that leaf is already taken the pick is an overwrite
 // and confirms like any other.
 //
-// The tick POLLS the box result (pure reads). Every terminal path runs the proven close
+// The tick polls the box result (pure reads). Every terminal path runs the proven close
 // sequence (OptionSetting immediately, IngameTop deferred 2 frames), and only once the
-// menus are closed AND the RAM gates are green does the tick arm the one-shot
-// er-save-suppress bypass and fire the FORCED (throttle-skipping) native save request
+// menus are closed and the RAM gates are green does the tick arm the one-shot
+// er-save-suppress bypass and fire the forced (throttle-skipping) native save request
 // pair. The tick only reads and decides; all menu mutation stays on the paths that already
-// own it, except the window CLOSE, which the shipping deferred IngameTop close already
+// own it, except the window close, which the shipping deferred IngameTop close already
 // performs from this same game task.
 //
-// A chosen destination is committed by ARMING a scoped write-open redirect just before the
+// A chosen destination is committed by arming a scoped write-open redirect just before the
 // fire, so the native writer's own container write lands on the destination while the
-// loaded save is only read; stage 8 verifies both files before returning to IDLE. A pick
-// that resolves back to the LOADED save takes the sanctioned in-place overwrite instead --
+// loaded save is only read; stage 8 verifies both files before returning to idle. A pick
+// that resolves back to the loaded save takes the sanctioned in-place overwrite instead --
 // the only remaining way to overwrite your own save, so that identity check now carries
 // the whole "overwrite my current file" use case.
 
-/// This stage's next tick count -- FROZEN while a modal OS file dialog is up.
+/// This stage's next tick count -- Frozen while a modal OS file dialog is up.
 ///
 /// Every save-flow deadline derives from `SAVE_FLOW_STAGE_TICKS`, which the game task increments
-/// once per frame at exactly one site. The game task runs CONCURRENTLY with the menu/Scaleform
+/// once per frame at exactly one site. The game task runs concurrently with the menu/Scaleform
 /// pump, so a modal dialog that blocks the pump does not stop the tick: a user browsing folders for
 /// twenty seconds would spend ~1200 ticks and watch the destination-browser bound (180), the
 /// confirm-box build bound (180) and eventually the commit watchdog (900) all expire underneath
-/// them -- pick a file, nothing happens. Freezing this one READ freezes all of them.
+/// them -- pick a file, nothing happens. Freezing this one read freezes all of them.
 ///
-/// The COUNTER is frozen, not the handlers. An early `return` from `save_flow_tick` would also
+/// The counter is frozen, not the handlers. An early `return` from `save_flow_tick` would also
 /// suspend the event-driven work that must keep running while a dialog is open (a box decision
-/// arriving, the writer-idle teardown interlock, the IDLE-tick deferred-teardown sweep); a frozen
+/// arriving, the writer-idle teardown interlock, the idle-tick deferred-teardown sweep); a frozen
 /// `ticks` value suspends only the deadlines. That is why this is a frozen read and not a skipped
 /// tick.
 ///
-/// Freezing is NECESSARY BUT NOT SUFFICIENT: stage 3's "abandoned" branch has no tick bound at all,
+/// Freezing is necessary but not SUFFICIENT: stage 3's "abandoned" branch has no tick bound at all,
 /// so it needs the separate liveness term in [`dest_browse_verdict`].
 fn save_flow_next_stage_ticks(dialog_open: bool, counter: &AtomicUsize) -> usize {
     if dialog_open {
@@ -152,17 +152,17 @@ fn save_flow_enter_stage(stage: usize, reason: &str) {
     ));
 }
 
-/// Per-frame save-flow driver. Called from the game task immediately AFTER
+/// Per-frame save-flow driver. Called from the game task immediately after
 /// `system_quit_save_game_deferred_close_tick`, so the frame the deferred IngameTop
 /// close drains is the same frame stage 6 observes "menus closed".
 pub(crate) unsafe fn save_flow_tick() {
     let stage = SAVE_FLOW_STAGE.load(Ordering::SeqCst);
     if stage == SAVE_FLOW_STAGE_IDLE {
-        // DEFERRED TEARDOWN SWEEP. A commit window is never taken out from under an executing
-        // writer -- `save_dest_verify_and_disarm` refuses -- so a flow that returned to IDLE while
+        // Deferred TEARDOWN sweep. A commit window is never taken out from under an executing
+        // writer -- `save_dest_verify_and_disarm` refuses -- so a flow that returned to idle while
         // the SL worker was still inside a save-job body leaves the window behind on purpose. It
         // has to be closed the moment the writer finishes: an armed redirect that outlives its
-        // commit would divert a LATER save of the loaded container to a destination nobody chose.
+        // commit would divert a later save of the loaded container to a destination nobody chose.
         if save_dest_commit_window_armed() && er_save_suppress::save_job_writer_idle() {
             let _ = save_dest_verify_and_disarm("deferred teardown after the writer finished");
             save_dest_reset("deferred teardown after the writer finished");
@@ -211,20 +211,20 @@ pub(crate) unsafe fn save_flow_tick() {
 }
 
 /// Stage 4 OVERWRITE_CONFIRM: "Are you sure you want to overwrite this file?" is (or is becoming)
-/// visible over the destination browser. PURE READS -- every menu mutation this decides runs
+/// visible over the destination browser. Pure reads -- every menu mutation this decides runs
 /// through the picker's own native close or the proven close-all sequence.
 ///
-/// There is deliberately NO timeout on the user's decision; the only timeout is on the BUILD, i.e.
+/// There is deliberately no timeout on the user's decision; the only timeout is on the build, i.e.
 /// the box never appearing at all, which means the recipe failed and waiting is pointless.
 ///
-/// EVERY NON-YES OUTCOME RETURNS TO THE BROWSER, not to the world. Declining an overwrite is not
+/// Every non-yes outcome returns to the browser, not to the world. Declining an overwrite is not
 /// declining to save -- the user is choosing a different destination, and the list is where that
 /// choice is made. That is also why an unreadable box lands here instead of ending the flow: a
 /// question we could not read the answer to must not be counted as "the user gave up on saving".
 unsafe fn save_flow_overwrite_confirm_tick(ticks: usize) {
     let box_id = SAVE_FLOW_BOX_OVERWRITE_FILE;
     let Some(decision) = (unsafe { save_flow_box_decision(box_id) }) else {
-        // The ONLY timeout in this stage covers the box never BECOMING visible: either the
+        // The only timeout in this stage covers the box never becoming visible: either the
         // menu pump never consumed the submit pending, or the submitted job never reached the
         // MessageBoxDialog builder. Both mean waiting longer cannot help.
         if SAVE_FLOW_BOX_DIALOG.load(Ordering::SeqCst) == 0
@@ -237,7 +237,7 @@ unsafe fn save_flow_overwrite_confirm_tick(ticks: usize) {
                 save_flow_box_label(box_id)
             ));
             save_flow_box_clear();
-            // The confirm sits OVER the destination browser: tear the picker down first (its close
+            // The confirm sits over the destination browser: tear the picker down first (its close
             // restores the user's rows and re-shows the System windows) and let the stage-3 path
             // take over once the window is gone.
             let picker = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
@@ -253,7 +253,7 @@ unsafe fn save_flow_overwrite_confirm_tick(ticks: usize) {
         return;
     };
     match decision {
-        // UNDECIDABLE is a FAILURE of ours, not a user "No": the box was freed/reused, or it
+        // UNDECIDABLE is a failure of ours, not a user "No": the box was freed/reused, or it
         // reported an answer we could not map. It never advances toward a write, and it is
         // counted separately so a run can tell "the user declined" from "we could not read the
         // user's answer".
@@ -282,10 +282,10 @@ unsafe fn save_flow_overwrite_confirm_tick(ticks: usize) {
             );
         }
         SaveFlowDecision::No => {
-            // Declining the overwrite drops only the TARGET, never the flow: the user is picking a
+            // Declining the overwrite drops only the target, never the flow: the user is picking a
             // different destination, not abandoning the save. In-game the browser window was never
             // closed, so they are simply back in it. In OS mode the dialog is gone by the time the
-            // confirm is answered, so "back to the picker" means RE-OPEN it, through the same
+            // confirm is answered, so "back to the picker" means RE-open it, through the same
             // menu-pump consumer the row press uses.
             save_dest_clear_target("overwrite declined");
             if os_native_picker_active() {
@@ -300,7 +300,7 @@ unsafe fn save_flow_overwrite_confirm_tick(ticks: usize) {
 }
 
 /// Stage 3 DEST_BROWSE: the destination browser is opening, being browsed, or tearing down after
-/// a destination was confirmed. PURE READS plus the two hand-offs the tick owns (closing the menus
+/// a destination was confirmed. Pure reads plus the two hand-offs the tick owns (closing the menus
 /// once the picker is gone, and ending a flow whose browser never appeared).
 ///
 /// The picker itself drives the interesting transitions from its own activation hook (menu
@@ -336,7 +336,7 @@ unsafe fn save_flow_dest_browse_tick(ticks: usize) {
             unsafe { save_flow_close_menus_from_tick("dest_teardown_timeout", false) };
         }
         DestBrowseAction::EnterOverwriteConfirm => {
-            // OS Save-As named an existing file. The TICK performs the transition so the menu
+            // OS Save-As named an existing file. The tick performs the transition so the menu
             // thread never becomes a second writer of `SAVE_FLOW_STAGE`.
             SAVE_DEST_CONFIRM_PENDING.store(0, Ordering::SeqCst);
             // The confirm is hosted by the System dialog here: in OS mode there is no picker window job
@@ -443,15 +443,15 @@ unsafe fn save_flow_close_menus_from_tick(source: &str, commit: bool) {
 /// What a Save Game commit is about to write, decided before anything is written.
 enum SaveFlowCommitPlan {
     /// The loaded save is the target: a browsed pick (or `[ new ]` in the loaded save's own folder)
-    /// that the filesystem says IS the loaded save, or a commit that never named a destination at
+    /// that the filesystem says is the loaded save, or a commit that never named a destination at
     /// all. The native writer rewrites it in place and nothing is redirected.
     ///
-    /// SINCE 2026-07-31 THE BROWSED-PICK ARM IS THE ONLY WAY A USER REACHES THIS. The up-front
+    /// Since 2026-07-31 the BROWSED-pick arm is the only way a user reaches this. The up-front
     /// "Overwrite your loaded save?" box that used to land here directly is gone, so overwriting
     /// your own save means finding its row in the destination list -- which is exactly what makes
     /// the filesystem-identity check below load-bearing rather than a corner case.
     LiveOverwrite { live: PathBuf, reason: &'static str },
-    /// A browsed destination PROVEN to be a different file from the loaded save.
+    /// A browsed destination proven to be a different file from the loaded save.
     Redirect { live: PathBuf, target: PathBuf },
     /// No destination was chosen and no loaded-save path could be resolved, so there is no file
     /// to name or protect. The request still fires; nothing is armed.
@@ -460,7 +460,7 @@ enum SaveFlowCommitPlan {
 
 /// Decide what this commit will write, and refuse rather than guess.
 ///
-/// PERFORMS NO WRITES. Everything that can turn this commit down happens here, while the
+/// Performs no writes. Everything that can turn this commit down happens here, while the
 /// destination is still exactly as the user left it. Two refusals are new, and both exist because
 /// the alternative was a save written over the wrong file:
 ///
@@ -476,7 +476,7 @@ enum SaveFlowCommitPlan {
 ///   unaffected.)
 fn save_flow_resolve_commit_plan() -> Result<SaveFlowCommitPlan, String> {
     let Some(target) = save_dest_target() else {
-        // NO DESTINATION WAS EVER NAMED. The product path always names one now (the row press
+        // No destination was ever named. The product path always names one now (the row press
         // opens the list and nothing commits without a pick), so this is the dormant
         // return-title safety net in `system_quit_save_game_return_title_request_hook`, which
         // fires a plain save with no redirect. Writing the loaded save in place is what a save
@@ -539,7 +539,7 @@ fn save_flow_resolve_commit_plan() -> Result<SaveFlowCommitPlan, String> {
 
 /// Stand-in status for "the freshness handshake said an outcome was waiting and it was gone by
 /// the time it was taken". Structurally unreachable -- both run on the game thread within a few
-/// statements -- and deliberately NOT zero, so it can never be mistaken for a success.
+/// statements -- and deliberately not zero, so it can never be mistaken for a success.
 const SAVE_FLOW_STATUS_LOST: u32 = u32::MAX;
 
 /// Normalized text form of a path, for the "were these two spelled differently?" report only.
@@ -548,7 +548,7 @@ fn save_dest_normalize_path_of(path: &std::path::Path) -> Option<String> {
 }
 
 /// Stage 7 FIRE_GATE_WAIT: menus are closed; wait for the RAM gates proving the native
-/// save orchestrator will accept and dispatch the request as ONE combined `b72 && b73`
+/// save orchestrator will accept and dispatch the request as one combined `b72 && b73`
 /// submit, then arm the one-shot bypass and fire the forced request pair.
 unsafe fn save_flow_fire_gate_tick(ticks: usize) {
     const HEAP_LO: usize = 0x10000;
@@ -564,7 +564,7 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
     }
     .unwrap_or(0);
     // Failure latch first: `CSMenuMan->[0x80]+0x290` (byte) / `+0x298` (qword). Latched
-    // means SaveRequest_Profile's gate FUN_14080d570 fails PERMANENTLY for the session --
+    // means SaveRequest_Profile's gate FUN_14080d570 fails permanently for the session --
     // waiting cannot help, so abort loudly instead of timing out (noise rule 3: failure
     // paths log on first occurrence; the counter is exported every telemetry cadence).
     if csm >= HEAP_LO {
@@ -601,7 +601,7 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
         (-1, -1)
     };
     // Green = ShouldSave's menu gate open (disableSaveMenu 0), no save/load in flight
-    // (b80 == 0), and the quit chain not parked at READY (bc4 != 3, where the b72
+    // (b80 == 0), and the quit chain not parked at ready (bc4 != 3, where the b72
     // effective-getter zeroes the request).
     let gates_green =
         dsm == 0 && b80 == 0 && bc4 != GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY as i32;
@@ -637,7 +637,7 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
             save_flow_enter_stage(SAVE_FLOW_STAGE_IDLE, "bypass arm refused");
             return;
         }
-        // THE FIRST WRITE. Naming the file is not optional either: a rewrite of the live
+        // The first write. Naming the file is not optional either: a rewrite of the live
         // `ER0000.sl2` that nothing in the log claims is indistinguishable after the fact from a
         // suppression leak or a staging copy.
         match &plan {
@@ -649,7 +649,7 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
                     SAVE_DEST_COMMIT_FAIL.fetch_add(1, Ordering::SeqCst);
                     if !degraded {
                         // The token was armed a moment ago and nothing will consume it now.
-                        // Leaving it pending would let the NEXT native save through for real.
+                        // Leaving it pending would let the next native save through for real.
                         let _ = er_save_suppress::expire_bypass_if_pending();
                     }
                     append_autoload_debug(format_args!(
@@ -668,7 +668,7 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
                 "save-flow: suppression NOT armed (oracle_save_suppress_armed=0) -- degraded fail-open: firing the forced native save request without a bypass token. Completion for this commit comes from the SL writer's own job-body signal, NOT from token consumption, which can never move on this path"
             ));
         }
-        // Sample the request flags BEFORE the fire. This is the whole basis of the scoped
+        // Sample the request flags before the fire. This is the whole basis of the scoped
         // retraction below: a flag already set here belongs to the game, a flag that goes
         // 0 -> 1 across our own call is ours. An unreadable GameMan disqualifies that flag
         // from retraction rather than defaulting it to "was clear".
@@ -687,7 +687,7 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
         unsafe { system_quit_save_game_request_save_forced() };
         // Read back the request flags the forced pair must have set: b73 (system lane)
         // unconditionally, b72 (char-slot lane) iff saveSlot != -1. Both 1 => the next
-        // pump dispatches ONE combined submit that consumes the token.
+        // pump dispatches one combined submit that consumes the token.
         let b72 = if gm >= HEAP_LO {
             unsafe { safe_read_u8(gm + GAME_MAN_ARM_FLAG_B72_OFFSET) }.map_or(-1, i32::from)
         } else {
@@ -700,7 +700,7 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
         };
         // Snapshot the consumed-token counter so stage 8 can tell a save that actually reached
         // the writer from a fire that silently went nowhere -- and, alongside it, the
-        // native-side attribution counters so a failure can name WHICH link broke instead of
+        // native-side attribution counters so a failure can name which link broke instead of
         // only reporting that the enqueue never arrived (see `save_flow_fire_failure_reason`).
         SAVE_FLOW_BYPASS_ALLOWED_AT_FIRE.store(
             usize::try_from(er_save_suppress::bypass_allowed_total()).unwrap_or(usize::MAX),
@@ -727,8 +727,8 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
             Ordering::SeqCst,
         );
         // The SL worker's own start and completion counters, plus a cleared start-tick, so stage 8
-        // can say WHEN the native write began and separate "the write is slow" from "we were slow
-        // to notice it finished". The COMPLETION baseline is also the teardown interlock: the
+        // can say when the native write began and separate "the write is slow" from "we were slow
+        // to notice it finished". The completion baseline is also the teardown interlock: the
         // redirect window may only be dropped once a job body has returned past this value, or
         // once it is known no body can start.
         SAVE_FLOW_SAVE_JOB_STARTS_AT_FIRE.store(
@@ -758,7 +758,7 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
 
 /// Name the link that broke when a fired Save Game commit produced no write.
 ///
-/// This exists because "no save enqueue arrived" is the SAME observation for every failure
+/// This exists because "no save enqueue arrived" is the same observation for every failure
 /// along the chain, and telling them apart used to take a run each. The native chain a fired
 /// request has to walk (1.16.2 decompile) is:
 ///
@@ -772,7 +772,7 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
 ///     -> FUN_140e6fb50                 the SL enqueue -- where the one-shot bypass lives
 /// ```
 ///
-/// Only the last link is ours. A lane that returns 0 touches NOTHING (the request flags stay
+/// Only the last link is ours. A lane that returns 0 touches nothing (the request flags stay
 /// set, `saveState` stays 0), so the dispatcher re-enters it every frame and the failure is
 /// invisible from the enqueue: exactly the shape that made a real run read as "the fire went
 /// nowhere" with no way to tell whether anything downstream had even been attempted.
@@ -781,15 +781,15 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
 /// boot saves before the row is ever pressed.
 ///
 /// The lane's own refusal splits three ways, and `serializer_calls` is what splits it. Both
-/// character lanes allocate their MainHeap buffers and null-check them BEFORE calling
+/// character lanes allocate their MainHeap buffers and null-check them before calling
 /// `FUN_14067dc00` (`FUN_14067b940`: `0x280000` then `0x60000`, both checked;
 /// `FUN_14067b750`: `0x280000`), so:
 ///
-/// * declines up, `serializer_calls` FLAT -> the lane never reached the serializer: an
+/// * declines up, `serializer_calls` flat -> the lane never reached the serializer: an
 ///   allocation returned null, or a pre-allocation gate refused.
 /// * `serializer_failures` up -> allocations fine, serializer entered and refused; the
 ///   step decoder names where.
-/// * declines up, `serializer_calls` up, `serializer_failures` FLAT -> allocations fine,
+/// * declines up, `serializer_calls` up, `serializer_failures` flat -> allocations fine,
 ///   serialization fine, and the submit builder is what refused.
 ///
 /// Each arm says which of those it was in words, so the verdict does not have to be
@@ -841,7 +841,7 @@ fn save_flow_fire_failure_reason() -> String {
          token/enqueue handshake"
             .to_owned()
     } else if serialize_fails > 0 {
-        // The allocations are NOT in question on this path: the lane null-checks its
+        // The allocations are not in question on this path: the lane null-checks its
         // MainHeap buffers before it can reach FUN_14067dc00 at all, so entering the
         // serializer is proof they succeeded.
         format!(
@@ -881,14 +881,14 @@ fn save_flow_fire_failure_reason() -> String {
     format!("{verdict} [{facts}]")
 }
 
-/// Take back the save-request flags OUR fire set, once that fire has provably gone nowhere.
+/// Take back the save-request flags our fire set, once that fire has provably gone nowhere.
 ///
 /// # Why this is not optional
 ///
 /// A save lane that refuses touches nothing: `GameMan+0xb72`/`+0xb73` stay set, `saveState`
 /// stays 0, so `FUN_140afb880` re-enters the refusing lane on the very next frame and does
 /// it again forever. Every entry runs the full character serializer into a 0x280000 (2.6 MB)
-/// buffer and throws the result away. Measured on a stuck run: 27,824 declines with ZERO
+/// buffer and throws the result away. Measured on a stuck run: 27,824 declines with zero
 /// serializer failures over 854 s -- about 33 complete character serializations per second,
 /// ~73 GB produced and discarded in fourteen minutes, on the game thread, for the rest of
 /// the session. That is not a stalled UI row; it is a permanent CPU burn in a build someone
@@ -899,7 +899,7 @@ fn save_flow_fire_failure_reason() -> String {
 /// Four conditions, all of which must hold. Any one failing leaves the flags alone and
 /// counts `SAVE_FLOW_RETRACT_DECLINED`:
 ///
-/// 1. **Suppression is armed.** With `er_save_suppress` armed, NO save reaches disk except
+/// 1. **Suppression is armed.** With `er_save_suppress` armed, no save reaches disk except
 ///    a bypassed one, so a native request we drop would have been swallowed anyway -- the
 ///    retraction cannot lose a byte that would otherwise have been written. On the degraded
 ///    fail-open path (suppression not armed) native saves are real, so we never retract.
@@ -1006,11 +1006,11 @@ fn save_flow_retract_stuck_request(reason: &str) {
 /// Stage 8 COMMIT_WAIT: the forced request is in flight through the native pump with the
 /// bypass token armed.
 ///
-/// COMPLETION IS AN EVENT, NOT A TIMEOUT (2026-07-28). This used to wait exclusively on the
+/// Completion is an event, not a timeout (2026-07-28). This used to wait exclusively on the
 /// status poll's terminal answer, and a measured commit that wrote and verified the user's
 /// save reported `bypass_final_status = null` and `commit_complete = 0` twenty-one seconds
-/// later, ending on the watchdog: the Save Game row is gated on the flow being IDLE, so a
-/// successful save froze the row for the whole watchdog AND under-reported itself as a
+/// later, ending on the watchdog: the Save Game row is gated on the flow being idle, so a
+/// successful save froze the row for the whole watchdog and under-reported itself as a
 /// non-completion. The poll cannot be the primary signal here -- see the write-completion
 /// section in `er-save-suppress` for why (its "terminal" needs the worker to have DEQUEUED
 /// the job, and its only two consumers are a MenuJob this flow deliberately closes before
@@ -1020,20 +1020,20 @@ fn save_flow_retract_stuck_request(reason: &str) {
 ///
 ///   1. adopt the SL worker's job-body completion, if one has arrived -- the event that
 ///      says the write finished, produced by the game on its own writer thread;
-///   2. hold everything while a save-job body is EXECUTING, because tearing the redirect
+///   2. hold everything while a save-job body is executing, because tearing the redirect
 ///      window down mid-body sends the writer's remaining per-block opens to the loaded save;
 ///   3. consume any terminal status (from step 1, from a native poll consumer, or from a
-///      submit the native enqueue refused) and issue the ONE verdict, file check included;
+///      submit the native enqueue refused) and issue the one verdict, file check included;
 ///   4. only then consider the enqueue-grace bailout, and only when the one-shot token can
 ///      be revoked, which is what proves nothing is in flight;
-///   5. the watchdog last, as a backstop that is counted as a DEGRADED outcome.
+///   5. the watchdog last, as a backstop that is counted as a degraded outcome.
 ///
 /// The degraded fail-open path has no token at all and is handled separately -- see
 /// [`save_flow_degraded_commit_wait_tick`].
 fn save_flow_commit_wait_tick(ticks: usize) {
     let completions_at_fire = SAVE_FLOW_SAVE_JOB_COMPLETIONS_AT_FIRE.load(Ordering::SeqCst) as u64;
     // Timestamp the moment the SL worker picked the job up. Cheap, and it is the number
-    // that says whether a long commit was a slow WRITE or a slow OBSERVATION.
+    // that says whether a long commit was a slow write or a slow observation.
     if SAVE_FLOW_COMMIT_JOB_START_TICK.load(Ordering::SeqCst) == 0
         && usize::try_from(er_save_suppress::save_job_starts()).unwrap_or(usize::MAX)
             > SAVE_FLOW_SAVE_JOB_STARTS_AT_FIRE.load(Ordering::SeqCst)
@@ -1044,13 +1044,13 @@ fn save_flow_commit_wait_tick(ticks: usize) {
         save_flow_degraded_commit_wait_tick(ticks, completions_at_fire);
         return;
     }
-    // POSITIVE EVIDENCE ONLY: this latches a status when, and only when, a save job that
-    // started after our own submit has RETURNED from its body, and it reports whatever
+    // Positive evidence ONLY: this latches a status when, and only when, a save job that
+    // started after our own submit has returned from its body, and it reports whatever
     // result the game itself recorded for it. It cannot fire on "no failure seen yet".
     let _ = er_save_suppress::adopt_completed_save_job_as_final_status();
-    // NOTHING BELOW MAY RUN WHILE THE WRITER IS INSIDE A JOB BODY. Every exit from this stage
-    // disarms the commit window, and the native in-place writer opens the save container ONCE
-    // PER DIRTY BLOCK: a window closed between block k and k+1 sends blocks k+1..N to the
+    // Nothing below may run while the writer is inside a job body. Every exit from this stage
+    // disarms the commit window, and the native in-place writer opens the save container once
+    // per dirty BLOCK: a window closed between block k and k+1 sends blocks k+1..N to the
     // loaded save with `OPEN_ALWAYS` (no truncate), after the leak check has already run, so
     // nothing detects or undoes it. A latched terminal status keeps its freshness flag and is
     // taken on a later tick instead.
@@ -1058,11 +1058,11 @@ fn save_flow_commit_wait_tick(ticks: usize) {
         return;
     }
     if er_save_suppress::bypass_final_status_fresh() {
-        // THE FILE CHECK RUNS FIRST AND HAS THE LAST WORD (2026-07-28). `status` is the game's SL
+        // The file check runs first and has the last word (2026-07-28). `status` is the game's SL
         // job result -- its opinion of its own bookkeeping, which run 4 reported as 0 (success) for
         // a commit that produced a sparse, headerless fragment. Announcing that status and then
         // contradicting it a line later made the log say "COMMIT COMPLETE" above "the user's save
-        // did NOT land". Score the bytes, then emit ONE verdict that folds both in.
+        // did not land". Score the bytes, then emit one verdict that folds both in.
         //
         // The status is PEEKED, not taken, until the file check has actually run: the disarm has
         // its own hard interlock against an executing writer, and a status consumed and then
@@ -1120,8 +1120,8 @@ fn save_flow_commit_wait_tick(ticks: usize) {
         );
         return;
     }
-    // DEAD-FIRE BAILOUT (user-reported 2026-07-28): the Save Game row is gated on the flow being
-    // IDLE, so a stage 8 that can never complete freezes the row for the whole watchdog -- ~15-30 s
+    // Dead-fire bailout (user-reported 2026-07-28): the Save Game row is gated on the flow being
+    // idle, so a stage 8 that can never complete freezes the row for the whole watchdog -- ~15-30 s
     // of "the menus don't work any more" after a single save. Distinguish the two cases by whether
     // the one-shot token was ever CONSUMED:
     //   * consumed  -> a real write is in flight; keep the full watchdog and protect it.
@@ -1134,7 +1134,7 @@ fn save_flow_commit_wait_tick(ticks: usize) {
     };
     let consumed = allowed_since_fire();
     if !consumed && ticks >= SAVE_FLOW_ENQUEUE_GRACE_TICKS {
-        // THE TOKEN IS THE INTERLOCK (2026-07-28). The read above and this call are not
+        // The token is the INTERLOCK (2026-07-28). The read above and this call are not
         // atomic together: an enqueue can arrive between them and take the token, and this
         // branch would then retract the request flags and free the row while a genuine write
         // was starting -- the one outcome worse than waiting. Both sides take the token with
@@ -1163,12 +1163,12 @@ fn save_flow_commit_wait_tick(ticks: usize) {
         return;
     }
     if ticks >= SAVE_BYPASS_WATCHDOG_TICKS {
-        // A CONSUMED TOKEN WITH NO JOB YET IS A WRITE THAT HAS NOT HAPPENED. The enqueue was
+        // A consumed token with no job yet is a write that has not happened. The enqueue was
         // forwarded for real, so the SL worker may still pick the job up; disarming the redirect
         // in front of it points the writer's per-block opens at the loaded save. Waiting is the
         // safe side, so the window is held past the watchdog -- bounded only so a permanently
         // stalled queue cannot disable the Save Game row for the rest of the session, and the
-        // moment that bound is reached is a NAMED failure rather than a quiet timeout.
+        // moment that bound is reached is a named failure rather than a quiet timeout.
         if consumed
             && save_dest_commit_window_armed()
             && save_dest_writer_state(completions_at_fire) == SaveDestWriterState::NotStarted
@@ -1187,7 +1187,7 @@ fn save_flow_commit_wait_tick(ticks: usize) {
             ));
         }
         let expired = er_save_suppress::expire_bypass_if_pending();
-        // A BACKSTOP REACHED IS A DEGRADED OUTCOME, AND IT IS COUNTED. Every other exit from
+        // A BACKSTOP reached is a degraded outcome, and it is counted. Every other exit from
         // this stage knows what happened; this one is defined by never having found out, and
         // the file check below cannot repair that (it scores bytes, not the write's own
         // verdict). Counting it is what stops "we never observed the save" from looking like
@@ -1217,18 +1217,18 @@ fn save_flow_commit_wait_tick(ticks: usize) {
     }
 }
 
-/// Stage 8 for a commit fired on the DEGRADED fail-open path: suppression never armed, so no
+/// Stage 8 for a commit fired on the degraded fail-open path: suppression never armed, so no
 /// bypass token exists and the save the request produces is an ordinary native write.
 ///
 /// This exists because the token-based stage 8 cannot describe this path at all. Its
-/// completion test reads `bypass_allowed_total`, which only moves when a token is CONSUMED;
+/// completion test reads `bypass_allowed_total`, which only moves when a token is consumed;
 /// with no token armed it is frozen by construction, so the "was the fire dead?" predicate was
 /// permanently true. Every degraded commit therefore ran to the 3 s enqueue-grace bailout,
 /// disarmed the commit window and reported "the user's save did NOT happen" -- including the
 /// ones where the native write had already succeeded. And `take_bypass_final_status` can never
 /// return `Some` here either, so that bailout was the only exit the path had.
 ///
-/// The signal that DOES exist on this path is the writer's own: `FUN_14240fd70`, the SL save-job
+/// The signal that does exist on this path is the writer's own: `FUN_14240fd70`, the SL save-job
 /// body, runs for every save the worker performs, bypassed or not. A completion past the value
 /// sampled at the fire is positive evidence that a save finished writing, and its result code is
 /// the game's own verdict on it. When the observer is not installed there is no such evidence,
@@ -1306,7 +1306,7 @@ mod save_flow_deadline_tests {
 
     /// Every save-flow bound, referenced by its real constant so a future retune cannot silently
     /// invalidate the proof below. Two entries share `SAVE_DEST_PICKER_OPEN_TIMEOUT_TICKS` because
-    /// the browser's OPEN and its TEARDOWN are two uses of one budget.
+    /// the browser's open and its TEARDOWN are two uses of one budget.
     const SAVE_FLOW_BOUNDS: [usize; 7] = [
         SAVE_FLOW_BOX_BUILD_TIMEOUT_TICKS,
         SAVE_DEST_PICKER_OPEN_TIMEOUT_TICKS,
@@ -1318,7 +1318,7 @@ mod save_flow_deadline_tests {
     ];
 
     /// A user may browse for arbitrarily long, so the freeze cannot be "extend the timeouts". Run
-    /// the frozen read past the LONGEST bound in the flow (~75 s of game-task frames at 60 Hz) and
+    /// the frozen read past the longest bound in the flow (~75 s of game-task frames at 60 Hz) and
     /// assert it never reaches any of them; then one unfrozen call must advance by exactly 1, so the
     /// freeze is a suspension and not a break.
     #[test]
@@ -1342,7 +1342,7 @@ mod save_flow_deadline_tests {
         );
     }
 
-    /// FREEZING IS NOT ENOUGH. Stage 3's abandon branch never consulted `ticks`, so with the dialog
+    /// Freezing is not enough. Stage 3's abandon branch never consulted `ticks`, so with the dialog
     /// term missing it would end the flow one frame after the dialog opened no matter how frozen
     /// the counter was. Both halves are asserted here: with the term, every tick count waits; with
     /// it removed, the same state is abandoned.
@@ -1361,7 +1361,7 @@ mod save_flow_deadline_tests {
                 DestBrowseAction::WaitForUser,
                 "an open OS dialog must have no deadline at tick {ticks}"
             );
-            // The ordering window: the menu-pump arm sets the dialog latch BEFORE clearing the
+            // The ordering window: the menu-pump arm sets the dialog latch before clearing the
             // pending-open latch, so a tick landing between the two stores sees both set.
             assert_eq!(
                 dest_browse_verdict(false, false, false, true, false, true, ticks),
@@ -1378,22 +1378,22 @@ mod save_flow_deadline_tests {
     }
 
     /// Game-task ticks that accrue between one destination dialog closing and the menu pump opening
-    /// the next. Measured from the loop in bd `er-effects-rs-rsxi`: CLOSED -> OPENED was 55-85 ms,
+    /// the next. Measured from the loop in bd `er-effects-rs-rsxi`: Closed -> opened was 55-85 ms,
     /// and `SAVE_FLOW_STAGE_TICKS` is frozen for the dialog's own lifetime, so only that gap counts.
     const REOPEN_GAP_TICKS: usize = 3;
 
     /// THE REOPEN LOOP, REPRODUCED (bd `er-effects-rs-rsxi`, measured 2026-07-30 on
-    /// `surface=save-as`: OPENED -> `result=cancelled` -> OPENED again 57 ms later, over and over,
+    /// `surface=save-as`: Opened -> `result=cancelled` -> opened again 57 ms later, over and over,
     /// each cancel logging "nothing staged" while the next pump re-asked).
     ///
-    /// Nothing in the verdict function was wrong -- the defect sat one actor EARLIER, in who owns
-    /// `SAVE_DEST_OPEN_PICKER_PENDING`. So the model here is the TWO actors, not one predicate: the
+    /// Nothing in the verdict function was wrong -- the defect sat one actor earlier, in who owns
+    /// `SAVE_DEST_OPEN_PICKER_PENDING`. So the model here is the two actors, not one predicate: the
     /// menu pump opens a dialog whenever the request is armed, and the save-flow tick then judges
     /// the latches. Counting the dialogs a cancelling user is shown is the whole bug report as a
     /// number.
     ///
     /// The old behaviour is not literally infinite -- `OpenTimeout` fires once the stage has accrued
-    /// its budget -- but ~60 dialogs is indistinguishable from a trap, and it is a FLOOR, because
+    /// its budget -- but ~60 dialogs is indistinguishable from a trap, and it is a floor, because
     /// every overwrite-confirm round-trip re-enters stage 3 and resets the budget to zero.
     #[test]
     fn a_cancelling_user_is_shown_one_destination_dialog_not_a_reopen_loop() {
@@ -1405,7 +1405,7 @@ mod save_flow_deadline_tests {
             let mut ticks = 0usize;
             loop {
                 if armed {
-                    // MENU PUMP: the request is armed, so comdlg32 opens. The user cancels it, and
+                    // Menu PUMP: the request is armed, so comdlg32 opens. The user cancels it, and
                     // the tick counter is frozen for the dialog's whole lifetime.
                     shown += 1;
                     assert!(shown < 1000, "neither behaviour may run away in this model");

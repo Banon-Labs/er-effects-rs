@@ -9,10 +9,10 @@ fn write_render_state_oracles(body: &mut String, base: usize) {
     const NULL_PTR: usize = 0;
     const READ_FAIL_SENTINEL: i32 = -1;
     let format_optional_ptr = format_optional_oracle_ptr;
-    // WORLD-LIVE oracle: CSNowLoadingHelper "now loading" latch = *(u8*)([base+0x3d60ec8]+0xED).
-    // NOTE (RE-corrected 2026-07-02): this reads `CSNowLoadingHelperImp::load_done` -- a load-COMPLETE
-    // latch, NOT "loading screen visible." `Update` copies it from `request_load_done` (raised by the
-    // map-load system), so it reads true AFTER the load finishes and lingers into gameplay. Kept as a
+    // World-live oracle: CSNowLoadingHelper "now loading" latch = *(u8*)([base+0x3d60ec8]+0xED).
+    // NOTE (RE-corrected 2026-07-02): this reads `CSNowLoadingHelperImp::load_done` -- a load-complete
+    // latch, not "loading screen visible." `Update` copies it from `request_load_done` (raised by the
+    // map-load system), so it reads true after the load finishes and lingers into gameplay. Kept as a
     // telemetry field, but do not treat it as a screen-visibility signal (see CSNowLoadingHelperImp).
     const NOW_LOADING_SINGLETON_RVA: usize = RuntimeGlobalRva::NowLoadingSingleton as usize;
     const NOW_LOADING_FLAG_OFFSET: usize = core::mem::offset_of!(CSNowLoadingHelperImp, load_done);

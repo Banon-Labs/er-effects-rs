@@ -83,8 +83,8 @@ pub unsafe extern "system" fn DllMain(
     if reason != DLL_PROCESS_ATTACH {
         return DLL_MAIN_SUCCESS;
     }
-    // FIRST, before anything that can panic. A panic in a cdylib crosses an
-    // `extern "system"` boundary and becomes an ABORT, which does not dispatch to a
+    // First, before anything that can panic. A panic in a cdylib crosses an
+    // `extern "system"` boundary and becomes an abort, which does not dispatch to a
     // vectored handler -- so no crash record is written at all and the process simply
     // vanishes. Enforced by `scripts/check-panic-reporter-installed.py`.
     er_game_base::panic_report::report_panics_to("er-death-persist", panic_log_sink);
@@ -102,7 +102,7 @@ pub unsafe extern "system" fn DllMain(
 fn spawn_param_patch_task() {
     write_runtime_log("patch task started");
     let mut attempts = NO_PATCH_ATTEMPTS;
-    // BOUNDED (2026-08-29): the unbounded form of this loop starved the wineserver and hung a
+    // Bounded (2026-08-29): the unbounded form of this loop starved the wineserver and hung a
     // whole boot -- see er_game_base::wait. The attempt counter and its throttled log are kept;
     // what changed is that the wait backs off in user space and ends.
     let cs_task = er_game_base::wait::poll_until(|| match unsafe { CSTaskImp::instance() } {
@@ -255,7 +255,7 @@ static LOG_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// `report_panics_to`'s sink, which takes `fmt::Arguments` where this crate logs `&str`.
 ///
-/// Small and duplicated per shell on purpose: the hook is installed PER DLL because every cdylib
+/// Small and duplicated per shell on purpose: the hook is installed per DLL because every cdylib
 /// statically links its own `er-game-base`, so there is no shared place this could live and still
 /// be the thing that runs in this module.
 fn panic_log_sink(args: core::fmt::Arguments<'_>) {

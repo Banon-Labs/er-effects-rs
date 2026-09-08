@@ -2,23 +2,23 @@
 # Rewrite every commit in <base>..<ref> with a path removed from its tree, then
 # move <ref> to the rewritten tip.
 #
-# WHY THIS EXISTS RATHER THAN `git filter-branch`/`git filter-repo`: the case this
-# repo keeps hitting is a large binary committed by ACCIDENT a few commits ago --
+# Why this exists rather than `git filter-branch`/`git filter-repo`: the case this
+# repo keeps hitting is a large binary committed by accident a few commits ago --
 # 35 MB of `vendor-archive/seamless/ersc-*.dll` in #385, against a `.gitignore`
 # rule that already covered them. filter-repo is not installed here and
 # filter-branch rewrites whole refs; both are the wrong size of hammer for three
 # commits at the tip, and filter-branch's own manual now tells you not to use it.
 # This walks exactly the range you name, in topological order, rebuilding each
-# commit with `git commit-tree` against a parent map -- so MERGE COMMITS keep both
+# commit with `git commit-tree` against a parent map -- so merge commits keep both
 # parents and the history shape is byte-identical apart from the removed path.
 #
-# It does NOT touch the working tree: the files stay on disk, which is the point
+# It does not touch the working tree: the files stay on disk, which is the point
 # when the path is a gitignored local reference archive that must survive the
 # untracking (AGENTS.md, `vendor-archive/seamless/`).
 #
 # Usage:  scripts/git-strip-path-from-history.sh <path> <base> [ref]
 #   <path>  pathspec to remove (a file or a directory)
-#   <base>  exclusive lower bound; commits AFTER this are rewritten
+#   <base>  exclusive lower bound; commits after this are rewritten
 #   [ref]   branch to move (default: the current branch)
 #
 # Prints the old and new tip. The old tip is not deleted, so `git reset --hard

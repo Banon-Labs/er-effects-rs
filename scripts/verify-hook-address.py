@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Verify a VA holds the SAME function in the 1.16.2 Ghidra dump and in `eldenring-deobf.bin`.
+"""Verify a VA holds the same function in the 1.16.2 Ghidra dump and in `eldenring-deobf.bin`.
 
 Why this is mandatory before hooking
 ------------------------------------
-The Ghidra dump is authoritative for MEANING; `eldenring-deobf.bin` is authoritative for
-ADDRESSES (it is what the DLL actually patches). They are not the same file, and the offset
+The Ghidra dump is authoritative for meaning; `eldenring-deobf.bin` is authoritative for
+addresses (it is what the DLL actually patches). They are not the same file, and the offset
 between them is piecewise-constant per code region -- so a VA read off the dump can land
 mid-instruction in the live image and turn a detour into a crash.
 
-Comparing the two disassemblies as TEXT does not work: Ghidra prints `RAX,RSP` where capstone
+Comparing the two disassemblies as text does not work: Ghidra prints `RAX,RSP` where capstone
 prints `rax, rsp`, `[RAX + -0x5f]` vs `[rax - 0x5f]`, `JZ` vs `je`. An earlier pass reported all
-six addresses as MISMATCH purely from that formatting. So this compares the two things that are
+six addresses as mismatch purely from that formatting. So this compares the two things that are
 format-independent and still catch a misaligned address: the MNEMONIC and the instruction
-LENGTH, in order.
+length, in order.
 
 Usage:
   python3 scripts/verify-hook-address.py 0x1408d1d00 [0x1408d2110 ...] [--count 40]
@@ -35,7 +35,7 @@ DEOBF = "eldenring-deobf.bin"
 MCP_QUERY_TIMEOUT_SECONDS = 30
 
 # Ghidra and capstone spell the same instruction differently; neither difference can mask a
-# misaligned address, since a wrong VA changes the LENGTH sequence almost immediately.
+# misaligned address, since a wrong VA changes the length sequence almost immediately.
 ALIASES = {
     "jz": "je",
     "jnz": "jne",

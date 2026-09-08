@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Whole-repo BARE-IDENTIFIER search across every Rust source file.
+"""Whole-repo bare-identifier search across every Rust source file.
 
 Why this exists: `rtk grep` false-negatives on tokens this repo uses constantly
 (`continue`, `input`, `block`, `online`, `splash`, `experiments`, `GOLD_SAVE`, ...) and bare
@@ -7,7 +7,7 @@ Why this exists: `rtk grep` false-negatives on tokens this repo uses constantly
 one-liner; this is that one-liner made reusable so a dead-code sweep can be re-run and
 reviewed rather than retyped.
 
-Searches for the identifier as a WHOLE WORD, never as a qualified path -- a symbol can be
+Searches for the identifier as a whole word, never as a qualified path -- a symbol can be
 reached through a `pub(crate) use ...::*` glob re-export from a file that never names its
 module, so `module::symbol` searches under-report.
 

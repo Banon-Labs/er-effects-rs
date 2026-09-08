@@ -2,22 +2,22 @@
 """Behavioral tests for the cupcake signal `last_assistant_wall_of_text`.
 
 The signal scans the last assistant turn that actually said something and returns:
-  * WALLOFTEXT:<n>:<opener>  -- the turn's longest CONTIGUOUS run of prose was n > 1 paragraphs;
+  * WALLOFTEXT:<n>:<opener>  -- the turn's longest contiguous run of prose was n > 1 paragraphs;
   * ""                       -- clean.
 
 Three properties matter and each has a wrong answer that already shipped:
 
-  * WHICH TURN. The consumer is UserPromptSubmit, where the new prompt may already be on disk. Taking
-    `turns[-1]` there reads an EMPTY turn and the guard silently never fires -- so the signal must
+  * Which turn. The consumer is UserPromptSubmit, where the new prompt may already be on disk. Taking
+    `turns[-1]` there reads an empty turn and the guard silently never fires -- so the signal must
     pick the last turn with text, and this file drives both orderings.
-  * WHAT UNIT. The longest contiguous run, not the turn's prose summed. A tool-heavy turn emits a
+  * What unit. The longest contiguous run, not the turn's prose summed. A tool-heavy turn emits a
     one-line preamble before each call; summing eleven of those scored the turn as an eleven-paragraph
     wall and halted ordinary work.
-  * WHAT IT SAYS. The tag has to carry the count and the opener, because the correction quotes them
+  * What it says. The tag has to carry the count and the opener, because the correction quotes them
     back. A correction that cannot name what it measured is a generic nag, and generic nags are what
     this guard already tried and lost with.
 
-We drive the real signal against crafted transcript JSONL under a temporary HOME so its
+We drive the real signal against crafted transcript JSONL under a temporary home so its
 `~/.claude/projects/<cwd-key>/*.jsonl` discovery resolves to our fixture, then assert the tag.
 """
 from __future__ import annotations
@@ -40,7 +40,7 @@ def user(text: str) -> dict:
 
 
 def tool_result(tool_use_id: str = "toolu_x") -> dict:
-    """A tool-result carrier user event -- must NOT split the assistant turn."""
+    """A tool-result carrier user event -- must not split the assistant turn."""
     return {
         "type": "user",
         "message": {"content": [{"type": "tool_result", "tool_use_id": tool_use_id, "content": "ok"}]},
@@ -114,7 +114,7 @@ FOUR_PARAGRAPHS = (
 
 
 def main() -> int:
-    # ---- THE DEFECT -------------------------------------------------------------------------------
+    # ---- The defect -------------------------------------------------------------------------------
 
     expect(
         "true-positive-four-paragraph-answer",
@@ -123,7 +123,7 @@ def main() -> int:
         "expected WALLOFTEXT:4 for a four-paragraph closing message",
     )
 
-    # The opener is what the correction quotes back, so it must be the offending run's FIRST line.
+    # The opener is what the correction quotes back, so it must be the offending run's first line.
     expect(
         "tag-carries-the-opener",
         [user("status?"), assistant_text(FOUR_PARAGRAPHS)],
@@ -131,7 +131,7 @@ def main() -> int:
         "expected the tag to end with the offending run's first line",
     )
 
-    # ---- WHICH TURN -------------------------------------------------------------------------------
+    # ---- Which turn -------------------------------------------------------------------------------
 
     # At UserPromptSubmit the next prompt is often already on disk. Reading turns[-1] there sees an
     # empty turn and the guard goes silent forever, which is how a guard dies without anyone noticing.
@@ -142,7 +142,7 @@ def main() -> int:
         "expected the previous turn to still be judged once the new prompt has landed",
     )
 
-    # ---- WHAT UNIT --------------------------------------------------------------------------------
+    # ---- What unit --------------------------------------------------------------------------------
 
     # Six one-line preambles between six tool calls: six runs of one paragraph, not a six-paragraph
     # wall. This is the shape the old whole-turn sum halted on, measured at 15 real turns.
@@ -172,7 +172,7 @@ def main() -> int:
         "expected a three-paragraph mid-turn run to be reported",
     )
 
-    # ---- STRUCTURE IS NOT PROSE -------------------------------------------------------------------
+    # ---- Structure is not prose -------------------------------------------------------------------
 
     expect(
         "one-paragraph-plus-table-is-silent",
@@ -195,7 +195,7 @@ def main() -> int:
         "expected a heading to be a signpost rather than a paragraph",
     )
 
-    # ---- CLEAN ------------------------------------------------------------------------------------
+    # ---- Clean ------------------------------------------------------------------------------------
 
     expect(
         "single-paragraph-is-silent",

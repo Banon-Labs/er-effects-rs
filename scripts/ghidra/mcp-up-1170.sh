@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Bring up the Ghidra MCP daemon on the ELDEN RING 1.17 runtime dump and validate it.
 #
-# Sibling of mcp-up-1162.sh. The two are meant to run AT THE SAME TIME: 1.16.2 on :8765 and 1.17
+# Sibling of mcp-up-1162.sh. The two are meant to run at the same TIME: 1.16.2 on :8765 and 1.17
 # on :8767, so the same question can be asked of both images in one session. That is the entire
 # point during this migration -- "where did this function go" is a two-image question.
 #
-# :8766 is deliberately NOT used. It belongs to an unrelated DarkSoulsII.exe daemon on this
+# :8766 is deliberately not used. It belongs to an unrelated DarkSoulsII.exe daemon on this
 # machine; taking it would collide with a live user session.
 #
 #   scripts/ghidra/mcp-up-1170.sh            # start + validate
@@ -44,8 +44,8 @@ bash "$REPO/scripts/ghidra/mcp-ghidra-daemon.sh" start \
 SUF=""; [[ "$PORT" != "8765" ]] && SUF="-$PORT"
 LOG="$HOME/ghidra_maporch/mcp/daemon${SUF}.log"
 
-# Loading a ~26G project exceeds the daemon's own 30s READY wait, so block EVENT-DRIVEN on its
-# READY heartbeat in bounded 30s segments (per-op 30s cap). No polling sleeps. Bail early on FAILED.
+# Loading a ~26G project exceeds the daemon's own 30s ready wait, so block event-driven on its
+# ready heartbeat in bounded 30s segments (per-op 30s cap). No polling sleeps. Bail early on failed.
 for _ in 1 2 3 4 5 6 7 8; do
 	timeout 30 grep -m1 "MCP_HEADLESS: READY" <(tail -F -n +1 "$LOG" 2>/dev/null) >/dev/null 2>&1 && break
 	grep -q "MCP_HEADLESS: FAILED" "$LOG" 2>/dev/null && break

@@ -3,7 +3,7 @@
 
 Walks uncompressed "GFX" version 0x0b files: verifies magic + version, reads
 FileLength, skips the bit-packed movie RECT + frameRate + frameCount, then walks
-the tag stream (u16 LE header: code = word>>6, len = word & 0x3f, long u32 length
+the tag stream (u16 le header: code = word>>6, len = word & 0x3f, long u32 length
 when len == 0x3f), tallying per-code file_count and total_occurrences and checking
 that each file ends cleanly (End tag, FileLength == filesize, no trailing garbage).
 Pure python3 stdlib only.

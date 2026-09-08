@@ -7,10 +7,10 @@
 //! lives in `er-loading-bar-core` for this validation slice; once proven, it can move
 //! behind a smaller shared compositor crate seam.
 
-// HOST-BUILD HYGIENE. This crate is a windows `cdylib`: on a non-windows host every item
+// Host-build hygiene. This crate is a windows `cdylib`: on a non-windows host every item
 // whose only consumer is `DllMain` or a hook reads as dead, and `[workspace.lints.rust]
 // warnings = "deny"` promotes that to a hard compile ERROR -- so `cargo test -p er-loading-bar`
-// failed outright, and its unit tests had therefore never executed in ANY gate. Same fix,
+// failed outright, and its unit tests had therefore never executed in any gate. Same fix,
 // same reason, as er-save-suppress / er-seamless-bugfixes / er-armament-icons. The shipping
 // target is unaffected: this allow does not exist there.
 #![cfg_attr(not(windows), allow(dead_code, unused_imports))]
@@ -102,8 +102,8 @@ pub unsafe extern "system" fn DllMain(
     _reserved: *mut core::ffi::c_void,
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
-        // FIRST, before anything that can panic. A panic in a cdylib crosses an
-        // `extern "system"` boundary and becomes an ABORT, which does not dispatch to a
+        // First, before anything that can panic. A panic in a cdylib crosses an
+        // `extern "system"` boundary and becomes an abort, which does not dispatch to a
         // vectored handler -- so `er_crash_logging` writes no record at all and the process
         // just vanishes. This hook is what turns that silence into a file:line. The hook is
         // per-DLL: every cdylib links its own `er-game-base`, so another shell installing it
@@ -209,7 +209,7 @@ fn standalone_validation_frame(
 
 /// Fresh per process, per file: the first line a run writes to `name` truncates it (rotating
 /// the previous run's aside as `<name>.prev`), later lines append. The one-shot is keyed by
-/// PATH, so the run log and the crash log each get their own clean start.
+/// path, so the run log and the crash log each get their own clean start.
 fn append_named_log(dir: &std::path::Path, name: &str, args: std::fmt::Arguments<'_>) {
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)

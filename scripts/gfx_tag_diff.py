@@ -5,7 +5,7 @@ Walks both tag streams recursively (descending into DefineSprite(39) bodies),
 renders each tag as one line -- sprite path, tag name/code, short/long header
 form, body length, body sha1 prefix -- and prints a unified diff. Identical
 bodies at the same position hash equal, so the diff shows exactly which tags a
-transform removed/changed/inserted and whether surviving tag BYTES are
+transform removed/changed/inserted and whether surviving tag bytes are
 verbatim-identical (same sha) or re-encoded (different sha at same position).
 
 With --emit-rust, instead of a diff it emits a Rust `TagEdit` table (the
@@ -156,7 +156,7 @@ def emit_rust(a_fn: str, b_fn: str, const_name: str):
 
     def anchor_at(sa, sf, idx, sprite):
         """Bytes+code of the vanilla anchor tag at position `idx`; it must be
-        UNIQUE in the container so `apply_edits` resolves it unambiguously."""
+        unique in the container so `apply_edits` resolves it unambiguously."""
         code, elem = sa[idx]
         ab = elem_bytes(sf, code, elem)
         n = sum(1 for (c, e) in sa if elem_bytes(sf, c, e) == ab)
@@ -198,7 +198,7 @@ def emit_rust(a_fn: str, b_fn: str, const_name: str):
                     if code == 39:
                         parent_edited_a.add(elem[1])
                     edits.append((sprite, code, elem_bytes(sf_a, code, elem), None, "Remove"))
-                # Head-to-head replacements. TagEdit.code documents the TARGETED
+                # Head-to-head replacements. TagEdit.code documents the targeted
                 # (old) tag; the replacement may be a different tag kind (e.g. a
                 # DefineSprite repurposed as a DefineEditText).
                 for (oc, oe), (nc, ne) in zip(olds[:pair], news[:pair]):

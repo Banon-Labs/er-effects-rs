@@ -13,7 +13,7 @@
 //! Because two thirds of an armament are not in its item id, and that call has nowhere to put
 //! them:
 //!
-//! * `AddInventoryEquipByItemId` -> `GetGaitemHandleByItemId` mints a BARE weapon gaitem. There
+//! * `AddInventoryEquipByItemId` -> `GetGaitemHandleByItemId` mints a bare weapon gaitem. There
 //!   is no gem in it, so the weapon carries whatever skill its `EquipParamWeapon` row names --
 //!   for an infused row, usually none at all.
 //! * `AddInventoryEquip` -> `EquipInventoryData::InsertItem(..., reinforcement = 0)` passes a
@@ -21,7 +21,7 @@
 //!   `GaitemLookupResult::SetReinforcement`. Every weapon it inserts is +0 until something puts
 //!   the level back.
 //!
-//! The level is put back in BOTH places the engine keeps it: folded into the minted item id
+//! The level is put back in both places the engine keeps it: folded into the minted item id
 //! (`er_build_import_core::plan::armament_item_id`, the half the player actually sees) and written to
 //! the instance field afterwards, since `InsertItem` has just zeroed that one.
 //!
@@ -67,7 +67,7 @@ const ADD_INVENTORY_EQUIP_RVA: usize = 0x246480;
 const GET_GAITEM_HANDLE_WEAPON_WITH_GEM_RVA: usize = 0x671ce0;
 /// `GaItemHandle::~GaItemHandle(uint *handle)`.
 ///
-/// Releases the reference the mint took. `CSGaitemImp` is a BOUNDED refcounted table (0x1400
+/// Releases the reference the mint took. `CSGaitemImp` is a bounded refcounted table (0x1400
 /// entries) and every native caller of the mint destructs its local handle once the inventory has
 /// taken its own reference; skipping it leaks table entries until the free queue is exhausted,
 /// which this repository has already crashed on once.
@@ -138,21 +138,21 @@ pub struct ArmamentOutcome {
     pub inventory_index: i32,
     /// The `GaItemHandle` this armament was minted as, or `0` when nothing usable was minted.
     ///
-    /// THE ONLY NAME THAT DISTINGUISHES THIS COPY FROM ITS TWINS. An ash lives on the gaitem
+    /// The only name that distinguishes this copy from its twins. An ash lives on the gaitem
     /// instance, not in the item id, so several copies of one armament carrying different ashes
     /// all share an item id -- and `EquipInventoryData::GetItemInventoryIdx` (0x14024c560) keys
     /// purely on that id: its body is `if (*itemId != -1) GetItemIndex(itemsData, itemId)`, and
-    /// `InventoryItemsData::InsertItemIntoLookupMap` keeps the LOWEST index for a repeated id.
+    /// `InventoryItemsData::InsertItemIntoLookupMap` keeps the lowest index for a repeated id.
     /// One id, one answer, forever the same copy. Carrying the handle forward is what lets the
     /// equip ask `GetItemIndexByGaitemHandle` (0x14024c460) instead, which scans the entries for
-    /// the one whose handle matches and therefore CAN separate them.
+    /// the one whose handle matches and therefore can separate them.
     ///
     /// # Why the number outlives our own reference
     ///
     /// `grant_armament` destructs its local handle before returning, as every native caller
     /// does. That is a refcount decrement, not an invalidation: `AddInventoryEquip` took the
     /// inventory's own reference first, so the entry stays live for exactly as long as the item
-    /// stays in the inventory -- which is longer than the equip pass. When the insert is REFUSED
+    /// stays in the inventory -- which is longer than the equip pass. When the insert is refused
     /// the inventory took no reference and our release frees the table entry, so this is left
     /// zero rather than left dangling; `RemoveCSGaitemIns` bumps the handle's generation bits on
     /// free, so even a stale handle fails the lookup closed rather than naming a later item.
@@ -169,7 +169,7 @@ impl ArmamentOutcome {
 /// One grant that landed, but at fewer than the number the build asked for.
 ///
 /// A category of its own because it is neither of the two the report used to have. `missing`
-/// means the item is not there at all -- a refusal, and loud. This is the QUIET failure: the add
+/// means the item is not there at all -- a refusal, and loud. This is the quiet failure: the add
 /// ran, the engine reported nothing, and the inventory holds three of the five that were asked
 /// for. `EquipInventoryData::InsertItem` and `UpdateQuantity` both clamp with a bare
 /// `if (max < amount) amount = max;`, so the shortfall exists only in the difference between two
@@ -186,7 +186,7 @@ pub struct Short {
     pub held: u32,
     /// The pot group that capped this, when one did.
     ///
-    /// SHORT AND SHORT-BECAUSE-OF-POTS ARE DIFFERENT REPORTS, and only one of them is a defect.
+    /// Short and short-because-of-POTS are different reports, and only one of them is a defect.
     /// A build asking for a Fire Pot's declared maximum on a character carrying three Cracked
     /// Pots will come up short every single time, correctly and permanently -- the group's
     /// ceiling is the number of vessels, and no importer can raise it past what the player owns.
@@ -195,7 +195,7 @@ pub struct Short {
     pub pot_group: Option<u8>,
 }
 
-/// One grant's demand, kept so the read-back can COMPARE rather than merely look.
+/// One grant's demand, kept so the read-back can compare rather than merely look.
 struct Requested {
     /// The id the inventory will file it under, which for an armament includes its level.
     item_id: u32,
@@ -225,17 +225,17 @@ impl Requested {
 
 /// `EquipGameData.lastItemAddResult`, at `+0x3fc` in a `0x4b0`-byte `EquipGameData`.
 ///
-/// Confirmed on BOTH images rather than carried over: the 1.16.2 dump names the field at that
+/// Confirmed on both images rather than carried over: the 1.16.2 dump names the field at that
 /// offset, and `AddInventoryEquip`'s entry sequence writes it as
 /// `XOR ESI,ESI / MOV dword ptr [RCX + 0x3fc],ESI` -- the bytes `33 f6 89 b1 fc 03 00 00`, which
-/// occur at `0x1402464b8` in `eldenring-deobf.bin` (1.16.2) and at the SAME address in
+/// occur at `0x1402464b8` in `eldenring-deobf.bin` (1.16.2) and at the same address in
 /// `eldenring-deobf-1.17.bin`.
 const LAST_ITEM_ADD_RESULT_OFFSET: usize = 0x3fc;
 
 /// `lastItemAddResult` when the engine flagged nothing.
 ///
-/// NOT a delivery receipt. `AddInventoryEquip` zeroes the field on entry and only ever writes it
-/// again to REFUSE; the pot-group clamp happens further in, inside `InsertItem` /
+/// Not a delivery receipt. `AddInventoryEquip` zeroes the field on entry and only ever writes it
+/// again to refuse; the pot-group clamp happens further in, inside `InsertItem` /
 /// `UpdateQuantity`, which reduce the amount and return normally. So a zero here means "no
 /// refusal", and the quantity read-back remains the only evidence that the requested number
 /// arrived.
@@ -274,7 +274,7 @@ fn describe_add_result(result: i32) -> &'static str {
 pub struct GrantOutcome {
     /// Grants the plan asked for.
     pub attempted: usize,
-    /// Grants confirmed present AT THE REQUESTED QUANTITY afterwards, by reading the inventory
+    /// Grants confirmed present at the requested quantity afterwards, by reading the inventory
     /// back.
     ///
     /// The comparison is against `Grant::quantity`, not against zero. Before 2026-08-31 this
@@ -282,13 +282,13 @@ pub struct GrantOutcome {
     /// received three -- the ordinary result of a full pot group -- reported
     /// `GRANTED: n/n confirmed present, 0 missing`.
     pub confirmed: usize,
-    /// Item ids that were requested but could not be found afterwards AT ALL.
+    /// Item ids that were requested but could not be found afterwards at all.
     pub missing: Vec<u32>,
     /// Grants that landed at fewer than the requested number. See [`Short`].
     pub short: Vec<Short>,
-    /// Items moved OUT of the storage box back into the inventory, rather than minted anew.
+    /// Items moved out of the storage box back into the inventory, rather than minted anew.
     pub pulled_from_storage: u32,
-    /// Items moved INTO the storage box to free a pot group's capacity.
+    /// Items moved into the storage box to free a pot group's capacity.
     pub deposited_to_storage: u32,
     /// Whether the storage box was reachable at all this run. `false` means both storage rungs
     /// were inert, which a reader has to know before concluding anything from the two counts.
@@ -372,12 +372,12 @@ pub unsafe fn player_present() -> bool {
 
 /// Whether a grant is an armament, i.e. the only kind that can carry a gem or a level.
 ///
-/// # The category nibble is necessary and NOT sufficient
+/// # The category nibble is necessary and not sufficient
 ///
 /// This used to be the nibble test alone, and that was correct only while ammunition was
-/// unimplemented. Arrows and bolts are `EquipParamWeapon` rows and carry the SAME
+/// unimplemented. Arrows and bolts are `EquipParamWeapon` rows and carry the same
 /// [`WEAPON_CATEGORY`] nibble, so the nibble by itself now answers "armament" for a quiver of
-/// Bone Arrows -- and that answer sends them down [`grant_armament`], which mints ONE
+/// Bone Arrows -- and that answer sends them down [`grant_armament`], which mints one
 /// `GaItemHandle`, writes an upgrade level into the instance and mounts a gem. A stack of 99
 /// arrows is not one instance, and none of those three things exist for ammunition.
 ///
@@ -401,7 +401,7 @@ fn gem_row(grant: &Grant) -> Option<u32> {
 /// The `EquipParamGem` row a `weapon_skill` field names, or `None` for "no ash".
 ///
 /// Public because the equip side asks the same question of the same encoding when it decides
-/// WHICH minted copy belongs in a slot -- and two copies of that rule would be two chances for
+/// which minted copy belongs in a slot -- and two copies of that rule would be two chances for
 /// the grant and the equip to disagree about what an armament is, which is precisely the
 /// ambiguity the handle threading exists to remove.
 pub fn gem_row_of(weapon_skill: u32) -> Option<u32> {
@@ -431,7 +431,7 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
         return outcome;
     };
 
-    // RESOLVED FOR THE RUNNING BUILD. All three are direct calls into game code at 1.16.2
+    // Resolved for the running build. All three are direct calls into game code at 1.16.2
     // addresses; on 1.17 an unresolved one transfers control into whatever moved there. Refusing
     // takes the same path a null EquipGameData already takes -- every item reported missing,
     // which is exactly what happens when nothing is granted.
@@ -464,20 +464,20 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
     // the plan asks it the same question.
     let levels = crate::catalog::ReinforceLevels::read();
 
-    // WHAT EACH GRANT ASKED FOR, AND THE IDS TO ASK ABOUT AFTERWARDS.
+    // What each grant asked for, and the IDS to ask about afterwards.
     //
     // The id is not always `grant.item_id`: for an armament the upgrade level lives in the id's
-    // last two digits, so a +25 weapon is a DIFFERENT id from the +0 one the plan names, and a
+    // last two digits, so a +25 weapon is a different id from the +0 one the plan names, and a
     // read-back that asked about the planned id would report every armament missing.
     //
-    // The REQUESTED quantity is carried alongside it because the confirmation is a comparison,
+    // The requested quantity is carried alongside it because the confirmation is a comparison,
     // not a presence test. Until 2026-08-31 the check was `if held > 0 { confirmed += 1 }`, which
     // reports `GRANTED: n/n confirmed, 0 missing` for a build that asked for five Fire Pots and
     // got three -- the exact case the pot cap produces, silently, on a character whose Cracked
     // Pots are already spoken for. A number that cannot go down is not an instrument.
     let mut confirms: Vec<Requested> = Vec::with_capacity(grants.len());
 
-    // Read the inventory BEFORE granting, so a grant can ask what is already held.
+    // Read the inventory before granting, so a grant can ask what is already held.
     //
     // A build says "this character HAS these items", not "add these items". Those read the same
     // on an empty character and differently on every other one: importing twice, or importing
@@ -490,7 +490,7 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
     // Safety: game thread, live EquipGameData.
     let inventory_before = unsafe { get_inventory(egd) };
 
-    // THE STORAGE BOX, AND WHAT THE GAME POT-CAPS. Both are optional and both fail the same way:
+    // The storage box, and what the game POT-caps. Both are optional and both fail the same way:
     // the ladder below loses a rung and says so, rather than the grant failing.
     //
     // Safety: game thread, `egd` live, `inventory_before` the carried inventory it owns.
@@ -509,7 +509,7 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
         );
     }
 
-    // EVERY ID THE BUILD WANTS, so the pot rung never deposits something the build asked for.
+    // Every ID the build wants, so the pot rung never deposits something the build asked for.
     // Alternates included: a name that resolves to several rows wants all of them left alone.
     let wanted_ids: std::collections::BTreeSet<u32> = grants
         .iter()
@@ -543,8 +543,8 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
         } else {
             grant.item_id
         };
-        // AN ARMAMENT'S ALTERNATES ARE NOT ITS UPGRADE ROWS. They are other weapons sharing its
-        // name, offset by the same affinity but NOT by the level folded into `full_id`, so
+        // An armament'S ALTERNATES are not its upgrade rows. They are other weapons sharing its
+        // name, offset by the same affinity but not by the level folded into `full_id`, so
         // counting them would credit a different weapon at a different level. Only the plain
         // categories, whose ids carry no level, can use them.
         let also_known_as: Vec<u32> = if armament {
@@ -559,19 +559,19 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
             label: grant.label.clone(),
             pot_group: grant.pot_group,
         });
-        // RECONCILE TO THE TARGET rather than adding to whatever is there. The build names a
+        // Reconcile to the target rather than adding to whatever is there. The build names a
         // quantity the character should end up with, so only the shortfall is granted, and an
         // item already held in sufficient number is left completely alone.
-        // COUNT EVERY ID THE NAME RESOLVES TO, not just the one the catalog happened to pick.
+        // Count every ID the name resolves to, not just the one the catalog happened to pick.
         //
         // Elden Ring gives each upgrade level of a flask its own goods row, and every row carries
         // the same name -- so "Flask of Wondrous Physick" is several ids. Asking about one of them
-        // and getting zero does NOT mean the player has no physick; it means they have a
+        // and getting zero does not mean the player has no physick; it means they have a
         // different row of it. That is what handed out a second flask beside the one already in
         // the inventory, and the same collision made the Crimson and Cerulean flasks report "not
         // in the inventory" while sitting in the player's belt.
         //
-        // `None` is "the inventory could not be read", which is NOT the same fact as "holds
+        // `None` is "the inventory could not be read", which is not the same fact as "holds
         // none" and must not be printed as it.
         let held: Option<u32> = (inventory_before != 0).then(|| {
             let mut held: i32 = 0;
@@ -586,7 +586,7 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
             held.unsigned_abs()
         });
         let mut shortfall: u32 = grant.quantity.saturating_sub(held.unwrap_or(0));
-        // WHAT WAS ASKED FOR AND WHY, for the grants where that is a real question. A grant of one
+        // What was asked for and why, for the grants where that is a real question. A grant of one
         // needs no explanation; a grant of ninety-nine does, and the number's provenance is the
         // difference between the importer honouring the item's own limit and the importer
         // emptying a gib table into the player's pockets. Printed before the ladder runs, so a
@@ -597,7 +597,7 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
                  holds {}, granting {shortfall}{}",
                 grant.label,
                 grant.quantity,
-                // WHICH FIELD THE NUMBER CAME FROM, because there are two and they live in
+                // Which field the number came from, because there are two and they live in
                 // different tables. A consumable's ceiling is `EquipParamGoods.maxNum` clamped to
                 // 99; an arrow's is `EquipParamWeapon.maxArrowQuantity`, which the engine reads
                 // instead and which needs no clamp. A line that named the wrong one would send
@@ -636,14 +636,14 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
             continue;
         }
 
-        // THE LADDER. Everything above this point decides HOW MANY are missing; everything below
-        // decides WHERE THEY COME FROM, cheapest and least destructive first:
+        // The ladder. Everything above this point decides how many are missing; everything below
+        // decides where they come from, cheapest and least destructive first:
         //
-        //   1 ASK       -- how many would the carried inventory actually accept? A pot cap is
+        //   1 ask       -- how many would the carried inventory actually accept? A pot cap is
         //                  the only thing that answers "fewer than you asked for" while every
         //                  other signal says the add will work.
-        //   2 PULL      -- the player's own copy, out of the storage box.
-        //   3 MAKE ROOM -- deposit pot-group members the build does not want, which is what
+        //   2 pull      -- the player's own copy, out of the storage box.
+        //   3 make room -- deposit pot-group members the build does not want, which is what
         //                  raises the group's ceiling. Only for a pot-capped item.
         //   4 GIB       -- mint the rest.
         //
@@ -665,7 +665,7 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
                 ));
             }
 
-            // RUNG 2 -- PULL. Run whenever the box holds one, NOT only when rung 1 said the
+            // RUNG 2 -- Pull. Run whenever the box holds one, not only when rung 1 said the
             // inventory is full. The build is a statement about the character, and minting a
             // second copy beside one the player already owns contradicts it just as surely as
             // minting a second Flask of Wondrous Physick did; the shortfall calculation above
@@ -693,7 +693,7 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
             }
             outcome.pulled_from_storage += pulled;
 
-            // RUNG 3 -- MAKE ROOM. Only a pot-capped item has a group whose ceiling can be
+            // RUNG 3 -- Make room. Only a pot-capped item has a group whose ceiling can be
             // raised, and only members the build does not want may be moved. The box has no pot
             // cap (`unlimitedConsumables`), so a deposit really does free the group.
             if shortfall > 0
@@ -706,9 +706,9 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
                     if wanted_ids.contains(other) {
                         continue;
                     }
-                    // MOVE AS FEW AS THE GROUP NEEDS, not everything in it. A group's headroom is
+                    // Move as few as the group needs, not everything in it. A group's headroom is
                     // `potItemsCapacity[g] - potItemsCount[g]`, and every consumable deposited
-                    // decrements the count by one -- so the deficit IS the number to move, and
+                    // decrements the count by one -- so the deficit is the number to move, and
                     // emptying a player's thirty Poison Pots into the box to make room for one
                     // Fire Pot would be a correct result reached by an obnoxious route.
                     // Safety: as above.
@@ -774,7 +774,7 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
         let id = full_id as i32;
         // Safety: game thread, live EquipGameData, and `id` outlives the call.
         unsafe { add(egd, &raw const id, shortfall, true, true) };
-        // AND READ WHAT THE GAME THOUGHT OF IT. The call's own return is an inventory index the
+        // And read what the game thought of it. The call's own return is an inventory index the
         // caller has no use for; the verdict is written to `EquipGameData.lastItemAddResult`.
         // Safety: a fault-checked read at a verified offset inside a live object.
         if let Some(result) = unsafe { last_item_add_result(egd) }
@@ -804,7 +804,7 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
                 .saturating_add(unsafe { get_quantity(inventory, &raw const candidate) }.max(0));
         }
         let held = held.unsigned_abs();
-        // CONFIRMED MEANS "AT THE QUANTITY THE BUILD ASKED FOR", not "present". The three
+        // Confirmed means "AT THE QUANTITY THE BUILD ASKED FOR", not "present". The three
         // outcomes are distinct on purpose: five of five is a success, three of five is a
         // silently clamped add, and zero of five is a refusal -- and the middle one used to be
         // reported as the first.
@@ -826,7 +826,7 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
     outcome
 }
 
-/// Grant ONE armament, with its ash mounted and its upgrade level set, and read both back.
+/// Grant one armament, with its ash mounted and its upgrade level set, and read both back.
 ///
 /// Returns `None` when the game declined to mint a handle at all, which is the caller's cue to
 /// fall back to the plain by-item-id call.
@@ -884,8 +884,8 @@ unsafe fn grant_armament(
     // own stack costs nothing.
     let mut handle = [0u32; 4];
 
-    // THE LEVEL IS PART OF THE ITEM ID, and it has to be decided before the mint rather than
-    // after it. The build's level is what the AUTHOR asked for, on the PLANNER's scale, not
+    // The level is part of the item ID, and it has to be decided before the mint rather than
+    // after it. The build's level is what the author asked for, on the planner's scale, not
     // necessarily a level this armament has -- somber armaments stop at +10 while the planner
     // still counts them in regular smithing-stone levels, and a build's `weaponUpgrade` is one
     // number for the whole character -- so the game is asked which `reinforceTypeId + level` rows
@@ -908,14 +908,14 @@ unsafe fn grant_armament(
         unsafe { add_by_handle(egd, handle.as_mut_ptr(), grant.quantity, true, true) };
 
     // Set the instance field too. `AddInventoryEquip` -> `InsertItem` has just written a
-    // hard-coded 0 into it, and the reference exporter sets BOTH halves; this is the half that
+    // hard-coded 0 into it, and the reference exporter sets both halves; this is the half that
     // survives that zeroing.
     // Safety: game thread; the helper only reads and writes this one instance.
     let level = unsafe { apply_reinforcement(module_base, &handle, wanted_level) };
     // Safety: same context; a pure read through the instance's own gem slot.
     let arts_id = unsafe { read_arts_id(module_base, &handle) };
 
-    // The handle is kept ONLY when the inventory actually took its own reference. A negative
+    // The handle is kept only when the inventory actually took its own reference. A negative
     // return means `EquipInventoryData::InsertItem` refused (`AddInventoryEquip` sets
     // `lastItemAddResult = 4` and returns -1), so the release below is the last reference and
     // the table entry goes back on the free queue -- a number that no longer names this item.

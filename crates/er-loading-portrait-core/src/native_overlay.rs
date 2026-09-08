@@ -1,19 +1,19 @@
 //! Native-Windows loading-experience overlay: a SEPARATE top-level window with our OWN D3D12 device and
-//! swapchain, layered on top of the game to OWN what the user sees during boot + every loading screen.
+//! swapchain, layered on top of the game to own what the user sees during boot + every loading screen.
 //!
-//! WHY (bd er-effects-rs-8jz, er-effects-rs-n4x). On the strict native AMD D3D12 driver, compositing on
-//! the GAME's shared device (creating resources + submitting command lists that race the game's own async
+//! Why (bd er-effects-rs-8jz, er-effects-rs-n4x). On the strict native AMD D3D12 driver, compositing on
+//! the game's shared device (creating resources + submitting command lists that race the game's own async
 //! rendering) crashes at every phase -- proven across 17 native-Windows runs. vkd3d/Proton isolates the
-//! shared-device work; native Windows does not. So on native Windows we do NOT touch the game's device.
-//! Instead we render the loading bar / static portrait / stats / save picker on our OWN device+swapchain,
+//! shared-device work; native Windows does not. So on native Windows we do not touch the game's device.
+//! Instead we render the loading bar / static portrait / stats / save picker on our own device+swapchain,
 //! in a topmost borderless window covering the game. Fully isolated -> nothing we do can corrupt the game.
 //!
-//! OWNERSHIP CYCLE (user 2026-07-15): this is NOT a one-shot boot cover. Because we can no longer paint
-//! onto the game's native loading screen, the window must REPLACE it every time -- SHOW whenever a loading
-//! sequence is active (boot + every subsequent native loading screen), HIDE during gameplay, re-own on the
+//! Ownership cycle (user 2026-07-15): this is not a one-shot boot cover. Because we can no longer paint
+//! onto the game's native loading screen, the window must replace it every time -- Show whenever a loading
+//! sequence is active (boot + every subsequent native loading screen), hide during gameplay, re-own on the
 //! next load. The window is persistent (created once, toggled), never destroyed per load.
 //!
-//! This file is the MINIMAL PROOF stage: create the window + device + swapchain, clear to a visible color
+//! This file is the minimal proof stage: create the window + device + swapchain, clear to a visible color
 //! while shown, and honor the SHOW/HIDE flag. Content (bar/portrait/stats/picker) is layered on next.
 
 use crate::prelude::*;
@@ -57,8 +57,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{Interface, w};
 
-/// Visibility request set by the game task each frame from the loading state: 1 = SHOW (cover the game),
-/// 0 = HIDE (release to gameplay). Starts SHOWN so the boot black gap is covered immediately.
+/// Visibility request set by the game task each frame from the loading state: 1 = show (cover the game),
+/// 0 = hide (release to gameplay). Starts shown so the boot black gap is covered immediately.
 pub static NATIVE_OVERLAY_SHOW: AtomicUsize = AtomicUsize::new(1);
 /// Frames presented (RAM oracle: the overlay is live + presenting).
 pub use er_telemetry_core::counters::NATIVE_OVERLAY_FRAMES;
@@ -74,9 +74,9 @@ pub use er_telemetry_core::counters::NATIVE_OVERLAY_STAGE;
 pub fn install_native_overlay() {
     // Under a RenderDoc capture, this overlay's OWN D3D12 device + swapchain + Present loop are hooked by
     // renderdoc.dll's D3D12/DXGI resource tracker, which null-derefs on our separate present path and takes
-    // ER down in BOOT before char-load (bd; crash: renderdoc.dll+0x83db51 READ of 0x18 on the native-overlay
+    // ER down in boot before char-load (bd; crash: renderdoc.dll+0x83db51 read of 0x18 on the native-overlay
     // present). This mirrors the present-overlay gate at install_present_overlay_hook. Skip the overlay
-    // entirely so RenderDoc captures the game's REAL present -- the overlay is not needed to CAPTURE the
+    // entirely so RenderDoc captures the game's real present -- the overlay is not needed to capture the
     // render state, and the passive gxdc/distview/mapitem oracle reads (no D3D12 calls) are unaffected.
     if crate::renderdoc_active() {
         append_autoload_debug(format_args!(
@@ -344,7 +344,7 @@ unsafe fn native_overlay_run() {
     };
     let mut fence_val: u64 = 0;
 
-    // --- upload buffer for the SHARED boot/loading frame (bar + picker), sized for a full-screen copy ---
+    // --- upload buffer for the shared boot/loading frame (bar + picker), sized for a full-screen copy ---
     // The per-frame region is a small strip most of the time and full-screen when the picker is up; both
     // fit in this full-frame-sized upload buffer, so it is created once.
     let region_desc_for = |w: usize, h: usize| D3D12_RESOURCE_DESC {
@@ -444,7 +444,7 @@ unsafe fn native_overlay_run() {
             continue;
         }
 
-        // --- render a frame on OUR device (minimal proof: clear to a visible color) ---
+        // --- render a frame on our device (minimal proof: clear to a visible color) ---
         let idx = unsafe { swapchain.GetCurrentBackBufferIndex() } as usize;
         let bb = &backbuffers[idx];
         if unsafe { allocator.Reset() }.is_err() || unsafe { list.Reset(&allocator, None) }.is_err()
@@ -466,9 +466,9 @@ unsafe fn native_overlay_run() {
         // Black cover (matches the game's black boot and the bar frame's own black background).
         unsafe { list.ClearRenderTargetView(handle, &[0.0, 0.0, 0.0, 1.0], None) };
 
-        // SHARED rasterizer: the exact same loading bar (milestone label, ticks, text scaling, progress)
+        // Shared rasterizer: the exact same loading bar (milestone label, ticks, text scaling, progress)
         // and save-picker panel as the Wine in-swapchain path -- rendered once, here uploaded + copied onto
-        // OUR backbuffer at its placement.
+        // our backbuffer at its placement.
         let frame = boot_view_render_frame(win_w as usize, win_h as usize);
         let mut drew = false;
         if let Some(up) = upload.as_ref()

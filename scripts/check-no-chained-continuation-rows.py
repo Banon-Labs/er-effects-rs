@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Refuse a map row whose address is an MSVC CHAINED-UNWIND continuation record.
+"""Refuse a map row whose address is an MSVC chained-unwind continuation record.
 
-WHAT THIS CATCHES THAT `classify-1170-entry-kind.py` DOES NOT
+What this catches that `classify-1170-entry-kind.py` does not
 ------------------------------------------------------------
-That tool asks: does this image's `.pdata` declare a function to BEGIN here? It is the right
+That tool asks: does this image's `.pdata` declare a function to begin here? It is the right
 question, and it caught six mid-function rows on 2026-08-30. But `.pdata` answers "yes" for an
-address that is NOT a function start.
+address that is not a function start.
 
 MSVC splits one function's unwind data across several `RUNTIME_FUNCTION` records whenever it
 outlines a cold path or a region-based unwind. Every chunk after the first gets its own record,
@@ -13,7 +13,7 @@ so it reads as `ENTRY` -- while being an address in the middle of a live functio
 record's `UNWIND_INFO` flags nibble (`UNW_FLAG_CHAININFO`, 0x4) says which kind it is, and the
 record it chains to owns the real prologue.
 
-MEASURED, and this is why the distinction is not academic. `0xc57666` is the record covering the
+Measured, and this is why the distinction is not academic. `0xc57666` is the record covering the
 `CSFreeListMemorySystem` shutdown assert. Both images' `.pdata` declare a function start there,
 `classify-1170-entry-kind.py --fail-on-mid` passes it, and it is already paired in
 `rva-map-1162-to-1170.functions.tsv` as `0xc57666 -> 0xc58d36`. It is a continuation: the real
@@ -23,11 +23,11 @@ slot 2 of `.?AVCSFreeListMemorySystem@CS@@` in both. A row for `0xc57666` would 
 function other threads are running.
 
 The inverse case is why this cannot simply refuse short records. `0x8c47c0`
-(`CS::FeSystemAnnounceView::Update`) has a SIX-byte `.pdata` record -- and it is a ROOT: the
+(`CS::FeSystemAnnounceView::Update`) has a six-byte `.pdata` record -- and it is a ROOT: the
 6 bytes are `push rbx; sub rsp,0x30`, one more than MinHook needs, and the chained record at
 `0x8c47c6` points back at it. Record size says nothing; the flag says everything.
 
-USAGE
+Usage
     python3 scripts/check-no-chained-continuation-rows.py            # gate over the tables build.rs reads
     python3 scripts/check-no-chained-continuation-rows.py --rows     # list every flagged row
     python3 scripts/check-no-chained-continuation-rows.py --selftest
@@ -46,7 +46,7 @@ BASE = 0x140000000
 UNW_FLAG_CHAININFO = 0x4
 
 # Same three tables `classify-1170-entry-kind.py` gates, and for the same reason: every one of
-# them is read by `er-game-base/build.rs` to license a CALL or a DETOUR.
+# them is read by `er-game-base/build.rs` to license a call or a detour.
 GATED_MAPS = (
     "docs/recon/rva-map-1162-to-1170.verified.tsv",
     "docs/recon/rva-map-1162-to-1170.needed-verified.tsv",
@@ -137,14 +137,14 @@ def main():
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
     # The two de-Arxan'd images are gitignored (game-derived bytes are never committed), so a fresh
-    # checkout and CI simply do not have them. SKIP at exit 0 -- loudly, naming the file -- the way
+    # checkout and CI simply do not have them. Skip at exit 0 -- loudly, naming the file -- the way
     # `classify-1170-entry-kind.py`, `verify-data-rvas-by-rtti.py` and
     # `check-singleton-field-offsets.py` already do. Without this the missing image surfaced as a
     # raw FileNotFoundError traceback at a nonzero exit, which is indistinguishable from the gate
-    # having RUN and found a chained-continuation row -- a gate that cannot run must not read like
+    # having run and found a chained-continuation row -- a gate that cannot run must not read like
     # a gate that failed, and must not read like one that passed either.
     #
-    # The guard sits ABOVE the `--selftest` branch on purpose: both paths construct `Unwind` from
+    # The guard sits above the `--selftest` branch on purpose: both paths construct `Unwind` from
     # these images, and the selftest's three cases are pinned to real addresses in them, so there is
     # nothing it can prove without the bytes.
     missing = [path for path in (OLD_IMAGE, NEW_IMAGE) if not os.path.isfile(path)]

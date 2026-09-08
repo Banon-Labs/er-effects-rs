@@ -6,12 +6,12 @@ disassembles cleanly, and the original `.pdata` still carries the
 RUNTIME_FUNCTION table. This reader parses the section table fresh on every run,
 so it needs none of those addresses hard-coded and survives a Seamless update.
 
-Do NOT reintroduce the concrete numbers this paragraph used to carry (`.themida`
+Do not reintroduce the concrete numbers this paragraph used to carry (`.themida`
 at VA 0x18023a000 / 0x546000 bytes, `.text` 0x18c626 bytes). They described
 v1.9.9 only: v2.0.0 renamed that section `.themida` -> `ERSC`, grew it to
 0xaf0000, and grew `.text` to 0x191496. Run `scripts/ersc_identify.py` to see
-what the INSTALLED build actually looks like. The rename is also why nothing here
-should ever match a section by NAME -- test executable-and-writable instead.
+what the installed build actually looks like. The rename is also why nothing here
+should ever match a section by name -- test executable-and-writable instead.
 
 Run under uv so capstone is provisioned:
     uv run --with capstone python3 scripts/ersc_pe.py --help
@@ -101,7 +101,7 @@ class PE:
 
     # -- function table ------------------------------------------------------
     def pdata_funcs(self):
-        """(start_va, end_va) from the ORIGINAL .pdata section."""
+        """(start_va, end_va) from the original .pdata section."""
         out = []
         for nm, va, vs, ra, rs in self.secs:
             if nm == '.pdata':

@@ -6,8 +6,8 @@
 //! every existing `crate::mh::{MhHook, MH_*, MH_STATUS, register_union_hook, ...}` reference is
 //! unchanged.
 //!
-//! The `#[no_mangle] er_effects_union_register` C export stays HERE (not in `er-hook`): it is a
-//! cross-DLL contract other DLLs resolve by name, and keeping it in this crate ensures ONLY
+//! The `#[no_mangle] er_effects_union_register` C export stays here (not in `er-hook`): it is a
+//! cross-DLL contract other DLLs resolve by name, and keeping it in this crate ensures only
 //! `er_quickload.dll` exports it -- exactly as before the extraction.
 use std::sync::atomic::AtomicUsize;
 
@@ -25,15 +25,15 @@ pub use er_hook::*;
 /// type that *does* implement `Drop` and really run its destructor.
 pub fn leak_installed_hook(_hook: MhHook) {}
 
-/// C-ABI export (2026-07-18, user-directed cross-DLL union). A COMPANION DLL loaded into the same
-/// process (the log-only `er-reload-trace`) hooks ~40 native load/menu functions that OVERLAP
+/// C-ABI export (2026-07-18, user-directed cross-DLL union). A companion DLL loaded into the same
+/// process (the log-only `er-reload-trace`) hooks ~40 native load/menu functions that overlap
 /// this DLL's own hooks (e.g. `0xb0e180` continue-confirm, `0xb0d960` title-SetState). If the
-/// companion drove its OWN MinHook instance, two instances patching the same address would corrupt
+/// companion drove its own MinHook instance, two instances patching the same address would corrupt
 /// each other's trampolines (the exact silent race the internal union was built to fix, now across
-/// DLLs). So the companion calls THIS export instead: every shared address is owned by this DLL's
-/// single MinHook instance + union, and the companion's handler is CHAINED like any internal one.
+/// DLLs). So the companion calls this export instead: every shared address is owned by this DLL's
+/// single MinHook instance + union, and the companion's handler is chained like any internal one.
 ///
-/// `orig_slot_ptr` points at a `usize`-sized cell (an `AtomicUsize`) that lives in the COMPANION's
+/// `orig_slot_ptr` points at a `usize`-sized cell (an `AtomicUsize`) that lives in the companion's
 /// image; the union stores the trampoline (or next chained handler) there for the companion handler
 /// to call. The companion image stays loaded for the process lifetime, so treating it as `'static`
 /// is sound. Returns `0` on success, `-1` for a null `orig_slot_ptr`, or the `MH_STATUS` code as a
@@ -62,14 +62,14 @@ pub unsafe extern "system" fn er_effects_union_register(
 
 /// C-ABI export: hold (or release, with 0) a DirectInput keyboard scancode in front of the game.
 ///
-/// THE ONLY KEYBOARD STAGE ER 1.17 READS. `eldenring.exe` imports no RawInput API at all, so a
+/// The only keyboard stage ER 1.17 reads. `eldenring.exe` imports no RawInput API at all, so a
 /// `SendInput` press has no code path to reach the game; what does reach it is this DLL's detour on
-/// the DInput8 keyboard `GetDeviceState`, which stamps the scancode into the 256-byte buffer AFTER
+/// the DInput8 keyboard `GetDeviceState`, which stamps the scancode into the 256-byte buffer after
 /// DInput has filled it. That makes the press focus-independent -- it applies with the window in the
 /// background and without ever forcing ER foreground -- and it is the same channel that carried the
 /// measured in-world displacement on br-20260905-161450-ec54.
 ///
-/// It is an EXPORT rather than a second hook because the DInput vtable slot is shared: three DLLs
+/// It is an export rather than a second hook because the DInput vtable slot is shared: three DLLs
 /// detour it, and each linking its own MinHook instance overwrites the others' trampolines (the
 /// conflict class in `scripts/me3-dll-conflicts.toml`). `er-input-harness` needs to press keys, not
 /// to own the prologue, so it asks this DLL to stamp for it -- one instance, one owner.
@@ -82,7 +82,7 @@ pub extern "system" fn er_quickload_hold_dinput_key(dik: u8) {
 
 /// C-ABI export: the live `05_010_ProfileSelect` dialog our save-file picker runs on, or 0.
 ///
-/// THIS IS THE ONLY WAY TO KNOW WHICH CURSOR IS THE PICKER'S. The picker's cursor is a
+/// This is the only way to know which cursor is the PICKER'S. The picker's cursor is a
 /// `CS::GridControl` at `dialog + 0xa38`, whose selected cell at `+0xd4` is the field
 /// `DIALOG_SLOT_CURSOR_B0C_OFFSET` already names (`0xa38 + 0xd4 == 0xb0c`). A memory scan for the
 /// GridControl vtable finds it -- along with thirteen other live grids, indistinguishable by
@@ -98,7 +98,7 @@ pub extern "system" fn er_quickload_save_picker_dialog() -> usize {
         .load(std::sync::atomic::Ordering::SeqCst)
 }
 
-/// C-ABI export: hold (or release, with 0) a Win32 virtual key -- including the MOUSE BUTTONS.
+/// C-ABI export: hold (or release, with 0) a Win32 virtual key -- including the mouse buttons.
 ///
 /// `VK_LBUTTON` is 0x01, and a left click is how a pointer-driven menu is confirmed. ELDEN RING 1.17
 /// imports USER32's `GetKeyState`/`GetKeyboardState`, and this DLL detours both, authoring the answer
@@ -106,7 +106,7 @@ pub extern "system" fn er_quickload_save_picker_dialog() -> usize {
 ///
 /// Separate from `er_quickload_hold_dinput_key` because they are different stages, not different
 /// spellings of one -- that one writes a DirectInput SCANCODE into the keyboard buffer, this one
-/// answers a VIRTUAL-KEY query. A run that confuses them cannot tell "the click never arrived" from
+/// answers a virtual-key query. A run that confuses them cannot tell "the click never arrived" from
 /// "the click arrived at the wrong layer", which is the distinction every menu-drive attempt here
 /// has turned on.
 #[unsafe(no_mangle)]
@@ -117,18 +117,18 @@ pub extern "system" fn er_quickload_hold_vk(vk: u8) {
 /// C-ABI export: tell the game the cursor is at `(x, y)`. Pass `u64::MAX` as `packed` to stop.
 ///
 /// `packed` is `(x << 32) | y`, one value so the pair cannot be read half-updated by the game
-/// thread mid-hit-test. This does NOT move the user's real pointer -- it authors the answer the
+/// thread mid-hit-test. This does not move the user's real pointer -- it authors the answer the
 /// game gets from USER32's `GetCursorPos`, so nothing is visible outside the process and the OS
 /// cannot fight it.
 ///
-/// It exists because the ELDEN RING pause menu is a POINTER HIT-TEST, not a list index: a real
+/// It exists because the ELDEN RING pause menu is a pointer hit-test, not a list index: a real
 /// mouse nudge walked one `CS::GridControl`'s hovered cell through 5, 6, 1, 2, 4, 3, 2, 17 while
 /// every other live grid held still, and no pad axis or button write has ever moved it. Writing the
 /// menu's own pointer pair does not work either -- the game refreshes it from the cursor each frame
 /// (five coordinates written, `wrote=true` each time, hovered cell never left 0 on
 /// br-20260905-175511-72a6). USER32 is where the mouse actually enters the process.
 ///
-/// An EXPORT rather than a second hook for the reason every other one here is: `er-input-harness`
+/// An export rather than a second hook for the reason every other one here is: `er-input-harness`
 /// needs to point, not to own the USER32 prologue.
 #[unsafe(no_mangle)]
 pub extern "system" fn er_quickload_hold_cursor_pos(packed: u64) {
@@ -138,11 +138,11 @@ pub extern "system" fn er_quickload_hold_cursor_pos(packed: u64) {
 /// C-ABI export: the live `CS::LoadingScreenData*`, or 0 when no loading screen is up.
 ///
 /// Published for the standalone `er-crash-logging` hang watchdog, which needs this object to
-/// detect a stuck LOAD -- a failure its frame counter structurally cannot see, because frames keep
+/// detect a stuck load -- a failure its frame counter structurally cannot see, because frames keep
 /// advancing through a loading screen (measured on a Seamless invasion-load softlock, 2026-08-15:
 /// eleven minutes at 12% with the frame counter ticking throughout).
 ///
-/// It is an EXPORT rather than a second hook for the same reason `er_effects_union_register` exists.
+/// It is an export rather than a second hook for the same reason `er_effects_union_register` exists.
 /// This DLL already detours the loading-screen update (`er-loading-portrait-core`, RVA 0x90a6b0) and
 /// records the object there; a companion installing its own MinHook on that same prologue would
 /// corrupt trampolines, which is the conflict class tracked in `scripts/me3-dll-conflicts.toml`. So

@@ -1,14 +1,14 @@
-//! THE CRATE'S FIRST AND ONLY DETOUR, and everything that follows from that.
+//! The crate'S first and only detour, and everything that follows from that.
 //!
 //! Layers 1 and 2 install no hook at all and layer 3 spends exactly one resolved address on a
-//! CALL. This layer writes five bytes into the game image, which is a different order of claim,
+//! call. This layer writes five bytes into the game image, which is a different order of claim,
 //! so the reasoning is written down here rather than assumed.
 //!
 //! # What is hooked, and why it is the right seam
 //!
 //! `CS::CSFeManImp::UpdatePlayerComponents` -- 1.16.2 `0x140772a80`, 1.17 `0x140773900` -- is the
 //! per-frame pass that fills the HUD's `FrontEndViewValues` from the local player. It reads the
-//! RAW `WorldChrManImp+0x1e508` exactly once, into `r12`, and carries it through all 1,366
+//! raw `WorldChrManImp+0x1e508` exactly once, into `r12`, and carries it through all 1,366
 //! instructions; `WorldChrManDbg+0xb8 camOverrideChrIns` (which is how possession moves the
 //! camera) is not consulted, so without this the bars keep showing the abandoned body.
 //!
@@ -19,7 +19,7 @@
 //!   (vtable `+0x168`) and `GetWeaponGaitemHandleBySlot` (vtable `+0x230`) during the original
 //!   call, and are never touched afterwards -- so they keep reading the real player, which is
 //!   what a creature cannot supply. An `EnemyIns` returns 0 from `+0x230` and its `GetChrAsm`
-//!   slots answer 0, so retargeting the WHOLE function would empty the armament HUD.
+//!   slots answer 0, so retargeting the whole function would empty the armament HUD.
 //! * The post-pass calls no game code and dereferences one pointer chain the engine itself walks
 //!   (`ChrIns+0x190` -> `+0x00`), so there is no vtable dispatch on a creature and nothing that
 //!   could reach `CSSessionManager` voice chat or the quickmatch manager the way a swapped
@@ -28,11 +28,11 @@
 //!   dangerous `+0x1e508` readers -- `UpdateSaveRelatedData`, `AddOrRemoveItem`, `RevivePlayer`,
 //!   `UploadPcInfo` and the rest -- are not on this path and must stay off it.
 //!
-//! LAST WRITE WINS, and that is checked rather than hoped: all eleven later `Update*` passes in
+//! Last write wins, and that is checked rather than hoped: all eleven later `Update*` passes in
 //! `CSFeManImp::Update` were disassembled, and every write they make to `[reg+0x84/88/8c/90/98/
 //! a4/ac/b8]` is RSP/RBP-relative stack, never a `CSFeManImp`.
 //!
-//! # The signature has a FLOAT in it, which rules out the hook union
+//! # The signature has a float in it, which rules out the hook union
 //!
 //! `void UpdatePlayerComponents(CSFeManImp* this /*rcx*/, float deltaTime /*xmm1*/)` -- Ghidra's
 //! recovered signature, and independently visible in the prologue (`movaps xmm6,xmm1` at
@@ -44,7 +44,7 @@
 //! address is recorded in `scripts/me3-dll-conflicts.toml` as unshared so that a second DLL
 //! arriving on this prologue is a gate failure rather than a silently dropped hook.
 //!
-//! (The call site also loads `r8`, which is NOT a third parameter -- every `r8` touch in the
+//! (The call site also loads `r8`, which is not a third parameter -- every `r8` touch in the
 //! body is a destination. It is dead setup shared with the sibling call above it.)
 //!
 //! # Inert unless something is possessed
@@ -68,7 +68,7 @@ use crate::hud::vitals::Source;
 use crate::log::possess_log;
 use crate::possess::layout::{chr_ins, modules};
 
-/// COMPILE-TIME CROSS-CHECK of this module's source offsets against `fromsoftware-rs`'s model of
+/// Compile-time cross-check of this module's source offsets against `fromsoftware-rs`'s model of
 /// `CSChrDataModule`, which was derived separately. The 1.16.2 named dump agrees with both
 /// (`getStructure CSChrDataModule`: `hp` `+0x138`, `hpMax` `+0x13c`, `hpMaxUncapped` `+0x140`,
 /// `fp` `+0x148`, `fpMax` `+0x14c`, `stamina` `+0x154`, `staminaMax` `+0x158`,
@@ -90,15 +90,15 @@ const _: () = {
 ///
 /// The 1.17 counterpart is `0x773900`, and the pair is registered in
 /// `docs/recon/rva-map-1162-to-1170.verified.tsv` with the verdict
-/// `IDENTICAL-WHOLE 1.000 over 1366 insns BOTH-ENTRIES PDATA:0x16c2/0x16c2` -- an EXHAUSTIVE
+/// `IDENTICAL-WHOLE 1.000 over 1366 insns BOTH-ENTRIES PDATA:0x16c2/0x16c2` -- an exhaustive
 /// comparison of both bodies, with each image's own `.pdata` confirming the address is a function
-/// START in both. That is what `er-game-base/build.rs` requires before an address may carry a
+/// start in both. That is what `er-game-base/build.rs` requires before an address may carry a
 /// detour rather than merely a call, and it is what makes the translation exist at all.
 ///
 /// The 21-byte prologue
 /// `48 8b c4 55 56 57 41 54 41 55 41 56 41 57 48 8d a8 a8 fd ff ff` is byte-identical in both
 /// images and its first five bytes are a clean rel32-free detour window. Extended to 51 bytes it
-/// matches UNIQUELY in each image, at exactly these two addresses.
+/// matches uniquely in each image, at exactly these two addresses.
 const UPDATE_PLAYER_COMPONENTS_RVA: u32 = 0x0077_2a80;
 
 /// MinHook's trampoline back to the real function.
@@ -110,7 +110,7 @@ static ORIG: AtomicUsize = AtomicUsize::new(0);
 
 /// The possessed creature's `ChrIns`, or 0 for "not possessing".
 ///
-/// THE INERT CHECK. One relaxed load per frame decides whether any of this module's code runs.
+/// The inert check. One relaxed load per frame decides whether any of this module's code runs.
 static TARGET: AtomicUsize = AtomicUsize::new(0);
 
 /// The measured offsets for the running build, published once at install.
@@ -123,7 +123,7 @@ static LAYOUT: std::sync::OnceLock<Layout> = std::sync::OnceLock::new();
 /// unloaded.
 ///
 /// `MhHook` holds three raw pointers -- the patched site in the game image, our detour, and
-/// MinHook's trampoline -- which makes it `!Send` BY INFERENCE rather than by intent. None is
+/// MinHook's trampoline -- which makes it `!Send` by inference rather than by intent. None is
 /// thread-affine: all three are process-lifetime addresses in mapped executable memory, and
 /// MinHook's own API is called from arbitrary threads throughout this repo. The claim is spelled
 /// out here rather than worked around, because the alternative is stashing the resolved address
@@ -200,7 +200,7 @@ fn record(outcome: Install) -> Install {
 /// Install the detour. Called once, from the DLL's install thread.
 ///
 /// Returns without touching the game image on any build whose offsets nobody has measured -- the
-/// address translation would still be refused a step later, but refusing HERE means the reason in
+/// address translation would still be refused a step later, but refusing here means the reason in
 /// the log is the true one ("no measured offsets") rather than the downstream one.
 pub(crate) fn install(enabled: bool) -> Install {
     if !enabled {
@@ -233,8 +233,8 @@ pub(crate) fn install(enabled: bool) -> Install {
         }
     }
 
-    // UNRESOLVED on purpose. `MhHook::new` translates 1.16.2 -> 1.17 internally through the
-    // DETOUR map, and resolving here first would hand it an already-resolved address to resolve
+    // Unresolved on purpose. `MhHook::new` translates 1.16.2 -> 1.17 internally through the
+    // detour map, and resolving here first would hand it an already-resolved address to resolve
     // again -- which is not merely redundant: a 1.17 destination can also be some other row's
     // 1.16.2 source, and the second lookup then lands on a third, unrelated function with no
     // error and no log line. `game_rva_for_hook` is the module-base lookup and nothing else.
@@ -265,7 +265,7 @@ pub(crate) fn install(enabled: bool) -> Install {
         }
     };
 
-    // BEFORE the enable, always. The detour can fire on the very next frame, and one that finds a
+    // Before the enable, always. The detour can fire on the very next frame, and one that finds a
     // zero trampoline declines to call the original -- which would blank the whole HUD.
     ORIG.store(hook.trampoline() as usize, Ordering::Release);
     if let Err(status) = unsafe { hook.queue_enable() } {
@@ -325,10 +325,10 @@ pub(crate) fn read_source(chr_ins: usize) -> Option<Source> {
 ///   `DllMain` while the loader lock is held, against threads that no longer exist, buys nothing
 ///   and can hang the exit. Disarm and leave.
 /// * **A real `FreeLibrary`.** The game keeps running with our code unmapped, so a detour still
-///   pointing into it is a jump into unmapped memory on the next frame. The five bytes MUST come
+///   pointing into it is a jump into unmapped memory on the next frame. The five bytes must come
 ///   back out, and the deadlock risk is the lesser one.
 ///
-/// The disarm happens FIRST in both cases, so no frame between here and the disable can run the
+/// The disarm happens first in both cases, so no frame between here and the disable can run the
 /// post-pass.
 pub(crate) fn shutdown(process_exiting: bool) {
     stop();
@@ -361,12 +361,12 @@ unsafe extern "system" fn update_player_components_hook(fe_man: usize, delta_tim
         // back, i.e. effectively never.
         return;
     }
-    // THE ORIGINAL, UNCHANGED, FIRST. Everything the creature cannot supply is filled in here.
+    // The original, unchanged, first. Everything the creature cannot supply is filled in here.
     unsafe {
         core::mem::transmute::<usize, UpdatePlayerComponentsFn>(orig)(fe_man, delta_time);
     }
 
-    // THE INERT PATH ends here on every frame nobody is possessing anything.
+    // The inert path ends here on every frame nobody is possessing anything.
     let creature = TARGET.load(Ordering::Acquire);
     if creature == 0 || fe_man == 0 {
         return;

@@ -1,7 +1,7 @@
 //! Shader -> object trace.
 //!
 //! "How is this shader used?" -> which materials (matbins) reference it, and which
-//! game OBJECTS those materials belong to. A matbin's binder path encodes the object
+//! game objects those materials belong to. A matbin's binder path encodes the object
 //! family directly, e.g.
 //!   material/matbin/character/chr/c4800/matxml/c4800_Body.matbin  -> chr c4800
 //!   material/matbin/asset/aeg/aeg301/AEG301_012.matbin            -> asset AEG301_012

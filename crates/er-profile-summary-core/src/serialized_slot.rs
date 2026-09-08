@@ -7,7 +7,7 @@
 //! terminal operation: everything above it -- the section walk, the `FACE` locator, the runtime
 //! `ChrAsm` reassembly, the plausibility score that picks the right `PlayerGameData` offset --
 //! exists to fill one record. The purely container-shaped half of the read (`slot_body`,
-//! `slot_saved_map`, the stat-block locator) already lives in `er-save-loader` and is DELEGATED to
+//! `slot_saved_map`, the stat-block locator) already lives in `er-save-loader` and is delegated to
 //! below rather than re-implemented, so the two cannot drift.
 
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -31,11 +31,11 @@ use crate::face_data::{
 };
 use crate::host::append_autoload_debug;
 
-/// `base + rva`, resolved for the RUNNING build, or `None` when this build moved the function.
+/// `base + rva`, resolved for the running build, or `None` when this build moved the function.
 ///
 /// The two calls below copy a character's face data and ChrAsm out of a serialized slot. A
 /// hand-built `base + rva` would call the 1.16.2 address on ELDEN RING 1.17 -- whatever now
-/// occupies it -- and a MAPPED constant is no safer that way, because the map knows the new
+/// occupies it -- and a mapped constant is no safer that way, because the map knows the new
 /// address and `base + rva` never asks it.
 #[cfg(windows)]
 fn gated_summary_fn(rva: usize, what: &'static str) -> Option<usize> {
@@ -46,8 +46,8 @@ pub const SAVE_FACE_MAGIC: &[u8; 4] = b"FACE";
 #[allow(dead_code)] // Retained: Save-format fact beside the live SAVE_FACE_MAGIC.
 pub const SAVE_FACE_DATA_BUFFER_SIZE: usize = 0x120;
 
-/// Per-slot FNV-1a64 (truncated to usize) of the FOREIGN character's inner `FaceDataBuffer` as written
-/// into the RAM ProfileSummary record by the save-swap preview -- the EXPECTED portrait identity for
+/// Per-slot FNV-1a64 (truncated to usize) of the foreign character's inner `FaceDataBuffer` as written
+/// into the RAM ProfileSummary record by the save-swap preview -- the expected portrait identity for
 /// that slot. 0 = no foreign preview owns the slot. The build kick re-hashes the record at kick time
 /// and trips `PORTRAIT_FACE_IDENTITY_MISMATCHES` on drift, so a wrong-face portrait can never again
 /// pass a run silently (user directive 2026-07-06: the run must detect the wrong rendered character
@@ -55,11 +55,11 @@ pub const SAVE_FACE_DATA_BUFFER_SIZE: usize = 0x120;
 pub static PROFILE_PREVIEW_FACE_HASH: [AtomicUsize; TITLE_PROFILE_SLOT_COUNT] =
     [const { AtomicUsize::new(0) }; TITLE_PROFILE_SLOT_COUNT];
 
-/// Bit per slot: the preview rebuilt this slot's record but could NOT source a place name for it.
+/// Bit per slot: the preview rebuilt this slot's record but could not source a place name for it.
 ///
-/// The rebuild copies a STRUCTURAL template from the original save's record before overwriting the
+/// The rebuild copies a structural template from the original save's record before overwriting the
 /// fields it can supply (see `write_profile_summary_record`), so a slot whose place name the previewed
-/// save cannot supply keeps the TEMPLATE character's -- and the map field, which is written from the
+/// save cannot supply keeps the template character's -- and the map field, which is written from the
 /// body, then agrees with the body and makes the record look self-consistent. The map comparison that
 /// catches a stale record on a normally-loaded save therefore cannot catch this one; this mask is the
 /// record of the fact, set where the failure to source actually happens.
@@ -138,7 +138,7 @@ impl<'a> SerializedSaveSlot<'a> {
 
     /// The saved `BlockId` / map id this slot deserializes into `GameMan+0xc30`. Delegates to
     /// `er_save_loader::bnd4::slot_saved_map`, which is the function the host corpus test asserts
-    /// against, so `saved_map()` IS the tested read rather than a parallel one that can drift.
+    /// against, so `saved_map()` is the tested read rather than a parallel one that can drift.
     pub fn saved_map(self) -> Option<i32> {
         er_save_loader::bnd4::slot_saved_map(self.body)
     }
@@ -218,24 +218,24 @@ impl<'a> SerializedSaveSlot<'a> {
             .get(sect_off + rel..sect_off + rel + FACE_DATA_BUFFER_TOTAL_SIZE)
     }
 
-    /// Assemble a RUNTIME `ChrAsm` image from the serialized sections, so the native ChrAsm copy
+    /// Assemble a runtime `ChrAsm` image from the serialized sections, so the native ChrAsm copy
     /// receives the layout it expects: runtime is `[hdr 8][ChrAsmEquipment][gaitem_handles]
     /// [equipment_param_ids][tail]` while the save serializes `[slot indices][ChrAsmEquipment]
     /// [param ids][handles]` -- a raw copy of the save bytes dresses the portrait from garbage.
     ///
-    /// THE THREE OVERRIDE SENTINELS MUST BE -1, NOT ZERO (bd er-effects-rs-wncc -- the real
+    /// The three override SENTINELS must be -1, not zero (bd er-effects-rs-wncc -- the real
     /// entirely-nude root cause). `unk0` (+0x00), `unkd4` (+0xd4) and `unkd8` (+0xd8) are not padding:
-    /// the model-resource request `FUN_1409e6fb0` tests them SIGNED and treats a non-negative value in
+    /// the model-resource request `FUN_1409e6fb0` tests them signed and treats a non-negative value in
     /// any of them as a forced whole-outfit override, so a zero-filled image resolves head/chest/hands/
-    /// legs to param ids 0/100/200/300 -- rows that do not exist. Nothing renders, INCLUDING the
+    /// legs to param ids 0/100/200/300 -- rows that do not exist. Nothing renders, including the
     /// bare-body defaults the native feed equips into hands and legs, which is exactly the reported
     /// "nude, missing even the default underwear". A ctor-built `ChrAsm` holds -1 here (deobf
-    /// 0x1403be1d0 and 0x1403be208), which is why BOOT was unaffected: its record is copied from the
+    /// 0x1403be1d0 and 0x1403be208), which is why boot was unaffected: its record is copied from the
     /// ctor-initialised `PlayerGameData.equipGameData.chrAsm`. See `CHR_ASM_OVERRIDE_ABSENT`.
-    /// `unk4` (+0x04) and the +0xdc..+0xe8 tail stay ZERO -- that is also what the ctor does.
+    /// `unk4` (+0x04) and the +0xdc..+0xe8 tail stay zero -- that is also what the ctor does.
     ///
-    /// THE GAITEM HANDLE ARRAY IS LEFT ZERO ON PURPOSE. A gaitem handle only has meaning against the
-    /// `gaitemInsTable` of the process that minted it; the FOREIGN save's serialized handles index a
+    /// The GAITEM handle array is left zero on purpose. A gaitem handle only has meaning against the
+    /// `gaitemInsTable` of the process that minted it; the foreign save's serialized handles index a
     /// table this process never populated. Both consumers of this image (`CHR_ASM_COPY_RVA` into the
     /// ProfileSummary record, then the renderer's own `ChrAsm::Copy` inside the profile feed) run
     /// `GaitemHandle::copy` 22 times -- a REFCOUNTING assign -- so copying foreign handles would
@@ -245,8 +245,8 @@ impl<'a> SerializedSaveSlot<'a> {
     /// `equipment_param_ids` alone (`CS::ChrAsm::GetProtectorParamIdBySlot` at deobf 0x1403be950 is
     /// `mov 0x7c(%rcx,%rdx,4),%eax`, and `FUN_1409e6fb0` feeds that straight to
     /// `EquipParamProtector::GetEntry`). No gaitem handle is read anywhere on the render path.
-    /// Handles matter only because `CS::ChrAsm::EquipItem` WRITES a param id from a handle lookup and
-    /// stores -1 when the lookup fails -- i.e. a bad handle can only DESTROY a good param id.
+    /// Handles matter only because `CS::ChrAsm::EquipItem` writes a param id from a handle lookup and
+    /// stores -1 when the lookup fails -- i.e. a bad handle can only destroy a good param id.
     pub fn runtime_chr_asm_image(
         self,
         pgd: SerializedPlayerGameData<'a>,
@@ -320,13 +320,13 @@ impl<'a> SerializedSaveSlot<'a> {
 
     /// Locate this slot body's serialized `PlayerGameData`.
     ///
-    /// TWO CANDIDATE SOURCES, ONE ACCEPTANCE TEST ([`SerializedPlayerGameData::is_plausible_core`]
+    /// Two candidate sources, one acceptance test ([`SerializedPlayerGameData::is_plausible_core`]
     /// plus the best [`SerializedPlayerGameData::score`], both unchanged).
     ///
-    /// The `0xa000..=0xa600` window before each leading `FACE` magic is an OBSERVATION of one
+    /// The `0xa000..=0xa600` window before each leading `FACE` magic is an observation of one
     /// save's layout, and it is too narrow. Across the ten characters of one real container the
     /// true PGD->FaceData delta ran `0x9d14..=0xa05c`, and the live default container's single
-    /// character sat at `0x959c`, so the window matched ONE of eleven -- every other character read
+    /// character sat at `0x959c`, so the window matched one of eleven -- every other character read
     /// as an empty slot. That is what made the "Load Character from File" preview offer one row of
     /// ten (`slot_mask=0x8`, 2026-08-25) and what made `save_bytes_have_any_character` call the live
     /// default save a `native empty container` while `scripts/dump-save-slots.py` and the game
@@ -335,7 +335,7 @@ impl<'a> SerializedSaveSlot<'a> {
     ///
     /// So the Rune Level invariant is a candidate source too, borrowed from
     /// `er_save_loader::stats` rather than re-implemented -- the same delegation `saved_map()`
-    /// makes, and for the same reason: that locator carries the host tests. It is ADDITIVE and
+    /// makes, and for the same reason: that locator carries the host tests. It is additive and
     /// ordered last, so a body the window already resolved keeps the exact offset it had (an equal
     /// score does not displace the incumbent).
     pub fn player_game_data(self) -> Option<SerializedPlayerGameData<'a>> {
@@ -374,10 +374,10 @@ impl<'a> SerializedSaveSlot<'a> {
 }
 
 /// True when any of the 10 save slots holds a readable character (a PlayerGameData block passing
-/// the plausibility core: level/health/stat sanity). A no-save boot natively CREATES a full-size
-/// EMPTY `ER0000.{sl2,co2}` container, which must not satisfy default-save discovery: observed
+/// the plausibility core: level/health/stat sanity). A no-save boot natively creates a full-size
+/// empty `ER0000.{sl2,co2}` container, which must not satisfy default-save discovery: observed
 /// 2026-07-07, the game rewrote ER0000.sl2 during a pending missing-save-picker run, and the next
-/// launch silently entered DEFAULT-USER-SAVE on that zero-character container instead of
+/// launch silently entered default-user-save on that zero-character container instead of
 /// re-arming the picker.
 pub fn save_bytes_have_any_character(bytes: &[u8]) -> bool {
     (0..TITLE_PROFILE_SLOT_COUNT).any(|slot| {
@@ -512,7 +512,7 @@ impl<'a> SerializedPlayerGameData<'a> {
 
     /// # Safety
     ///
-    /// `profile_summary` must be the LIVE `CS::ProfileSummary` allocation and `slot` must be under
+    /// `profile_summary` must be the live `CS::ProfileSummary` allocation and `slot` must be under
     /// [`TITLE_PROFILE_SLOT_COUNT`]: this writes `PROFILE_SUMMARY_RECORD_STRIDE` bytes at that
     /// slot's record and one occupancy byte at `summary+0x8+slot`, through raw pointers, with no
     /// fault guard. `base` must be the running game module base -- the two native helpers called
@@ -562,11 +562,11 @@ impl<'a> SerializedPlayerGameData<'a> {
             *(slot_data.wrapping_add(PROFILE_SUMMARY_RUNE_MEMORY_OFFSET) as *mut i32) =
                 self.read_i32(SAVE_PGD_RUNE_MEMORY_OFFSET).unwrap_or(0);
             *(slot_data.wrapping_add(PROFILE_SUMMARY_MAP_OFFSET) as *mut i32) = saved_map;
-            // Location. Without this the row keeps whichever place name the PREVIOUS save left in
+            // Location. Without this the row keeps whichever place name the previous save left in
             // the record, so a swap updated the name, level, play time and stats while the location
             // stayed put -- user-reported 2026-08-07. `None` leaves the field alone rather than
             // writing a zero that would render as an empty Location, and records that the row must
-            // not SHOW it: the value still sitting there is the template character's, and the field
+            // not show it: the value still sitting there is the template character's, and the field
             // is unrecoverable otherwise (it is in no character body and the game cannot recompute
             // it from a map), so the row hides it rather than printing somebody else's place.
             let slot_bit = 1usize << slot;
@@ -577,12 +577,12 @@ impl<'a> SerializedPlayerGameData<'a> {
             } else {
                 PROFILE_PREVIEW_PLACE_NAME_UNSOURCED.fetch_or(slot_bit, Ordering::SeqCst);
             }
-            // VISUAL IDENTITY (second-load wrong-head ROOT fix, user-identified 2026-07-06: "Banon in
-            // all three windows"). The fallback record above is a STRUCTURAL template cloned from the
-            // ORIGINAL save's first active slot -- its FaceData (+0x38) and ChrAsm (+0x1a8) describe
-            // THAT character, so every foreign row's portrait rendered the original character while
+            // Visual identity (second-load wrong-head root fix, user-identified 2026-07-06: "Banon in
+            // all three windows"). The fallback record above is a structural template cloned from the
+            // original save's first active slot -- its FaceData (+0x38) and ChrAsm (+0x1a8) describe
+            // that character, so every foreign row's portrait rendered the original character while
             // the overwritten name/level kept the stats text correct. Fill the real visual blocks from
-            // the FOREIGN character's save bytes through the game's own copy helpers: the section-walk
+            // the foreign character's save bytes through the game's own copy helpers: the section-walk
             // locators handle the save's variable-length layout (fixed runtime offsets false-negatived
             // on every slot, run portrait-faceid-switchqa-20260706-142552), and the saved FaceData
             // wrapper header does not match the live one, so CopyFromBuffer -- never a raw memcpy.
@@ -626,7 +626,7 @@ impl<'a> SerializedPlayerGameData<'a> {
                     }
                 }
                 // `er_gfx::title_05_000::fnv1a64` in the product; that name is a `pub use` of
-                // THIS function, so the hash is byte-identical and the crate keeps its dependency
+                // this function, so the hash is byte-identical and the crate keeps its dependency
                 // on the shared primitive rather than on the GFx parser.
                 PROFILE_PREVIEW_FACE_HASH[slot].store(
                     er_game_base::fnv1a::fnv1a64(face) as usize,
@@ -700,7 +700,7 @@ mod loading_cover_chr_asm_image_tests {
         )
     }
 
-    /// THE FIX (bd er-effects-rs-wncc). `FUN_1409e6fb0` tests these three SIGNED and treats a
+    /// The fix (bd er-effects-rs-wncc). `FUN_1409e6fb0` tests these three signed and treats a
     /// non-negative value as a forced whole-outfit override, so a zero here resolves the four
     /// protector slots to 0/100/200/300 and the portrait renders entirely nude -- default underwear
     /// included. A ctor-built `ChrAsm` holds -1; our hand-built image must too.
@@ -721,7 +721,7 @@ mod loading_cover_chr_asm_image_tests {
         }
     }
 
-    /// The ctor writes `unk4` and the +0xdc..+0xe8 tail as ZERO, so the image must leave them zero --
+    /// The ctor writes `unk4` and the +0xdc..+0xe8 tail as zero, so the image must leave them zero --
     /// matching the ctor exactly, no wider.
     #[test]
     fn only_those_three_fields_are_seeded_the_rest_of_the_header_and_tail_stay_zero() {
@@ -753,7 +753,7 @@ mod loading_cover_chr_asm_image_tests {
         assert!(CHR_ASM_UNKD8_OFFSET + core::mem::size_of::<i32>() <= CHR_ASM_SIZE);
     }
 
-    /// A FOREIGN save's gaitem handles index a `gaitemInsTable` this process never populated, so they
+    /// A foreign save's gaitem handles index a `gaitemInsTable` this process never populated, so they
     /// must never reach the refcounting `ChrAsm::Copy` -- not for the ProfileSummary record and not
     /// for the renderer. Costless visually: the render path never reads a handle.
     #[test]
@@ -768,7 +768,7 @@ mod loading_cover_chr_asm_image_tests {
         );
     }
 
-    /// The param ids are the ONLY armor source the render path reads, so zeroing the handles must not
+    /// The param ids are the only armor source the render path reads, so zeroing the handles must not
     /// take them with it.
     #[test]
     fn the_equipment_param_ids_survive_verbatim() {
@@ -790,7 +790,7 @@ mod loading_cover_chr_asm_image_tests {
         assert!(equipment.iter().all(|byte| *byte == TEST_EQUIPMENT_FILL));
     }
 
-    /// Dropping the handle bytes must NOT drop the bounds check they carried: a body truncated
+    /// Dropping the handle bytes must not drop the bounds check they carried: a body truncated
     /// inside the handle section is not a whole serialized ChrAsm and must still be rejected.
     #[test]
     fn a_body_truncated_inside_the_handle_section_is_still_rejected() {
@@ -803,11 +803,11 @@ mod loading_cover_chr_asm_image_tests {
 /// Corpus diagnostics for the serialized `ChrAsmEquipment` block, run against a real save named by
 /// `ER_ARM_STYLE_SAVE` (`<path>:<slot>`). Skips when unset, so it costs nothing in CI.
 ///
-/// WHY IT EXISTS. The loading portrait picks its idle animation from `armStyle`, and a user
-/// observed the portrait one-handed while the SAME save loaded into the world two-handing -- so the
+/// Why it exists. The loading portrait picks its idle animation from `armStyle`, and a user
+/// observed the portrait one-handed while the same save loaded into the world two-handing -- so the
 /// grip is in the save and our reading of it disagrees with the game's. The runtime layout is
 /// `ChrAsmEquipment { armStyle @ +0, selectedSlots @ +4 }` (Ghidra 1.16.2, 28 bytes); whether the
-/// SAVE serializes it in that order is exactly what this dumps rather than assumes.
+/// save serializes it in that order is exactly what this dumps rather than assumes.
 #[cfg(test)]
 mod arm_style_corpus {
     use super::*;

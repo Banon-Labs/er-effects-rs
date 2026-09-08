@@ -1,4 +1,4 @@
-//! Keyboard presses at the ONE stage ELDEN RING 1.17 actually reads.
+//! Keyboard presses at the one stage ELDEN RING 1.17 actually reads.
 //!
 //! # Why this module is a phone call and not a hook
 //!
@@ -38,7 +38,7 @@ const HOLD_CURSOR_EXPORT: &[u8] = b"er_quickload_hold_cursor_pos\0";
 const HOLD_VK_EXPORT: &[u8] = b"er_quickload_hold_vk\0";
 const PICKER_DIALOG_EXPORT: &[u8] = b"er_quickload_save_picker_dialog\0";
 
-/// Cached export address. `0` = not yet resolved, `1` = resolved to ABSENT (the product is not in
+/// Cached export address. `0` = not yet resolved, `1` = resolved to absent (the product is not in
 /// this profile), anything else = the function. The sentinel keeps a missing product from costing a
 /// `GetProcAddress` on every frame of every nav phase.
 static HOLD_KEY_FN: AtomicUsize = AtomicUsize::new(0);
@@ -63,7 +63,7 @@ fn resolve() -> Option<HoldKeyFn> {
         unsafe { GetProcAddress(module, HOLD_KEY_EXPORT.as_ptr()) }
     };
     if address.is_null() {
-        // Do NOT latch absent here. The harness's first nav frame can precede me3's LoadLibrary of
+        // Do not latch absent here. The harness's first nav frame can precede me3's LoadLibrary of
         // the product only in a hand-written profile, but a latch would make that ordering permanent
         // for the whole session; re-probing costs one call on a path that is already frame-rate.
         return None;

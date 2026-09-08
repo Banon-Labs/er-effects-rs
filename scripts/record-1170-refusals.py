@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record which 1.16.2 addresses the RUNNING game actually asked for and was refused.
+"""Record which 1.16.2 addresses the running game actually asked for and was refused.
 
 `select-needed-1170-rows.py` finds addresses by scanning for `const` declarations whose
 name carries the RVA suffix. That misses any address whose constant is named something
@@ -25,7 +25,7 @@ from pathlib import Path
 
 BASE = 0x140000000
 # Both refusal wordings. `ADDRESS REFUSED FOR DETOUR` was added when calls and detours were
-# split, and the original pattern -- which required the parenthesis straight after REFUSED --
+# split, and the original pattern -- which required the parenthesis straight after refused --
 # silently matched none of them. That hid 72 addresses that no map covers: the ones the boot
 # oracles hook, and therefore the reason boot progress reads as zero.
 REFUSED = re.compile(r"ADDRESS REFUSED(?: FOR DETOUR)? \([^)]*\): (0x14[0-9a-f]+)")
@@ -90,9 +90,9 @@ def main() -> int:
         if REFUSED.findall("HOOK REFUSED (MhHook::new 0x1411d0fa0): game FileVersion 2.7.0.0\n"):
             failures.append("a HOOK REFUSED line was harvested; only ADDRESS REFUSED carries the address")
 
-        # THE BOUNDED WORDINGS (2026-08-30). `er_game_base::game_build` no longer writes one line
+        # The bounded WORDINGS (2026-08-30). `er_game_base::game_build` no longer writes one line
         # per refusal: after 12 of an address it writes a went-quiet marker, then restates at each
-        # power of ten. That is safe for THIS script only because it de-duplicates into a set AND
+        # power of ten. That is safe for this script only because it de-duplicates into a set and
         # because every one of those lines keeps the same prefix. The second half is a contract
         # between two files that nothing else checks, so it is checked here -- from the consuming
         # side -- as well as by `every_refusal_line_stays_harvestable_by_the_refusal_recorder` in
@@ -126,7 +126,7 @@ def main() -> int:
         return 0
 
     target = repo / OUTPUT
-    # SAY SO WHEN A RUN WOULD DELETE WORK. Without `--merge` this file is OVERWRITTEN by whatever
+    # Say so when a run would delete work. Without `--merge` this file is OVERWRITTEN by whatever
     # the logs currently in the game directory happen to hold, and those logs are one session --
     # often a short one, sometimes one where a fix means almost nothing is refused any more.
     # Measured 2026-08-30: a plain run against a live directory rewrote a 136-address list down to

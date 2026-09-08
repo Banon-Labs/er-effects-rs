@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Offline census of every regulation.bin row the game considers auto-replenishable.
 
-`GetEquipParamReplenishType` (1.16.2 @0x14023de20) is the ONLY eligibility gate the storage-box
+`GetEquipParamReplenishType` (1.16.2 @0x14023de20) is the only eligibility gate the storage-box
 refill path uses. It reads exactly two bytes:
 
     item id high nibble 0x0  -> EquipParamWeapon.autoReplenishType  @ +0x197

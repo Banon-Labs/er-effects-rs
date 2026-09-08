@@ -2,7 +2,7 @@
 //!
 //! The hooks, the early final-geometry apply and their telemetry moved to
 //! `er_loading_portrait_core::window_reconfig_observer` with the loading-cover crate extraction.
-//! What stays here is the ONE product entry point `experiments/lifecycle/hook_installers.rs`
+//! What stays here is the one product entry point `experiments/lifecycle/hook_installers.rs`
 //! spawns, wrapped so the loading-cover seam is installed before any moved code runs (the moved
 //! module reaches `trace_first_game_caller_rva`, `safe_input_proc`, `own_window` and
 //! `create_absolute_hook` through it).

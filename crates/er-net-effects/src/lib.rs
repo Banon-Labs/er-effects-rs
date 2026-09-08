@@ -68,7 +68,7 @@ fn state_or_recover(
 
 #[cfg(windows)]
 fn wait_for_task_instance() -> Option<&'static CSTaskImp> {
-    // BOUNDED (2026-08-29). This was `loop { yield_now() }`. On 1.17 the singleton did not turn
+    // Bounded (2026-08-29). This was `loop { yield_now() }`. On 1.17 the singleton did not turn
     // up promptly and two such loops starved the wineserver: the game reached 104 CPU ticks in
     // three minutes while these threads burned 19,000 each, half of it system time. See
     // er_game_base::wait for the measurement.
@@ -155,9 +155,9 @@ pub unsafe extern "system" fn DllMain(
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
         // One sink for this DLL's hook + address lines. Without it a refused address is
-        // silent HERE, because every cdylib links its own copy of er-hook/er-game-base.
+        // silent here, because every cdylib links its own copy of er-hook/er-game-base.
         // A rust_panic in a cdylib loaded into the game is otherwise anonymous: the message goes to a
-        // stderr nobody reads, and what survives is a 0xe06d7363 record naming the MODULE and nothing
+        // stderr nobody reads, and what survives is a 0xe06d7363 record naming the module and nothing
         // else. Two boots were lost to one before this existed. See er_game_base::panic_report.
         er_game_base::panic_report::report_panics_to("er-net-effects", crate::net_effects_log);
         er_hook::set_hook_logger(crate::net_effects_log);
@@ -178,7 +178,7 @@ pub extern "C" fn er_net_effects_host_stub() -> i32 {
     DLL_MAIN_SUCCESS
 }
 
-// This module may HOST the process's only imgui context, so it must be findable by any other
+// This module may host the process's only imgui context, so it must be findable by any other
 // overlay module wanting to draw. Without this export a guest walks every loaded module, finds
 // nobody who answers, and silently draws nothing.
 #[cfg(windows)]

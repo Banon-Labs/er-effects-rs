@@ -10,7 +10,7 @@
 //! # The edge rule that differs from the keyboard
 //!
 //! `GetAsyncKeyState` has a low bit meaning "pressed since the previous call on this thread", so a
-//! keyboard poll catches a press that happened AND was released between two polls. **XInput has no
+//! keyboard poll catches a press that happened and was released between two polls. **XInput has no
 //! such bit** -- `XInputGetState` reports only the state at the instant it is called. A pad chord
 //! must therefore edge-detect against the previous poll's `wButtons`, and a press shorter than one
 //! poll interval is genuinely invisible. Polling from the game's own menu update (which is where
@@ -119,7 +119,7 @@ impl PadChord {
 
     /// Is every button in the chord held in this `wButtons` sample?
     ///
-    /// A SUBSET test, not equality: requiring an exact match would mean the chord failed whenever
+    /// A subset test, not equality: requiring an exact match would mean the chord failed whenever
     /// the player happened to be holding anything else -- and on a pad, resting a thumb on a stick
     /// or nudging the d-pad is not "pressing another button" to the person doing it.
     pub const fn held_in(self, buttons: u16) -> bool {
@@ -156,7 +156,7 @@ pub fn parse_pad_chord(raw: &str) -> Result<PadChord, PadParseError> {
 /// Name a chord back for the log, so a player can see which buttons the DLL actually took.
 ///
 /// Canonical spelling, not the player's: echoing their text back would show that the file was read
-/// but not that it was UNDERSTOOD, and those are the two cases a log line here has to separate.
+/// but not that it was understood, and those are the two cases a log line here has to separate.
 pub fn pad_chord_name(chord: PadChord) -> String {
     if !chord.is_bound() {
         return "(none)".to_owned();
@@ -203,7 +203,7 @@ impl PadEdge {
         }
     }
 
-    /// Move onto a different chord, seeding the held state from the CURRENT pad sample.
+    /// Move onto a different chord, seeding the held state from the current pad sample.
     ///
     /// `buttons` is not decoration and clearing `was_held` instead is a bug. If the player is
     /// holding Select+Start at the instant a config reload binds Select+Start, then a cleared
@@ -211,7 +211,7 @@ impl PadEdge {
     /// the act of saving the file. Seeding from the live sample says "this chord is already down,
     /// it is an ongoing hold", and the next genuine press is the one after they let go.
     ///
-    /// This is the pad's version of the keyboard rebind rule. The keyboard needs a DISCARDED
+    /// This is the pad's version of the keyboard rebind rule. The keyboard needs a discarded
     /// `GetAsyncKeyState` read as well, because its low bit has been accumulating since process
     /// start; XInput keeps no such per-thread state, so one honest sample is the whole fix.
     pub fn rebind(&mut self, chord: PadChord, buttons: u16) -> bool {
@@ -318,7 +318,7 @@ mod tests {
         let mut edge = PadEdge::new(parse_pad_chord("a").unwrap());
         assert!(edge.feed(PAD_A), "old chord pressed");
 
-        // Select+Start is ALREADY held at the instant the reload binds it.
+        // Select+Start is already held at the instant the reload binds it.
         assert!(edge.rebind(parse_pad_chord("select+start").unwrap(), both));
         assert!(!edge.feed(both), "an ongoing hold is not a press");
         assert!(!edge.feed(both), "still not");
@@ -326,7 +326,7 @@ mod tests {
         assert!(edge.feed(both), "THIS is the first real press");
     }
 
-    /// The same rebind while the new chord is NOT held stays armed for the next real press.
+    /// The same rebind while the new chord is not held stays armed for the next real press.
     #[test]
     fn rebinding_onto_a_released_chord_arms_normally() {
         let both = PAD_BACK | PAD_START;
@@ -335,7 +335,7 @@ mod tests {
         assert!(edge.feed(both), "first press after the rebind counts");
     }
 
-    /// Rebinding onto the SAME chord is not a change, and must not disturb the latch -- otherwise
+    /// Rebinding onto the same chord is not a change, and must not disturb the latch -- otherwise
     /// every reformat of the config file re-primes the edge mid-hold.
     #[test]
     fn rebinding_onto_the_same_chord_is_not_a_change() {

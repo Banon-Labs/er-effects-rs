@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Report Elden Ring's two `CSTeamTypeRelation` matrices for a set of team ids.
 
-Elden Ring keeps TWO independent 79x79 tables of `CSTeamTypeRelation*` singletons:
+Elden Ring keeps two independent 79x79 tables of `CSTeamTypeRelation*` singletons:
 
 * `CSTeamTypeRelation_array_1` -- consulted by `CanTeamTypeDamageEachOther`
   (1.16.2 `0x14051ab40`), `canTeamTypeHitAnother` (`0x14051ac10`) and therefore by
-  `getTeamTypeRelationshipWithAtkParam` (`0x14051a980`). This is the DAMAGE table.
+  `getTeamTypeRelationshipWithAtkParam` (`0x14051a980`). This is the damage table.
 * `CSTeamTypeRelation_array_2` -- consulted by `CS::ChrIns::CanTargetTeamType`
-  (`0x14051a810`). This is the LOCK-ON / TARGETING table.
+  (`0x14051a810`). This is the lock-on / targeting table.
 
-They are NOT the same data, so "friendly for targeting" and "friendly for damage" are
+They are not the same data, so "friendly for targeting" and "friendly for damage" are
 separate questions and have to be answered against the right table. Both are indexed
 `table[a * 79 + b]` with 8-byte pointers, where `a` is the ACTOR/attacker team and `b`
 the SUBJECT/victim team.
@@ -42,7 +42,7 @@ TEAM_COUNT = 79
 DAMAGE_TABLE_VA = 0x143B180E0
 TARGET_TABLE_VA = 0x143B243F0
 
-# The four singletons are classified by the BODY of their `Validate`, not by address, so this
+# The four singletons are classified by the body of their `Validate`, not by address, so this
 # reads any build. Every one opens `TEST R8B,R8B; JZ +5; MOVZX EAX,[RDX+2]; RET` (the self-target
 # early-out) and then diverges -- the tail below is what actually distinguishes them:
 #

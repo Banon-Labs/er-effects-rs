@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Measure the colour of every world-map icon subtexture, so "which icon is red" is a number.
 
-The world-map pin icon id is a 1-based FRAME index into a MovieClip in
+The world-map pin icon id is a 1-based frame index into a MovieClip in
 `menu:/02_120_WorldMap.gfx`; each frame places one `MENU_MAP_*` external image, and those
 images are subtextures packed into the `SB_MapCursor*` atlases and described by
 `01_common.sblytbnd`. So picking a red pin icon means picking the frame whose subtexture is
@@ -16,7 +16,7 @@ Usage:
     uv run --with pillow python3 scripts/map-icon-colors.py --min-alpha 32 --top 25
 
 The corpus root is env-overridable (`ER_GFX_CORPUS_ROOT`) exactly as the er-gfx tests' one
-is, so a re-extraction to a different path needs no source edit. The script SKIPS with a
+is, so a re-extraction to a different path needs no source edit. The script skips with a
 clear message when the corpus is absent rather than failing the caller: these are game
 assets, and they are deliberately not in the repo.
 """

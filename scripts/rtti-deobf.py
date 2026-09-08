@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Given a vtable SLOT VA (where some method ptr sits) in the deobfuscated ER mapped image,
-scan backward to the vtable BASE (where [base-8] is a valid MSVC RTTI CompleteObjectLocator),
+"""Given a vtable slot VA (where some method ptr sits) in the deobfuscated ER mapped image,
+scan backward to the vtable base (where [base-8] is a valid MSVC RTTI CompleteObjectLocator),
 and print the class name + the slot index of the queried address.
 
 Mapped image: file offset == RVA, image base 0x140000000 (VA = offset + base).

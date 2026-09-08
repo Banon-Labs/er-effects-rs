@@ -2,7 +2,7 @@
 //! both.
 //!
 //! All of the work lives in `er-build-import-runtime`; this crate is the standalone trigger for it.
-//! The product DLL (`er-quickload`) drives the SAME runtime from its System>Quit "Load Build from
+//! The product DLL (`er-quickload`) drives the same runtime from its System>Quit "Load Build from
 //! URL" row instead, so the two must never share a profile -- see `scripts/me3-dll-conflicts.toml`.
 //!
 //! Nothing here sleeps: `DllMain` spawns two threads and returns, the fetch blocks in WinHTTP, and
@@ -10,9 +10,9 @@
 //!
 //! # The export side is a harness, not a feature
 //!
-//! `export_build_link_on_load = true` makes this shell generate ONE share link as soon as the
+//! `export_build_link_on_load = true` makes this shell generate one share link as soon as the
 //! character is in the world and write it to `er-build-import.log`, with no clipboard and no
-//! browser. That exists so the CONTENT of a link can be checked -- `scripts/decode-build-link.py
+//! browser. That exists so the content of a link can be checked -- `scripts/decode-build-link.py
 //! --log <file> --summary` -- without a human driving the System>Quit menu, which is the only way
 //! a player reaches the product's own export. The product row is unchanged and is still the thing
 //! players press.
@@ -37,8 +37,8 @@ static MODULE: AtomicUsize = AtomicUsize::new(0);
 #[unsafe(no_mangle)]
 pub extern "system" fn DllMain(module: HINSTANCE, reason: u32, _reserved: *mut ()) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
-        // FIRST, before anything that can panic. A panic in a cdylib crosses an
-        // `extern "system"` boundary and becomes an ABORT, which does not dispatch to a
+        // First, before anything that can panic. A panic in a cdylib crosses an
+        // `extern "system"` boundary and becomes an abort, which does not dispatch to a
         // vectored handler -- so no crash record is written at all and the process simply
         // vanishes. Enforced by `scripts/check-panic-reporter-installed.py`.
         er_game_base::panic_report::report_panics_to("er-build-import", panic_log_sink);
@@ -52,7 +52,7 @@ pub extern "system" fn DllMain(module: HINSTANCE, reason: u32, _reserved: *mut (
 
 /// `report_panics_to`'s sink, which takes `fmt::Arguments` where this crate logs `&str`.
 ///
-/// Small and duplicated per shell on purpose: the hook is installed PER DLL because every cdylib
+/// Small and duplicated per shell on purpose: the hook is installed per DLL because every cdylib
 /// statically links its own `er-game-base`, so there is no shared place this could live and still
 /// be the thing that runs in this module.
 fn panic_log_sink(args: core::fmt::Arguments<'_>) {
@@ -134,7 +134,7 @@ enum Mode {
 
 /// What this run is armed for.
 ///
-/// EXPORT-ONLY IS EXCLUSIVE, and deliberately so: an export measures the character as it stands,
+/// Export-only is exclusive, and deliberately so: an export measures the character as it stands,
 /// while an import REWRITES that character and grants it items. Asking for both is the round trip,
 /// and it has to be asked for by name.
 fn mode() -> Mode {
@@ -180,7 +180,7 @@ fn arm_export_after_import() {
             );
             start_configured_export();
         }
-        // A FAILED import leaves the character in a state nobody asked for, so the round trip is
+        // A failed import leaves the character in a state nobody asked for, so the round trip is
         // abandoned rather than reported on. Said once, then never again.
         Phase::Failed => {
             EXPORT_REQUESTED.store(1, Ordering::SeqCst);
@@ -232,7 +232,7 @@ fn register_task() {
     use eldenring::fd4::FD4TaskData;
     use fromsoftware_shared::{FromStatic, SharedTaskImpExt};
 
-    // BOUNDED (2026-08-29): see er_game_base::wait -- the unbounded form of this loop starved the
+    // Bounded (2026-08-29): see er_game_base::wait -- the unbounded form of this loop starved the
     // wineserver and hung a boot.
     let Some(task) = er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
     else {

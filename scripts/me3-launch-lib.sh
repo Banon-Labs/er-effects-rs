@@ -1,10 +1,10 @@
 # shellcheck shell=bash
 # er-artifact-redirect: library
-# This file RUNS the me3 command on a caller's behalf; it has no run of its own and no
+# This file runs the me3 command on a caller's behalf; it has no run of its own and no
 # artifact dir. The ER_QUICKLOAD_*_PATH redirects that keep a run's evidence out of the
-# single-slot game directory belong to each CALLER, which `scripts/er-artifact-redirect-audit.py`
+# single-slot game directory belong to each caller, which `scripts/er-artifact-redirect-audit.py`
 # audits individually. Do not add a redirect list here -- it would silently override theirs.
-# Shared me3 launch helpers. me3 is the ONLY supported loader for er_quickload.dll:
+# Shared me3 launch helpers. me3 is the only supported loader for er_quickload.dll:
 # the LazyLoader dinput8 proxy + lazyLoad.ini chainload delivery was removed 2026-07-04
 # (branch feat/me3-launch-smoketest) after the me3 production smoke passed end-to-end
 # (run me3-product-smoke-20260704-110507: DLL attach, env propagation, flag files,
@@ -28,7 +28,7 @@ ME3_LOG_DIR="${ME3_LOG_DIR:-$HOME/.local/share/me3/logs}"
 # Validate the me3 installation and that me3 can resolve a Proton compat tool for
 # Elden Ring. me3 resolves strictly: per-app CompatToolMapping (config.vdf) -> global
 # "0" mapping -> its hardcoded per-game default (proton_8 for Elden Ring, me3 0.11.0
-# crates/mod-protocol/src/game.rs); there is NO me3-side override. Returns non-zero
+# crates/mod-protocol/src/game.rs); there is no me3-side override. Returns non-zero
 # with guidance on stderr instead of burning a launch.
 me3_preflight() {
   local launch_scope="${1:-full-product}"
@@ -75,14 +75,14 @@ PY
 # cannot fire is worse than not launching: it returns a clean-looking run that proves nothing, and
 # the absence of the expected log line reads as "the fix did not work" rather than "the fix could
 # never have run". That happened on 2026-08-04 -- a disarm gated on `requestCode` latching 2 shipped
-# and did nothing, because the state it was scoped to is DEFINED by `requestCode` staying 1, and the
+# and did nothing, because the state it was scoped to is defined by `requestCode` staying 1, and the
 # previous run's telemetry already said so.
 #
 # `scripts/er-launch-gate.py` checks that offline, against recordings that already exist, in
 # milliseconds. Fail-closed: a gate that cannot read its evidence refuses.
 #
-# ER_LAUNCH_GATE_SKIP=1 bypasses it. That is for a launch which is NOT validating a code path (the
-# user just wants to play, or a launch whose only purpose is to PRODUCE a first recording). It is
+# ER_LAUNCH_GATE_SKIP=1 bypasses it. That is for a launch which is not validating a code path (the
+# user just wants to play, or a launch whose only purpose is to produce a first recording). It is
 # not a way to launch a fix you have not shown can run -- the skip is logged so a run that used it
 # can never later be cited as proof.
 me3_launch_gate() {
@@ -105,8 +105,8 @@ me3_launch_gate() {
 # Writes a v1 ModProfile loading DLL_PATH as a native. DLL_PATH may be absolute
 # (per-run artifact copies) or relative (resolved against the profile's directory --
 # used by the relocatable release payload). EXTRA_NATIVE_PATH (optional) is emitted as
-# an ADDITIONAL native BEFORE the DLL -- used by seamless-mode probes to load the
-# user's installed SeamlessCoop/ersc.dll IN PLACE by absolute path. The referenced
+# an additional native before the DLL -- used by seamless-mode probes to load the
+# user's installed SeamlessCoop/ersc.dll in place by absolute path. The referenced
 # file is never copied, moved, or staged (Do-not-bundle-ersc rule): only this per-run
 # profile TOML mentions it.
 me3_write_profile() {
@@ -132,7 +132,7 @@ EOF
 }
 
 # me3_write_telemetry_only_profile PROFILE_PATH TELEMETRY_DLL_PATH
-# Writes a v1 ModProfile that loads ONLY the standalone er_telemetry.dll (the
+# Writes a v1 ModProfile that loads only the standalone er_telemetry.dll (the
 # read-side telemetry-only DLL from crates/er-telemetry). Runs alone -- no
 # product DLL, no hooks -- so it emits er-telemetry-standalone.json from RAM/PE
 # reads only. Build the DLL with:
@@ -155,7 +155,7 @@ EOF
 # Appends one additional [[natives]] block to an existing profile. Used to add the
 # standalone er_telemetry.dll as a 4th native alongside the product +
 # reload-trace + input-harness DLLs (companion DLLs are enabled purely by presence
-# in the profile; product must be listed FIRST so its er_effects_union_register
+# in the profile; product must be listed first so its er_effects_union_register
 # export is mapped before companions resolve it).
 me3_append_native() {
   local profile_path="$1" dll_path="$2"
@@ -186,7 +186,7 @@ me3_launch() {
 }
 
 # Fail closed if a leftover LazyLoader proxy is still active in GAME_DIR: an me3 native
-# plus a dinput8 chainload would DOUBLE-LOAD the DLL (two modules, two DllMains).
+# plus a dinput8 chainload would double-load the DLL (two modules, two DllMains).
 me3_require_no_lazyloader() {
   local game_dir="$1"
   if [[ -f "$game_dir/dinput8.dll" ]]; then

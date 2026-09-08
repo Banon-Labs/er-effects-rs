@@ -1,14 +1,14 @@
-//! The session-scoped map DATA this crate accumulates: MSB invasion points, and the place
+//! The session-scoped map data this crate accumulates: MSB invasion points, and the place
 //! names the pins were given.
 //!
 //! Split out of `map_hooks` on 2026-08-30, when that file stood 29 lines under the 3200-line
-//! FAIL threshold in `scripts/check-rust-file-sizes.py` with two writers still appending to it.
-//! The seam is not the line count -- it is that NOTHING here is a detour. `map_hooks` owns the
+//! fail threshold in `scripts/check-rust-file-sizes.py` with two writers still appending to it.
+//! The seam is not the line count -- it is that nothing here is a detour. `map_hooks` owns the
 //! three MinHook sites and what runs inside them; this owns two session-lifetime caches that the
 //! injection reads and the local-invasion filter reads long after the map row list is gone:
 //!
 //! * [`MSB_CATALOG`] -- `InvasionPoint` regions harvested from the MSBs of maps that have been
-//!   resident this session. It is the ONLY source of pins for a legacy dungeon, cave, catacomb or
+//!   resident this session. It is the only source of pins for a legacy dungeon, cave, catacomb or
 //!   tunnel, because the `.aip` table has no entries outside areas 60/61.
 //! * [`PLACE_NAMES_BY_BLOCK`] -- block -> `PlaceName` text ids, recorded as pins are named, so
 //!   "somewhere in the Haligtree" is still answerable when a match arrives.
@@ -22,7 +22,7 @@ use super::*;
 
 /// Invasion points harvested from the MSBs of maps that have been resident this session.
 ///
-/// Session-scoped and only ever grown. It is NOT reset when the catalog signature changes: a mod
+/// Session-scoped and only ever grown. It is not reset when the catalog signature changes: a mod
 /// rewriting the `.aip` table says nothing about MSB region data, and throwing away coverage the
 /// player has already walked past would make the surface worse for no reason.
 static MSB_CATALOG: std::sync::Mutex<
@@ -57,7 +57,7 @@ pub(crate) unsafe fn refresh_msb_catalog() -> (usize, usize) {
         // what happened before this check existed -- the player reached the Haligtree and its 88
         // invasion points were never read, because m15 had been "observed" at boot with a null cap.
         if let Some(read) = unsafe { read_map_invasion_points(base, block, cap) } {
-            // SAY WHAT WAS LOST. The engine reports a region count; only the regions that carry shape
+            // Say what was lost. The engine reports a region count; only the regions that carry shape
             // data yield a position. Absorbing the difference in silence is what made "not all of a
             // dungeon's icons" indistinguishable from "that dungeon only has that many spawns" -- the
             // catalog recorded 40 points and nothing anywhere recorded that 88 were on offer.
@@ -81,12 +81,12 @@ pub(crate) unsafe fn refresh_msb_catalog() -> (usize, usize) {
     (catalog.len(), catalog.observed_block_count())
 }
 
-/// How many blocks the world lists that the catalog has NOT read yet.
+/// How many blocks the world lists that the catalog has not read yet.
 ///
 /// Reported alongside coverage because the two together are the whole diagnosis: `read` climbing
 /// while `pending` falls is the harvest working; `pending` frozen at the full block count means
 /// every cap is dead, which is what a boot-time-only pass looks like.
-/// Whether the harvest has actually READ this block's MSB this session.
+/// Whether the harvest has actually read this block's MSB this session.
 ///
 /// Distinguishes "we have not looked inside this dungeon yet" from "we looked and it has no
 /// invasion points at all". Only the first deserves a provisional marker; the second would be a
@@ -157,11 +157,11 @@ const MSB_HARVEST_FRAME_STRIDE: u64 = 60;
 
 /// Fold whatever maps are resident right now into the session catalog.
 ///
-/// WHY THIS RUNS PER FRAME AND NOT FROM THE MAP HOOK (2026-08-04). The harvest used to be called only
+/// Why this runs per frame and not from the map hook (2026-08-04). The harvest used to be called only
 /// from [`inject_pins`], which runs from the `WorldMapViewModel` constructor -- and that constructor
 /// has exactly one call site in the image, reached only from `STEP_MoveMap_Init`. So it fires once
-/// per WORLD ENTRY, during the loading screen, before `MoveMapStep` has ticked and before the
-/// destination's `MsbResCap`s exist. It does NOT fire when the player opens the map. That made the
+/// per world entry, during the loading screen, before `MoveMapStep` has ticked and before the
+/// destination's `MsbResCap`s exist. It does not fire when the player opens the map. That made the
 /// legacy-dungeon source able to see only whatever happened to be resident at world-entry init --
 /// never the catacomb the player is standing in. Harvesting from the recurring task instead means a
 /// map contributes from the moment the player has actually been in it.
@@ -172,15 +172,15 @@ const MSB_HARVEST_FRAME_STRIDE: u64 = 60;
 /// Say which blocks the world list actually offers a usable `MsbResCap` for, and which one the
 /// player is standing in.
 ///
-/// THIS IS THE MEASUREMENT, not decoration. The feature rests on one unverified assumption: that
+/// This is the measurement, not decoration. The feature rests on one unverified assumption: that
 /// while the player is inside a legacy dungeon, that dungeon's block appears in
 /// `world_block_info()` with a live cap at `+0x48`. Run 1615 falsified the old code but could not
-/// distinguish WHY -- the player was in the Haligtree (`block=0x0f000000`, m15, 88 invasion points
+/// distinguish why -- the player was in the Haligtree (`block=0x0f000000`, m15, 88 invasion points
 /// on disk) and coverage read `0 points/111 maps`, which is equally consistent with "m15 is absent
 /// from the list", "m15 is listed but its cap is null", and "the cap is there but the liveness test
 /// rejects it". Those need three different fixes, so the next run must name which one it is.
 ///
-/// Bounded: emits only when the non-null-cap population CHANGES, so travelling logs a handful of
+/// Bounded: emits only when the non-null-cap population changes, so travelling logs a handful of
 /// lines rather than one per second.
 /// The area byte of a packed `BlockId`: `area.block.region.index`, one byte each, area highest.
 const BLOCK_ID_AREA_SHIFT: u32 = 24;
@@ -215,7 +215,7 @@ unsafe fn log_msb_cap_census() {
     // does not list it at all, which would make retrying pointless and send the fix elsewhere.
     let player_block = unsafe { current_player_block() };
 
-    // The dedup signature MUST include the player's block. Keying it on the population counts alone
+    // The dedup signature must include the player's block. Keying it on the population counts alone
     // meant one block going live while another died -- equal totals -- printed nothing, so walking
     // into the Haligtree could be silent, which is the one event this census exists to capture.
     static LAST: AtomicUsize = AtomicUsize::new(usize::MAX);
@@ -232,8 +232,8 @@ unsafe fn log_msb_cap_census() {
     });
     let player_desc = match (player_block, player_entry) {
         (None, _) => "player block UNKNOWN".to_owned(),
-        // AN OVERWORLD BLOCK IS NOT SUPPOSED TO BE IN THIS LIST, AND SAYING IT IS MISSING WAS A
-        // FALSE ALARM THAT COST TWO INVESTIGATIONS. `world_block_info()` holds the NON-overworld
+        // An OVERWORLD block is not supposed to be in this list, and saying it is missing was a
+        // false alarm that cost two investigations. `world_block_info()` holds the non-overworld
         // blocks only; upstream's own `WorldInfo::world_block_info_by_map` proves it by branching
         // on `BlockId::is_overworld()` and searching `world_grid_area_info()` instead for anything
         // in areas 50..89. So every run where the player stood in the open world printed
@@ -242,7 +242,7 @@ unsafe fn log_msb_cap_census() {
         // built a hard-lock hypothesis on top of it ("we warp the player into a block the world
         // block list does not contain"), which was never a symptom of anything.
         //
-        // The offset is NOT the problem: `WORLD_BLOCK_INFO_MSB_RES_CAP_OFFSET = 0x48` is witnessed
+        // The offset is not the problem: `WORLD_BLOCK_INFO_MSB_RES_CAP_OFFSET = 0x48` is witnessed
         // for 1.17 by `scripts/check-object-field-offsets-1170.py` (WorldBlockInfo constructor,
         // 55/55 aligned, zero moved offsets), and Ghidra's 1.16.2 type names that member
         // `msbResCap` at 0x48.
@@ -318,13 +318,13 @@ pub(crate) fn msb_block_targets() -> Vec<er_invasion_warp_core::invasion_warp::I
         Ok(catalog) => catalog,
         Err(poisoned) => poisoned.into_inner(),
     };
-    // GRANULARITY IS PER-BLOCK FOR THE OVERWORLD AND PER-POINT FOR A LEGACY DUNGEON, because a
+    // GRANULARITY is per-block for the OVERWORLD and per-point for a legacy dungeon, because a
     // "block" means two completely different sizes of place.
     //
     // An overworld block is one map tile, so one marker per tile is already fine resolution --
     // and collapsing is what keeps the `.aip` table's 7073 points down to 365 readable markers.
     //
-    // A legacy dungeon's block is the WHOLE dungeon. m15 is the entire Haligtree with 88
+    // A legacy dungeon's block is the whole dungeon. m15 is the entire Haligtree with 88
     // invasion points; m11 is all of Leyndell with 168. One representative for that is a marker
     // saying "somewhere in this castle", which throws away everything that makes the feature
     // worth having there. The user's report was exactly this: warped to the Haligtree and found
@@ -345,13 +345,13 @@ pub(crate) fn msb_block_targets() -> Vec<er_invasion_warp_core::invasion_warp::I
             )
         })
         .collect();
-    // ONE ROW PER SEPARABLE MARKER, NOT ONE PER POINT. Per-point was the right correction to
+    // One row per SEPARABLE marker, not one per point. Per-point was the right correction to
     // one-per-dungeon, but it overshot: the map projects 1:1 in metres and throws Y away, and a
     // legacy dungeon is stacked vertically -- so the Haligtree's 88 points draw as ~39 icons and
     // Volcano Manor's 115 draw as ~21 no matter how many rows are injected. The surplus rows do not
     // add markers; they stack invisibly on the ones already there while consuming list rows and
     // Scaleform clip-pool slots, and they make the pin count a claim about resolution the map
-    // cannot honour. Merging per BLOCK (a cluster only means anything within one map's space).
+    // cannot honour. Merging per block (a cluster only means anything within one map's space).
     let mut legacy_points: std::collections::BTreeMap<u32, Vec<_>> =
         std::collections::BTreeMap::new();
     for point in catalog
@@ -381,7 +381,7 @@ pub(crate) fn msb_block_targets() -> Vec<er_invasion_warp_core::invasion_warp::I
             )
         }));
     }
-    // ONCE PER OUTCOME, NOT ONCE PER FRAME. The live top-up calls this function every frame, so an
+    // Once per outcome, not once per frame. The live top-up calls this function every frame, so an
     // unconditional line here wrote 35,900 duplicates and 11.8 MB into one session's log -- noise
     // that buries the lines a diagnosis actually needs, and disk I/O on the game task thread.
     // Latched on (raw, merged), which changes exactly when the harvest does.
@@ -424,13 +424,13 @@ pub fn msb_coverage() -> (usize, usize) {
 
 /// Block -> `PlaceName` text ids, recorded as the pins are named.
 ///
-/// The registry stores TARGETS, and the resolved name was previously written into the param row
-/// and then forgotten. The local-invasion filter judges by AREA NAME, so the name has to outlive
+/// The registry stores targets, and the resolved name was previously written into the param row
+/// and then forgotten. The local-invasion filter judges by area name, so the name has to outlive
 /// injection: this is where it is kept. Recording it here costs one map insert per pin and makes
 /// "somewhere in the Haligtree" answerable later, when a match arrives and the map row list is
 /// long gone.
 ///
-/// A block can carry SEVERAL names -- that is the whole point of the "five names, five places to
+/// A block can carry several names -- that is the whole point of the "five names, five places to
 /// look" rule -- so the value is a set, not a single id.
 static PLACE_NAMES_BY_BLOCK: std::sync::Mutex<
     Option<std::collections::BTreeMap<u32, std::collections::BTreeSet<i32>>>,

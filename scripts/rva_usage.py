@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Which constants this workspace USES as game addresses, derived from the call sites.
+"""Which constants this workspace uses as game addresses, derived from the call sites.
 
-WHY THIS EXISTS, AND WHY IT IS NOT A FOURTH NAME REGEX
+Why this exists, and why it is not a fourth name REGEX
 ------------------------------------------------------
-`select-needed-1170-rows.py` decides what to translate by scanning for constants whose NAME
+`select-needed-1170-rows.py` decides what to translate by scanning for constants whose name
 carries `RVA`. That question -- "is this spelled like an address?" -- is not the question that
 matters, and it has now been answered wrong four times:
 
@@ -21,14 +21,14 @@ matters, and it has now been answered wrong four times:
     Build from URL" applied none. The log said `catalog: 0 named, 6966 unnamed` and the telemetry
     said success.
 
-The question that MATTERS is "does this workspace hand the constant to the address resolver?"
-That is a property of the CALL SITE, not of the spelling, and it cannot drift as names drift.
-A constant passed to `native::resolve` IS a game address by construction -- there is no other
+The question that matters is "does this workspace hand the constant to the address resolver?"
+That is a property of the call site, not of the spelling, and it cannot drift as names drift.
+A constant passed to `native::resolve` is a game address by construction -- there is no other
 reason to pass it -- so this module answers by reading the argument lists.
 
-WHAT THIS DELIBERATELY DOES NOT DO
+What this deliberately does not do
 ----------------------------------
-It does not guess from the VALUE. A value threshold was measured first and rejected: admitting
+It does not guess from the value. A value threshold was measured first and rejected: admitting
 any uppercase hex constant at or above `0x1000` pulls in eleven constants that are not addresses,
 ten of them because they are exactly `0x1000` -- which is where `.text` begins and therefore
 where a function begins, so they pair cleanly against the function map and mean nothing. That is
@@ -61,14 +61,14 @@ IDENT = re.compile(r"\b([A-Z][A-Z0-9_]{3,})\b")
 TRANSMUTE = re.compile(
     r"transmute\s*(?:::<[^>]*>)?\s*\(\s*\w+\s*\+\s*([A-Z][A-Z0-9_]{3,})\b"
 )
-# A table field that HOLDS an address, initialised from a named constant:
+# A table field that holds an address, initialised from a named constant:
 # `getter_rva: rva::GET_WEAPON_NAME_RVA,`. This is the named twin of the bare `rva: 0x...` literal
 # that `select-needed-1170-rows.py::BARE_RVA_FIELD` already special-cases, and it is how the six
 # `MsgRepository` name getters reach the resolver: `SOURCES` stores the address, `getter_rva_for`
-# returns it, and `name_for` resolves the returned VARIABLE. Four of the six therefore never
+# returns it, and `name_for` resolves the returned variable. Four of the six therefore never
 # appear inside a resolver's argument list at all, and a call-site-only scan finds 23 of the 27
 # rather than 27 -- measured on the pre-rename tree before this pattern was added.
-# NOT `re.I`: a case-insensitive flag also widens the `[A-Z]` capture, which matched the
+# Not `re.I`: a case-insensitive flag also widens the `[A-Z]` capture, which matched the
 # lowercase `usize` in `const FOO_RVA: usize = ...` and put a type name in the vocabulary.
 # Harmless only because admission also requires the name to be a declared constant -- so it
 # is spelled out instead.
@@ -78,7 +78,7 @@ FIELD_CONST = re.compile(r"\b\w*(?:rva|RVA)\s*:\s*(?:\w+::)*([A-Z][A-Z0-9_]{3,})
 def _args_of_calls(text: str) -> list[str]:
     """The parenthesised argument text of every resolver call in `text`.
 
-    Paren-BALANCED rather than line- or regex-delimited. The equip pass asks for ten functions in
+    Paren-balanced rather than line- or regex-delimited. The equip pass asks for ten functions in
     one `resolve_all` array spanning forty lines; a fixed lookahead reads part of it and reports a
     subset, which is the same silent undercount this module exists to end.
     """
@@ -122,34 +122,34 @@ def workspace_usage(repo: Path) -> set[str]:
 
 
 # =============================================================================================
-# The same question asked of a value with NO NAME AT ALL
+# The same question asked of a value with no name at all
 # =============================================================================================
 #
-# WHAT WAS STILL INVISIBLE AFTER EVERYTHING ABOVE. Every form above starts from an identifier, so
+# What was still invisible after everything above. Every form above starts from an identifier, so
 # all of them are blind to an address that never becomes one:
 #
 #     let g = |rva: u32| game_rva(rva).ok();
 #     let repo_gate = g(0x0485cbec) ...
 #
 # Five addresses are written that way in `menu_trace_hooks.rs` and, measured 2026-08-31, four of
-# them held no row in ANY ledger. They were neither verified nor reported as unverified -- the
+# them held no row in any ledger. They were neither verified nor reported as unverified -- the
 # third state, worse than either, because a missing row reads exactly like an address nobody has
 # gotten to yet. On 1.17 all four were refused at runtime (`game_rva` fails closed, so the
 # CAPSTATE-SUBSYS line printed -1/0 rather than garbage) and the resource-repository diagnostic
 # they exist to produce had been silently dark since the 1.17 bump.
 #
-# WHY THIS IS NOT A HEX SCAN. `rva_symbols` already indexes every bare hex literal in `crates/`,
+# Why this is not a HEX scan. `rva_symbols` already indexes every bare hex literal in `crates/`,
 # and that population is tens of thousands of numbers: struct offsets, Win32 flags, masks, the
-# `> 0x10000` pointer-sanity test that appears 40 times in the one file above. Admitting by VALUE
+# `> 0x10000` pointer-sanity test that appears 40 times in the one file above. Admitting by value
 # was measured and rejected upstream in this module's own docstring. So the question here is the
-# same one the named forms ask -- DOES THIS WORKSPACE HAND THE NUMBER TO THE ADDRESS RESOLVER? --
+# same one the named forms ask -- Does this WORKSPACE hand the number to the address RESOLVER? --
 # and nothing else. A literal that is compared, masked, added to a struct base or passed to
 # `VirtualAlloc` is not reported no matter what it looks like.
 #
-# THE ONE HOP. The literals above do not reach `game_rva` directly; they reach a local closure
+# The one hop. The literals above do not reach `game_rva` directly; they reach a local closure
 # that forwards to it. Refusing to follow that would answer "zero bare addresses in this
 # workspace", which is the wrong answer by exactly the five that matter -- and refusing a real
-# address is the direction this repo has already been wrong in four times. So a `let NAME = |P|
+# address is the direction this repo has already been wrong in four times. So a `let name = |P|
 # ... RESOLVER(P) ...;` binding is followed, one hop, in the file that declares it. Measured over
 # `crates/` on 2026-08-31: two such bindings exist, and the whole population this module reports
 # is 5 literals in 1 file. Zero of them are direct calls -- without the hop this finds nothing.
@@ -188,7 +188,7 @@ HEX_LITERAL = re.compile(r"\b0[xX][0-9a-fA-F_]+\b")
 def _balanced_args(text: str, pattern: re.Pattern) -> list[tuple[int, str]]:
     """`(offset of the open paren, the parenthesised argument text)` for every match of `pattern`.
 
-    Paren-BALANCED, for the same reason `_args_of_calls` is: a resolver call in this tree
+    Paren-balanced, for the same reason `_args_of_calls` is: a resolver call in this tree
     routinely spans lines, and a fixed lookahead reads part of it and reports a subset.
     """
     out: list[tuple[int, str]] = []
@@ -226,7 +226,7 @@ def bare_resolver_addresses(text: str) -> list[tuple[int, int]]:
     prints `repo_gate` also spells `*0x14485cbec` inside the format string. Counting prose would
     report the address twice and would report addresses nothing resolves.
 
-    `#[cfg(test)]` scopes are NOT filtered here; the caller does it, the way `declared_rvas` does,
+    `#[cfg(test)]` scopes are not filtered here; the caller does it, the way `declared_rvas` does,
     because a test may name an address precisely to assert the workspace does not use it.
     """
     blanked = rva_role.blank_rust(text)
@@ -253,14 +253,14 @@ CFG_TEST_MOD = re.compile(r"#\[cfg\(test\)\]\s*(?://[^\n]*\n\s*)*(?:pub\s+)?mod\
 def test_module_spans(text: str) -> list[tuple[int, int]]:
     """Byte ranges of every `#[cfg(test)]` module in `text`.
 
-    WHY THE SELECTOR HAS TO SKIP THESE. A test may declare an address deliberately in order to
-    assert that the workspace does NOT use it, and `er-seamless-bugfixes` does exactly that:
+    Why the selector has to skip these. A test may declare an address deliberately in order to
+    assert that the workspace does not use it, and `er-seamless-bugfixes` does exactly that:
 
         const CHAINED_CONTINUATION_RVA: usize = 0xc5_7666;
 
-    names a `.pdata` CHAINED-CONTINUATION record 0x86 bytes inside a live function, and the test
+    names a `.pdata` chained-continuation record 0x86 bytes inside a live function, and the test
     around it exists to prove `FREELIST_SHUTDOWN_ASSERT_FN_RVA` is not that address. Its own
-    doc comment says naming it "would put a BOTH-ENTRIES row into the maps for an address 0x86
+    doc comment says naming it "would put a both-entries row into the maps for an address 0x86
     inside a live function" -- which is precisely what happened: the name ends in `_RVA`, so the
     selector took it, and `check-no-chained-continuation-rows.py` failed on the row.
 
@@ -290,13 +290,13 @@ def in_any_span(offset: int, spans: list[tuple[int, int]]) -> bool:
 # Frozen controls for the bare-literal reader
 # ---------------------------------------------------------------------------------------------
 #
-# Frozen SOURCE rather than live constants, for the reason `rva_role.CONTROL_ADDRESS` is frozen:
+# Frozen source rather than live constants, for the reason `rva_role.CONTROL_ADDRESS` is frozen:
 # the whole point of a control is that it keeps meaning what it means after the tree moves. The
 # live subjects of the positive control are the five literals in `menu_trace_hooks.rs`, and if
 # somebody names them tomorrow -- which would be an improvement -- a control pinned to them would
 # quietly stop testing anything.
 
-# THE POSITIVE. The exact shape measured in the tree: the literal never touches `game_rva`, it
+# The positive. The exact shape measured in the tree: the literal never touches `game_rva`, it
 # touches a one-line closure that does.
 CONTROL_FORWARDED = """
 pub fn subsystems() {
@@ -307,7 +307,7 @@ pub fn subsystems() {
 }
 """
 
-# THE SAME CLAIM WITHOUT THE HOP, so a reader that only ever learned the closure shape is caught.
+# The same claim without the hop, so a reader that only ever learned the closure shape is caught.
 CONTROL_DIRECT = """
 pub fn direct(module_base: usize) -> usize {
     let addr = game_rva(0x3d5b078).unwrap_or(0);
@@ -316,8 +316,8 @@ pub fn direct(module_base: usize) -> usize {
 }
 """
 
-# THE FROZEN NEGATIVE. Hex literals that are genuinely NOT game addresses, written the way this
-# tree writes them, in a file that ALSO contains a forwarding closure -- so proximity is not
+# The frozen negative. Hex literals that are genuinely not game addresses, written the way this
+# tree writes them, in a file that also contains a forwarding closure -- so proximity is not
 # enough and only the argument position counts. An over-broad matcher (one deciding from the
 # value, from the file, or from "there is a resolver somewhere in here") reports one of these and
 # goes red.
@@ -337,7 +337,7 @@ pub fn housekeeping(pointer: usize, size: usize, rva: u32) -> usize {
 }
 """
 
-# PROSE IS NOT A USE. Every address in this tree is also spelled in a doc comment and in the log
+# Prose is not a use. Every address in this tree is also spelled in a doc comment and in the log
 # line that reports it -- `menu_trace_hooks.rs` prints `*0x14485cbec` in the same statement that
 # resolves it. A reader that counted those would report addresses nothing resolves, and would
 # double-count the ones it got right.
@@ -391,7 +391,7 @@ def control_failures() -> list[str]:
             "logged address in the tree is about to enter a ledger."
         )
 
-    # NON-VACUITY. Blind the resolver matcher and BOTH positives must stop being found -- otherwise
+    # Non-VACUITY. Blind the resolver matcher and both positives must stop being found -- otherwise
     # the three negatives above are satisfied by a reader that sees nothing at all and the whole
     # control set is green for the wrong reason. The blind is a value swap, not a source edit: a
     # mutant that fails to import proves nothing about the matcher.
@@ -450,7 +450,7 @@ def selftest() -> int:
         "a non-address constant was admitted; the value heuristic this module rejects is back"
     )
 
-    # NON-VACUITY. Blind the paren balancer to multi-line calls and the first assertion must fail.
+    # Non-VACUITY. Blind the paren balancer to multi-line calls and the first assertion must fail.
     global RESOLVERS
     keep = RESOLVERS
     try:

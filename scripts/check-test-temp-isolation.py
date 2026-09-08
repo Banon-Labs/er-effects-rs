@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Reject a test scratch path under a SHARED temp root that carries no per-process component.
+"""Reject a test scratch path under a shared temp root that carries no per-process component.
 
-WHAT WENT WRONG, THREE TIMES IN ONE DAY, IN SIX CRATES
+What went wrong, three times in one day, in six crates
 ------------------------------------------------------
-A test builds its scratch directory from a FIXED name under `std::env::temp_dir()` and wipes it
-on entry. Under this repo's wine runner `%TEMP%` IS the host `/tmp` -- one directory shared by
+A test builds its scratch directory from a fixed name under `std::env::temp_dir()` and wipes it
+on entry. Under this repo's wine runner `%TEMP%` is the host `/tmp` -- one directory shared by
 every process on the machine -- so a second copy of the same test binary (two agents running
 `scripts/check.sh` at once, the host `cargo test` racing the wine `cargo xwin test`, or a second
 checkout) deletes the files between one process's `fs::write` and its own probe.
 
-The failure then ACCUSES CORRECT PRODUCT CODE, which is what makes it expensive. Measured
+The failure then accuses correct product code, which is what makes it expensive. Measured
 before/after at 8-way concurrency on 2026-08-31:
 
-    er-quit-menu-core     5 of 8 red (one run red on BOTH tests)   ->  8/8, then 16/16
+    er-quit-menu-core     5 of 8 red (one run red on both tests)   ->  8/8, then 16/16
     er-save-redirect      7 of 8 red                               ->  0/80
     er-save-picker-core  10 of 80 red                              ->  0/80
     er-soulsformats       2 of 8 red                               ->  0/80
@@ -20,15 +20,15 @@ before/after at 8-way concurrency on 2026-08-31:
 
 Every single before-failure blamed working code: `WrongSize { len: 0 }` for a container a
 sibling had truncated, `MissingOrNotFile` for one it had deleted, `BridgeWriteFailed` for a
-directory it had removed, and an identity probe answering `Unknown` because BOTH of its inputs
+directory it had removed, and an identity probe answering `Unknown` because both of its inputs
 were `Absent`. An agent spent an hour deciding whether the save-destination logic was broken.
 It was not.
 
-WHY A GATE AND NOT A SHARED HELPER CRATE
+Why a gate and not a shared helper crate
 ----------------------------------------
 The fix already existed in this repo and was invisible: `save_dest_test_dir` in
 `save_dest_commit_runtime.rs`'s test module was pid-keyed and carried a comment describing this
-exact failure -- but it was PRIVATE TO THAT MODULE, which is how the tests one file over came to
+exact failure -- but it was private to that module, which is how the tests one file over came to
 be written without it. Two of the six fixes hoisted their helper to crate scope for exactly that
 reason.
 
@@ -37,12 +37,12 @@ that need it only through nine `[dev-dependencies]` edges plus a new workspace m
 crates involved (`soulsformats`, `er-save-picker-core`, `er-hotkey-config`, `er-objectkit`) share
 no existing dependency that could host it -- `er-game-base` covers five of nine. The helper's
 whole body is one expression. Six copies of one expression was never the problem; nothing
-TELLING you about it was. A gate tells you, in the crate you are editing, with the fix in the
+telling you about it was. A gate tells you, in the crate you are editing, with the fix in the
 message -- which is reachable from every crate in the workspace without a dependency edge at all.
 
-WHAT IT DECIDES ON
+What it decides on
 ------------------
-The EXPRESSION, not the name. A constant string joined onto a shared temp root is the defect;
+The expression, not the name. A constant string joined onto a shared temp root is the defect;
 any of these is the fix, and all four forms occur in this tree:
 
     std::env::temp_dir().join(format!("er-foo-{}", std::process::id()))
@@ -51,23 +51,23 @@ any of these is the fix, and all four forms occur in this tree:
     std::env::temp_dir().join(unique)
     tempfile::TempDir::new()                                          // accepted, unused today
 
-A site is SKIPPED without needing an exemption when the path provably cannot reach a filesystem
-call: its enclosing test function mentions no filesystem or subprocess token AND its signature
+A site is skipped without needing an exemption when the path provably cannot reach a filesystem
+call: its enclosing test function mentions no filesystem or subprocess token and its signature
 mentions no `Path` type, so the value is inert and local. That is what keeps the four pure
 expected-value paths in this tree (`temp_dir().join("run-42")` compared against a function's
 return, `Path::new("/tmp/staged/ER0000.sl2")` fed to a pure normalizer) out of the exemption
 list, where they would have been noise.
 
-BOTH DIRECTIONS
+Both directions
 ---------------
 `EXEMPT_SITES` and the detector each fail if the other is wrong: an exemption that no longer
-matches a would-be finding is reported as STALE and fails the gate, so a site that gets fixed or
+matches a would-be finding is reported as stale and fails the gate, so a site that gets fixed or
 deleted cannot leave a dead licence behind. `FROZEN_PROCESS_SCOPED` is the frozen negative -- real,
 legitimate, pid-keyed sites that must keep classifying clean, with per-file floors -- so a
 detector that stops matching (a lobotomised regex, an empty read, a renamed root) goes red
 instead of reporting a confident zero.
 
-WIRING (for whoever lands the current `scripts/check.sh` -- this file must not touch it):
+Wiring (for whoever lands the current `scripts/check.sh` -- this file must not touch it):
 
     python3 "$repo_root/scripts/check-test-temp-isolation.py" --selftest
     python3 "$repo_root/scripts/check-test-temp-isolation.py"
@@ -95,7 +95,7 @@ from repo_source_scan import REPO_ROOT, rust_source_files  # noqa: E402
 # --------------------------------------------------------------------------------------------
 
 # Rooted at the machine-wide temp directory. Under wine `%TEMP%` resolves to the host `/tmp`, so
-# a windows-target test binary and a host one land in the SAME directory -- which is why the host
+# a windows-target test binary and a host one land in the same directory -- which is why the host
 # `cargo test` and the wine `cargo xwin test` of one crate collide with each other.
 TEMP_ROOT_CALL = re.compile(r"\b(?:std\s*::\s*)?env\s*::\s*temp_dir\s*\(\s*\)")
 TEMP_ROOT_WINAPI = re.compile(r"\bGetTempPath[AW]?\s*\(")
@@ -151,13 +151,13 @@ FILESYSTEM_TOKENS = (
     "Command::new",
 )
 
-# A signature that mentions a path TYPE returns or accepts one, so the value escapes the
+# A signature that mentions a path type returns or accepts one, so the value escapes the
 # function and the body's own token set says nothing about where it ends up.
 PATH_TYPE_IN_SIGNATURE = re.compile(r"\bPath(?:Buf)?\b")
 
 
 # --------------------------------------------------------------------------------------------
-# Sites that are genuinely fixed BY DESIGN. Keyed by (path, snippet that must appear in the
+# Sites that are genuinely fixed by design. Keyed by (path, snippet that must appear in the
 # offending statement) so the entry survives line drift but dies the moment the site changes.
 # --------------------------------------------------------------------------------------------
 EXEMPT_SITES: dict[tuple[str, str], str] = {
@@ -174,7 +174,7 @@ EXEMPT_SITES: dict[tuple[str, str], str] = {
 }
 
 # --------------------------------------------------------------------------------------------
-# THE FROZEN NEGATIVE. Real sites in this tree that are legitimately process-scoped and must keep
+# The frozen negative. Real sites in this tree that are legitimately process-scoped and must keep
 # classifying clean. Per-file floors, not exact text, so a renamed tag does not go red -- but a
 # detector that stops seeing the tree does, which is the whole point. er-save-redirect's floor of
 # 3 covers both shapes at once: one inline `format!(... process::id())` and two that reach the pid
@@ -247,7 +247,7 @@ def lex(text: str) -> tuple[str, list[StringSpan]]:
             blank(i, j)
             i = j
             continue
-        # Raw string: r"..." / r#"..."# / br##"..."## -- and NOT the raw identifier `r#foo`.
+        # Raw string: r"..." / r#"..."# / br##"..."## -- and not the raw identifier `r#foo`.
         m = re.match(r"(?:b?r)(#*)\"", text[i:])
         if m and (c == "r" or (c == "b" and text[i : i + 2] == "br")):
             hashes = m.group(1)
@@ -459,7 +459,7 @@ def binding_statement(code: str, name: str, before: int, scope_start: int) -> tu
     for m in pattern.finditer(code, scope_start, max(scope_start, before)):
         found = m
     if found is None:
-        # Module-scope const/static declared AFTER the use, which is legal in Rust.
+        # Module-scope const/static declared after the use, which is legal in Rust.
         for m in pattern.finditer(code):
             found = m
             break
@@ -797,7 +797,7 @@ def selftest() -> int:
     expect("path escapes via -> PathBuf", HELPER_HOLE, ["shared"])
     expect("cfg(all(test, windows)) fn", WINDOWS_ONLY_FN, ["shared"])
 
-    # --- negative controls: legitimate forms that must NOT trip ------------------------------
+    # --- negative controls: legitimate forms that must not trip ------------------------------
     expect("pid in the format!", FIXED, ["process-scoped"])
     expect("pid one `let` away", INDIRECT, ["process-scoped"])
     expect("pure expected value", INERT, ["inert"])
@@ -846,7 +846,7 @@ def selftest() -> int:
         EXEMPT_SITES.update(saved)
 
     # --- the real tree, mutated: every clean site must go red when its pid is removed --------
-    # The floors below prove the detector still SEES the tree. This proves it still JUDGES it:
+    # The floors below prove the detector still sees the tree. This proves it still judges it:
     # each frozen file is re-read with every `process::id()` call deleted -- the exact edit that
     # produced the six defects -- and every site that was clean must come back as a finding. A
     # detector that has drifted into matching only one spelling passes the floors and fails here.

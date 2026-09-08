@@ -3,15 +3,15 @@
 
 The comparator is only useful if it draws the line in exactly the right place:
 blind to link-time noise, and unable to miss a single changed code byte. Both
-halves are asserted here against a REAL cdylib from `target/`, because a
+halves are asserted here against a real cdylib from `target/`, because a
 synthetic PE would not exercise the debug-directory/CodeView walk that the
 normalizer depends on.
 
-The BUILD WATERMARK is the third thing tested, and it is the one that had the
+The build WATERMARK is the third thing tested, and it is the one that had the
 gate red on every PR: er-game-base's build.rs bakes a 12-character commit id
 into every DLL that links it, so two different commits always differ by those
 bytes. Masking it is only safe if the mask cannot grow into an exemption, so the
-cases here are paired -- the watermark alone must FAIL unmasked and PASS masked,
+cases here are paired -- the watermark alone must fail unmasked and pass masked,
 a sha present in neither image must mask nothing and hide nothing, and a flipped
 .text byte must still fail with the mask correctly applied.
 
@@ -41,7 +41,7 @@ def load_checker():
 
 
 def find_sample_dll() -> pathlib.Path | None:
-    """Smallest SHIPPED cdylib, so the test exercises a PE the gate actually compares."""
+    """Smallest shipped cdylib, so the test exercises a PE the gate actually compares."""
     if not RELEASE_DIR.is_dir():
         return None
     shipped = set(
@@ -106,14 +106,14 @@ def flip_text_byte(checker, data: bytes) -> bytes:
 #: test independent of which commit the sample DLL happened to be built from.
 WATERMARK_SHA_A = "a56af6a06c03"
 WATERMARK_SHA_B = "0be70e7616f6"
-#: A sha of the right SHAPE that is in neither image -- the negative control for "masked nothing".
+#: A sha of the right shape that is in neither image -- the negative control for "masked nothing".
 WATERMARK_SHA_ABSENT = "ffffffffffff"
 
 
 def plant_build_watermark(checker, data: bytes, sha: str) -> bytes:
     """Write a 12-byte ASCII commit id into .rdata, the way er-game-base's build.rs does.
 
-    Deliberately NOT at a random offset: base and head must plant theirs at the SAME place, or
+    Deliberately not at a random offset: base and head must plant theirs at the same place, or
     the pair would differ in length-of-run rather than in content and the test would be measuring
     something else.
     """
@@ -163,7 +163,7 @@ def main() -> int:
         tmp = pathlib.Path(raw_tmp)
         base = write(tmp, "base.dll", original)
 
-        # --- link noise must NOT fail the gate ----------------------------
+        # --- link noise must not fail the gate ----------------------------
         noisy = write(tmp, "noisy.dll", bump_link_noise(checker, original))
         identical, lines, _ = checker.compare(base, noisy)
         if not identical:
@@ -172,7 +172,7 @@ def main() -> int:
                 + "; ".join(lines[:2])
             )
 
-        # --- one changed code byte MUST fail the gate ---------------------
+        # --- one changed code byte must fail the gate ---------------------
         patched = write(tmp, "patched.dll", flip_text_byte(checker, original))
         identical, lines, _ = checker.compare(base, patched)
         if identical:
@@ -188,11 +188,11 @@ def main() -> int:
         elif not any("size:" in line for line in lines):
             failures.append(f"size mismatch not reported: {lines}")
 
-        # --- THE BUILD WATERMARK ------------------------------------------
+        # --- The build WATERMARK ------------------------------------------
         # er-game-base's build.rs bakes `git rev-parse --short=12 HEAD` into every DLL that
-        # links it, so two DIFFERENT commits always differ by those 12 bytes with no help from
+        # links it, so two different commits always differ by those 12 bytes with no help from
         # the code. Four cases, and the first two are the pair that matters: the difference is
-        # real and visible, AND it is what the mask is for. Without case 1 the mask could be
+        # real and visible, and it is what the mask is for. Without case 1 the mask could be
         # masking nothing; without case 2 the gate stays unpassable.
         wm_base = write(tmp, "wm-base.dll", plant_build_watermark(checker, original, WATERMARK_SHA_A))
         wm_head = write(tmp, "wm-head.dll", plant_build_watermark(checker, original, WATERMARK_SHA_B))
@@ -218,7 +218,7 @@ def main() -> int:
         if masked != 2:
             failures.append(f"expected one masked watermark per image (2); masked {masked}")
 
-        # 3. the WRONG sha masks nothing and hides nothing. This is what stops the mask from
+        # 3. the wrong sha masks nothing and hides nothing. This is what stops the mask from
         #    becoming a blanket "12 hex bytes anywhere are fine" allowlist.
         absent = checker.build_sha_bytes(WATERMARK_SHA_ABSENT)
         identical, _, masked = checker.compare(wm_base, wm_head, absent, absent)
@@ -227,7 +227,7 @@ def main() -> int:
         if masked:
             failures.append(f"a sha in neither image reported {masked} mask hit(s)")
 
-        # 4. a real code change is NOT hidden by a correct mask. The whole risk of masking is
+        # 4. a real code change is not hidden by a correct mask. The whole risk of masking is
         #    that it grows into an exemption; this is the assertion that it did not.
         wm_head_patched = write(
             tmp,

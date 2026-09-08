@@ -88,7 +88,7 @@ def main() -> int:
 
     write(".auto/marker_file_gate_policy.rego", valid_policy())
 
-    # 1. A behavioral-fix marker gate (the incident shape) is FORBIDDEN.
+    # 1. A behavioral-fix marker gate (the incident shape) is forbidden.
     write(
         "src/return_title.rs",
         "fn reload_b73_hold_enabled() -> bool {\n"
@@ -103,8 +103,8 @@ def main() -> int:
     write_baseline({})
     assert rules_for(checker) == {"marker-gate-forbidden"}, rules_for(checker)
 
-    # 2. A DIAGNOSTIC-logging marker gate becomes allowed once listed in diagnostic_gates
-    #    (with a rationale) AND its fn is not behavioral.
+    # 2. A diagnostic-logging marker gate becomes allowed once listed in diagnostic_gates
+    #    (with a rationale) and its fn is not behavioral.
     write(
         "src/diag.rs",
         "fn log_ids() {\n"
@@ -119,11 +119,11 @@ def main() -> int:
     write_baseline({"er-quickload-grsysmsg-log-x.txt": "passive GR_System_Message id log; no game behavior."})
     assert rules_for(checker) == set(), rules_for(checker)
 
-    # 2b. An EMPTY rationale is not enough -> still forbidden.
+    # 2b. An empty rationale is not enough -> still forbidden.
     write_baseline({"er-quickload-grsysmsg-log-x.txt": "  "})
     assert rules_for(checker) == {"marker-gate-forbidden"}, rules_for(checker)
 
-    # 3. A BEHAVIORAL fn cannot sneak into diagnostic_gates: even if listed, it is rejected.
+    # 3. A behavioral fn cannot sneak into diagnostic_gates: even if listed, it is rejected.
     write(
         "src/inline.rs",
         "fn tick(p: *mut u8) {\n"
@@ -137,7 +137,7 @@ def main() -> int:
     assert rules_for(checker) == {"marker-gate-diagnostic-is-behavioral"}, rules_for(checker)
     (FIXTURE_ROOT / "src" / "inline.rs").unlink()
 
-    # 4. A real-runtime-condition fix with NO marker file is NOT flagged (desired shape).
+    # 4. A real-runtime-condition fix with no marker file is not flagged (desired shape).
     write(
         "src/default_fix.rs",
         "fn tick(p: *mut u8) {\n"
@@ -150,7 +150,7 @@ def main() -> int:
     assert rules_for(checker) == set(), rules_for(checker)
     (FIXTURE_ROOT / "src" / "default_fix.rs").unlink()
 
-    # 4b. A DATA control file read with read_to_string (not `.exists()`) is OUT OF SCOPE.
+    # 4b. A data control file read with read_to_string (not `.exists()`) is out of scope.
     write(
         "src/data_file.rs",
         "fn wanted_slot() -> Option<u32> {\n"
@@ -183,7 +183,7 @@ def main() -> int:
     assert rules_for(checker) == {"marker-gate-allowlist-not-deprecated"}, rules_for(checker)
     (FIXTURE_ROOT / "src" / "diag2.rs").unlink()
 
-    # 6. POLICY DRIFT: missing / drifted policy file is itself a finding.
+    # 6. Policy DRIFT: missing / drifted policy file is itself a finding.
     write_baseline({})
     (FIXTURE_ROOT / ".auto" / "marker_file_gate_policy.rego").unlink()
     assert rules_for(checker) == {"missing-marker-gate-policy"}, rules_for(checker)

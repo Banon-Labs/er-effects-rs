@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Find RIP-relative WRITERS (mov [rip+disp32], reg) of a target global VA in the deobfuscated ER
+"""Find RIP-relative writers (mov [rip+disp32], reg) of a target global VA in the deobfuscated ER
 mapped image. Mapped image: file offset == RVA, base 0x140000000.
 
 Matches `[REX.W] 89 modrm disp32` where modrm encodes mod=00, rm=101 (RIP-relative) -- i.e.

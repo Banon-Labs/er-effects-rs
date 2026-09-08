@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Runner for the vanilla save-read TRACE probe (see .envs/save-trace-probe.env). Loads the env then
-# runs the direct/offline eldenring.exe probe. A char-present save MUST already be staged in the real
+# Runner for the vanilla save-read trace probe (see .envs/save-trace-probe.env). Loads the env then
+# runs the direct/offline eldenring.exe probe. A char-present save must already be staged in the real
 # appdata (EldenRing/<steamid>/ER0000.sl2) so the game reads it -- this captures the working open seq.
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

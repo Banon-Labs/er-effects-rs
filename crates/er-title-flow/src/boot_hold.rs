@@ -33,21 +33,21 @@ pub fn should_deny_world_entry(missing_save_pending: bool, state: i32) -> bool {
 }
 
 /// Consecutive ticks the autoload will sit on an empty-like Continue-slot profile before it gives
-/// up on its OWN save selection and hands the choice back to the user.
+/// up on its own save selection and hands the choice back to the user.
 ///
 /// 1800 ticks. The unit is the product autoload's game-task tick, the same unit its existing log
 /// throttle counts in, so this reads as "sixty log lines" rather than as a clock -- and it is
 /// deliberately far past anything a slow boot can produce:
 ///
-///   * MEASURED (run br-20260826-174240-385e, the dead end this exists to end): the game task ran
-///     at 16.8 ms/tick, and the empty-like branch emitted an IDENTICAL fingerprint
+///   * measured (run br-20260826-174240-385e, the dead end this exists to end): the game task ran
+///     at 16.8 ms/tick, and the empty-like branch emitted an identical fingerprint
 ///     (`map=0xffffffff level=0 name_len=0`) on every tick from +14231 ms to +104119 ms without
 ///     one field changing. 1800 ticks is ~30 s there -- and that run had already burned 5370.
 ///   * The one legitimate transient this must not cut short is the boot save-data job still
 ///     filling `ProfileSummary` after the autoload reaches its submit phase. In that same run the
 ///     window between the branch's first tick and the last save-container read was ~0.9 s. 30 s is
 ///     roughly thirty times it.
-///   * It is a FROZEN-state threshold, not a slow-progress one, which is what lets it be this
+///   * It is a frozen-state threshold, not a slow-progress one, which is what lets it be this
 ///     tight: the branch republishes the same fingerprint every tick, so unlike the loading bar
 ///     (whose stall window had to be loosened to 60 s because early boot legitimately crawls)
 ///     there is no progress here that could be merely slow. Either the profile fills or it never
@@ -90,7 +90,7 @@ pub fn empty_profile_action(
 
 /// Advance the consecutive empty-like-profile counter for one tick.
 ///
-/// Separated from [`empty_profile_action`] so the RESET is testable on its own: a profile that
+/// Separated from [`empty_profile_action`] so the reset is testable on its own: a profile that
 /// reads real -- even for a single tick in the middle of a bad window -- must put the count back
 /// to zero, or a boot that flickers its way to a good load would still trip the hand-back.
 pub fn empty_profile_next_ticks(previous_ticks: u64, profile_real: bool) -> u64 {

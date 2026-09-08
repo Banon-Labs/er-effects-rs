@@ -1,6 +1,6 @@
 //! The `[camera.cNNNN]` block of `er-npc-possess.derived.toml`.
 //!
-//! Same contract as [`crate::moveset::derived`], which owns the rest of that file: it is OUTPUT,
+//! Same contract as [`crate::moveset::derived`], which owns the rest of that file: it is output,
 //! it is rewritten on every possession, and nothing reads it back. Corrections go in
 //! `er-npc-possess.toml` under `[camera]` and `[chr.cNNNN].camera_distance_scale`.
 //!
@@ -9,7 +9,7 @@
 //! "The camera did not change" has half a dozen causes -- the feature is off, the build is one
 //! nobody measured, the creature's `hitHeight` is zero, the row the player picked is referenced by
 //! their regulation -- and from the chair they are indistinguishable. Every one of them is a
-//! [`Refusal`] with a sentence next to it here. When it DID change, the block prints the height it
+//! [`Refusal`] with a sentence next to it here. When it did change, the block prints the height it
 //! read, the row it patched, the row it copied the untouched fields from, the two numbers it
 //! wrote, and -- the part a player can actually check against what they can see -- where that puts
 //! the top of the creature on screen and how much room is above it.
@@ -63,7 +63,7 @@ pub(crate) fn render(chr_id: u32, report: &Report) -> String {
             }
             let _ = writeln!(out, "cam_dist_target = {}", shape.distance);
             let _ = writeln!(out, "chr_org_offset_y = {}", shape.pivot_height);
-            // WHERE THAT PUTS THE CREATURE. Two metres and a pivot height are not something
+            // Where that puts the creature. Two metres and a pivot height are not something
             // anybody can check against what they can see; "the top of your body sits here on
             // screen" is. The player's own body sits at +0.0296 with 1.0946 body-heights of sky
             // above it, and anything at or past 1.0 is cropped off the top edge.
@@ -134,7 +134,7 @@ mod tests {
         assert!(text.contains("row 0"), "the base row is named: {text}");
     }
 
-    /// A refusal must name itself AND say what it means, because "the camera did not change" is
+    /// A refusal must name itself and say what it means, because "the camera did not change" is
     /// the symptom every one of them shares.
     #[test]
     fn every_refusal_prints_its_name_and_its_sentence() {

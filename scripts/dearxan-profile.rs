@@ -1,15 +1,15 @@
-// Measure a FromSoftware executable's ARXAN OBFUSCATION PROFILE, so two game builds can be
-// compared by the KINDS of protection present rather than by a single stub count.
+// Measure a FromSoftware executable's ARXAN OBFUSCATION profile, so two game builds can be
+// compared by the kinds of protection present rather than by a single stub count.
 //
 // The question this exists to answer: "did this build introduce a new obfuscation / anti-tamper
 // technique?" A raw stub total cannot answer it -- a count moving from 1597 to 1597 says nothing
-// about whether one TEA region list quietly became something dearxan does not model. So this
-// reports the population BROKEN DOWN BY KIND at every stage of dearxan's pipeline:
+// about whether one tea region list quietly became something dearxan does not model. So this
+// reports the population broken down by kind at every stage of dearxan's pipeline:
 //
 //   raw candidates    every `test rsp, 15` in an executable section (the scan seed)
 //   -> stubs          candidates that analyze as real Arxan stubs (NotAStub is filtered out)
 //   -> ok / error     analysis outcome, errors bucketed by normalized message
-//   -> region lists   ok stubs that DECLARE encrypted regions, by ArxanDecryptionKind
+//   -> region lists   ok stubs that declare encrypted regions, by ArxanDecryptionKind
 //   -> applied        region lists that survive apply_relocs_and_resolve_conflicts, by kind
 //
 // A genuinely new technique shows up as a new shape in that table -- an error bucket that did not
@@ -21,15 +21,15 @@
 //   cargo run --release --example profile --no-default-features --features rayon -- \
 //       <image> [--mapped] [--regions <out.tsv>]
 //
-// `--mapped` treats <image> as an ALREADY-MAPPED flat image (file offset == RVA), which is what
+// `--mapped` treats <image> as an already-mapped flat image (file offset == RVA), which is what
 // the deobfuscate example writes. That matters because the on-disk .exe for an older build is
 // usually gone once the game updates, while its deobfuscated flat image is still on disk -- and
-// stub discovery plus region DECLARATION are readable from the flat image, since Arxan's stubs are
-// never themselves encrypted. Only the decrypted BYTES differ there (decrypting plaintext yields
+// stub discovery plus region declaration are readable from the flat image, since Arxan's stubs are
+// never themselves encrypted. Only the decrypted bytes differ there (decrypting plaintext yields
 // noise, so the resolver eliminates nearly everything). Read the "applied" row of a --mapped run as
 // a lower bound, never as a region count; the pre-resolution rows are the comparable ones.
 //
-// NOTE: the input is the copyrighted game binary -- do NOT commit it or any dump of its bytes.
+// NOTE: the input is the copyrighted game binary -- do not commit it or any dump of its bytes.
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::PathBuf;
@@ -218,10 +218,10 @@ fn profile(pe: PeView<'_>, regions_tsv: Option<PathBuf>) {
         dl as i64 - al as i64
     );
 
-    // A declared region list is PRESENT IN THE IMAGE when the bytes now sitting at its RVAs are
+    // A declared region list is present in the image when the bytes now sitting at its RVAs are
     // already its own plaintext. On a ciphertext image that is false for everything; on a
     // deobfuscated image it is true for exactly the lists the deobfuscator applied. That is the
-    // only way to recover the applied/eliminated split of an OLD build once its .exe is gone --
+    // only way to recover the applied/eliminated split of an old build once its .exe is gone --
     // the resolver itself cannot, because on an already-decrypted image every list loses the
     // entropy comparison and is eliminated. Relocation does not disturb the comparison: with
     // preferred_base = None the reloc delta is zero, so plaintext bytes are written unmodified.
@@ -323,7 +323,7 @@ fn main() {
     println!("input_form           = {}", if mapped_input { "mapped flat image" } else { "on-disk PE" });
 
     if mapped_input {
-        // A flat mapped image IS what PeView expects, so no re-mapping step is involved.
+        // A flat mapped image is what PeView expects, so no re-mapping step is involved.
         let bytes = std::fs::read(&in_path).expect("read image");
         let pe = PeView::from_bytes(&bytes).expect("not a mapped PE image");
         profile(pe, regions_tsv);

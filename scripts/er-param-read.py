@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read PARAM rows (ids AND named fields) out of the installed regulation.bin, offline.
+"""Read PARAM rows (ids and named fields) out of the installed regulation.bin, offline.
 
 Extends scripts/regulation-params.py (decrypt -> DCX/zstd -> BND4 -> PARAM row ids)
 with a paramdef-driven field decoder. Paramdefs come from a local Smithbox/Paramdex
@@ -172,7 +172,7 @@ def row_names(stem):
     for e in d:
         if isinstance(e, dict):
             i = e.get('ID', e.get('id'))
-            # The Smithbox row-name schema nests a SECOND 'Entries' inside each row:
+            # The Smithbox row-name schema nests a second 'Entries' inside each row:
             #   {"Name": "NpcParam", "Entries": [{"ID": 40700000, "Entries": ["Wolf"]}]}
             # This used to read e['Name'], which that shape does not have, so --names
             # printed `'name': None` for all 6864 named NpcParam rows and looked like

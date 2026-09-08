@@ -1,4 +1,4 @@
-//! Validate the er-shaderkit DXBC reflection against REAL extracted shaders:
+//! Validate the er-shaderkit DXBC reflection against real extracted shaders:
 //!
 //!  1. tally which DX-container chunks appear across all bundles (esp. whether any
 //!     carry `RDEF` — Elden Ring's DXIL shaders mostly don't);

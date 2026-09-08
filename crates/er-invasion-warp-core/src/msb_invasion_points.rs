@@ -21,7 +21,7 @@
 //! This module is the second one. An offline harvest of all 1347 shipped MSBs found **2807**
 //! `InvasionPoint` regions across 113 maps, 2596 of them outside the overworld (Leyndell 168,
 //! Farum Azula 119, Volcano Manor 115, Stormveil 94, Haligtree 88, catacombs 285, caves 229,
-//! the m12 underground 399, ...). That harvest is a CHECK, never the product's data: per the
+//! the m12 underground 399, ...). That harvest is a check, never the product's data: per the
 //! project rule the surface must reflect what is actually loaded, because a mod can rewrite it.
 //!
 //! # Why the catalog accumulates instead of being read once
@@ -50,17 +50,17 @@ pub const MSB_POINT_TYPE_INVASION_POINT: u32 = 1;
 /// `CS::MsbResCap::GetPointDataSectionItemCount(MsbResCap*, MsbPointType)` -- `0x140cf6300`.
 ///
 /// Preferred over walking `MsbResCap+0x318 + type*0x10` by hand: the count is the sum of that
-/// static TOC entry AND a dynamic overflow vector, so a pointer-walk that knows only about the TOC
+/// static TOC entry and a dynamic overflow vector, so a pointer-walk that knows only about the TOC
 /// silently undercounts any map that populates the vector.
 ///
 /// The overflow vector's layout, corrected against the disassembly of `FUN_140cf6350` (which
 /// computes `RDX = (type << 5) + resCap`, then reads begin at `[RDX+0xa98]` and end at
-/// `[RDX+0xaa0]`): the container starts at `MsbResCap+0xa70`, but the per-type ELEMENT base is
+/// `[RDX+0xaa0]`): the container starts at `MsbResCap+0xa70`, but the per-type element base is
 /// `+0xa90` with stride `0x20`, and within an element `begin` is at `+0x8` and `end` at `+0x10`.
 /// A previous version of this comment said `+0xa70 + type*0x18`, which lands in the wrong type slot
 /// -- and this comment exists specifically to stop the next agent hand-walking it.
 ///
-/// IMPORTANT: this count has NO readiness gate. `CS::MsbResCap`'s constructor zeroes the header and
+/// IMPORTANT: this count has no readiness gate. `CS::MsbResCap`'s constructor zeroes the header and
 /// the section tables, so a cap that has been constructed but not yet PARSED answers `0` while
 /// already carrying an in-image vtable. See [`EMPTY_READS_BEFORE_OBSERVED`].
 pub const GET_POINT_DATA_SECTION_ITEM_COUNT_RVA: usize = 0xcf_6300;
@@ -86,7 +86,7 @@ pub const WORLD_INFO_OWNER_GET_MSB_RES_CAP_RVA: usize = 0x66_9ea0;
 /// `FieldArea+0x10` -- the owned `WorldInfoOwner` pointer used by the previous typed
 /// `FieldArea::instance().world_info_owner` path.
 ///
-/// MEASURED. The previous note here said only that "both the CI-pinned and local binding layouts
+/// Measured. The previous note here said only that "both the CI-pinned and local binding layouts
 /// pin this field at the same offset", which is two copies of one declaration agreeing with each
 /// other -- the exact shape that left `CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` wrong for its whole
 /// life. The instructions: in `CS::FieldArea::FieldArea` (`0x140618bf0`) the constructor's first
@@ -99,12 +99,12 @@ pub const WORLD_INFO_OWNER_GET_MSB_RES_CAP_RVA: usize = 0x66_9ea0;
 /// ```
 ///
 /// with `rsi = this`. `FUN_14066d5c0` is a one-shot ownership claim: it sets a flag inside the
-/// argument's `worldres` and returns the ARGUMENT (it `DLPanic`s in `WorldRes.cpp:0x482` on a
-/// second claim), so at construction `+0x10` and `+0x18` receive the SAME pointer -- the "owned"
+/// argument's `worldres` and returns the argument (it `DLPanic`s in `WorldRes.cpp:0x482` on a
+/// second claim), so at construction `+0x10` and `+0x18` receive the same pointer -- the "owned"
 /// in the name is about the claim, not about a different object.
 ///
 /// It has not moved: that constructor aligns 311/311 instructions against its 1.17 counterpart
-/// (`0x140619a40`) with 101 `this`-relative offsets and ZERO moved. Re-measured every run by
+/// (`0x140619a40`) with 101 `this`-relative offsets and zero moved. Re-measured every run by
 /// `scripts/check-object-field-offsets-1170.py`.
 pub const FIELD_AREA_WORLD_INFO_OWNER_OFFSET: usize = 0x10;
 /// `FieldArea+0x18` -- `worldInfoOwner2`, the owner the native lookup calls above take. Written by
@@ -146,7 +146,7 @@ impl MsbInvasionPoint {
 
 /// One map's whole answer to "what invasion points do you have?".
 ///
-/// Carries the count the ENGINE reported alongside the points that could actually be read, because
+/// Carries the count the engine reported alongside the points that could actually be read, because
 /// those two numbers are not the same and the difference is invisible otherwise. A point whose
 /// region has no shape data has no position, so it is skipped -- correctly, the engine's own
 /// consumer skips it too -- but skipping it silently means a dungeon with 88 regions can contribute
@@ -188,21 +188,21 @@ pub struct MsbInvasionCatalog {
 
 /// Below this separation, two points of the same map cannot render as two icons.
 ///
-/// The world map's projection is 1:1 IN METRES and discards Y entirely:
+/// The world map's projection is 1:1 in metres and discards Y entirely:
 /// `ConvertMsbCoordsToMapCoords` (0x140876140) keeps only the converted X and Z, and the converter's
 /// scale is the literal `1.0`. `ConvertLegacyDungeonPositionToOverworldPositionForMap`'s tile rebase
 /// subtracts `i*256` on x/z which the projection's `+i*256` term cancels exactly, so relative XZ
 /// distances survive the whole pipeline unchanged -- which is what lets this clustering run in
 /// physics space without needing the ViewModel's converters.
 ///
-/// The pin clip is counter-scaled to a constant SCREEN size, so its footprint in map units is
+/// The pin clip is counter-scaled to a constant screen size, so its footprint in map units is
 /// `screenPixels / zoom`, and the maximum zoom in the table is 2.25 stage-px per map unit. A 40px
 /// icon therefore covers ~18 metres of map at the tightest zoom the game allows, and the declared
 /// 146x146 marker art covers ~65. 20 metres is the conservative end of that range: it keeps every
 /// pair a player could conceivably tell apart and merges only pairs that would draw on top of each
 /// other at every zoom level.
 ///
-/// This matters most exactly where the feature does: a legacy dungeon is stacked VERTICALLY, and Y
+/// This matters most exactly where the feature does: a legacy dungeon is stacked vertically, and Y
 /// is the axis the map throws away. The Haligtree's 88 invasion points occupy 39 separable spots at
 /// this radius, Leyndell's 104 occupy 78, Volcano Manor's 115 occupy 21. Injecting one row per point
 /// there does not draw more markers -- it draws the same markers several times over, costs rows and
@@ -211,9 +211,9 @@ pub const MARKER_MERGE_RADIUS_METRES: f32 = 20.0;
 
 /// Merge points of a single map that would draw on top of each other, keeping one per cluster.
 ///
-/// Single-linkage on XZ: a point joins a cluster when it is within `radius` of ANY member, which is
+/// Single-linkage on XZ: a point joins a cluster when it is within `radius` of any member, which is
 /// the right rule for "these overlap on screen" (overlap is transitive through a chain of touching
-/// icons). The FIRST point of each cluster is the representative, so the result is stable under the
+/// icons). The first point of each cluster is the representative, so the result is stable under the
 /// catalog's key ordering and a warp still targets a real authored spawn.
 ///
 /// `radius <= 0` returns the input unchanged, so the merge can be disabled without a second path.
@@ -247,13 +247,13 @@ pub fn merge_coincident_points(points: &[MsbInvasionPoint], radius: f32) -> Vec<
 
 /// How many consecutive empty reads a block needs before "no invasion points" is believed.
 ///
-/// ONE ZERO IS NOT AN ANSWER. `CS::MsbResCap`'s constructor zeroes its header and section tables,
+/// One zero is not an answer. `CS::MsbResCap`'s constructor zeroes its header and section tables,
 /// and `GetPointDataSectionItemCount` is a bare read of `pointDataToc[type].entryCount` with no
-/// readiness gate -- so a cap that has been CONSTRUCTED but whose MSB has not been PARSED answers
+/// readiness gate -- so a cap that has been constructed but whose MSB has not been PARSED answers
 /// `0` while already carrying an in-image vtable, which is exactly what the liveness test accepts.
 /// The harvest samples once a second and also synchronously from the `WorldMapViewModel` ctor,
 /// which runs during the loading screen; catching that window used to latch the block as
-/// "observed, empty" for the whole session, which both denied it its precise pins and RETRACTED the
+/// "observed, empty" for the whole session, which both denied it its precise pins and retracted the
 /// provisional whole-dungeon marker standing in for them. One badly-timed sample removed a
 /// dungeon's icon permanently.
 ///
@@ -263,7 +263,7 @@ pub fn merge_coincident_points(points: &[MsbInvasionPoint], radius: f32) -> Vec<
 pub const EMPTY_READS_BEFORE_OBSERVED: u32 = 3;
 
 impl MsbInvasionCatalog {
-    /// An empty catalog: nothing observed, which is NOT the same as "nothing exists".
+    /// An empty catalog: nothing observed, which is not the same as "nothing exists".
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -275,7 +275,7 @@ impl MsbInvasionCatalog {
 
     /// Fold in everything read from one map.
     ///
-    /// A read that yields points marks the block observed immediately. An EMPTY read does not --
+    /// A read that yields points marks the block observed immediately. An empty read does not --
     /// it takes [`EMPTY_READS_BEFORE_OBSERVED`] consecutive empty reads, because a single zero is
     /// indistinguishable from sampling a cap whose MSB has not been parsed yet, and latching that
     /// zero costs the map both its pins and its standby marker for the rest of the session.
@@ -436,13 +436,13 @@ mod native {
     ///
     /// # Why this is cached rather than resolved per read
     ///
-    /// ON 1.17 IT IS NOT RESOLVABLE AT ALL, AND THAT IS NOT A BUG.
+    /// On 1.17 it is not RESOLVABLE at all, and that is not a bug.
     /// `docs/recon/rva-map-1162-to-1170.verified.tsv` records [`CS_MSB_POINT_CTOR_RVA`]
-    /// (`0x140cf9300`) as deliberately absent: its 1.17 pair `0x140cfa9d0` is CORRECT by 16 caller
+    /// (`0x140cf9300`) as deliberately absent: its 1.17 pair `0x140cfa9d0` is correct by 16 caller
     /// votes -- both bodies write `.?AVDLNonCopyable@DLUT@@`'s vtable -- but the pair verifies
     /// DIVERGES 0.09 on an Arxan entry-jmp whose targets differ over inert stack-shuffle spills,
     /// and writing a row that weak would make `refuted_sources()` drop the constructor from the
-    /// CALL map as well. So the address is genuinely unmapped, this reader is genuinely
+    /// call map as well. So the address is genuinely unmapped, this reader is genuinely
     /// unavailable on 1.17, and the honest behaviour is to say so once and stop asking.
     ///
     /// Before this cache it asked on every map open: the 2026-08-30 21:16 session's
@@ -450,11 +450,11 @@ mod native {
     /// `ADDRESS REFUSED (CS_MSB_POINT_CTOR_RVA): 0x140cf9300`, each preceded by a live
     /// `GetPointDataSectionItemCount` call into the game whose answer was then thrown away.
     ///
-    /// # What is NOT changed by being unavailable
+    /// # What is not changed by being unavailable
     ///
     /// [`read_map_invasion_points`] still answers `None`, which means "no answer yet" and leaves
     /// the block UNOBSERVED. That is deliberate and must stay: an observed-and-empty block both
-    /// denies the map its precise pins AND retracts the provisional whole-dungeon marker standing
+    /// denies the map its precise pins and retracts the provisional whole-dungeon marker standing
     /// in for them, so degrading to "this map has no invasion points" would make dungeon icons
     /// disappear. Unavailable means the precise pins never arrive and the provisional markers
     /// stand, which is the correct fallback.
@@ -531,7 +531,7 @@ mod native {
 
     /// Whether `cap` is plausibly a live `MsbResCap` rather than a stale or uninitialised slot.
     ///
-    /// `WorldInfo::world_block_info()` is the engine's block LIST, not a list of blocks whose
+    /// `WorldInfo::world_block_info()` is the engine's block list, not a list of blocks whose
     /// resources are currently loaded: an entry for a block that is registered but not streamed in
     /// can carry a null or leftover `msbResCap`. Handing such a pointer to
     /// `GetPointDataSectionItemCount` is a wild call through a garbage vtable, on the game thread,
@@ -565,17 +565,17 @@ mod native {
 
     /// Read every `InvasionPoint` region out of one map's `MsbResCap`.
     ///
-    /// `None` means NO ANSWER -- either the map was not loaded (null cap, or no in-image vtable, so
+    /// `None` means no answer -- either the map was not loaded (null cap, or no in-image vtable, so
     /// nothing was looked at) or the count came back implausible. `Some(read)` means the cap was
     /// live and this is the map's real answer, zero regions included.
     ///
-    /// The caller must treat `None` as "look again later" and must NOT record the block as observed,
+    /// The caller must treat `None` as "look again later" and must not record the block as observed,
     /// because observed-and-empty retracts the provisional whole-dungeon marker.
     ///
-    /// THE DISTINCTION IS THE WHOLE POINT (2026-08-04). This used to return a bare `Vec` and the
+    /// The distinction is the whole point (2026-08-04). This used to return a bare `Vec` and the
     /// caller recorded the block as observed either way, on the reasoning that "read it, found
     /// nothing" is a real answer. It is -- but a dead cap is not that answer, it is "never looked",
-    /// and conflating them broke the feature: `resident_blocks` enumerates the world's STATIC block
+    /// and conflating them broke the feature: `resident_blocks` enumerates the world's static block
     /// list, so at boot all 111 entries were marked observed with dead caps, and every one of them
     /// was then skipped forever by `has_observed`. Measured in run 1615 -- the player standing in the
     /// Haligtree (`block=0x0f000000`) with `msb[0 points/111 maps]` and exactly one `map-msb:` line
@@ -604,16 +604,16 @@ mod native {
         }
         let count = unsafe { (api.get_count)(msb_res_cap, MSB_POINT_TYPE_INVASION_POINT) };
         if count > MAX_POINTS_PER_MAP {
-            // NOT an answer. The doc above this constant says such a map "is skipped and reported",
+            // Not an answer. The doc above this constant says such a map "is skipped and reported",
             // but this branch used to fall in with `count <= 0` and return an empty vector -- which
-            // marks the block OBSERVED. Observed-and-empty is the one state that both denies the map
-            // its precise pins AND retracts the provisional whole-dungeon marker that was standing in
+            // marks the block observed. Observed-and-empty is the one state that both denies the map
+            // its precise pins and retracts the provisional whole-dungeon marker that was standing in
             // for them, so an implausible count made a dungeon's icon disappear the moment the player
             // walked into it. Refuse instead: stay unobserved, keep the provisional marker, look again.
             return None;
         }
         if count <= 0 {
-            // The cap IS live, so this is a genuine answer: this map has no invasion points.
+            // The cap is live, so this is a genuine answer: this map has no invasion points.
             return Some(MapPointRead {
                 reported: 0,
                 points: Vec::new(),
@@ -666,7 +666,7 @@ mod native {
     /// Every resident block paired with its `MsbResCap`.
     ///
     /// Walks the typed `FieldArea -> WorldInfoOwner -> WorldRes -> WorldInfo` binding rather than
-    /// calling `FUN_140669af0`: that native fills a `std::vector` with the GAME's allocator, and
+    /// calling `FUN_140669af0`: that native fills a `std::vector` with the game's allocator, and
     /// owning the lifetime of an engine-allocated vector from here is a leak-or-crash choice with
     /// no upside. The slice is already exactly the resident set.
     ///
@@ -765,7 +765,7 @@ mod tests {
         ];
         let merged = merge_coincident_points(&points, 20.0);
         assert_eq!(merged.len(), 2);
-        // The representative is the FIRST of its cluster, so the result is stable.
+        // The representative is the first of its cluster, so the result is stable.
         assert_eq!(merged[0].index, 0);
         assert_eq!(merged[1].index, 3);
     }
@@ -842,7 +842,7 @@ mod tests {
     #[test]
     fn the_invasion_point_type_is_the_byte_verified_edx_value() {
         // `0x140a0c1f1` loads EDX = 1 for the InvasionPoint section. If this drifts, the reader
-        // silently enumerates a DIFFERENT region subtype and every marker is wrong.
+        // silently enumerates a different region subtype and every marker is wrong.
         assert_eq!(MSB_POINT_TYPE_INVASION_POINT, 1);
     }
 
@@ -878,7 +878,7 @@ mod tests {
     #[test]
     fn a_map_with_no_points_is_recorded_as_read_only_after_repeated_empty_reads() {
         // "This dungeon has no invasion points" must still become distinguishable from "we have not
-        // looked yet" -- but not on the FIRST zero. A cap can be constructed and answer zero before
+        // looked yet" -- but not on the first zero. A cap can be constructed and answer zero before
         // its MSB is parsed, and latching that costs the map its pins and its standby marker for
         // the session.
         let mut catalog = MsbInvasionCatalog::new();

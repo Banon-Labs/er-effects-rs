@@ -69,13 +69,13 @@ fn write_telemetry(state: &NetEffectsState, player_available: bool) {
         effects::duration_filtered_effects(),
         effects::stacked_effect_count(),
         effects::stack_write_failures(),
-        // How many config reloads actually MOVED a selector key. Emitted because "the player
+        // How many config reloads actually moved a selector key. Emitted because "the player
         // rebound a key and it did not take" and "the poller never ran" are the same silence
         // otherwise -- and this number is the one that can disagree with the config file.
         crate::config::binding_reloads()
     ));
     // `effect_selector_open` is the one that decides whether the DLL may touch the keyboard, and
-    // it is NOT `effect_selector_visible`: a shown-but-collapsed bar is closed. Reading only the
+    // it is not `effect_selector_visible`: a shown-but-collapsed bar is closed. Reading only the
     // visible flag is what hid the arrow-key theft for as long as it did, so both are emitted
     // side by side with the counter that proves keys are being let through.
     body.push_str(&format!(

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Recover MSVC RTTI class names -> vtable addresses from a flat ELDEN RING image.
 
-WHY THIS EXISTS. The Ghidra dump served on :8767 is the INSTALLED build (1.17) and has zero class
+Why this exists. The Ghidra dump served on :8767 is the installed build (1.17) and has zero class
 names -- `searchFunctionsByName` answers 0 for GridControl, MenuWindow and CSMenuMan alike -- so
 every name-driven lookup has had to detour through the 1.16.2 dump on :8765 and then translate the
 address back. That detour is the single reason anything in this repo still references 1.16.2, and it
-is avoidable: the RTTI is PRESENT in the 1.17 image (`.?AVGridControl@CS@@` sits at 0x143c93728),
+is avoidable: the RTTI is present in the 1.17 image (`.?AVGridControl@CS@@` sits at 0x143c93728),
 it was simply never parsed, because `scripts/ghidra/import-runtime-gzf.sh` imports with
 `-noanalysis` on the reasoning that a .gzf carries its own analysis. That reasoning held for the
 curated 1.16.2 export and does not hold for this file.
@@ -14,7 +14,7 @@ Parsing it here rather than re-running Ghidra's analyzer is a minutes-vs-hours c
 image, and it produces exactly the artifact the lookups need: a name -> vtable table for the build
 that is actually running, with no cross-version translation in the path.
 
-LAYOUT (x64 MSVC), which is why the walk is three passes:
+Layout (x64 MSVC), which is why the walk is three passes:
   TypeDescriptor      { void* pVFTable; void* spare; char name[]; }   name at +0x10
   CompleteObjectLocator { u32 signature; u32 offset; u32 cdOffset;
                           u32 pTypeDescriptor_rva; u32 pClassDescriptor_rva; u32 pSelf_rva; }

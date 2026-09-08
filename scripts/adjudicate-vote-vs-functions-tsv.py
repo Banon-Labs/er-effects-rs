@@ -9,15 +9,15 @@ Two independent methods pair the same 1.16.2 function with a 1.17 one:
   whose two bodies have identical extent length and identical direct-branch offsets, and
   reads the i-th call target off each side.  It never looks at the callee's bytes.
 
-Agreement between them is the positive control for voting.  DISAGREEMENT is a bug in one of
+Agreement between them is the positive control for voting.  Disagreement is a bug in one of
 them, and it matters which: a wrong `functions.tsv` row is a 1.17 address that reads as live.
 
 The adjudicator is byte evidence, not a vote count: take the 1.16.2 function's whole declared
-extent, mask it with the repo's own rule, and require the candidate to have the SAME extent
-length and the SAME masked body.  Only if neither or both match does it fall back to which
+extent, mask it with the repo's own rule, and require the candidate to have the same extent
+length and the same masked body.  Only if neither or both match does it fall back to which
 candidate's delta agrees with the surrounding region -- and it says so.
 
-USAGE
+Usage
     uv run --with capstone python3 scripts/adjudicate-vote-vs-functions-tsv.py
     ... --selftest
 """
@@ -91,11 +91,11 @@ def adjudicate(verbose=True):
 
         ok_tsv, ok_vote = matches(tsv_dst), matches(vote_dst)
         region = local_delta(keys, fmap, src)
-        # A byte verdict rests on the REJECTION, not the acceptance. Masking removes exactly
+        # A byte verdict rests on the rejection, not the acceptance. Masking removes exactly
         # the bytes that separate two same-shape functions, so "accepted" means "same shape",
         # not "same function" -- measured: 9 of 200 deliberately-wrong candidates are accepted,
         # every one an adjacent same-length sibling. "Rejected" is the strong half: a different
-        # masked shape IS a different function. So a verdict is issued only when exactly one
+        # masked shape is a different function. So a verdict is issued only when exactly one
         # candidate is rejected.
         region_picks_vote = (
             None if region is None
@@ -137,7 +137,7 @@ def adjudicate(verbose=True):
 def selftest():
     """The adjudicator must prefer the candidate whose masked body actually matches.
 
-    Positive control: every row where the two methods AGREE is a row where the byte test
+    Positive control: every row where the two methods agree is a row where the byte test
     must also accept the shared answer -- if it did not, the test would be rejecting
     correct pairings and its verdicts on the disagreements would be worthless.
     """
@@ -166,17 +166,17 @@ def selftest():
     rate = accepted / max(1, tested)
     check("the byte test accepts agreed pairs", rate > 0.90,
           f"{accepted}/{tested} = {rate * 100:.1f}%")
-    # NEGATIVE CONTROL, and the thing it actually measures. Feed the test a deliberately
+    # Negative control, and the thing it actually measures. Feed the test a deliberately
     # wrong destination -- the next function along in 1.17 -- and count rejections.
     #
-    # It is NOT 100%, and it cannot be. Masking wildcards exactly the bytes that separate two
+    # It is not 100%, and it cannot be. Masking wildcards exactly the bytes that separate two
     # instantiations of the same shape, so a wrong candidate that is an adjacent same-length
     # sibling is accepted by construction: 9 of 200 here, e.g. 0x140239ad0 and its neighbour
     # 0x140239b00, both 0x30 bytes and both `sub rsp,0x38 / mov rax,[rcx+0x40] / ...`. That is
     # a property of the image, not a defect in the rule, and it is why `adjudicate` issues a
-    # byte verdict only on the REJECTION of the loser.
+    # byte verdict only on the rejection of the loser.
     #
-    # The threshold is a REGRESSION floor, not a target: 191/200 when written, so a drop below
+    # The threshold is a regression floor, not a target: 191/200 when written, so a drop below
     # 185 means the masking itself stopped discriminating rather than that a few more siblings
     # collided.
     NEGATIVE_CONTROL_FLOOR = 185
@@ -197,7 +197,7 @@ def selftest():
     check("...and rejects the next function along", rejected >= NEGATIVE_CONTROL_FLOOR,
           f"{rejected}/{tried}, floor {NEGATIVE_CONTROL_FLOOR} (was 191 when written)")
 
-    # THE GATE THAT MATTERS, on the real disagreements rather than a sample: where the BYTES
+    # The gate that matters, on the real disagreements rather than a sample: where the bytes
     # decide a row, the surrounding region's delta must independently pick the same winner.
     #
     # These two signals share nothing -- one compares masked bodies, the other looks only at
@@ -208,7 +208,7 @@ def selftest():
     # That was a claim about the data, and it was false: 20 of the 53 have it, for the same
     # reason the negative control is not 100% -- adjacent same-length siblings share a masked
     # shape. Those rows get no byte verdict at all, which is the correct handling, so the
-    # right gate is on the rows a verdict IS issued for.
+    # right gate is on the rows a verdict is issued for.
     rows, tally, _agree = adjudicate(verbose=False)
     undecidable = tally.get("BOTH SHAPE-COMPATIBLE (undecidable by bytes)", 0)
     print(f"  note  {undecidable} of the disagreements are shape-undecidable "

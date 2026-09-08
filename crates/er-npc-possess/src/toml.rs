@@ -4,7 +4,7 @@
 //! `er-enemynpc-effects` and `er-refill-all` are: a settings file read once a second in a DLL
 //! cross-compiled into the game process does not justify a dependency. Those two get away with a
 //! four-line `find the key, split on '='` helper because their whole schema is flat. This one is
-//! not -- it has named tables, and an OPEN-ENDED family of them (`[chr.c4500]`, one per character
+//! not -- it has named tables, and an open-ended family of them (`[chr.c4500]`, one per character
 //! id the player wants to override), so "which section is this key in" is a question the parser
 //! has to answer rather than ignore.
 //!
@@ -22,7 +22,7 @@
 //!   every assignment after the first.
 //! * `#` comments, to end of line, outside quotes.
 //!
-//! # What it does NOT do
+//! # What it does not do
 //!
 //! No multi-line values, no `"""` strings, no `[[array of tables]]` semantics (a `[[x]]` header
 //! is read as the section `x`, which is enough not to lose the keys under it), no escape
@@ -88,7 +88,7 @@ impl Document {
         doc
     }
 
-    /// The raw text of a value, quotes and brackets included. FIRST occurrence wins, matching the
+    /// The raw text of a value, quotes and brackets included. First occurrence wins, matching the
     /// flat helper the other config crates use: a duplicated key is a mistake, and taking the
     /// first is at least stable across reloads.
     pub(crate) fn raw(&self, section: &str, key: &str) -> Option<&str> {
@@ -103,7 +103,7 @@ impl Document {
         self.raw(section, key).map(unquote)
     }
 
-    /// The items of `[a, b, c]`, unquoted. `None` when the key is absent; an EMPTY vector when the
+    /// The items of `[a, b, c]`, unquoted. `None` when the key is absent; an empty vector when the
     /// value is `[]`, which is a real setting ("nothing") and not a missing one.
     pub(crate) fn array(&self, section: &str, key: &str) -> Option<Vec<&str>> {
         let raw = self.raw(section, key)?;
@@ -132,7 +132,7 @@ impl Document {
 
     /// Every section named `<prefix><something>`, in file order, as the `<something>` part.
     ///
-    /// This is what makes `[chr.c4500]` open-ended: the caller asks for what the FILE contains
+    /// This is what makes `[chr.c4500]` open-ended: the caller asks for what the file contains
     /// rather than looking up ids it already knows.
     pub(crate) fn sections_under(&self, prefix: &str) -> Vec<&str> {
         self.sections
@@ -297,7 +297,7 @@ speed_scale = 0.8
         assert_eq!(doc.array("chr.c4500", "nothing_here"), None);
     }
 
-    /// The open-ended half of the schema. The parser is told a PREFIX and reports what the file
+    /// The open-ended half of the schema. The parser is told a prefix and reports what the file
     /// happens to contain, so a chr id nobody has ever written down still arrives.
     #[test]
     fn dynamic_sections_are_enumerated_not_guessed() {
@@ -319,7 +319,7 @@ speed_scale = 0.8
     }
 
     /// Junk lines are skipped, not fatal: a file being edited passes through half-written states
-    /// and the poller reads it about once a second, so it WILL see one.
+    /// and the poller reads it about once a second, so it will see one.
     #[test]
     fn a_malformed_line_does_not_lose_the_rest_of_the_file() {
         let doc = Document::parse("enabled = true\nthis is not an assignment\nhotkey = \"F8\"\n");

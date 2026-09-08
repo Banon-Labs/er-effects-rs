@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build er_quickload.dll from the CURRENT tree, then score it exactly like a release artifact.
+# Build er_quickload.dll from the current tree, then score it exactly like a release artifact.
 #
 # The scoring -- launch it alone, wait, decide from thread count and CPU burn rather than from a
 # pid existing -- lives in scripts/er-release-bisect.py and is not repeated here. This exists only

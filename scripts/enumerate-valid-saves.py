@@ -3,11 +3,11 @@
 
 For the repeatable-multi-save-load proof (docs/goals/repeatable-multi-save-load-acceptance.md):
 walks a corpus of ER0000.sl2/.co2 files, decodes every slot with the evidence-bound
-save-slot-oracle.py decoder, and writes a JSON inventory of the VALID (occupied, real)
+save-slot-oracle.py decoder, and writes a JSON inventory of the valid (occupied, real)
 (file, slot) pairs -- the concrete test targets a proof harness loops over.
 
 "Valid save" per the acceptance doc = the slot is occupied (a real character), which we take
-as: decoded name is non-empty (not name_empty_like) AND decoded level > 0. Files/slots that
+as: decoded name is non-empty (not name_empty_like) and decoded level > 0. Files/slots that
 fail to decode are cataloged as skipped-with-reason, never silently dropped.
 
 Corpus root precedence: --root -> $ER_SAVE_CORPUS_ROOT ->
@@ -16,7 +16,7 @@ Staged redirect subtrees (er-quickload-save-redirect-stage/) are skipped -- they
 copies produced by the save-redirect probe path, not source saves.
 
 Usage:
-  enumerate-valid-saves.py [--root DIR] [--ext sl2|co2|both] [--json OUT] [--quiet]
+  enumerate-valid-saves.py [--root DIR] [--ext sl2|co2|both] [--json out] [--quiet]
 Exit 0 always (enumeration is diagnostic); a nonzero exit only on a hard root-missing error.
 """
 from __future__ import annotations

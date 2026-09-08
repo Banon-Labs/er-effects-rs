@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Hardware WRITE watchpoint on a field of a LIVE Wine/Proton `eldenring.exe`.
+"""Hardware write watchpoint on a field of a live Wine/Proton `eldenring.exe`.
 
-WHY THIS EXISTS
+Why this exists
 ---------------
 `scripts/er-live-fields.py` answers "what is this field NOW" by reading /proc/<pid>/mem.
 It cannot answer "WHICH INSTRUCTION wrote it", and neither can an in-process function hook
@@ -9,39 +9,39 @@ when the writer set has already been enumerated byte-complete and every member w
 at the moment of interest (bd `savestate-writer-set-complete-and-silent-at-the-wedge-2026-08-31`).
 The remaining instrument is a data watchpoint, and AGENTS.md names exactly one sanctioned
 transport for a Wine target: the `linux-x86-debug` toolkit's `winedbg --gdb` attach.
-NEVER `frida.attach()` here -- it segfaults inside eldenring.exe and kills the game.
+Never `frida.attach()` here -- it segfaults inside eldenring.exe and kills the game.
 
-WHY `--no-start` RATHER THAN THE TOOLKIT'S `tracebreakpoint`
+Why `--no-start` rather than the toolkit'S `tracebreakpoint`
 -----------------------------------------------------------
-`tracebreakpoint` only emits `break *<addr>` (a CODE breakpoint). The question here is a DATA
+`tracebreakpoint` only emits `break *<addr>` (a code breakpoint). The question here is a data
 write to an address that is not known to be written by any code we can name, so the tool's
-own gdb-script builder cannot express it. This drives the SAME transport with a different
+own gdb-script builder cannot express it. This drives the same transport with a different
 script: `winedbg --gdb --no-start --port N <windows-pid>` opens a gdb stub on localhost and
-a HOST gdb connects to it. Two things fall out of that split, both of which matter here:
+a host gdb connects to it. Two things fall out of that split, both of which matter here:
 
   * gdb does not have to exist inside the Steam Linux Runtime container (it does not), and
   * the host's own gdb (with `watch`) drives the session.
 
-MEASURED CONTAINER FACTS (2026-08-31, Proton Experimental + SteamLinuxRuntime_4)
+Measured container facts (2026-08-31, Proton Experimental + SteamLinuxRuntime_4)
 -------------------------------------------------------------------------------
-  * mount namespace is NOT shared with the host, but the PID and NET namespaces ARE.
+  * mount namespace is not shared with the host, but the PID and net namespaces are.
     So localhost TCP crosses the boundary and `--port` works.
   * the prefix's wineserver socket is `/tmp/.wine-<uid>/server-<dev>-<ino>/socket`, derived
-    from the WINEPREFIX directory's st_dev/st_ino, and the host CAN see it: /tmp is shared.
+    from the WINEPREFIX directory's st_dev/st_ino, and the host can see it: /tmp is shared.
     That is what lets a host-launched Proton `wine` join the running prefix.
   * the game image is at 0x140000000 (WINEPRELOADRESERVE=140000000-145e0a000), so a 1.17
     deobf VA needs no runtime translation.
 
-The Wine WINDOWS pid (what `winedbg --gdb` wants -- not the unix pid) is printed by me3 as
+The Wine Windows pid (what `winedbg --gdb` wants -- not the unix pid) is printed by me3 as
 `attaching to process pid=<N>` in its launch log; `--me3-log` parses it.
 
-POSITIVE CONTROL, ALWAYS
+Positive control, always
 ------------------------
 A watchpoint that silently fails to arm looks exactly like a field nobody writes. Hardware
 data breakpoints are known to be silently dropped on some Wine configurations here (bd
 `wine-proton-no-hardware-data-breakpoints-2026`: DR0/DR7 set through SetThreadContext on 85
 threads, zero traps, while the field provably changed). So this refuses to report "no writer"
-on its own: it records whether gdb called the watchpoint HARDWARE, and the caller must
+on its own: it records whether gdb called the watchpoint hardware, and the caller must
 compare the hit count against an independent in-process count of writes over the same window.
 
 Usage:
@@ -117,12 +117,12 @@ def read_environ(pid: int) -> dict[str, str]:
 
 
 def windows_pid_from_me3_log(path: Path) -> int | None:
-    """me3 logs `attaching to process pid=<N>` with the WINDOWS pid it created."""
+    """me3 logs `attaching to process pid=<N>` with the Windows pid it created."""
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
-    # The log is ANSI-coloured and the escape sequences THEMSELVES contain digits
+    # The log is ANSI-coloured and the escape sequences themselves contain digits
     # (`\x1b[3m`), so a `\D`-tolerant pattern matches the colour code instead of the pid.
     # Strip the escapes first and match the plain text.
     plain = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
@@ -139,18 +139,18 @@ def free_port() -> int:
 def gdb_script(addr: int, mode: str, max_hits: int, port: int, control_hits: int = 3) -> str:
     """The whole session as one gdb command file. `commands` blocks run per hit.
 
-    SYMBOL LOADING IS THE ENEMY. winedbg's stub advertises `exec-file`, so on connect gdb
+    Symbol loading is the enemy. winedbg's stub advertises `exec-file`, so on connect gdb
     reads `eldenring.exe` (>100 MB) plus every loaded Wine DLL off the local filesystem to
-    build minimal symbol tables -- and the game is FROZEN for the whole of it. Measured
+    build minimal symbol tables -- and the game is frozen for the whole of it. Measured
     2026-08-31: a session spent its entire 220 s budget there and never reached the `watch`
     command, which reads exactly like a field nobody writes. `auto-solib-add off` plus a
     sysroot that resolves to nothing skips all of it. Nothing here needs symbols: the answer
     wanted is a raw $rip, which is then resolved offline against the 1.17 deobf image.
 
-    THE CONTROL SHARES THE MECHANISM. `awatch` (read OR write) on the SAME address uses the
-    same debug register and the same trap delivery as the write watch, and saveState is READ
+    The control shares the mechanism. `awatch` (read or write) on the same address uses the
+    same debug register and the same trap delivery as the write watch, and saveState is read
     every frame (`IsSaveStateIdle` from the in-map MoveMapStep tick). So a few control hits
-    prove the hardware path is live BEFORE the write watch's silence is allowed to mean
+    prove the hardware path is live before the write watch's silence is allowed to mean
     anything -- exactly the failure mode of bd `wine-proton-no-hardware-data-breakpoints-2026`,
     where DR0/DR7 were accepted on 85 threads and no trap was ever delivered.
     """
@@ -165,7 +165,7 @@ def gdb_script(addr: int, mode: str, max_hits: int, port: int, control_hits: int
         "set debuginfod enabled off",
         "set architecture i386:x86-64",
         "set can-use-hw-watchpoints 1",
-        # WITHOUT THIS, WINEDBG CRASHES AND TAKES THE SESSION WITH IT. gdb's default is to
+        # Without this, WINEDBG crashes and takes the session with it. gdb's default is to
         # remove every breakpoint at each internal stop and re-insert before resuming. This
         # target creates and destroys threads constantly, so a stop lands right after a
         # thread exit, and winedbg's `be_x86_64_remove_Xpoint` then clears DR7 through that
@@ -179,15 +179,15 @@ def gdb_script(addr: int, mode: str, max_hits: int, port: int, control_hits: int
         f'printf "\\n{CONNECTED}\\n"',
         "info threads",
     ]
-    # The control watchpoint is its OWN session. Retiring it mid-session is not an option:
+    # The control watchpoint is its own session. Retiring it mid-session is not an option:
     # `delete`/`disable` is a remove, and a remove is the crash (measured run ...-k, three
     # control hits then `winedbg: Internal crash at 000000014001E262` on the delete, leaving
-    # the GAME suspended for good). Leaving it armed is not an option either -- saveState is
+    # the game suspended for good). Leaving it armed is not an option either -- saveState is
     # read every frame, so the game would stop every frame. So: control_hits > 0 means a
     # short control session that is expected to end badly, and control_hits == 0 means the
     # measurement session, which never removes anything until it is done.
     if mode == "attach":
-        # CONTROL FOR THE INSTRUMENT ITSELF: connect and resume with NO watchpoint at all.
+        # Control for the instrument ITSELF: connect and resume with no watchpoint at all.
         # Every armed run so far ended `TELEMETRY_FROZEN_HUNG`, but so did some runs with no
         # debugger, so "armed" and "attached" have to be separated before either is blamed.
         lines += [f'printf "\\n{ARMED}\\n"', "continue"]
@@ -222,7 +222,7 @@ def gdb_script(addr: int, mode: str, max_hits: int, port: int, control_hits: int
         "set $__hits = $__hits + 1",
         f'printf "\\n{HIT} n=%d rip=%p\\n", $__hits, $rip',
         # Wall clock per hit, to align a hit with the DLL's own +NNNNms telemetry timeline.
-        # gdb's in-process Python, NOT `shell date`: the game is STOPPED for the whole of
+        # gdb's in-process Python, not `shell date`: the game is stopped for the whole of
         # this block, and a fork+exec per hit is the most expensive thing in it.
         'python import time; print("--WP-CLOCK--\\n%.3f" % time.time())',
         "info registers rip rsp rbp rax rbx rcx rdx rsi rdi r8 r9 r10 r11 r12 r13 r14 r15",
@@ -253,16 +253,16 @@ def proton_wine(steam_dir: Path, proton_name: str) -> Path:
 
 
 def wait_for_proxy_port(proc: subprocess.Popen, port: int, deadline: float) -> bool:
-    """Wait until the winedbg gdb stub ACCEPTS a connection on the port we chose.
+    """Wait until the winedbg gdb stub accepts a connection on the port we chose.
 
     The obvious readiness signal -- winedbg's own `target remote localhost:%d` line -- is a
-    TRAP, and it cost a run on 2026-08-31. winedbg writes it to a PIPE, so libc switches from
+    trap, and it cost a run on 2026-08-31. winedbg writes it to a pipe, so libc switches from
     line buffering to block buffering and the line sits unflushed. Meanwhile the target is
     already suspended waiting for gdb, so no further output is produced to flush it: the game
     is frozen, the reader is blocked, and neither side moves. The port number is not news --
     this process passed `--port` on the command line -- so the sound signal is the stub's
-    socket reaching LISTEN. That is read out of /proc/net/tcp rather than probed by
-    connecting: the stub accepts exactly ONE client, so a probe connect would consume the
+    socket reaching listen. That is read out of /proc/net/tcp rather than probed by
+    connecting: the stub accepts exactly one client, so a probe connect would consume the
     accept and gdb would arrive to a closed door. The lookup is instant, so the selector
     call, not the lookup, is what paces the loop.
     """
@@ -280,7 +280,7 @@ def wait_for_proxy_port(proc: subprocess.Popen, port: int, deadline: float) -> b
 
 
 def tcp_port_listening(port: int) -> bool:
-    """True when a socket is in LISTEN (state 0A) on `port`, per /proc/net/tcp*."""
+    """True when a socket is in listen (state 0A) on `port`, per /proc/net/tcp*."""
     for table in ("/proc/net/tcp", "/proc/net/tcp6"):
         try:
             with open(table, encoding="utf-8", errors="replace") as fh:
@@ -344,7 +344,7 @@ def wait_for_target(me3_log: Path | None, seconds: float,
     DLL's telemetry -- never a fixed delay. `selectors.select` on an empty set is the pacing
     primitive so this does not spin a core.
 
-    WHY THE SEMAPHORE. Attaching a debugger STOPS the process, and doing that during the
+    Why the SEMAPHORE. Attaching a debugger stops the process, and doing that during the
     boot/asset-load phase wedges this game: runs j/k/l/m all attached inside the first ~20 s
     and every one of them ended `TELEMETRY_FROZEN_HUNG` with the player never reaching the
     world, while runs b and d attached after load1 was up and both survived to load3. The
@@ -401,7 +401,7 @@ def parse_hits(text: str) -> list[dict[str, object]]:
         if tm:
             rec["gdb_thread"] = int(tm.group(1))
         hits.append(rec)
-    # gdb prints Old/New value BEFORE the commands block; pair them positionally.
+    # gdb prints Old/New value before the commands block; pair them positionally.
     pairs = re.findall(r"Old value = (-?\d+)\s*\n\s*New value = (-?\d+)", text)
     for i, (old, new) in enumerate(pairs):
         if i < len(hits):
@@ -461,7 +461,7 @@ def selftest() -> int:
     if got != 388:
         print(f"selftest FAIL: windows pid parsed as {got}, want 388")
         ok = False
-    # The LISTEN detector is the readiness signal the whole live path hangs off, and its
+    # The listen detector is the readiness signal the whole live path hangs off, and its
     # failure mode (never fires) is indistinguishable from "the proxy did not start".
     with socket.socket() as srv:
         srv.bind(("127.0.0.1", 0))
@@ -622,7 +622,7 @@ def main() -> int:
         if key in env_game:
             env[key] = env_game[key]
     env["WINEDEBUG"] = env.get("WINEDEBUG", "-all")
-    # Do NOT inherit the game's WINEDLLOVERRIDES: winedbg needs none of it and the d3d
+    # Do not inherit the game's WINEDLLOVERRIDES: winedbg needs none of it and the d3d
     # overrides only add failure modes to a debugger process.
     env.pop("WINEDLLOVERRIDES", None)
 

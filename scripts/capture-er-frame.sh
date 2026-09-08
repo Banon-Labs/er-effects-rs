@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
-# Launch the APPROVED direct/offline eldenring.exe Proton path with RenderDoc's Vulkan
+# Launch the approved direct/offline eldenring.exe Proton path with RenderDoc's Vulkan
 # capture layer enabled, so a real frame (vkd3d-proton -> native Vulkan) can be captured
-# and a single object's draw replayed offline through its native .vpo/.ppo with the GAME'S
+# and a single object's draw replayed offline through its native .vpo/.ppo with the game'S
 # actual lighting cbuffers + IBL/GI textures.
 #
-# This does NOT auto-tear-down: the game runs on your monitor, you reach a lit spot, then
-# YOU trigger the capture (qrenderdoc target control or the F12 hotkey), then tear down
-# with `pkill -x eldenring.exe`. There is intentionally NO Steam/AppID/EAC launch path.
+# This does not auto-tear-down: the game runs on your monitor, you reach a lit spot, then
+# you trigger the capture (qrenderdoc target control or the F12 hotkey), then tear down
+# with `pkill -x eldenring.exe`. There is intentionally no Steam/AppID/EAC launch path.
 #
 #   Capture flow:
 #     1) ER_QUICKLOAD_GOLD_SAVE=/abs/ER0000.sl2 ./scripts/capture-er-frame.sh
 #     2) reach a lit area; trigger a capture:
-#          qrenderdoc --targetcontrol localhost:38920   (Queue Capture at a frame)   OR   F12
+#          qrenderdoc --targetcontrol localhost:38920   (Queue Capture at a frame)   or   F12
 #     3) pkill -x eldenring.exe
 #     4) extract:  QT_QPA_PLATFORM=offscreen qrenderdoc --python scripts/extract-capture.py -- \
 #                    <ARTIFACT_DIR>/er_cap_frameN.rdc target/capture/aeg301 --match cbLight
 #     5) replay:   cargo run -p er-objectkit --example replay_capture -- target/capture/aeg301
 #
 # Save handling (per user directive: use the gold save, read+write):
-#   default  -> stage a WRITABLE COPY of the gold save (read+write) and redirect the game at
+#   default  -> stage a WRITABLE copy of the gold save (read+write) and redirect the game at
 #               it (save-safe: autosaves land in the copy, the gold is only read once).
-#   ER_QUICKLOAD_CAPTURE_SAVE_DIRECT=1 -> point the game at the gold save ITSELF, read+write
-#               (chmod u+w on the original; the game WILL write/autosave to your real save).
+#   ER_QUICKLOAD_CAPTURE_SAVE_DIRECT=1 -> point the game at the gold save itself, read+write
+#               (chmod u+w on the original; the game will write/autosave to your real save).
 set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
@@ -107,11 +107,11 @@ cat <<EOF
 EOF
 
 cd "$GAME_DIR"
-# exec -> this shell BECOMES the foreground me3 CLI, which owns the compat-tool/wine tree and holds
+# exec -> this shell becomes the foreground me3 CLI, which owns the compat-tool/wine tree and holds
 # the game until you quit. RenderDoc capture is enabled via the implicit Vulkan layer's enable var;
 # VKD3D_CONFIG=force_host_cached stabilises capture.
 #
-# EVERY per-run artifact is redirected into ARTIFACT_DIR. Anything left in GAME_DIR is SINGLE-SLOT:
+# Every per-run artifact is redirected into ARTIFACT_DIR. Anything left in GAME_DIR is single-SLOT:
 # the DLL rotates `<name>` to `<name>.prev` on its first write, so run N-2 is already gone and a
 # harness that pre-deletes the log drops the surviving `.prev` with it. Measured 2026-08-31: two
 # launches destroyed a 5.4 MB continue trace nobody had read. Add a line here for any future log

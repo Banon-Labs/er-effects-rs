@@ -2,7 +2,7 @@
 //!
 //! The planner's `?b=<id>` links are not encoded payloads -- they are ids for
 //! builds stored server-side, fetched with a single unauthenticated
-//! `GET https://er-inventory-api.nyasu.business/inventories/<id>`. The response
+//! `get https://er-inventory-api.nyasu.business/inventories/<id>`. The response
 //! identifies every item by **display name**, so importing a build is two
 //! problems: parsing the document ([`model`]) and resolving those names to item
 //! ids ([`catalog`]) before computing what to grant ([`plan`]).
@@ -116,7 +116,7 @@ pub fn config_value<'a>(contents: &'a str, key: &str) -> Option<&'a str> {
 }
 
 /// Whether a boolean key is set to `true`. Anything else -- absent, `false`, a typo -- is `false`,
-/// because every caller of this is an opt-in switch and a misread must leave it OFF.
+/// because every caller of this is an opt-in switch and a misread must leave it off.
 ///
 /// ```
 /// assert!(er_build_import_core::config_flag("export_build_link_on_load = true\n", "export_build_link_on_load"));
@@ -127,7 +127,7 @@ pub fn config_flag(contents: &str, key: &str) -> bool {
     config_value(contents, key).is_some_and(|value| value.eq_ignore_ascii_case("true"))
 }
 
-/// Config key that makes the STANDALONE shell export one build link at character load.
+/// Config key that makes the standalone shell export one build link at character load.
 ///
 /// Read only by `er-build-import`, the harness DLL -- never by the product, whose export is the
 /// System>Quit row a player presses. It exists because the content of an exported link is worth
@@ -136,12 +136,12 @@ pub fn config_flag(contents: &str, key: &str) -> bool {
 /// `scripts/decode-build-link.py --log <that file> --summary` says exactly what it carries.
 pub const EXPORT_ON_LOAD_KEY: &str = "export_build_link_on_load";
 
-/// Config key that makes the STANDALONE shell import the configured build and THEN export the
+/// Config key that makes the standalone shell import the configured build and then export the
 /// character it produced -- the round trip, whose answer is known in advance.
 ///
 /// Separate from [`EXPORT_ON_LOAD_KEY`], which exports the character as it already is. Measuring
 /// an export that ran straight after an import measures the importer as much as the exporter, and
-/// the import also GRANTS items, so repeating it inflates the very inventory being exported.
+/// the import also grants items, so repeating it inflates the very inventory being exported.
 pub const ROUND_TRIP_ON_LOAD_KEY: &str = "round_trip_build_link_on_load";
 
 /// The URL prefix the in-game editor opens with, so a player only has to supply the id.
@@ -155,7 +155,7 @@ pub const BUILD_URL_PREFIX: &str = "https://er-build-planner.nyasu.business/?b="
 pub const BUILD_URL_ROW_HELP: &str =
     "Paste or type an er-build-planner link to rebuild this character";
 
-/// Why a URL cannot be imported. Each variant carries the ONE sentence a player sees when the
+/// Why a URL cannot be imported. Each variant carries the one sentence a player sees when the
 /// editor refuses their input, so the reason a thing was rejected lives with the rejection rather
 /// than being reconstructed at the call site.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -200,7 +200,7 @@ impl UrlRejection {
 
 /// Decide whether a typed URL can be imported, and say why not when it cannot.
 ///
-/// This is the gate the in-game editor runs on Accept. It is deliberately the ONLY place that
+/// This is the gate the in-game editor runs on Accept. It is deliberately the only place that
 /// decision is made -- the editor re-opens rather than closing when this returns `Err`, so a
 /// disagreement between this and [`share_id_from_url`] would let a link through that the fetch
 /// then cannot use.

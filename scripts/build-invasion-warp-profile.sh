@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # Build er_invasion_warp.dll and write an me3 profile that loads it.
 #
-# WHY THIS EXISTS. `scripts/check-rust-build.sh` type-checks the invasion-warp crates with
-# `cargo xwin check --tests`, which NEVER LINKS a cdylib, and `default-members` is only
+# Why this exists. `scripts/check-rust-build.sh` type-checks the invasion-warp crates with
+# `cargo xwin check --tests`, which never links a cdylib, and `default-members` is only
 # `crates/er-quickload`, so the documented `cargo xwin build --release` does not build this
 # DLL either. Before this script the only way to obtain a loadable artifact was an ad-hoc
 # `-p` invocation, and no profile in the repo referenced it -- so a green gate could coexist
 # with a DLL that does not link and cannot be loaded (bd er-effects-rs-5es review).
 #
 # The invasion-warp shell owns no Present detour and no MinHook instance, so unlike
-# `er_loading_portrait.dll` it is SAFE alongside the product DLL in one profile. That
+# `er_loading_portrait.dll` it is safe alongside the product DLL in one profile. That
 # stays true only while it installs no detours; the first detour it adds must go through the
 # `er-hook` union, and this comment should be revisited then.
 #
-# This script does NOT launch the game. It prints the profile path; launching is the caller's
+# This script does not launch the game. It prints the profile path; launching is the caller's
 # (or the user's) decision.
 #
 # Usage:
@@ -39,7 +39,7 @@ fatal() {
   exit 1
 }
 
-# Real LINK of the cdylib, not a metadata check. This is the step whose absence let an
+# Real link of the cdylib, not a metadata check. This is the step whose absence let an
 # unlinkable DLL pass every gate.
 echo "[invasion-warp-profile] cargo xwin build --release -p er-invasion-warp --target $target"
 cargo xwin build --release -p er-invasion-warp \

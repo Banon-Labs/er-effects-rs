@@ -4,7 +4,7 @@
 A non-text fenced block must be preceded by one of:
 
   <!-- md-test: bash-n -->              # bash/sh/shell block parses with bash -n
-  <!-- md-test: bash-run -->            # run shell block with safe test stubs in PATH
+  <!-- md-test: bash-run -->            # run shell block with safe test stubs in path
   <!-- md-test: parse-toml -->          # TOML block parses with tomllib
   <!-- md-test: run <command> -->       # run an explicit validation command
   <!-- md-test: skip <reason> -->       # unsafe/illustrative; reason required

@@ -1,6 +1,6 @@
 """Two-step vtable-call aware scan of ersc.dll .text, plus context-offset tracing.
 
-Catches BOTH `call qword ptr [reg+disp]` and the split form
+Catches both `call qword ptr [reg+disp]` and the split form
 `mov r, qword ptr [reg+disp]` ... `call r`, which a single-instruction census misses.
 Read-only.
 

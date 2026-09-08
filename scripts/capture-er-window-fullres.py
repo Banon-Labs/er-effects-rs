@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Full-resolution screenshot of ONLY the Elden Ring game window.
+"""Full-resolution screenshot of only the Elden Ring game window.
 
-Like scripts/capture-er-window.py but keeps the capture at FULL resolution (no
+Like scripts/capture-er-window.py but keeps the capture at full resolution (no
 854x480 downscale / quality-35 jpg), so on-screen menu/title text is legible.
 
 Selects strictly the window owned by the running eldenring.exe PID (preferring
 class steam_app_1245620). Validates mapped + sane geometry, focuses/raises it,
 then grim-captures that exact region. Never enumerates or captures other windows
-/ the desktop. Writes a .txt note and takes NO screenshot if the game window
+/ the desktop. Writes a .txt note and takes no screenshot if the game window
 can't be safely validated.
 
 Usage: capture-er-window-fullres.py <out.png>

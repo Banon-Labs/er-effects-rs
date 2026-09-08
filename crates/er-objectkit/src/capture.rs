@@ -2,7 +2,7 @@
 //!
 //! The goal is the exact-render path: capture a real frame (vkd3d-proton → native Vulkan,
 //! via RenderDoc) and replay a single object's draw through the native `.vpo`/`.ppo` with
-//! the GAME'S actual constant buffers + textures — the scene lighting, IBL cubemaps and
+//! the game'S actual constant buffers + textures — the scene lighting, IBL cubemaps and
 //! baked GI irradiance volumes that can't be synthesized offline.
 //!
 //! A capture directory is self-describing: a `manifest.json` lists every descriptor-bound
@@ -23,9 +23,9 @@ use serde::{Deserialize, Serialize};
 
 /// A captured constant/storage buffer's raw contents.
 ///
-/// The replay maps this to OUR binding scheme by the D3D `register` (e.g. `cbSceneParam`
+/// The replay maps this to our binding scheme by the D3D `register` (e.g. `cbSceneParam`
 /// = b8) — shared between the captured frame and our dxil-spirv translation since both
-/// come from the same DXIL — NOT by the capture's Vulkan `(set, binding)` (vkd3d-proton's
+/// come from the same DXIL — not by the capture's Vulkan `(set, binding)` (vkd3d-proton's
 /// layout, which differs from ours).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapturedBuffer {
@@ -91,9 +91,9 @@ pub struct CaptureManifest {
 pub struct Capture {
     pub dir: PathBuf,
     pub manifest: CaptureManifest,
-    /// Cbuffer bytes index-aligned with `manifest.buffers` — NOT keyed by register, because
+    /// Cbuffer bytes index-aligned with `manifest.buffers` — not keyed by register, because
     /// vkd3d-proton's descriptor buffers make every captured cbuffer report register 0, so a
-    /// register key collapses them all. Re-association to our shader is by SIZE (`match_by_size`).
+    /// register key collapses them all. Re-association to our shader is by size (`match_by_size`).
     pub buffer_bytes: Vec<Vec<u8>>,
 }
 
@@ -171,7 +171,7 @@ impl Capture {
     }
 }
 
-/// One of OUR shader's cbuffers: which stage binds it, its D3D register, its byte size.
+/// One of our shader's cbuffers: which stage binds it, its D3D register, its byte size.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OurCbuffer {
     pub stage: String,
@@ -179,7 +179,7 @@ pub struct OurCbuffer {
     pub byte_size: u64,
 }
 
-/// Greedily match each captured cbuffer to OUR cbuffer of the SAME stage + byte size,
+/// Greedily match each captured cbuffer to our cbuffer of the same stage + byte size,
 /// returning the matched D3D register per captured cbuffer (`None` if unmatched). vkd3d-proton's
 /// descriptor buffers erase the register from a capture, but the byte size survives and
 /// uniquely identifies the scene cbuffers (`cbSceneParam` = 2048B). Size collisions (e.g. two
@@ -187,7 +187,7 @@ pub struct OurCbuffer {
 /// most once. This is the brittle capture→our re-association, made testable + offline.
 pub fn match_by_size(ours: &[OurCbuffer], captured: &[(String, u64)]) -> Vec<Option<u32>> {
     // D3D binds constant buffers 256-byte aligned, so a capture's byteSize is the data size
-    // rounded UP to 256 (our `block_byte_sizes` returns the unrounded data size). Round ours
+    // rounded up to 256 (our `block_byte_sizes` returns the unrounded data size). Round ours
     // the same way before comparing — captured sizes are already aligned, so leave them as-is
     // (a non-aligned captured size, e.g. a 144B root-constant buffer, then matches nothing).
     let align = |n: u64| -> u64 { if n == 0 { 0 } else { n.div_ceil(256) * 256 } };
@@ -275,8 +275,8 @@ mod tests {
         assert_eq!(match_by_size(&ours, &captured), vec![None, None]);
     }
 
-    /// Two captured cbuffers that BOTH report register 0 (the vkd3d descriptor-buffer case)
-    /// must round-trip to DISTINCT files + distinct bytes. The earlier register-keyed loader
+    /// Two captured cbuffers that both report register 0 (the vkd3d descriptor-buffer case)
+    /// must round-trip to distinct files + distinct bytes. The earlier register-keyed loader
     /// collapsed them (and the `cb_stage_reg` filename overwrote one) — this is the regression
     /// test for that. Index-aligned storage keeps them separate.
     #[test]

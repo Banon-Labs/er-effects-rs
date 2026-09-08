@@ -1,11 +1,11 @@
-// FD4FileCap / DLString / DLIO virtual-root readers MOVED DOWN to `er_game_base::filecap`
+// FD4FileCap / DLString / DLIO virtual-root readers moved down to `er_game_base::filecap`
 // (2026-08-25). The msb-parse, DLC-root and loadlist-wait traces that used to compile into the
 // product DLL now live in the `er-diag-harness` shell, and they name file caps and virtual roots
 // in every log line -- so a second image needed these walks. Copying them would have put two
 // literal declarations on one address; `crate::filecap_readers` re-exports the single owner
 // instead, and every call site in this crate is unchanged.
 
-/// Read the TitleTopDialog FD4 state machine by NAME (is_in_state) given the title `owner` (rcx of
+/// Read the TitleTopDialog FD4 state machine by name (is_in_state) given the title `owner` (rcx of
 /// STEP_MenuJobWait). Returns `(dialog_ptr, in_fadein, in_loop, in_textfadeout, menu_opened_latch)` or
 /// `None` if the dialog isn't the TitleTopDialog yet. Read-only / no side effects. Mirrors STAGE1d.
 unsafe fn title_dialog_sm_state(
@@ -38,15 +38,15 @@ unsafe fn title_dialog_sm_state(
 }
 
 /// Skip the title FadeIn ONCE: the first frame the dialog SM is settled in FadeIn (menu-open latch
-/// clear), drive the FD4 state machine FadeIn->Loop by calling the game's OWN transition `SetState`
-/// (deobf 0x1407499e0) with `(sm = dialog+0xa60, desc = Loop 0x142a8f9e8)`. This is EXACTLY the call
+/// clear), drive the FD4 state machine FadeIn->Loop by calling the game's own transition `SetState`
+/// (deobf 0x1407499e0) with `(sm = dialog+0xa60, desc = Loop 0x142a8f9e8)`. This is exactly the call
 /// `CS::TitleTopDialog::update`'s input-skip branch makes on a confirm/cancel press (Ghidra: bd
 /// fadein-* RE), so it is save-safe and routes through the SM's own vtable[0x150] request path (no
-/// struct stomp) -- but ZERO input. `SetState` internally no-ops unless the current node is settled
+/// struct stomp) -- but zero input. `SetState` internally no-ops unless the current node is settled
 /// (`[node+0x20]&0x8f >= 2`), so an early call before the node is eligible cannot corrupt the SM.
 /// One-shot via `TITLE_FADEIN_SKIP_FIRED`; the dt-scale / frame-burst / anim-complete-predicate levers
 /// were all runtime-falsified (bd title-anim-framedelta / pab-to-menuopen-real-breakdown / fadein-
-/// predicate-75cea0). The FadeIn IS frame-paced animation -- it is just skipped by the state transition,
+/// predicate-75cea0). The FadeIn is frame-paced animation -- it is just skipped by the state transition,
 /// not by pacing.
 unsafe fn title_anim_fadein_skip(owner: usize) {
     if TITLE_FADEIN_SKIP_FIRED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS {
@@ -92,7 +92,7 @@ unsafe fn title_anim_fadein_skip(owner: usize) {
     };
     let set_state: unsafe extern "system" fn(usize, usize) =
         unsafe { std::mem::transmute(set_state_addr) };
-    // THE ARGUMENT NEEDED RESOLVING TOO. The call target was already gated by `title_fn`, but the
+    // The argument needed resolving too. The call target was already gated by `title_fn`, but the
     // Loop state DESCRIPTOR was passed as a raw `base + RVA` -- and `set_state` dereferences it.
     // `.rdata` moved on 1.17 like everything else (0x2a8f9e8 -> 0x2a92a68), so the FD4 state
     // machine was being handed a pointer to whatever now occupies the 1.16.2 slot and told to
@@ -131,7 +131,7 @@ pub unsafe extern "system" fn title_menujob_speed_detour(
     unsafe { orig(owner, task_data, r8, r9) }
 }
 
-/// Install the title-anim speedup hook ONCE (MinHook, mirroring `install_pab_advance_hook`). Gated by
+/// Install the title-anim speedup hook once (MinHook, mirroring `install_pab_advance_hook`). Gated by
 /// `title_anim_speedup_enabled` at the call site; the detour self-gates per frame too.
 pub unsafe fn install_title_anim_speed_hook(base: usize) {
     if TITLE_ANIM_SPEED_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
@@ -256,15 +256,15 @@ pub unsafe extern "system" fn movemapstep_step_move_map_gate_detour(
     ret
 }
 
-/// Diagnostic opt-in for the failed state-18 hold hook. Default OFF so canonical semaphore-diff runs are
+/// Diagnostic opt-in for the failed state-18 hold hook. Default off so canonical semaphore-diff runs are
 /// observational and not contaminated by candidate writes.
 pub fn movemapstep_step_move_map_gate_hold_enabled() -> bool {
-    // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): the state-18 candidate-write hold
+    // De-gated (deprecate-env-marker-gate-allowlists-2026-07-19): the state-18 candidate-write hold
     // was a diagnostic behavioral experiment gated by env; env feature gates are forbidden; retired.
     false
 }
 
-/// Install the `STEP_MoveMap` after-original advance-gate hook ONCE. Runtime-falsified task-tick holds
+/// Install the `STEP_MoveMap` after-original advance-gate hook once. Runtime-falsified task-tick holds
 /// were too late; this hook runs immediately after the native state-18 body.
 pub unsafe fn install_movemapstep_step_move_map_gate_hook(base: usize) {
     if MOVEMAPSTEP_STEP_MOVEMAP_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
@@ -293,17 +293,17 @@ pub unsafe fn install_movemapstep_step_move_map_gate_hook(base: usize) {
     std::mem::forget(hooks);
 }
 
-/// BEFORE-original defer detour for `CS::InGameStep::STEP_MoveMap_Update` (deobf 0x140aec720). Root fix
+/// Before-original defer detour for `CS::InGameStep::STEP_MoveMap_Update` (deobf 0x140aec720). Root fix
 /// for the warm-reload revert (bd er-effects-rs-9fmm): the parent reports the ending child finished
 /// (`FUN_140eb5550`, an outer-stepper vtable done-query decoupled from the MoveMapStep finalize substate)
 /// while the ending advancer is still at substate 8, then sets requestCode `+0xd8=2` and tears the child
-/// down (`FUN_140eb54e0`) BEFORE the advancer runs case 8 (which posts substate 9). That strands the
-/// reload and native reverts to title. This detour replicates the function's OWN "child not finished"
+/// down (`FUN_140eb54e0`) before the advancer runs case 8 (which posts substate 9). That strands the
+/// reload and native reverts to title. This detour replicates the function's own "child not finished"
 /// early-return: while the MoveMapStep finalize substate is in [1..=8] (finalize in progress) it skips
-/// the original, so the advancer (pumped elsewhere -- STEP_MoveMap_Update does NOT pump it, confirmed by
+/// the original, so the advancer (pumped elsewhere -- STEP_MoveMap_Update does not pump it, confirmed by
 /// decompile) gets the frames to reach 9; then the original runs and advances normally. Bounded by
 /// INGAMESTEP_MOVEMAP_UPDATE_DEFER_MAX (fail-soft) and scoped to a committed reload epoch so the proven
-/// boot load is untouched. DEFAULT behavior (no marker/env toggle); scoped to a committed reload epoch.
+/// boot load is untouched. Default behavior (no marker/env toggle); scoped to a committed reload epoch.
 pub unsafe extern "system" fn ingamestep_step_movemap_update_defer_detour(
     ingame_step: usize,
     param2: usize,
@@ -314,11 +314,11 @@ pub unsafe extern "system" fn ingamestep_step_movemap_update_defer_detour(
     if orig_addr == TITLE_OWNER_SCAN_START_ADDRESS {
         return 0;
     }
-    // INSTRUMENT (bd ROOT-load2-finalize-advancer-not-ticked-fun140afa7c0): count STEP_MoveMap_Update
+    // Instrument (bd root-load2-finalize-advancer-not-ticked-fun140afa7c0): count STEP_MoveMap_Update
     // calls per reload epoch. The finalize advancer FUN_140afa7c0 is ticked ~145x for load1 but ~1x for
-    // load2. This detour runs on EVERY STEP_MoveMap_Update call, so if this counter CLIMBS for epoch>=1
+    // load2. This detour runs on every STEP_MoveMap_Update call, so if this counter climbs for epoch>=1
     // (load2) while the advancer stays at 1, STEP_MoveMap_Update runs but skips the advancer call
-    // INTERNALLY (an internal branch); if it stays LOW for load2, the parent stopped calling it.
+    // internally (an internal branch); if it stays low for load2, the parent stopped calling it.
     {
         let epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
         let n = INGAMESTEP_MOVEMAP_UPDATE_DEFER_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
@@ -352,17 +352,17 @@ pub unsafe extern "system" fn ingamestep_step_movemap_update_defer_detour(
         .filter(|&m| m > PAB_MIN_HEAP_PTR) else {
             return false;
         };
-        // The finalize substate at +0x12a is a single BYTE (the SWITCH-ORACLE reads it with
+        // The finalize substate at +0x12a is a single byte (the switch-oracle reads it with
         // safe_read_u8 at the same offset). Reading it as i32 folds in the adjacent bytes so the value
         // is almost never in [1..=8] -- the cause of the 0-firings inert run (DLL 63e70e0e). Read u8.
         let fin = unsafe { safe_read_u8(mms + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET) }
             .map(|v| v as i32)
             .unwrap_or(-1);
-        // DISABLED (bd load2-mms18-real-cause-my-defer-detour-deadlock-2026-07-19): deferring
+        // Disabled (bd load2-mms18-real-cause-my-defer-detour-deadlock-2026-07-19): deferring
         // STEP_MoveMap_Update while finalize is in [1..=8] DEADLOCKED load2. The premise ("the advancer
         // posts substate 9, pumped elsewhere") is WRONG: STEP_MoveMap_Update itself is what advances the
         // finalize, so skipping it strands load2 at mms=18/finalize=7 forever (log 'finalize-defer #64
-        // held finalize=7'). load1 (untouched, epoch 0) advances mms 18->done fine. So NEVER defer --
+        // held finalize=7'). load1 (untouched, epoch 0) advances mms 18->done fine. So never defer --
         // run the update every frame like load1 does, so it sets requestCode=2 and the world completes.
         let _ = fin;
         INGAMESTEP_MOVEMAP_UPDATE_DEFER_TICKS.store(0, Ordering::SeqCst);
@@ -379,7 +379,7 @@ pub unsafe extern "system" fn ingamestep_step_movemap_update_defer_detour(
     unsafe { orig(ingame_step, param2, r8, r9) }
 }
 
-/// Install the STEP_MoveMap_Update finalize-defer hook ONCE.
+/// Install the STEP_MoveMap_Update finalize-defer hook once.
 pub unsafe fn install_ingamestep_step_movemap_update_defer_hook(base: usize) {
     if INGAMESTEP_STEP_MOVEMAP_UPDATE_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
         != TITLE_OWNER_SCAN_START_ADDRESS
@@ -409,13 +409,13 @@ pub unsafe fn install_ingamestep_step_movemap_update_defer_hook(base: usize) {
 
 /// After-original override for the child-done query FUN_140eb5550 (rva 0xeb5530). STEP_MoveMap_Update
 /// tears the MoveMapStep child down (FUN_140eb54e0 + requestCode+0xd8=2) when this returns done; for
-/// load2 it returns done PREMATURELY (field25=0) -> advancer stops -> frozen (bd COMPLETE-CHAIN-load2-
+/// load2 it returns done prematurely (field25=0) -> advancer stops -> frozen (bd complete-chain-load2-
 /// child-torndown-early-fun140eb5550-done-premature). Isolate the MoveMapStep child's call
 /// (rcx == current MoveMapStep + 0x108, bd mms-child-ezchildstepbase-at-plus0x108) and, on a committed
-/// reload while the finalize is mid-walk (field25 in 0..=8), force the result NOT-done so
+/// reload while the finalize is mid-walk (field25 in 0..=8), force the result not-done so
 /// STEP_MoveMap_Update takes its `if(!done) return` branch (keeps the child, no teardown) while the
 /// FD4-ticked child keeps ticking the advancer FUN_140afa7c0 until field25 reaches 9; then the real
-/// done passes -> natural teardown -> world completes. ONLY the MoveMapStep child (rcx gate) on a
+/// done passes -> natural teardown -> world completes. Only the MoveMapStep child (rcx gate) on a
 /// committed reload is touched; load1 (epoch 0) and every other child/query are unchanged.
 pub unsafe extern "system" fn child_done_query_override_detour(
     child_base: usize,
@@ -431,12 +431,12 @@ pub unsafe extern "system" fn child_done_query_override_detour(
         unsafe { std::mem::transmute(orig_addr) };
     let ret = unsafe { orig(child_base, param2, r8, r9) };
     // DIAG: for every call whose child_base-0x108 is a MoveMapStep at step 18, log ret + field25 so a
-    // run shows exactly why the HOLD does/doesn't fire (throttled).
+    // run shows exactly why the hold does/doesn't fire (throttled).
     if SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) != 0
         && child_base > PAB_MIN_HEAP_PTR + MOVEMAPSTEP_CHILD_EZSTEP_BASE_OFFSET
     {
-        // UNGATED: log every committed-reload child-done call whose return is DONE (ret!=0), with the
-        // mms_state + field25 that child_base-0x108 points to. Reveals the ACTUAL child_base<->MoveMapStep
+        // UNGATED: log every committed-reload child-done call whose return is done (ret!=0), with the
+        // mms_state + field25 that child_base-0x108 points to. Reveals the actual child_base<->MoveMapStep
         // relationship for the reload freeze (run13: the ==18 gate never matched, so the single run11
         // mms+0x108 data point does not generalize). Also probe the reliable-oracle mms for comparison.
         if (ret & 0xff) != 0 {
@@ -456,9 +456,9 @@ pub unsafe extern "system" fn child_done_query_override_detour(
         }
     }
     let hold = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        // PHASE-3 (bd PHASE3-render-release-is-CommonFinalize): while the outgoing-teardown fix is active,
-        // NEVER force the child not-done. This hold exists only to keep the OLD in-place reload's reused
-        // WorldChrMan alive by suppressing the finalize; once the OUTGOING world is torn down first and the
+        // Phase-3 (bd PHASE3-render-release-is-CommonFinalize): while the outgoing-teardown fix is active,
+        // never force the child not-done. This hold exists only to keep the old in-place reload's reused
+        // WorldChrMan alive by suppressing the finalize; once the outgoing world is torn down first and the
         // reload rebuilds fresh, the hold must not fire (else it strands the child + keeps the render heavy).
         // It re-engages automatically on fail-soft (outgoing_teardown_suppresses_holds -> false).
         if crate::compat::gating::outgoing_teardown_suppresses_holds() {
@@ -469,8 +469,8 @@ pub unsafe extern "system" fn child_done_query_override_detour(
         {
             return false;
         }
-        // RELEASE post-stabilization (bd CORRECTION-STEP4-finalize-substate-is-0): the override only needs to
-        // prevent PREMATURE child teardown DURING the load. Once the reloaded world has been genuinely live
+        // Release post-stabilization (bd correction-STEP4-finalize-substate-is-0): the override only needs to
+        // prevent premature child teardown during the load. Once the reloaded world has been genuinely live
         // (play_time advancing) for a sustained window, the load is complete -- stop holding so the
         // MoveMapStep child tears down like vanilla (else it is stranded alive forever = ez10-set + ~4fps
         // steady-state divergence). 180 frames (~3s) is well past load completion, so no premature-teardown
@@ -481,9 +481,9 @@ pub unsafe extern "system" fn child_done_query_override_detour(
         {
             return false;
         }
-        // Derive the MoveMapStep from the query's OWN child_base (child EzChildStepBase = mms+0x108),
+        // Derive the MoveMapStep from the query's own child_base (child EzChildStepBase = mms+0x108),
         // self-consistently -- no dependence on the telemetry-published pointer (which raced/mismatched
-        // in run11). Validate it IS the MoveMapStep at step 18 (state @ +0x48 == 18) so other children's
+        // in run11). Validate it is the MoveMapStep at step 18 (state @ +0x48 == 18) so other children's
         // queries (whose child_base-0x108 is not a step-18 MoveMapStep) are never held.
         if child_base <= PAB_MIN_HEAP_PTR + MOVEMAPSTEP_CHILD_EZSTEP_BASE_OFFSET {
             return false;
@@ -511,7 +511,7 @@ pub unsafe extern "system" fn child_done_query_override_detour(
     ret
 }
 
-/// Install the child-done-query override hook ONCE (unioned).
+/// Install the child-done-query override hook once (unioned).
 pub unsafe fn install_child_done_query_override_hook(base: usize) {
     if CHILD_DONE_QUERY_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
         != TITLE_OWNER_SCAN_START_ADDRESS
@@ -538,11 +538,11 @@ pub unsafe fn install_child_done_query_override_hook(base: usize) {
 /// STEP_MoveMap_LoadlistInit (deobf rva 0xaec480 / dump 0x140aec570). Its build is gated on
 /// `worldloadlistlistVirtualPath.size != 0` (InGameStep+0x108, a DlFixedString<wchar_t,128> inline:
 /// +0x00 union{pointer when capacity>7 / inline}, +0x08 size(wchars), +0x10 capacity). When that
-/// string is empty the game SKIPS building the loadlist -> no block-res -> WorldResWait hangs ->
-/// mms stuck 18. This must be a PRODUCT hook (the union chains a base MinHook the product owns; the
-/// trace-DLL copy never fired). READ-ONLY for now: it logs the DlFixedString per load epoch so a run
-/// settles whether the STALLED load's path was EMPTY (empty-loadlist root confirmed) or POPULATED
-/// (root is downstream/contention). The capture-replay WRITE is added once the layout is confirmed.
+/// string is empty the game skips building the loadlist -> no block-res -> WorldResWait hangs ->
+/// mms stuck 18. This must be a product hook (the union chains a base MinHook the product owns; the
+/// trace-DLL copy never fired). Read-only for now: it logs the DlFixedString per load epoch so a run
+/// settles whether the stalled load's path was empty (empty-loadlist root confirmed) or populated
+/// (root is downstream/contention). The capture-replay write is added once the layout is confirmed.
 // deobf entry 0x140aec570 (== dump 0x140aec570; shift 0 for this fn -- the dump-deobf-shift tool
 // mislanded at 0xaec480 in the -0xf0 sub-region). Verified by prologue mov [rsp+0x10],rbx; push rsi;
 // sub rsp,0x20; mov rbx,rcx then the DAT_143d5db09=1 store (0x140aec57d) + CreateLoadlistlistFileCap
@@ -564,7 +564,7 @@ pub unsafe extern "system" fn loadlist_init_capture_detour(
         let n = LOADLIST_INIT_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
         let epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
         // worldloadlistlistVirtualPath = InGameStep+0x108, DlFixedString<wchar_t,128> (Ghidra getStructure):
-        //   field+0x00 string_buffer[128] INLINE text; field+0x108 DLString union; field+0x118 size;
+        //   field+0x00 string_buffer[128] inline text; field+0x108 DLString union; field+0x118 size;
         //   field+0x120 capacity. The gate is size!=0. (My earlier field+0x08 read landed mid-text.)
         let field = ingamestep + INGAMESTEP_WORLDLOADLIST_VPATH_OFFSET;
         let size = unsafe { safe_read_usize(field + 0x118) }.unwrap_or(usize::MAX);
@@ -598,7 +598,7 @@ pub unsafe extern "system" fn loadlist_init_capture_detour(
     unsafe { orig(ingamestep, param2, r8, r9) }
 }
 
-/// Install the LoadlistInit capture hook ONCE (product-owned so the union detour actually fires).
+/// Install the LoadlistInit capture hook once (product-owned so the union detour actually fires).
 pub unsafe fn install_loadlist_init_capture_hook(base: usize) {
     if LOADLIST_INIT_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
         != TITLE_OWNER_SCAN_START_ADDRESS
@@ -621,13 +621,13 @@ pub unsafe fn install_loadlist_init_capture_hook(base: usize) {
     ));
     std::mem::forget(hooks);
 }
-/// READ-ONLY trace detour for the title step-setter `SetState(owner, int state)` (deobf 0x140b0d960).
+/// Read-only trace detour for the title step-setter `SetState(owner, int state)` (deobf 0x140b0d960).
 /// Logs every native state transition with a timestamp + the current owner+0xe0 (TitleTopDialog
-/// holder) liveness, then calls the original UNCHANGED. Pure observation -- this is the
+/// holder) liveness, then calls the original unchanged. Pure observation -- this is the
 /// "look before acting" instrument for the menu-build-overlap lever: it reveals the exact wall-clock
 /// at which BeginTitle(3) fires natively (and the full state sequence during boot), so we can decide
 /// whether the 05_000_Title build has any headroom to be started earlier (overlap with init) before
-/// risking a forced SetState (which has NO double-build guard). bd menu-build-overlap-lever-2026-06-24.
+/// risking a forced SetState (which has no double-build guard). bd menu-build-overlap-lever-2026-06-24.
 pub unsafe extern "system" fn title_setstate_trace_detour(owner: usize, state: i32) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if owner > PAB_MIN_HEAP_PTR {
@@ -667,9 +667,9 @@ pub unsafe extern "system" fn title_setstate_trace_detour(owner: usize, state: i
                     }
                 }
             }
-        // BLOCKER ATTRIBUTION (2026-07-19): a post-finalize SetState(owner,2) from committed_was=6
-        // tears down the just-entered reload world. To decide native-vs-ours WITHOUT a return-address
-        // capture, log the concurrent state: our return-title chain is the only way OUR code can cause
+        // Blocker attribution (2026-07-19): a post-finalize SetState(owner,2) from committed_was=6
+        // tears down the just-entered reload world. To decide native-vs-ours without a return-address
+        // capture, log the concurrent state: our return-title chain is the only way our code can cause
         // a native SetState(2) (we never call the setter with state 2 directly -- we submit the game's
         // own return-title builder 0x79d700). So SetState(2) with rt_submit unchanged/old across it, at
         // phase==AUTOLOAD_HANDOFF, is a genuine native InGameStep decision; a fresh rt_submit near it is
@@ -685,25 +685,25 @@ pub unsafe extern "system" fn title_setstate_trace_detour(owner: usize, state: i
         let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
         let rt_submit = SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.load(Ordering::SeqCst);
         let own_phase = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
-        // ENDING-CONDITION SNAPSHOT at the exact SetState frame (bd er-effects-rs-9fmm).
+        // Ending-condition snapshot at the exact SetState frame (bd er-effects-rs-9fmm).
         //
-        // THIS SNAPSHOT USED TO LOG THE WRONG FUNCTION'S INPUTS, AND THAT IS HOW WE MISDIAGNOSED THE
-        // REVERT (2026-09-04). It sampled the MoveMapStep *ending evaluator*'s cVar10 inputs -- warp,
+        // This snapshot used to log the wrong function'S inputs, and that is how we MISDIAGNOSED the
+        // revert (2026-09-04). It sampled the MoveMapStep *ending evaluator*'s cVar10 inputs -- warp,
         // menuData+0x5d/0x5e, b73, bc4 -- but a `SetState(owner, 2=BeginLogo)` from committed=6 is
         // not decided by that evaluator at all. It is decided by `STEP_GameStepWait`
         // (1.16.2 `0x140b0cde0` / 1.17 `FUN_140b0e480`, both size 437, delta +0x16a0), which reads
-        // EXACTLY three things and nothing else:
+        // exactly three things and nothing else:
         //
         //     if (InGameStep->requestCode_0xd8 == 0)      // else: no SetState at all
         //       if (GameMan+0xb7c == 0)                   // else: state 7
         //         if (GameMan+0xb7d == 0)  -> state 2 = BeginLogo   // else: state 9
         //
-        // `menuData+0x5e` is NOT read on that path -- verified on the INSTALLED 1.17 build and
+        // `menuData+0x5e` is not read on that path -- verified on the installed 1.17 build and
         // identity-checked (shift 0). Because b7c/b7d were missing from this line, the only field
         // that happened to be set at the revert was md5e, which is how a byte with no role in the
-        // decision became the prime suspect. b7c/b7d are logged now so the trace can NAME the branch.
+        // decision became the prime suspect. b7c/b7d are logged now so the trace can name the branch.
         let gm_rt = game_man_ptr_or_null();
-        // b7c/b7d are NOT read here. They belong to STEP_GameStepWait's own decision and are
+        // b7c/b7d are not read here. They belong to STEP_GameStepWait's own decision and are
         // read in their own block below, beside the +0x798 half of that decision -- the shape
         // `main` settled on. Reading them twice per call is what the rebase of this branch
         // briefly produced, and clippy caught it as two unused bindings.
@@ -734,12 +734,12 @@ pub unsafe extern "system" fn title_setstate_trace_detour(owner: usize, state: i
                 )
             })
             .unwrap_or((-1, -1));
-        // STEP_GameStepWait's OWN inputs, at the frame it decides (bd
+        // STEP_GameStepWait's own inputs, at the frame it decides (bd
         // setstate-beginlogo-is-gamestepwait-b7c-b7d-not-menudata-5e-2026-09-04). Its whole decision is
         // `if (InGameStep+0xd8 == 0) { if (GameMan+0xb7c == 0) { if (GameMan+0xb7d == 0) -> state 2 } }`,
         // and `req_code` above is that d8 -- but b7c/b7d were never logged, so every teardown frame so
-        // far had to be inferred from a 20ms gm-snap sampler whose values are IDENTICAL in runs that do
-        // NOT tear down (measured: br-20260904-165518-e3be shows `ig_d8=2 menu_job=0x0` and never loses
+        // far had to be inferred from a 20ms gm-snap sampler whose values are identical in runs that do
+        // not tear down (measured: br-20260904-165518-e3be shows `ig_d8=2 menu_job=0x0` and never loses
         // the world). +0x798 rides along because `STEP_RequestWait` -- the only writer that can clear d8
         // -- returns early while it is non-null, so it is the upstream half of the same decision.
         let (b7c_now, b7d_now) = if gm_rt > PAB_MIN_HEAP_PTR {
@@ -769,11 +769,11 @@ pub unsafe extern "system" fn title_setstate_trace_detour(owner: usize, state: i
     if orig == TITLE_OWNER_SCAN_START_ADDRESS || orig == 0 {
         return;
     }
-    // Missing-save in-game picker guard: while no save has been selected, DENY only the two
+    // Missing-save in-game picker guard: while no save has been selected, deny only the two
     // world-load entry states (RE-verified 2026-07-07: every path into the world -- Continue,
     // Load-slot confirm, New Game, NG+ -- funnels through SetState(4=BeginNewGame) or
     // SetState(5=PlayGame); menu states 0..3/10/11 must flow or the title never becomes
-    // interactive). The old behavior condvar-BLOCKED every SetState here, which froze the title
+    // interactive). The old behavior condvar-blocked every SetState here, which froze the title
     // thread; now the title boots to its native no-save menu and the picker rides it. Skipping
     // the call (not waiting) keeps the title thread alive; the request is simply dropped.
     if crate::boot_hold::should_deny_world_entry(missing_save_selection_pending(), state) {
@@ -785,7 +785,7 @@ pub unsafe extern "system" fn title_setstate_trace_detour(owner: usize, state: i
     let f: unsafe extern "system" fn(usize, i32) = unsafe { std::mem::transmute(orig) };
     unsafe { f(owner, state) };
 }
-/// Install the READ-ONLY title step-setter trace hook ONCE. Mirrors `install_pab_advance_hook`.
+/// Install the read-only title step-setter trace hook once. Mirrors `install_pab_advance_hook`.
 /// Save-safe: the detour only logs + passes through. bd menu-build-overlap-lever-2026-06-24.
 pub unsafe fn install_title_setstate_trace_hook(base: usize) {
     if TITLE_SETSTATE_TRACE_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)

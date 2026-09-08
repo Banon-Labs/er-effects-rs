@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Read-only recursive dump of the live profile-portrait gx wrapper nest to locate the real
 ID3D12Resource (a VKD3D-Proton object whose vtable lives in d3d12.dll/d3d12core.dll/dxgi.dll,
-NOT eldenring.exe).
+not eldenring.exe).
 
 Walks slot-0 renderer -> offscreen -> tex_rescap -> gx, then BFS-dumps the wrapper objects
-(depth-limited), annotating every plausible qword pointer with the MODULE its pointee's vtable
+(depth-limited), annotating every plausible qword pointer with the module its pointee's vtable
 belongs to. A pointer whose vtable is in d3d12*/dxgi/vkd3d is the ID3D12Resource we want; its
 offset path through the wrappers is the fix for resolve_id3d12_resource. Needs sudo (ptrace_scope=1).
 
@@ -44,7 +44,7 @@ def parse_maps(text):
 
 
 def exe_range(mods):
-    """Full [lo, hi) span of the eldenring.exe image across ALL its segments (.text/.rdata/...),
+    """Full [lo, hi) span of the eldenring.exe image across all its segments (.text/.rdata/...),
     so vtables in any segment classify as EXE -- the prior bug only saw the header segment."""
     segs = [m for m in mods if m[2] == EXE]
     if not segs:

@@ -1,6 +1,6 @@
 //! The `[hud]` block of `er-npc-possess.derived.toml` -- what the retarget decided, and why.
 //!
-//! Same contract as [`crate::moveset::derived`]: this file is OUTPUT, rewritten on every
+//! Same contract as [`crate::moveset::derived`]: this file is output, rewritten on every
 //! possession, and corrections go in `er-npc-possess.toml` instead. It exists for one question a
 //! player will otherwise have to guess at -- "why is my FP bar empty?" -- whose answer is not a
 //! bug but a param value, and which is invisible from the chair.
@@ -144,7 +144,7 @@ mod tests {
         }
     }
 
-    /// The block must be a valid TOML table header plus keys, and must say WHICH character the
+    /// The block must be a valid TOML table header plus keys, and must say which character the
     /// numbers came from.
     #[test]
     fn a_driving_decision_reports_the_creatures_own_numbers() {
@@ -165,7 +165,7 @@ mod tests {
         assert!(out.contains("fp = \"0/1\""), "{out}");
         assert!(out.contains("NpcParam.mp = 0"), "{out}");
         assert!(out.contains("drawn empty"), "{out}");
-        // Stamina is populated, so it must NOT carry the empty note.
+        // Stamina is populated, so it must not carry the empty note.
         assert!(out.contains("stamina = \"40/50\""), "{out}");
         assert!(out.contains("NpcParam.stamina = 50"), "{out}");
     }

@@ -6,7 +6,7 @@
 //!
 //! # Rules a new guard must satisfy
 //!
-//! 1. **Return the guarded function's OWN value for "nothing here".** Find the branch inside the
+//! 1. **Return the guarded function's own value for "nothing here".** Find the branch inside the
 //!    original that already handles the empty/absent case and return exactly what it returns. A
 //!    guard that invents a return value is asserting something the game never asserts, and the
 //!    callers were not written against it.
@@ -40,7 +40,7 @@ pub(crate) const ORIGINAL_UNSET: usize = 0;
 pub(crate) struct Guard {
     /// Name used in the install log and the telemetry line.
     pub(crate) name: &'static str,
-    /// Guards that only make sense armed together share a group. A partially armed GROUP is an
+    /// Guards that only make sense armed together share a group. A partially armed group is an
     /// unsafe state and is reported as such; a guard whose group is only itself is complete on its
     /// own. Without this the install log called a run UNGUARDED whenever any one guard in the whole
     /// registry failed, which is false as soon as two unrelated guards exist.

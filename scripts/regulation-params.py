@@ -10,7 +10,7 @@ key or a format change fails loudly rather than producing plausible garbage.
     python3 scripts/regulation-params.py EquipParamWeapon
     python3 scripts/regulation-params.py --contains 16110217 EquipParamWeapon
 
-Field NAMES need a paramdef this does not have. Row IDS do not, which is what
+Field names need a paramdef this does not have. Row IDS do not, which is what
 makes this enough to answer "is this id a row at all" -- the question that
 decides whether an id the game handed us can be looked up by name.
 """
@@ -22,11 +22,11 @@ import subprocess
 import sys
 import tempfile
 
-# `compression.zstd` IS PYTHON 3.14 AND NEWER ONLY (PEP 784), AND THIS IMPORT USED TO BE BARE.
+# `compression.zstd` is Python 3.14 and newer only (PEP 784), and this import used to be bare.
 #
 # The dev box runs 3.14, so it resolved here and every local run was green. GitHub's
 # ubuntu-latest ships an older 3.x, where the same line raises
-# `ModuleNotFoundError: No module named 'compression'` -- at IMPORT time, before any argument
+# `ModuleNotFoundError: No module named 'compression'` -- at import time, before any argument
 # parsing, so it took down every consumer that merely imports this module for its PARAM
 # readers and never decompresses anything. Measured on PR #388, run 33793058851: it reached
 # check.sh through check-moveset-table.py -> er-moveset-table-gen.py -> er-param-read.py:16
@@ -37,7 +37,7 @@ import tempfile
 # runner does not have cannot detect its own unavailability, so it reads as proof when it is
 # silence. Deferring the failure to the one function that actually needs zstd lets an absent
 # decompressor be reported the way this file already reports an absent regulation -- see
-# `missing_regulation` in diff-regulation-params.py: a PRINTED skip, never a silent exit 0.
+# `missing_regulation` in diff-regulation-params.py: a printed skip, never a silent exit 0.
 try:
     from compression import zstd
 except ModuleNotFoundError as _zstd_import_error:  # pragma: no cover - interpreter-dependent
@@ -56,7 +56,7 @@ class ZstdUnavailable(RuntimeError):
 
     A distinct type so a caller can tell "I could not look" apart from "I looked and the
     answer is no" -- the same distinction ER_ALLOW_MISSING_REGULATION draws for the game
-    file. Catch this to SKIP; do not catch it to pass.
+    file. Catch this to skip; do not catch it to pass.
     """
 
 

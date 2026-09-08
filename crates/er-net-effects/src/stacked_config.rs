@@ -1,12 +1,12 @@
 //! The `stacked_effects` list in `er-net-effects.toml`, and editing it in place.
 //!
-//! The selector applies ONE effect at a time: moving the cursor takes the last one back off and
+//! The selector applies one effect at a time: moving the cursor takes the last one back off and
 //! puts the new one on. The stack is the other mode -- a set of effects that stay on regardless
 //! of where the cursor is, so several can run at once. It lives in the config file rather than in
 //! a sidecar because it is something a player curates and keeps between sessions, and because a
 //! file they can read and hand-edit beats a binary blob they cannot.
 //!
-//! EDITING IT IN PLACE, NOT REWRITING IT. Numpad `+`/`-` change this list while the game is
+//! Editing it in place, not rewriting it. Numpad `+`/`-` change this list while the game is
 //! running, so the DLL writes back a file the player also owns: their other keys, their comments
 //! and their ordering all have to survive. So the rewrite replaces exactly the one
 //! `stacked_effects` line (or appends it when absent) and copies every other byte through.

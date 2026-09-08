@@ -1,7 +1,7 @@
 use crate::prelude::*;
 use er_game_base::fnv1a::{fnv1a64, fnv1a64_mix};
 
-/// Q4 keepalive oracle: read the GX render-pass queue head/tail (non-destructively -- NO pop) to detect
+/// Q4 keepalive oracle: read the GX render-pass queue head/tail (non-destructively -- No pop) to detect
 /// whether a GX pass is queued this frame (the precondition the offscreen draw checks via FUN_1419e5850).
 /// g_GxDrawContext may be a pointer-global (heap ctx) or the struct itself; resolve defensively and fall
 /// back to the global address. All reads fault-guarded.
@@ -25,7 +25,7 @@ pub unsafe fn profile_gx_queue_sample(base: usize) {
     // Primary: g_GxDrawContext holds the context pointer (the game passes it directly as the ctx base).
     let mut ctx = unsafe { safe_read_usize(global) }.unwrap_or(0);
     if !readable(ctx) {
-        ctx = global; // fallback: the global IS the context struct
+        ctx = global; // fallback: the global is the context struct
     }
     if !readable(ctx) {
         return;
@@ -36,7 +36,7 @@ pub unsafe fn profile_gx_queue_sample(base: usize) {
     if head != tail {
         PROFILE_GX_QUEUE_NONEMPTY.fetch_add(1, Ordering::SeqCst);
     }
-    // LOOK-BEFORE-BUILD: directly measure the GX subcontext pool's FREE depth this frame to settle whether
+    // Look-before-BUILD: directly measure the GX subcontext pool's free depth this frame to settle whether
     // the ~4x head refresh is pool contention (pop fails 96%) or a readback/rasterize sync race. free =
     // (top - floor)/8; >0 means a subcontext is poppable. A min-free > 0 across the whole loading screen
     // refutes the contention theory (the pop never fails -> the black RT is a sync/rasterize problem).
@@ -66,9 +66,9 @@ pub unsafe fn profile_gx_queue_sample(base: usize) {
     }
 }
 
-/// Pixel oracle sample: scan for the FIRST slot whose model is currently live (model_ins present), read
-/// back its offscreen RT (AFTER the draw step) and record nonblack + whether the content hash changed vs
-/// the previous sample OF THE SAME SLOT. Sampling the live slot (not a fixed one) is required because the
+/// Pixel oracle sample: scan for the first slot whose model is currently live (model_ins present), read
+/// back its offscreen RT (after the draw step) and record nonblack + whether the content hash changed vs
+/// the previous sample of the same slot. Sampling the live slot (not a fixed one) is required because the
 /// engine keeps barely one menu model built at a time (cycling); "changed" is gated to same-slot so a
 /// slot switch (different character) is not mistaken for head motion. Only does the (costly) readback when
 /// a live model exists, so it is free when none is present. Read-only + fault-guarded.
@@ -87,7 +87,7 @@ pub unsafe fn profile_lookat_rt_sample(base: usize) {
     let valid = |p: usize| p != 0 && p != null;
     let mut chosen = usize::MAX;
     let mut off = 0usize;
-    // Prefer the POST-Continue spared renderer (the persistent model) when it is set + live; it is not in
+    // Prefer the post-Continue spared renderer (the persistent model) when it is set + live; it is not in
     // the menu table, so the table scan below would miss it. Use a dedicated sample index (10) so the
     // same-slot "changed" gate treats it as its own stream.
     let spared = LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst);
@@ -154,7 +154,7 @@ pub unsafe fn profile_lookat_rt_sample(base: usize) {
     if portrait_center_nonblack(w, h, &px) {
         PROFILE_LOOKAT_RT_NONBLACK.fetch_add(1, Ordering::SeqCst);
     }
-    // ALPHA vs RGB: max RGB and max alpha over the same center region. If rgb_max>0 but alpha_max==0 the
+    // Alpha vs RGB: max RGB and max alpha over the same center region. If rgb_max>0 but alpha_max==0 the
     // RT has a portrait that GFx will composite as fully transparent (the "renders black despite content"
     // signature). Decides the color-space/alpha question without a screenshot.
     {
@@ -197,7 +197,7 @@ pub unsafe fn profile_lookat_rt_sample(base: usize) {
     }
 }
 
-/// DRAW-PHASE SWEEP diagnostic, run from a FrameBegin task (ticks every frame). Throttled: (1) re-read
+/// Draw-phase sweep diagnostic, run from a FrameBegin task (ticks every frame). Throttled: (1) re-read
 /// the live phase selector `er-quickload-lookat-phase.txt` (a single integer index 0..LOOKAT_DRAW_PHASE_COUNT)
 /// into `PROFILE_LOOKAT_SELECTED_PHASE` so the active draw phase can be switched without recompiling; and
 /// (2) log each candidate phase's per-frame tick count + the draw count, so one run reveals which phases
@@ -330,17 +330,17 @@ pub fn profile_lookat_phase_diag_tick() {
     if LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) != 0 && n.is_multiple_of(20) {
         let spared_ptr = LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst);
         // Raw live read of renderer+model_ins: distinguishes the field being ZEROED (renderer detached from
-        // its model) from a DANGLING pointer (field intact but the model object behind it freed).
+        // its model) from a dangling pointer (field intact but the model object behind it freed).
         let model_raw =
             unsafe { safe_read_usize(spared_ptr + PROFILE_RENDERER_MODEL_INS_OFFSET) }.unwrap_or(0);
-        // Liveness probe of the model OBJECT captured at record-time: read its first qword (vtable). If
+        // Liveness probe of the model object captured at record-time: read its first qword (vtable). If
         // the object is still mapped/live its vtable reads as a plausible pointer; if freed/unmapped the
         // read fails (cap_vt=0). This decides whether re-attaching cap_model into renderer+0x778 could
         // restore the portrait (object alive) or whether the model must be rebuilt/refcounted (freed).
         let cap_model = PROFILE_SPARE_CANDIDATE_MODEL.load(Ordering::SeqCst);
         let cap_vt = unsafe { safe_read_usize(cap_model) }.unwrap_or(0);
         // Scan the (re)built profile table: how many of the 10 slots now hold a valid CSMenuProfModelRend
-        // (built[r]) and how many of those have a live model_ins (built[m]). This is the DIRECT measure of
+        // (built[r]) and how many of those have a live model_ins (built[m]). This is the direct measure of
         // whether our own builder's fresh renderers are constructing + latching their own models post-
         // Continue -- independent of the spared (empty) renderer the rest of this line reports.
         let null = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -371,9 +371,9 @@ pub fn profile_lookat_phase_diag_tick() {
                 }
             }
         }
-        // CHAIN DIAGNOSTIC: for the autoload target slot's BUILT renderer, walk renderer -> +0xa8
+        // Chain DIAGNOSTIC: for the autoload target slot's built renderer, walk renderer -> +0xa8
         // (CSEzOffscreenRend) -> +0x10 (CSRuntimeTexResCap) -> +GX (CSGxTexture) -- the exact texture the
-        // forge re-bind should publish. And read the bound container's CURRENT first-TexResCap GX. If
+        // forge re-bind should publish. And read the bound container's current first-TexResCap GX. If
         // chain_gx != bound_gx, the re-bind is publishing the wrong (stale menu) texture, not our live RT.
         let (mut ch_r, mut ch_off, mut ch_trc, mut ch_gx, bound_gx) =
             (0usize, 0usize, 0usize, 0usize, 0usize);
@@ -436,7 +436,7 @@ pub fn profile_lookat_phase_diag_tick() {
 }
 
 /// One candidate draw-phase task tick (registered once per phase index). Always bumps that phase's
-/// per-frame tick counter (for the sweep), and drives the realtime look-at draw ONLY when this phase is
+/// per-frame tick counter (for the sweep), and drives the realtime look-at draw only when this phase is
 /// the selected active one -- so exactly one phase rasterizes per frame regardless of how many are registered.
 ///
 /// # Safety
@@ -456,7 +456,7 @@ pub unsafe fn profile_lookat_phase_draw_tick(phase_index: usize, task_data: &FD4
     }
     if let Ok(base) = game_module_base() {
         // Re-engage on every loading screen (subsequent-character-load fix): pause the draw/publish tick
-        // ONLY during active gameplay, not permanently after the first world.
+        // only during active gameplay, not permanently after the first world.
         if unsafe { portrait_pipeline_idle_in_gameplay(base) } {
             return;
         }
@@ -464,9 +464,9 @@ pub unsafe fn profile_lookat_phase_draw_tick(phase_index: usize, task_data: &FD4
     }
 }
 
-/// HOOK on the per-frame per-model PUSH task (deobf 0x140bba6e0). For our profile renderers, write the
+/// Hook on the per-frame per-model push task (deobf 0x140bba6e0). For our profile renderers, write the
 /// cursor/sinusoid Head/Neck/Spine2 rotation into the importer PoseHolder (+ recompute its model-space)
-/// BEFORE the original runs, so the original's submodel propagation (FUN_1409e9ac0) copies OUR pose into
+/// before the original runs, so the original's submodel propagation (FUN_1409e9ac0) copies our pose into
 /// every submodel's modelSpaceBoneData -- the buffer the GPU actually skins from -- using the engine's
 /// own (correct) `frame` arg. This is the fix for "head doesn't move": our prior code wrote the importer
 /// PoseHolder but never propagated to the submodels. Fires per model per frame (only when the model is
@@ -474,7 +474,7 @@ pub unsafe fn profile_lookat_phase_draw_tick(phase_index: usize, task_data: &FD4
 ///
 /// # Safety
 ///
-/// Do NOT call this directly. It is the detour body MinHook installs over the game's per-frame per-
+/// Do not call this directly. It is the detour body MinHook installs over the game's per-frame per-
 /// model push task (deobf `0x140bba6e0`), so it may only be entered by that patched call site, on
 /// the game thread that made the call, with the arguments and `extern "system"` ABI the original
 /// declares.
@@ -489,8 +489,8 @@ pub unsafe fn profile_lookat_phase_draw_tick(phase_index: usize, task_data: &FD4
 /// the frame the engine passed it in.
 pub unsafe extern "system" fn per_frame_push_hook(renderer: usize, frame: usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    // CAPTURE the engine's live render context (param_2/frame) on its OWN calls only (not our re-drives),
-    // so our per-frame draw can enqueue the model into the SAME offscreen pass the engine routes to. Our
+    // Capture the engine's live render context (param_2/frame) on its own calls only (not our re-drives),
+    // so our per-frame draw can enqueue the model into the same offscreen pass the engine routes to. Our
     // draw-phase task_data routes to the wrong pass -> nothing renders into the portrait RT.
     if !PROFILE_IN_OUR_DRIVE.load(Ordering::SeqCst) && frame != 0 && frame != null {
         PROFILE_DRAW_TASK_CTX.store(frame, Ordering::SeqCst);
@@ -525,7 +525,7 @@ pub unsafe extern "system" fn per_frame_push_hook(renderer: usize, frame: usize)
                     break;
                 }
             }
-            // Post-Continue the menu table is torn down, so the SPARED renderer isn't in it: map it to
+            // Post-Continue the menu table is torn down, so the spared renderer isn't in it: map it to
             // its original autoload slot, whose cached look-at indices (base re-latches) we reuse.
             if slot == usize::MAX
                 && renderer == LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst)
@@ -566,8 +566,8 @@ pub fn install_per_frame_push_hook() {
             return;
         }
     }
-    // UNRESOLVED, so `MhHook::new` owns the single 1.16.2 -> 1.17 resolve. This was `game_rva`,
-    // which resolves too, and the pair was MEASURED wrong on 2026-08-30 18:42: 0x140bba6e0 ->
+    // Unresolved, so `MhHook::new` owns the single 1.16.2 -> 1.17 resolve. This was `game_rva`,
+    // which resolves too, and the pair was measured wrong on 2026-08-30 18:42: 0x140bba6e0 ->
     // 0x140bbbd90 here, then 0x140bbbd90 -> 0x140bbd440 inside `MhHook::new` -- a
     // `CSMenuFaceModelRend` method, detoured while this log line reported 0x140bbbd90.
     // `scripts/check-double-resolved-hook-targets.py` gates the shape.
@@ -585,7 +585,7 @@ pub fn install_per_frame_push_hook() {
             }
             // The handle is deliberately dropped here without ceremony: `MhHook` is three raw
             // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
-            // address -- so letting the handle go does NOT uninstall the hook.
+            // address -- so letting the handle go does not uninstall the hook.
         }
         Err(status) => {
             append_autoload_debug(format_args!(
@@ -734,9 +734,9 @@ unsafe fn latched_profile_model_facing_yaw(renderer: usize, idx: usize) -> f32 {
     yaw
 }
 
-/// CAMERA LEVER: override one profile renderer's orbit camera with a custom viewport (closer, model-facing
+/// Camera LEVER: override one profile renderer's orbit camera with a custom viewport (closer, model-facing
 /// framing), proving the lever on the still dump. Replicates the tail of the engine's own camera routine
-/// `FUN_140bbe190` WITHOUT its `MenuOffscrRendParam` read (so it never clobbers our override): latch the
+/// `FUN_140bbe190` without its `MenuOffscrRendParam` read (so it never clobbers our override): latch the
 /// engine baseline once, write the orbit fields from `baseline + offsets`, rebuild the view matrix via
 /// the engine builder, copy it into the renderer's matrix slot, then push the CSPersCam into the
 /// offscreen render. Re-applied every tick so a refresh that re-runs the engine setup can't win.
@@ -745,10 +745,10 @@ unsafe fn latched_profile_model_facing_yaw(renderer: usize, idx: usize) -> f32 {
 ///
 /// # Safety
 ///
-/// This WRITES camera fields into the game's renderer and CALLS three game functions
+/// This writes camera fields into the game's renderer and calls three game functions
 /// resolved as `base + RVA`. The caller must guarantee:
 ///
-/// * `base` is the running `eldenring.exe` image base AND the image is the version these
+/// * `base` is the running `eldenring.exe` image base and the image is the version these
 ///   RVA constants were reverse-engineered against -- a mismatch calls into the middle of
 ///   an unrelated function;
 /// * `renderer` is an already-validated live `CSMenuProfModelRend` (the caller checks its
@@ -781,7 +781,7 @@ pub unsafe fn apply_profile_camera_override(_base: usize, renderer: usize, slot:
     {
         return false;
     }
-    // Latch the engine baseline ONCE per slot, BEFORE the first override write, so all overrides derive
+    // Latch the engine baseline once per slot, before the first override write, so all overrides derive
     // from an immutable baseline. The lock is never held across a game call.
     let baseline = {
         let mut guard = match PROFILE_CAM_BASELINE.lock() {
@@ -823,9 +823,9 @@ pub unsafe fn apply_profile_camera_override(_base: usize, renderer: usize, slot:
                 fov,
             });
             PROFILE_CAM_LATCHED_MASK.fetch_or(1usize << idx, Ordering::SeqCst);
-            // The baseline is the engine's OWN framing for this slot, read once and then never
+            // The baseline is the engine's own framing for this slot, read once and then never
             // re-read. It was latched silently until 2026-08-21 -- the mask said a baseline existed,
-            // nothing said WHAT it was -- so a claim like "the orbit camera is the same for every
+            // nothing said what it was -- so a claim like "the orbit camera is the same for every
             // character" (the `MenuOffscrRendParam` row is 20 for all ten slots) rested on a static
             // dump alone. One line per slot per renderer makes the log itself the confirmation, and
             // makes a slot whose engine baseline differs impossible to miss.
@@ -839,12 +839,12 @@ pub unsafe fn apply_profile_camera_override(_base: usize, renderer: usize, slot:
     let target = baseline.target;
     let distance = baseline.distance * PROFILE_CAM_DISTANCE_SCALE;
     let pitch = baseline.pitch + PROFILE_CAM_PITCH_DELTA_RAD;
-    // FACING: the engine baseline.yaw (latched from the engine's param-derived camera) ALREADY frames the
-    // model FRONT-on -- the natural profile render shows the face. The detected model-facing yaw is the
-    // model's intrinsic orientation, which is REDUNDANT with that baseline: adding it (here ~-π) orbits the
-    // camera a further ~180deg to the BACK of the head (observed calib-6: facing latched -3.14, render = back
-    // of head at every cursor position). So do NOT add it to the camera yaw; keep the detection for the
-    // telemetry/log only. (If a future renderer's baseline does NOT face front, revisit -- but our own-built
+    // FACING: the engine baseline.yaw (latched from the engine's param-derived camera) already frames the
+    // model front-on -- the natural profile render shows the face. The detected model-facing yaw is the
+    // model's intrinsic orientation, which is redundant with that baseline: adding it (here ~-π) orbits the
+    // camera a further ~180deg to the back of the head (observed calib-6: facing latched -3.14, render = back
+    // of head at every cursor position). So do not add it to the camera yaw; keep the detection for the
+    // telemetry/log only. (If a future renderer's baseline does not face front, revisit -- but our own-built
     // renderer inherits the engine's front-facing param camera.)
     let _facing_yaw = unsafe { latched_profile_model_facing_yaw(renderer, idx) };
     let yaw = baseline.yaw + PROFILE_CAM_YAW_DELTA_RAD;
@@ -908,7 +908,7 @@ pub unsafe fn apply_profile_camera_override(_base: usize, renderer: usize, slot:
     PROFILE_CAM_APPLY_CALLS.fetch_add(1, Ordering::SeqCst);
     PROFILE_CAM_LAST_SLOT.store(idx, Ordering::SeqCst);
     PROFILE_CAM_LAST_MATRIX_OK.store(1, Ordering::SeqCst);
-    // Publish the APPLIED orbit (baseline * the scale/delta transform above) for the oracle writer.
+    // Publish the applied orbit (baseline * the scale/delta transform above) for the oracle writer.
     // Stored only on the success path, so the value always pairs with the `PROFILE_CAM_LAST_SLOT` and
     // matrix-ok that the same apply just published -- a half-failed apply never leaves a camera value
     // that no frame was ever rendered with. `to_bits` keeps the sign and every significand bit; the

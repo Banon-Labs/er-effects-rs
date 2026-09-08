@@ -1,4 +1,4 @@
-// PER-LOAD-WINDOW PORTRAIT VERDICT SEMAPHORES: product re-export facade.
+// Per-load-window portrait verdict SEMAPHORES: product re-export facade.
 //
 // The window state machine, the published-vs-loaded identity check, the verdict classification and
 // the history ring moved to `er_loading_portrait_core::portrait_load_windows` with the

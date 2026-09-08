@@ -1,17 +1,17 @@
-//! The badge must work for users running SOMEONE ELSE'S menu mod through ME3.
+//! The badge must work for users running someone else'S menu mod through ME3.
 //!
 //! That is the common case, not an edge case: modded menu `.gfx` files are widespread, and a
 //! byte-exact fingerprint gate would lock every one of those users out of the feature. What
-//! those mods do NOT do is remove the machinery we bind to -- the item tiles, their
+//! those mods do not do is remove the machinery we bind to -- the item tiles, their
 //! `ItemIcon`/`AttributeIcon` children and the icon placeholders are all still there -- so the
 //! derivation has everything it needs; it just cannot assume exact bytes.
 //!
 //! So this stands in for a third-party mod by applying realistic transformations to a real
 //! movie and requiring `derive_unknown` to still produce a correct, additive badge:
 //!
-//!   * MOVED tile furniture (a repositioned/rescaled `AttributeIcon`) -- the badge mirrors
-//!     that placement, so it must FOLLOW the mod rather than land where vanilla put it.
-//!   * ADDED characters -- a mod's own new sprites must not collide with the ids we allocate.
+//!   * moved tile furniture (a repositioned/rescaled `AttributeIcon`) -- the badge mirrors
+//!     that placement, so it must follow the mod rather than land where vanilla put it.
+//!   * added characters -- a mod's own new sprites must not collide with the ids we allocate.
 //!
 //! And the safety gates must actually fire: a movie we cannot reproduce byte-for-byte, or an
 //! edit that came out non-additive, must be refused so the caller serves the user's own bytes.
@@ -23,7 +23,7 @@ mod common;
 use er_gfx::arts_badge::{BadgeError, TARGETS, derive_unknown, validate_additive};
 use er_gfx::{Matrix, Movie, Tag};
 
-/// Run the modded path against a REAL third-party menu mod, not a synthetic one.
+/// Run the modded path against a real third-party menu mod, not a synthetic one.
 ///
 /// Point `ER_GFX_MODDED_ROOT` at a directory of that mod's `menu/*.gfx` files; every target
 /// the mod ships is derived and checked. Skipped when the var is unset, so this stays a
@@ -75,7 +75,7 @@ fn real_third_party_mod_derives() {
                         _ => None,
                     })
                     .collect::<Vec<_>>();
-                // Does the badge TRACK the mod, or did it land where vanilla would put it?
+                // Does the badge track the mod, or did it land where vanilla would put it?
                 // Derive the same movie's vanilla counterpart and compare transforms.
                 let vpath = common::corpus_root().join(target.file_name);
                 let ratio = if vpath.exists() {
@@ -139,7 +139,7 @@ fn real_third_party_mod_derives() {
     );
 }
 
-/// Re-serialise a movie after mutating its parsed form -- i.e. produce bytes that are NOT any
+/// Re-serialise a movie after mutating its parsed form -- i.e. produce bytes that are not any
 /// vanilla fingerprint but are still a structurally valid movie, exactly like a real mod.
 fn remix(bytes: &[u8], mutate: impl FnOnce(&mut Movie)) -> Vec<u8> {
     let mut movie = Movie::parse(bytes).expect("parse");
@@ -202,11 +202,11 @@ fn attribute_transform(movie: &Movie) -> Option<(f32, f32, f32)> {
     })
 }
 
-/// EFFECTIVE (screen-space) badge scale.
+/// Effective (screen-space) badge scale.
 ///
-/// The badge has two mounts. Re-pointed onto the tile's own `ArtsIcon`, its placement scale IS
+/// The badge has two mounts. Re-pointed onto the tile's own `ArtsIcon`, its placement scale is
 /// the screen scale. Nested inside the `ItemIcon` container, the placement is expressed in
-/// CONTAINER space and the container's own scale multiplies it -- so a mod that doubles the
+/// container space and the container's own scale multiplies it -- so a mod that doubles the
 /// tile leaves the nested placement numerically unchanged while doubling it on screen.
 /// Comparing raw placement values across mounts therefore reports a bogus x1.000; this
 /// resolves the composition so both mounts are measured in the same units.
@@ -338,7 +338,7 @@ fn moved_tile_furniture_is_followed() {
             "{}: badge did not follow the moved tile furniture",
             target.file_name
         );
-        // And it must have picked up the MOD's scale. The badge placement is expressed in the
+        // And it must have picked up the mod's scale. The badge placement is expressed in the
         // container's space for the nested mount, so its absolute value is not `attr.0`; what
         // must hold is that rescaling the tile furniture by 1.25 rescaled the badge by 1.25.
         let base_scale = base_badge.expect("vanilla badge").0;

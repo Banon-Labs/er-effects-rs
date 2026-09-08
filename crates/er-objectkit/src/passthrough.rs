@@ -90,7 +90,7 @@ mod tests {
 
         let spv = translate_pass(v, p).expect("translate pair to spirv");
         assert!(spv.vertex.len() > 64 && spv.pixel.len() > 64, "empty spirv");
-        // SPIR-V magic word 0x07230203 (LE).
+        // SPIR-V magic word 0x07230203 (le).
         assert_eq!(&spv.vertex[0..4], &[0x03, 0x02, 0x23, 0x07]);
         assert_eq!(&spv.pixel[0..4], &[0x03, 0x02, 0x23, 0x07]);
         eprintln!(

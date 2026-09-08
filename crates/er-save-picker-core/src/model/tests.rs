@@ -4,12 +4,12 @@ use super::*;
 
 /// Build a model with a fixed listing, bypassing the filesystem enumeration `open` does.
 ///
-/// Each file carries ONE character whose name encodes the file's own index (`char{idx}`), and a
-/// modification time of epoch + `idx` minutes, so a test can assert that the character info AND
-/// the timestamp a row renders belong to that row's OWN file rather than a neighbour's -- the
+/// Each file carries one character whose name encodes the file's own index (`char{idx}`), and a
+/// modification time of epoch + `idx` minutes, so a test can assert that the character info and
+/// the timestamp a row renders belong to that row's own file rather than a neighbour's -- the
 /// exact confusion `row_file_characters` had.
 ///
-/// `drives` is left EMPTY, so these models have no drive cycler row: the drive-row tests opt
+/// `drives` is left empty, so these models have no drive cycler row: the drive-row tests opt
 /// in explicitly via `with_drives`, and every other test keeps the no-drive-row layout.
 fn model_with(intent: PickerIntent, dir: &str, files: usize) -> SavePickerModel {
     SavePickerModel {
@@ -54,7 +54,7 @@ fn row_char_name(model: &SavePickerModel, row: usize) -> Option<String> {
         .map(|info| info.name.clone())
 }
 
-/// The file stem a row's LABEL would render, or `None` for a non-file row.
+/// The file stem a row's label would render, or `None` for a non-file row.
 fn row_label_file(model: &SavePickerModel, row: usize) -> Option<String> {
     match model.row_meaning(row) {
         PickerRow::File(path) => Some(
@@ -75,7 +75,7 @@ fn destination(dir: &str, files: usize) -> SavePickerModel {
     destination_loading(dir, files, "Z:\\elsewhere\\ER0000.sl2")
 }
 
-/// A destination browse whose LOADED save is `loaded`, so the `[CURRENT]` marker has something
+/// A destination browse whose loaded save is `loaded`, so the `[CURRENT]` marker has something
 /// to point at. The default `destination` deliberately loads a save that is not in the listing.
 fn destination_loading(dir: &str, files: usize, loaded: &str) -> SavePickerModel {
     model_with(
@@ -89,10 +89,10 @@ fn destination_loading(dir: &str, files: usize, loaded: &str) -> SavePickerModel
 }
 
 // -----------------------------------------------------------------------------------------
-// SYNTHETIC SAVE CONTAINERS. Deterministic generators, never captured game bytes (repo rule:
+// Synthetic save containers. Deterministic generators, never captured game bytes (repo rule:
 // no game-derived binaries in tree, test fixtures included). They reproduce only the fields
 // the readers under test actually parse: the BND4 header/entry index, `USER_DATA010`'s
-// active-slot bytes, and a PlayerGameData block placed where the FACE-anchored locator scans.
+// active-slot bytes, and a PlayerGameData block placed where the face-anchored locator scans.
 // -----------------------------------------------------------------------------------------
 
 /// PlayerGameData field offsets the plausibility core reads (`loading_cover_save_slot.rs`).
@@ -143,7 +143,7 @@ fn synthetic_slot_body(name: &str, level: u32) -> Vec<u8> {
 }
 
 /// A structurally complete BND4 save container. `slots[i]` is `Some((name, level))` for an
-/// ACTIVE character slot and `None` for an inactive one; a `USER_DATA010` entry always carries
+/// active character slot and `None` for an inactive one; a `USER_DATA010` entry always carries
 /// the resulting active-slot bytes.
 fn synthetic_save_container(slots: &[Option<(&str, u32)>]) -> Vec<u8> {
     const HEADER_LEN: usize = 0x40;
@@ -208,7 +208,7 @@ fn synthetic_save_container(slots: &[Option<(&str, u32)>]) -> Vec<u8> {
 
 /// An empty temp directory of our own, so a listing test sees exactly the files it wrote.
 ///
-/// "Of our own" has to mean of our own PROCESS too, which is what [`crate::picker_scratch_dir`]
+/// "Of our own" has to mean of our own process too, which is what [`crate::picker_scratch_dir`]
 /// adds: `%TEMP%` is shared by every process, so a name keyed only by `tag` was the same
 /// directory in two concurrent test binaries and each wiped the other's files. This wrapper is
 /// now only a namespace for the tests below.
@@ -297,9 +297,9 @@ fn the_load_intent_rejects_everything_that_is_not_a_loadable_container() {
     assert_eq!(chars[0].name, "Tarnished");
 }
 
-/// THE INTENT ASYMMETRY, pinned. A destination is an overwrite target: it needs no loadable
+/// The intent ASYMMETRY, pinned. A destination is an overwrite target: it needs no loadable
 /// character (hiding a slotless file would let `[ new ]` clobber it silently) and it need not
-/// exist at all (`[ new ]` and Save-As both name a file that does not). Its FOLDER must exist.
+/// exist at all (`[ new ]` and Save-As both name a file that does not). Its folder must exist.
 #[test]
 fn the_destination_intent_accepts_what_the_load_intent_refuses() {
     let dir = scratch_dir("dest-accepts");
@@ -331,7 +331,7 @@ fn the_destination_intent_accepts_what_the_load_intent_refuses() {
     assert_eq!(dest(&dir), Err(PickRejection::NotAFile));
 }
 
-/// CONTRACT 7: there is not a second notion of "valid save". Whatever the in-game listing shows
+/// Contract 7: there is not a second notion of "valid save". Whatever the in-game listing shows
 /// is exactly what the predicate accepts, in both intents -- so the OS dialog, which calls the
 /// same predicate, cannot load a container the browser would have hidden.
 #[test]
@@ -386,7 +386,7 @@ fn the_listing_and_the_predicate_agree_file_for_file() {
 /// filter instead of an invented path. Returns `(created_dir, its drive root)`.
 ///
 /// It must also genuinely exist for the duration of the test that asked for it, and that is the
-/// part [`crate::picker_scratch_dir`] supplies by keying the name to this PROCESS. One of these
+/// part [`crate::picker_scratch_dir`] supplies by keying the name to this process. One of these
 /// tests (`cycling_drives_falls_back_to_the_root_when_the_remembered_folder_is_gone`) DELETES the
 /// directory on purpose to prove the fallback; with a name shared across processes it was
 /// deleting a concurrent test binary's directory as well as its own, and its own `remove_dir_all`
@@ -438,11 +438,11 @@ fn destination_keeps_new_file_above_parent_but_below_the_drive_row() {
     );
 }
 
-/// REGRESSION: the per-row character info was read at `row - 1` while the row LABEL came from
+/// REGRESSION: the per-row character info was read at `row - 1` while the row label came from
 /// `entry_row_base()`, so in destination intent every row showed the character info of the file
 /// one entry further down and the pinned `[ new ]` row showed the first file's info. Pin the
-/// invariant that matters -- the text a row renders describes that row's OWN file -- across
-/// BOTH intents AND with the drive row present, which is the layout shift most likely to
+/// invariant that matters -- the text a row renders describes that row's own file -- across
+/// both intents and with the drive row present, which is the layout shift most likely to
 /// reintroduce it.
 #[test]
 fn row_character_info_belongs_to_that_rows_own_file() {
@@ -627,7 +627,7 @@ fn status_message_auxiliary_lines_override_row_zero_only() {
     );
 }
 
-/// Only a save-FILE row is backed by a file, so only a File row has a last-saved time to show.
+/// Only a save-file row is backed by a file, so only a File row has a last-saved time to show.
 /// Enumerated per kind so the decision is pinned independently of any layout.
 #[test]
 fn only_file_rows_have_a_last_saved_time() {
@@ -653,7 +653,7 @@ fn only_file_rows_have_a_last_saved_time() {
 
 /// On a real layout the timestamp decision must agree with the row's own label and character
 /// info, across both intents and with the drive row present: exactly the file rows carry one,
-/// and each carries ITS OWN file's stamp rather than a neighbour's.
+/// and each carries its own file's stamp rather than a neighbour's.
 #[test]
 fn last_saved_time_agrees_with_the_rows_own_file() {
     for model in [
@@ -683,7 +683,7 @@ fn last_saved_time_agrees_with_the_rows_own_file() {
                 model.row_meaning(row)
             );
             // `model_with` stamps file `idx` at epoch + idx minutes, so the stamp a row renders
-            // proves WHICH file it read -- the same own-file property the character info has.
+            // proves which file it read -- the same own-file property the character info has.
             match (row_label_file(&model, row), model.row_last_saved(row)) {
                 (Some(file), Some(stamp)) => {
                     let idx: u64 = file
@@ -707,7 +707,7 @@ fn last_saved_time_agrees_with_the_rows_own_file() {
     }
 }
 
-/// A file whose metadata the listing build could not read renders NOTHING -- never a fabricated
+/// A file whose metadata the listing build could not read renders nothing -- never a fabricated
 /// or epoch-zero date.
 #[test]
 fn a_file_without_metadata_has_no_last_saved_time() {
@@ -733,7 +733,7 @@ fn civil_time_matches_known_epochs() {
         (86_400, (1970, 1, 2, 0, 0)),
         // 2000-02-29 12:00: leap year by the 400-rule.
         (951_825_600, (2000, 2, 29, 12, 0)),
-        // 2100-02-28 then 2100-03-01, one day apart: 2100 is NOT a leap year (100-rule), so a
+        // 2100-02-28 then 2100-03-01, one day apart: 2100 is not a leap year (100-rule), so a
         // date the 4-rule alone would place on 2100-02-29 must not exist.
         (4_107_456_000, (2100, 2, 28, 0, 0)),
         (4_107_542_400, (2100, 3, 1, 0, 0)),
@@ -758,7 +758,7 @@ fn civil_time_matches_known_epochs() {
     assert_eq!(civil_from_unix_seconds(-1), None, "pre-epoch is not a date");
 }
 
-/// The rendered text, and the DST boundary the offset has to carry: US Pacific springs forward
+/// The rendered text, and the DST boundary the offset has to carry: Us Pacific springs forward
 /// at 2026-03-08 10:00 UTC, so one minute of real time crosses from -08:00 to -07:00 and the
 /// local clock jumps 01:59 -> 03:00. Passing the two offsets that boundary switches between is
 /// exactly how the OS-supplied offset behaves, so this pins the arithmetic without a machine
@@ -882,7 +882,7 @@ fn right_from_the_rightmost_drive_focuses_current_path_without_wrapping() {
     assert_eq!(model.drive_strip_focus(), Some(DriveStripFocus::Cell(1)));
 }
 
-/// The drive cycler must be excluded from entry indexing in BOTH intents: it shifts the entry
+/// The drive cycler must be excluded from entry indexing in both intents: it shifts the entry
 /// base by exactly one and never resolves to an entry itself.
 #[test]
 fn drive_row_is_excluded_from_entry_indexing_in_both_intents() {
@@ -973,7 +973,7 @@ fn drive_row_label_names_the_strip_and_fits_the_name_budget() {
     assert!(!label.contains(','), "row labels must be comma-safe");
 }
 
-/// Cycling drives must RESUME the folder last browsed on the drive being returned to, instead
+/// Cycling drives must resume the folder last browsed on the drive being returned to, instead
 /// of dumping the user at the drive root every time -- that resume is what makes the row useful
 /// for moving a save between two directories on different drives.
 #[test]
@@ -999,7 +999,7 @@ fn cycling_drives_resumes_each_drives_remembered_folder() {
         "the folder being left must be remembered against its own drive"
     );
 
-    // Coming back RESUMES that folder instead of the drive root -- the whole point.
+    // Coming back resumes that folder instead of the drive root -- the whole point.
     model.cycle_drive(true);
     assert_eq!(model.current_dir(), real_dir.as_path());
 }
@@ -1048,7 +1048,7 @@ fn a_single_drive_keeps_the_complete_path_row_without_fake_cycling() {
     assert_eq!(model.entries_per_page(), PICKER_ROW_COUNT - 2);
 }
 
-/// The `[..]` row names the folder it goes TO, not just the direction, and truncates rather
+/// The `[..]` row names the folder it goes to, not just the direction, and truncates rather
 /// than overflowing the record's name field.
 #[test]
 fn up_row_label_names_the_parent_folder() {
@@ -1091,7 +1091,7 @@ fn long_listing_uses_scroll_window_instead_of_page_row() {
 }
 
 /// One press at an edge row moves the window exactly one row, and only at an edge. The window used
-/// to slide from a pointer DWELL on the edge row, which moved the list under a player who was only
+/// to slide from a pointer dwell on the edge row, which moved the list under a player who was only
 /// resting there; a press is now the sole trigger, so nothing moves without an explicit input.
 #[test]
 fn an_edge_press_scrolls_exactly_one_row_and_only_from_the_edge() {
@@ -1114,12 +1114,12 @@ fn an_edge_press_scrolls_exactly_one_row_and_only_from_the_edge() {
     assert_eq!(model.scroll_window_from_edge_press(last / 2, false), None);
     assert_eq!(model.scroll_offset(), 3);
 
-    // Pressing DOWN at the top edge (and UP at the bottom) is not an edge press for that direction.
+    // Pressing down at the top edge (and up at the bottom) is not an edge press for that direction.
     assert_eq!(model.scroll_window_from_edge_press(0, true), None);
     assert_eq!(model.scroll_offset(), 3);
 
     // Up at the top edge walks back one row per press, and stops at the top rather than wrapping.
-    // The pinned row is the first CONTENT row, which is 1 here rather than 0: this listing has a
+    // The pinned row is the first content row, which is 1 here rather than 0: this listing has a
     // parent ("up one directory") row above the entries, so row 0 is not an entry. Pinning to the
     // literal top of the window would park the selection on a non-entry row.
     let top_content_row = 1;
@@ -1141,9 +1141,9 @@ fn an_edge_press_scrolls_exactly_one_row_and_only_from_the_edge() {
     assert_eq!(model.scroll_offset(), 0);
 }
 
-/// A DOWN press on the last row of the LAST window holds that row instead of letting the native
+/// A down press on the last row of the last window holds that row instead of letting the native
 /// list wrap the selection back to the top. Reported from a live run (2026-08-12): stepping down
-/// through a long listing and pressing DOWN once more at the bottom jumped the selection to the
+/// through a long listing and pressing down once more at the bottom jumped the selection to the
 /// drives row, which reads as the list losing the player's place.
 #[test]
 fn a_down_press_at_the_end_of_the_listing_holds_instead_of_wrapping_to_the_top() {
@@ -1171,7 +1171,7 @@ fn a_down_press_at_the_end_of_the_listing_holds_instead_of_wrapping_to_the_top()
     }
 }
 
-/// A listing that fits entirely in the window has no scroll at all, and DOWN on its final row must
+/// A listing that fits entirely in the window has no scroll at all, and down on its final row must
 /// still hold rather than wrap. The window-scrolling path never runs here, so this is the case a
 /// scroll-only rule would miss.
 #[test]
@@ -1205,7 +1205,7 @@ fn cycle_page_compatibility_moves_scroll_window_without_page_row() {
     assert_eq!(model.scroll_offset(), 0);
 }
 
-/// Rows beyond the listing must be reported as NOT visible, so the staging layer marks their
+/// Rows beyond the listing must be reported as not visible, so the staging layer marks their
 /// native slots unoccupied and the builder omits them -- that is what stops a short listing
 /// rendering placeholder rows with a name, `Level 0` and `0:00:00`.
 #[test]
@@ -1295,7 +1295,7 @@ fn load_source_layout_is_unaffected_by_the_destination_intent() {
     assert_eq!(model.row_meaning(9), PickerRow::Empty);
 }
 
-/// THE DESTINATION CURSOR STARTS ON `[ new ]`, IN EVERY LAYOUT. Since the Save Game row press
+/// The destination cursor starts on `[ new ]`, in every layout. Since the Save Game row press
 /// opens this browser with no question in front of it, the row the cursor rests on is the
 /// answer a user gets for pressing confirm twice without reading -- so it must be the row that
 /// creates rather than the row that replaces. Checked with entries present and absent, with and
@@ -1349,10 +1349,10 @@ fn direct_cursor_set_accepts_only_selectable_rows() {
     );
 }
 
-/// On an EMPTY drive the initial cursor must still land on a real, selectable row.
+/// On an empty drive the initial cursor must still land on a real, selectable row.
 #[test]
 fn first_selectable_row_is_sane_on_an_empty_drive() {
-    // Empty drive root WITH somewhere else to go: the cycler is the only row, and the cursor
+    // Empty drive root with somewhere else to go: the cycler is the only row, and the cursor
     // must land on it so the user is not stranded.
     let multi = with_drives(
         model_with(PickerIntent::LoadSource, "Z:\\", 0),
@@ -1393,8 +1393,8 @@ fn new_file_row_label_fits_the_profile_summary_name_budget() {
     assert_eq!(String::from_utf16(&label).unwrap(), PICKER_NEW_FILE_LABEL);
 }
 
-/// EXACTLY ONE ROW IS `[CURRENT]`, and it is the row whose file the user is playing. With the
-/// up-front "Overwrite your loaded save?" box gone, finding that row IS the overwrite-my-own-
+/// Exactly one row is `[CURRENT]`, and it is the row whose file the user is playing. With the
+/// up-front "Overwrite your loaded save?" box gone, finding that row is the overwrite-my-own-
 /// save flow, so a marker on the wrong row (or on none) sends the user to the wrong file.
 #[test]
 fn only_the_loaded_saves_row_is_marked_current() {
@@ -1427,7 +1427,7 @@ fn the_current_marker_ignores_path_case() {
     assert!(model.row_is_loaded_save(row));
 }
 
-/// NOTHING is marked when the loaded save is not in the browsed folder, and NOTHING is ever
+/// Nothing is marked when the loaded save is not in the browsed folder, and nothing is ever
 /// marked in a load browse -- there is no "current" there, and a marker would be a claim the
 /// model cannot support.
 #[test]
@@ -1447,8 +1447,8 @@ fn no_row_is_marked_current_without_a_matching_loaded_save() {
 }
 
 /// The marker never lands on a non-file row: `[ new ]` resolves to the loaded save's own leaf,
-/// and in the loaded save's own folder that path IS the loaded save -- but `[ new ]` is an
-/// ACTION row, not the file's row, and marking it would put `[CURRENT]` on two rows at once.
+/// and in the loaded save's own folder that path is the loaded save -- but `[ new ]` is an
+/// action row, not the file's row, and marking it would put `[CURRENT]` on two rows at once.
 #[test]
 fn the_new_file_row_is_never_marked_current_even_when_it_targets_the_loaded_save() {
     let model = destination_loading("Z:\\saves", 2, "Z:\\saves\\ER0000.sl2");

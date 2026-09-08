@@ -1,4 +1,4 @@
-//! Elden Ring's OWN key bindings, read out of the game's configuration singleton.
+//! Elden Ring's own key bindings, read out of the game's configuration singleton.
 //!
 //! # Where this comes from
 //!
@@ -26,7 +26,7 @@
 //!
 //! The accessor `GetAssign(cfg, out[0x14], actionIndex, mode)` at RVA `0x242ab0` is literally
 //! `cmp r8d,0x35; ja fail; lea rcx,[rcx + idx*0x14 + 0x440]`, which is where both the entry stride
-//! and the `0x36` bound come from. This crate does NOT call it -- reading the table directly is a
+//! and the `0x36` bound come from. This crate does not call it -- reading the table directly is a
 //! pure load and cannot re-enter the game -- but it is the citation for the layout.
 //!
 //! # The keyboard key id is not a scancode
@@ -41,19 +41,19 @@
 //!   }
 //! ```
 //!
-//! The table is READ from the running image rather than transcribed here. A transcribed copy is a
+//! The table is read from the running image rather than transcribed here. A transcribed copy is a
 //! second source of truth that goes stale on the next patch and produces a warning naming the
 //! wrong key, which is worse than no warning.
 //!
 //! # What is deliberately not read
 //!
-//! * **Action NAMES.** They are not strings in the executable: `CS_KEY_ASSIGN_MENUITEM_PARAM`
+//! * **Action names.** They are not strings in the executable: `CS_KEY_ASSIGN_MENUITEM_PARAM`
 //!   carries a `textID` into an FMG message table, so naming them means loading and decoding
-//!   `menu.msgbnd.dcx`. The action INDEX is reported instead -- enough to say "the game already
+//!   `menu.msgbnd.dcx`. The action index is reported instead -- enough to say "the game already
 //!   uses this key", which is the question, without inventing a label.
 //! * **Mouse bindings.** `CS_MOUSE_KEY` is a separate id space starting at `0x400` that the RE
 //!   pass did not enumerate. Guessing at it would put wrong buttons in a warning.
-//! * **Pad bindings.** They ARE in the table and could be decoded, but a mod's pad binding is not
+//! * **Pad bindings.** They are in the table and could be decoded, but a mod's pad binding is not
 //!   observable on the other side: `XInputGetState` hands back the whole pad and never names a
 //!   button, so there is nothing to compare them against.
 
@@ -68,7 +68,7 @@ use crate::dik::vk_for_scancode;
 /// Derived from `er-game-base`'s table rather than written out again. The address was already
 /// declared elsewhere in this workspace under a different name and a wrong description
 /// (`TITLE_MENU_TRANSITION_SINGLETON_RVA`, "menu-system manager"), which is exactly the drift
-/// `scripts/check-rva-alias-drift.py` exists to stop: divergent names are divergent CLAIMS about
+/// `scripts/check-rva-alias-drift.py` exists to stop: divergent names are divergent claims about
 /// what an address is, and at least one of them is then a wrong fact shipping in a DLL.
 pub const CS_PC_KEY_CONFIG_SINGLETON_RVA: u32 =
     er_game_base::rva::CS_PC_KEY_CONFIG_SINGLETON_RVA as u32;
@@ -401,7 +401,7 @@ mod tests {
     }
 
     /// Unavailable must yield an empty list, never a fabricated one. The report keeps that honest
-    /// by ALSO printing the reason.
+    /// by also printing the reason.
     #[test]
     fn unavailable_bindings_produce_no_collisions() {
         let census = census_with("er_invasion_warp.dll", VK_F7);

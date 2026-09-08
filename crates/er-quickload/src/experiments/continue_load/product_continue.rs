@@ -20,7 +20,7 @@ pub(crate) use er_telemetry_core::counters::PRODUCT_CONTINUE_EMPTY_PROFILE_TICKS
 /// resolved, and the caching.
 ///
 /// CACHED, and it has to be: the caller is a per-frame boot path and the container is ~29 MB, so an
-/// uncached read here would be a 29 MB read per frame ON THE GAME THREAD -- the same shape as the
+/// uncached read here would be a 29 MB read per frame on the game thread -- the same shape as the
 /// per-call log open that already cost framerate once. The answer cannot change during a boot
 /// (the file is whatever the game opened; the slot comes from a `OnceLock`), and `None` is cached
 /// too so an unreadable container is not retried sixty times a second.
@@ -41,14 +41,14 @@ fn configured_slot_holds_a_character(slot: i32) -> Option<bool> {
 /// The configured slot's fingerprint, having first repaired a `CS::ProfileSummary` the game's own
 /// boot read left empty.
 ///
-/// The game deserializes that table exactly ONCE per boot. Measured run 2026-09-05 20:58:51: the
+/// The game deserializes that table exactly once per boot. Measured run 2026-09-05 20:58:51: the
 /// wait step polled four times, got the "completed, result code 0" answer instead of the `3` that
 /// fills, advanced without calling `GetProfileSummary`, and all ten records stayed zeroed for the
 /// rest of the boot -- while the container the runtime had open held all ten characters and our own
 /// decoder read every one of them. Waiting out `EMPTY_PROFILE_ESCALATE_TICKS` cannot recover that:
 /// there is no second native read to wait for.
 ///
-/// So when the container on disk says this slot HOLDS a character and the live record still says it
+/// So when the container on disk says this slot holds a character and the live record still says it
 /// does not, rebuild the records from that container -- the same writer, throttle and drift watch
 /// the picked path already ships. Both guards matter: `profile_real` skips this entirely on a boot
 /// whose native read worked, and `Some(true)` from the container means a genuinely vacant slot still
@@ -79,7 +79,7 @@ pub(crate) unsafe fn product_continue_action_ready(
     }
     let dialog_vt = unsafe { safe_read_usize(ready.title_dialog) }.unwrap_or(null);
     // `null` is `usize::MIN` = 0, and so is a refused `game_data_addr`: without the screen an
-    // unreadable dialog and an unmapped RVA agree at zero and this reports READY at a title with
+    // unreadable dialog and an unmapped RVA agree at zero and this reports ready at a title with
     // no dialog at all.
     let want_dialog_vt = er_game_base::mem::game_data_addr(
         base,
@@ -89,13 +89,13 @@ pub(crate) unsafe fn product_continue_action_ready(
     want_dialog_vt != null && dialog_vt == want_dialog_vt
 }
 /// `CS::MenuItem`'s constant-false accept predicate: a 3-byte `xor eax,eax; ret` leaf a row carries
-/// at `+0xf8` while it is NOT accept-ready.
+/// at `+0xf8` while it is not accept-ready.
 ///
-/// MAPPED 2026-08-30 as `0x7add70 -> 0x7aebf0`, after being the one constant here with no 1.17
-/// row -- and the reason it was missing is worth keeping. It is a `.pdata`-less LEAF, invisible to
-/// the whole-image function-table alignment, and NOTHING CALLS IT: its address is only ever taken,
+/// Mapped 2026-08-30 as `0x7add70 -> 0x7aebf0`, after being the one constant here with no 1.17
+/// row -- and the reason it was missing is worth keeping. It is a `.pdata`-less leaf, invisible to
+/// the whole-image function-table alignment, and nothing calls IT: its address is only ever taken,
 /// so the caller-vote tools were blind to it too until they learned to count `lea`s. The evidence
-/// is a unanimous 1-of-1 -- each image contains exactly ONE rip-relative reference to its address,
+/// is a unanimous 1-of-1 -- each image contains exactly one rip-relative reference to its address,
 /// both at byte offset +0xa5 inside `0x7acf80 -> 0x7ade00` (`IDENTICAL-WHOLE`, 151 insns, `.pdata`
 /// 0x232 in both), both spelled `48 8d 05 44 0d 00 00`.
 ///
@@ -103,7 +103,7 @@ pub(crate) unsafe fn product_continue_action_ready(
 /// and MinHook's own rules refuse the site, so `er-game-base` admits the row to the CALL/READ map
 /// and never to the detour one. That is exactly the shape this site needs -- it only compares.
 /// The verdict exists because the two used to be one decision: `IDENTICAL-SHORT` refused the hook
-/// AND withdrew the address from comparing, and this constant was what paid for it.
+/// and withdrew the address from comparing, and this constant was what paid for it.
 const MENU_ITEM_ACCEPT_IDLE_RVA: usize = 0x007add70;
 
 /// `CS::MenuItem`'s real accept predicate: the row is selectable. `0x7ad810 -> 0x7ae690`.
@@ -184,8 +184,8 @@ pub(crate) unsafe fn product_continue_item_action(base: usize) -> Option<NativeC
     }
     let functor_vt = unsafe { safe_read_usize(functor) }?;
     let do_call = unsafe { safe_read_usize(functor_vt + DOCALL_VTABLE_SLOT_10) }?;
-    // RESOLVED, and never satisfied by zero. `MenuTitleContinue::_Do_call` moved on 1.17
-    // (0x764b80 -> 0x7659d0), so the raw comparison could not match and EVERY native Continue
+    // Resolved, and never satisfied by zero. `MenuTitleContinue::_Do_call` moved on 1.17
+    // (0x764b80 -> 0x7659d0), so the raw comparison could not match and every native Continue
     // MenuWindowJob was rejected here -- the autoload's own path to the Continue row, refused on a
     // stale address rather than on anything about the item, and silently.
     let expected_do_call = er_game_base::mem::game_data_addr(
@@ -202,7 +202,7 @@ pub(crate) unsafe fn product_continue_item_action(base: usize) -> Option<NativeC
     const MENU_ITEM_ACCEPT_PREDICATE_F8_OFFSET: usize = 0xf8;
     let accept_predicate = unsafe { safe_read_usize(item + MENU_ITEM_ACCEPT_PREDICATE_F8_OFFSET) }?;
     record_continue_candidate(item, accept_predicate, base);
-    // The idle predicate is a REJECTION, and the native-accept check below rejects the same items
+    // The idle predicate is a rejection, and the native-accept check below rejects the same items
     // for the same reason, so a refusal here costs the precise log line and not the decision.
     if accept_predicate_is_idle(base, accept_predicate) {
         append_autoload_debug(format_args!(
@@ -326,14 +326,14 @@ pub(crate) unsafe fn product_continue_autoload_tick(
     }
 
     if phase == FULLREAD_PHASE_SUBMIT {
-        // SWITCH-SAFETY (System->Quit->Load-Profile): for the in-world character switch (not a boot
-        // autoload), the return-title chain we submitted is still tearing down the OLD world. Firing
+        // Switch-SAFETY (System->Quit->Load-Profile): for the in-world character switch (not a boot
+        // autoload), the return-title chain we submitted is still tearing down the old world. Firing
         // the Continue-load now sets GameMan saveState/b80=2 and DoSaveStuff deserializes the picked
-        // slot INTO the still-live world -> crash in CSGaitemImp::Deserialize (live 0x67141a). Defer
+        // slot into the still-live world -> crash in CSGaitemImp::Deserialize (live 0x67141a). Defer
         // until the old world is actually gone (local player absent), so the load runs at a clean
         // title exactly like the boot autoload does. The boot path has no System-Quit phase, and at a
         // fresh title there is no local player, so this gate passes immediately there.
-        // See bd system-quit-load-profile-trigger-RESOLVED.
+        // See bd system-quit-load-profile-trigger-resolved.
         if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
             && unsafe { PlayerIns::local_player_mut() }.is_ok()
         {
@@ -364,16 +364,16 @@ pub(crate) unsafe fn product_continue_autoload_tick(
         }
         let (profile_real, profile_map, profile_level, profile_name_len) =
             unsafe { fingerprint_slot_repairing_an_empty_summary(slot) };
-        // CONSECUTIVE, and reset by a single real read. A boot whose ProfileSummary is still
+        // Consecutive, and reset by a single real read. A boot whose ProfileSummary is still
         // filling can reach this check before the save-data job has parsed it, so the count has to
-        // measure an UNBROKEN run of empty-like reads -- not how long the autoload has been alive.
+        // measure an unbroken run of empty-like reads -- not how long the autoload has been alive.
         let empty_ticks = PRODUCT_CONTINUE_EMPTY_PROFILE_TICKS.load(Ordering::SeqCst) as u64;
         let empty_ticks =
             er_title_flow::boot_hold::empty_profile_next_ticks(empty_ticks, profile_real);
         PRODUCT_CONTINUE_EMPTY_PROFILE_TICKS.store(empty_ticks as usize, Ordering::SeqCst);
         if !profile_real {
             let escalated = PRODUCT_CONTINUE_EMPTY_PROFILE_ESCALATED.load(Ordering::SeqCst) != null;
-            // ASK THE CONTAINER BEFORE SPENDING THE PATIENCE. The 1800-tick wait exists to tell a
+            // Ask the container before spending the patience. The 1800-tick wait exists to tell a
             // ProfileSummary that is still filling apart from a slot that is genuinely vacant, and
             // it is the right answer for the first case. For the second the container on disk knows
             // already, so waiting is pure loss -- see `configured_slot_holds_a_character` for the
@@ -389,7 +389,7 @@ pub(crate) unsafe fn product_continue_autoload_tick(
             };
             match action {
                 er_title_flow::boot_hold::EmptyProfileAction::Escalate => {
-                    // THE DEAD END ENDS HERE. Waiting longer cannot help: this branch has
+                    // The dead end ends here. Waiting longer cannot help: this branch has
                     // republished the identical fingerprint every tick for the whole threshold
                     // window, so the profile is not filling, it is absent. Reject our own selection
                     // and hand the choice to the user -- the picker's pick supersedes it, and the
@@ -418,21 +418,21 @@ pub(crate) unsafe fn product_continue_autoload_tick(
             return;
         }
         let Some(action) = (unsafe { product_continue_item_action(base) }) else {
-            // THE CONTINUE LATCH IS UNSATISFIABLE AT THE TITLE, so this is not a wait -- it is the
+            // The continue latch is UNSATISFIABLE at the title, so this is not a wait -- it is the
             // path. `MENU_CONTINUE_ITEM` latches only on a MenuWindowJob whose docall matches
-            // `MENU_TITLE_CONTINUE_DOCALL_RVA` AND whose accept predicate is
+            // `MENU_TITLE_CONTINUE_DOCALL_RVA` and whose accept predicate is
             // `MENU_ITEM_ACCEPT_NATIVE_RVA`, and the 1.16.2 curated dump names both:
             //   * 0x140764b80 is an adjustor thunk (`ADD RCX,8 ; JMP 0x140763fc0`) onto a function
             //     that allocates 0xaa0 and constructs **CS::BackScreen** (a CS::FullScreenMenu)
             //     with a "Fade" proxy -- the black fade screen, built by the `L"01_900_Black"`
             //     factory 0x140764290 whose only code xref is CSMenuManImp::Update;
             //   * 0x1407ad810 is `GLOBAL_CSMenuMan != 0 && !FUN_140765f20(GLOBAL_CSMenuMan)` -- a
-            //     global "menu manager not busy" check, stored by the GENERIC MenuWindowJob ctors,
+            //     global "menu manager not busy" check, stored by the generic MenuWindowJob ctors,
             //     so it says nothing about Continue.
             // Measured 2026-09-05 21:32: 416/416 candidate observations idle,
             // `native_accept_hits = 0`, `accept_changes = 0`, and the autoload parked forever.
             //
-            // `title_menu_action_ready` is the identification that IS grounded: TitleTopDialog
+            // `title_menu_action_ready` is the identification that is grounded: TitleTopDialog
             // vtable, the [dialog+0xa48] registry, a MenuMemberFuncJob vtable, and a member_fn that
             // resolves through at most six thunk hops to the live Load-Game dialog factory. Firing
             // its node through the native run 0x1409aaba0 is the game's own path -- no forged
@@ -662,13 +662,13 @@ pub(crate) unsafe fn fire_product_title_load_action(
     OWN_STEPPER_SELECTOR_STEP.store(null, Ordering::SeqCst);
     OWN_STEPPER_SELECTOR_CTX.store(null, Ordering::SeqCst);
     reset_phase_timer(&OWN_STEPPER_S2_PHASE_STARTED_MS);
-    // CHECK THE RESOLUTION BEFORE IT BECOMES A FUNCTION POINTER. `game_data_addr` answers 0 when
+    // Check the resolution before it becomes a function pointer. `game_data_addr` answers 0 when
     // the running build has no verified mapping for the RVA, and `mem.rs` says of it in as many
-    // words: "NEVER use this for a call target. Zero is a safe address to fail a read at and a
+    // words: "never use this for a call target. Zero is a safe address to fail a read at and a
     // fatal one to jump to." This transmuted the result straight into a fn pointer and called it.
     //
-    // It is not a live crash today -- MENU_MEMBER_FUNC_JOB_RUN_RVA (0x9aaba0) IS mapped for 1.17
-    // (-> 0x9abd40), so the address that arrives here is the right one. It is the CONTRACT that was
+    // It is not a live crash today -- MENU_MEMBER_FUNC_JOB_RUN_RVA (0x9aaba0) is mapped for 1.17
+    // (-> 0x9abd40), so the address that arrives here is the right one. It is the contract that was
     // broken: nothing at this site established that, and the day the row leaves the map this jumps
     // to address 0.
     let run_addr = er_game_base::mem::game_data_addr(
@@ -697,21 +697,21 @@ pub(crate) unsafe fn fire_product_title_load_action(
         "product-core-autoload: native TitleTopDialog Load-Game run returned; waiting for ProfileLoadDialog factory hook capture"
     ));
 }
-// The DETERMINISTIC MENU INPUT PROBE driver (`menu_input_probe`) stood here: a per-frame
+// The DETERMINISTIC menu input probe driver (`menu_input_probe`) stood here: a per-frame
 // Down->Confirm schedule injected at the native keystate bitmap, used as a measurement oracle
 // for whether the d180 leaf-Update ticks on highlight alone. Its only caller was the
 // `input_probe_enabled()` branch in product_core_own_stepper/fallback_drives.rs, and that gate
 // has returned a literal `false` since it was written, so the probe never ran. Deleted with the
 // branch rather than left as an orphan that reads like a live input path.
-/// OBSERVE-ONLY NATIVE-LOAD tick (native_load_enabled(), gated OFF by default). Runs each frame
-/// INSTEAD of the own_stepper forcing logic, then the caller pass-throughs to OWN_STEPPER_ORIG_IDX10
-/// so the NATIVE title machine advances untouched (the user drives past press-any-button + modals).
-/// KEEP vs the normal own_stepper: it does NOT SetState(owner,2/3), does NOT clear the beginlogo
-/// gate, does NOT self-fire the registrar 0x1409b24e0, does NOT run direct_build / cold_char_mount.
+/// Observe-only native-load tick (native_load_enabled(), gated off by default). Runs each frame
+/// instead of the own_stepper forcing logic, then the caller pass-throughs to OWN_STEPPER_ORIG_IDX10
+/// so the native title machine advances untouched (the user drives past press-any-button + modals).
+/// Keep vs the normal own_stepper: it does not SetState(owner,2/3), does not clear the beginlogo
+/// gate, does not self-fire the registrar 0x1409b24e0, does not run direct_build / cold_char_mount.
 /// It ONLY: (1) read-only checks whether the live TitleTopDialog menu/action is rendered and
 /// semantically validated (TitleTopDialog vtable, [dialog+0xa48] registry, Load-Game
-/// MenuMemberFuncJob node/action chain); (2) ONE-SHOT: fires that native run
-/// MENU_MEMBER_FUNC_JOB_RUN_RVA (0x1409aaba0, rcx=node) -- which builds the LIVE registered
+/// MenuMemberFuncJob node/action chain); (2) one-SHOT: fires that native run
+/// MENU_MEMBER_FUNC_JOB_RUN_RVA (0x1409aaba0, rcx=node) -- which builds the live registered
 /// ProfileLoadDialog the native pump drives. After firing it observes (the caller keeps writing the
 /// golden oracle as the native pump hopefully loads the char). Pure read-only until the single fire.
 #[allow(dead_code)] // Retained: Staged-save slot seeder for the deprecated staged-save probe path; the RE it encodes (ProfileSummary slot layout, FaceData::CopyFromBuffer, ChrAsm copy) is the reason it stays.

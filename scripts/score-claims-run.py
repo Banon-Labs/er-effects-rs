@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """Score one product runtime run's artifact directory against the oracles a claim set needs.
 
-WHY THIS EXISTS. A settlement run is judged per CLAIM, not in aggregate -- "the run passed" settles
+Why this exists. A settlement run is judged per claim, not in aggregate -- "the run passed" settles
 nothing. That judgement needs three things read together, and reading them by hand invites reading
 only the flattering one:
 
-  1. WHAT THE RUN ACTUALLY PRODUCED. An artifact that is ABSENT is not a zero. A telemetry JSON that
+  1. What the run actually produced. An artifact that is absent is not a zero. A telemetry JSON that
      never appeared would make every "oracle read 0" below a statement about a file that is not
      there, so the file listing is printed first.
-  2. THE DLL'S OWN REFUSAL LINES. After a game-version bump a stale address is a `HOOK REFUSED` /
-     `ADDRESS REFUSED` log line plus a silently-zeroed counter, NOT a crash. A counter sitting at 0
+  2. The DLL'S own refusal lines. After a game-version bump a stale address is a `HOOK REFUSED` /
+     `ADDRESS REFUSED` log line plus a silently-zeroed counter, not a crash. A counter sitting at 0
      beside a refusal for the address that feeds it is a refused hook, not a disproven feature --
-     so refusals are printed BEFORE the oracle values, never after.
-  3. THE NAMED ORACLES, GROUPED BY THE CLAIM GROUP THAT NEEDS THEM, printed as `<ABSENT>` when the
+     so refusals are printed before the oracle values, never after.
+  3. The named ORACLES, grouped by the claim group that needs them, printed as `<ABSENT>` when the
      key is not in the JSON at all. "Absent" and "0" are different verdicts, and this repo has
      already been burned by a field a crate published but telemetry never emitted.
 
-The `er-quickload-autoload-debug.log` is DEFAULT-OFF: `append_autoload_debug` returns before any I/O
+The `er-quickload-autoload-debug.log` is default-OFF: `append_autoload_debug` returns before any I/O
 unless the marker file `er-quickload-autoload-debug.txt` exists in the game directory. A run staged
 without it produces an empty log, and every log-line oracle below is silence rather than evidence --
 which is why a missing log is called out explicitly instead of counting as "zero refusals".

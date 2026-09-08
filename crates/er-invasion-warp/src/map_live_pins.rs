@@ -1,4 +1,4 @@
-//! Writes to pin rows that ALREADY EXIST -- the live half of the world-map surface.
+//! Writes to pin rows that already exist -- the live half of the world-map surface.
 //!
 //! Split from `map_hooks` because the two halves have opposite safety rules and conflating them is
 //! what produced the 2026-08-05 crash. `map_hooks` builds the row list inside the
@@ -8,18 +8,18 @@
 //!
 //! Two things are being solved here, and they share the same machinery:
 //!
-//! 1. RE-COLOURING. Marking a location has to change the map while the player is standing there,
+//! 1. RE-colouring. Marking a location has to change the map while the player is standing there,
 //!    because the list is not rebuilt until the next world entry.
-//! 2. TOPPING UP. A dungeon whose MSB became resident since the last world entry has points that
+//! 2. Topping up. A dungeon whose MSB became resident since the last world entry has points that
 //!    have nowhere to go. The constructor reserves dormant rows for exactly this; a top-up claims
 //!    one and retargets it.
 //!
 //! # The ownership rule, learned the expensive way
 //!
-//! A recorded row address is not permission to write to it. Freed MenuHeap pages stay MAPPED, so a
+//! A recorded row address is not permission to write to it. Freed MenuHeap pages stay mapped, so a
 //! fault-tolerant read of a destroyed ViewModel's buffer succeeds and returns whatever now lives
 //! there. A run that trusted a four-bit id-range check repainted 456 rows inside other objects and
-//! crashed the game. Every write below is gated on, in order: the ViewModel read LIVE from the
+//! crashed the game. Every write below is gated on, in order: the ViewModel read live from the
 //! engine's own `CSPopupMenu+0x250` slot (nulled by the same function that frees the object), that
 //! being the same object our span was recorded against, the list still beginning where it did, and
 //! the row pointing into the param slab this DLL leaked. The last is a full 64-bit match on an
@@ -41,7 +41,7 @@ use super::map_hooks::{
 ///
 /// # Why this has to exist
 ///
-/// Everything else in this module changes what the NEXT ViewModel is built with, and measurement
+/// Everything else in this module changes what the next ViewModel is built with, and measurement
 /// says there is no next one: closing and reopening the world map does not re-run the constructor
 /// (`opens=2`, no `ctor #3`, live 2026-08-05), and neither does switching map layer -- the ctor is
 /// reachable only from `STEP_MoveMap_Init`. So a mark made while playing could never reach the
@@ -72,7 +72,7 @@ pub unsafe fn restyle_live_pins() -> (usize, usize) {
     if LIVE_RESTYLE_SIGNATURE.load(Ordering::SeqCst) == signature {
         return (0, 0);
     }
-    // Past this point the user's marks have CHANGED and the map is expected to change with them.
+    // Past this point the user's marks have changed and the map is expected to change with them.
     // Every refusal below is therefore a visible failure -- the player pressed a key and nothing
     // happened -- so each one says why, deduped on the reason.
     macro_rules! decline {
@@ -88,14 +88,14 @@ pub unsafe fn restyle_live_pins() -> (usize, usize) {
             return (0, 0);
         }};
     }
-    // EXACTLY ONE VIEWMODEL, RE-VALIDATED BEFORE ANY WRITE.
+    // Exactly one VIEWMODEL, RE-validated before any write.
     //
     // Three independent gates, because the previous single gate was not one: (1) the ViewModel must
     // be the one the last injection wrote into and its pin list must still be readable and
-    // plausible; (2) that list must still START where it did when we recorded the span -- if it
+    // plausible; (2) that list must still start where it did when we recorded the span -- if it
     // moved, the buffer was reallocated and every recorded address is meaningless; (3) each row must
     // point into our own leaked param slab. Only then is a write authorised.
-    // GATE 0, AND IT IS THE ONE THAT MATTERS: the ViewModel comes from the ENGINE'S slot, not from
+    // Gate 0, and it is the one that MATTERS: the ViewModel comes from the engine'S slot, not from
     // ours. `CSPopupMenu+0x250` is nulled by the same function that frees the object, so a
     // destroyed ViewModel reads as `None` here. A remembered pointer cannot do that -- MenuHeap
     // hands the freed 0x450 block back at the same size class and the pages stay mapped, so every
@@ -103,7 +103,7 @@ pub unsafe fn restyle_live_pins() -> (usize, usize) {
     let Some(view_model) = authoritative_view_model() else {
         decline!("CSPopupMenu+0x250 is null -- there is no world map to repaint right now")
     };
-    // And it must be the SAME object our span was recorded against. If the engine has built a new
+    // And it must be the same object our span was recorded against. If the engine has built a new
     // one since, the span describes a buffer that has been freed.
     if view_model != LIVE_VIEW_MODEL.load(Ordering::SeqCst) {
         decline!(
@@ -149,15 +149,15 @@ pub unsafe fn restyle_live_pins() -> (usize, usize) {
     const SAMPLE_LIMIT: usize = 4;
     let mut samples: Vec<(i32, Option<u32>, u16, Option<u32>)> = Vec::new();
     let mut param_disagreements = 0_usize;
-    // BOTH SPANS. A pin the player can see is not necessarily in the INJECTED span: a legacy
-    // dungeon harvested mid-session has its markers in CLAIMED DORMANT rows instead, put there by
+    // Both spans. A pin the player can see is not necessarily in the injected span: a legacy
+    // dungeon harvested mid-session has its markers in claimed dormant rows instead, put there by
     // `top_up_live_pins`. Walking only the injected span meant marking such a dungeon repainted
-    // exactly one row -- its whole-dungeon marker, which the top-up had already HIDDEN -- and left
+    // exactly one row -- its whole-dungeon marker, which the top-up had already hidden -- and left
     // every marker actually on screen untouched. Measured 2026-08-05: `MARKED 0x1c000000` three
     // times, `1 of 467 repainted` every time, while nine visible Haligtree markers sat in dormant
     // rows and never changed. That is the reported "marking does nothing" in full.
     //
-    // Only the CLAIMED prefix of the dormant span is walked. The rest are still blank rows with a
+    // Only the claimed prefix of the dormant span is walked. The rest are still blank rows with a
     // zero layer mask; they are not drawn and have no tier to show.
     let dormant_rows: Vec<usize> = er_invasion_warp_core::map_surface::claimed_dormant_span(
         DORMANT_SPAN_BEGIN.load(Ordering::SeqCst),
@@ -174,7 +174,7 @@ pub unsafe fn restyle_live_pins() -> (usize, usize) {
         .step_by(PIN_ROW_STRIDE)
         .chain(dormant_rows)
     {
-        // Ownership by POINTER, not by a four-bit id range. The row must point at a param row inside
+        // Ownership by pointer, not by a four-bit id range. The row must point at a param row inside
         // the slab this module leaked, at an exact slab stride -- an address only we hand out.
         let Some(index) = row_is_verifiably_ours(row, slab) else {
             foreign += 1;
@@ -204,8 +204,8 @@ pub unsafe fn restyle_live_pins() -> (usize, usize) {
         if current == Some(u32::from(desired)) {
             continue;
         }
-        // KEEP THE FIRST FEW DISAGREEMENTS. Counts alone cannot distinguish "these rows genuinely
-        // changed tier" from "our write is not sticking": a live run showed the SAME 48 rows
+        // Keep the first few disagreements. Counts alone cannot distinguish "these rows genuinely
+        // changed tier" from "our write is not sticking": a live run showed the same 48 rows
         // rewritten on four consecutive passes (generations 62-65), which is only possible if the
         // value never reads back as what was written -- and the count-only log line could not say
         // which rows, what they resolved to, or what was actually in the field.
@@ -228,10 +228,10 @@ pub unsafe fn restyle_live_pins() -> (usize, usize) {
         // SAFETY: `row` is inside a span this module appended and still carries our stamp; both
         // fields are plain scalars the engine only reads.
         //
-        // ALL FOUR descriptors, not just `+0x248`. The engine picks which one to draw from at read
+        // All four descriptors, not just `+0x248`. The engine picks which one to draw from at read
         // time, out of state we do not control -- see `ROW_ICON_DESCRIPTOR_OFFSETS`.
         unsafe { write_row_icon(row, desired) };
-        // AND BUMP THE RE-BIND TOKEN. Without this the write above is invisible: the draw re-reads
+        // And BUMP the RE-BIND token. Without this the write above is invisible: the draw re-reads
         // a row's icon only when re-binding its clip, and it re-binds only on an id it has not
         // cached. This is the difference between "the field says the new frame" and "the map shows
         // the new frame".
@@ -273,11 +273,11 @@ static LAST_RESTYLE_REFUSAL: AtomicUsize = AtomicUsize::new(0);
 
 /// Why the last top-up attempt did nothing.
 ///
-/// THIS EXISTS BECAUSE THE FIRST VERSION HAD NONE. Every gate below was a bare `return 0`, so a
+/// This exists because the first version had none. Every gate below was a bare `return 0`, so a
 /// live run produced seven world entries, 512 dormant rows reserved on each, and not one line
 /// saying why zero of them were ever claimed -- the same silent no-op this module's oracles were
 /// written to eliminate. Deduped on the message's address so a gate that refuses every frame prints
-/// once and a CHANGE of gate prints immediately.
+/// once and a change of gate prints immediately.
 #[cfg(windows)]
 static LAST_REFUSAL: AtomicUsize = AtomicUsize::new(0);
 
@@ -300,11 +300,11 @@ fn clear_refusal_latch() {
     LAST_REFUSAL.store(0, Ordering::SeqCst);
 }
 
-/// Make points harvested SINCE the last world entry visible, by retargeting dormant rows in place.
+/// Make points harvested since the last world entry visible, by retargeting dormant rows in place.
 ///
 /// This is the answer to "I walked into Leyndell, opened the map, and my markers were not there".
 /// The row list is populated only in the `WorldMapViewModel` constructor, which runs on a world
-/// entry and, worse, runs during the loading screen BEFORE the destination's `MsbResCap`s exist --
+/// entry and, worse, runs during the loading screen before the destination's `MsbResCap`s exist --
 /// so the injection that accompanies arriving somewhere is built from a catalog that does not yet
 /// contain the place being arrived at. The points land in the catalog a second later and then have
 /// nowhere to go until the next transition.
@@ -332,7 +332,7 @@ pub unsafe fn top_up_live_pins() -> usize {
     let Ok(base) = er_game_base::mem::game_module_base() else {
         return refuse("the game module base is unreadable");
     };
-    // GATE 1: the ViewModel from the ENGINE's slot, and it must be the one our span describes.
+    // Gate 1: the ViewModel from the engine's slot, and it must be the one our span describes.
     let Some(view_model) = authoritative_view_model() else {
         // `+0x250` is written only from `MoveMapStep`'s constructor (`FUN_1407ed840`, store at
         // 0x1407ed8d9) and nulled only from `~MoveMapStep` (`FUN_1407ed790`, null-store at
@@ -350,7 +350,7 @@ pub unsafe fn top_up_live_pins() -> usize {
              dormant span describes a buffer that has been freed",
         );
     }
-    // GATE 2: no map dialog attached. A dialog holds RAW row pointers in
+    // Gate 2: no map dialog attached. A dialog holds raw row pointers in
     // `CS::WorldMapWarpData+0x08` and its clip pool caches the list base; retargeting underneath it
     // would change what a bound clip points at mid-frame. Waiting costs nothing -- the player is
     // not looking at the map.
@@ -365,7 +365,7 @@ pub unsafe fn top_up_live_pins() -> usize {
     if span_begin == 0 || span_end <= span_begin {
         return refuse("the last injection recorded no dormant span to claim from");
     }
-    // GATE 3: the list must still begin where it did. If it moved, every recorded address is a
+    // Gate 3: the list must still begin where it did. If it moved, every recorded address is a
     // description of a buffer that has been freed.
     let Some(geometry) = (unsafe { read_pin_list(view_model) }) else {
         return refuse("the pin row list is unreadable through the live ViewModel");
@@ -390,18 +390,18 @@ pub unsafe fn top_up_live_pins() -> usize {
         return refuse("the synthetic param slab bounds are not published");
     };
 
-    // IDENTITY IS (BLOCK, POINT), NOT BLOCK -- and getting that wrong is what made this function a
+    // Identity is (block, point), not block -- and getting that wrong is what made this function a
     // permanent no-op.
     //
     // Keying on block alone reads "this block already has a pin, so there is nothing to add". But
-    // the pin a not-yet-entered legacy dungeon has is the WHOLE-DUNGEON marker: one row at the
+    // the pin a not-yet-entered legacy dungeon has is the whole-dungeon marker: one row at the
     // dungeon's centre, placed precisely because its interior was unknown. The moment its MSB
     // becomes resident, its real points arrive -- and they are all in that same block, so a
     // block-keyed filter discarded every one of them. Measured live 2026-08-05: the Haligtree's 34
     // points merged to 9 markers, the harvest reported them for ~35,900 consecutive frames, and the
     // top-up refused all of them on every frame because block 0x1c000000 already carried its
     // whole-dungeon marker. That is exactly the reported gap -- "I see the legacy locations only
-    // after I warp" -- because the next constructor DOES supersede the marker properly.
+    // after I warp" -- because the next constructor does supersede the marker properly.
     //
     // Superseding it live is the whole job: claim a row per real point, then hide the marker they
     // replace.
@@ -444,7 +444,7 @@ pub unsafe fn top_up_live_pins() -> usize {
     // undoing.
     let (mut unprojectable, mut unlayered, mut unnamed) = (0_usize, 0_usize, 0_usize);
     let candidates = fresh.len();
-    // Points, not places. A legacy dungeon's whole per-point set lives in ONE block, so 48 markers
+    // Points, not places. A legacy dungeon's whole per-point set lives in one block, so 48 markers
     // can be a single markable location -- and marking it flips all 48 rows at once. Reading a
     // per-point count as a per-place count is what made a correct restyle look like a stuck write.
     let candidate_blocks = fresh
@@ -532,7 +532,7 @@ pub unsafe fn top_up_live_pins() -> usize {
         record_place_name(target.block.raw(), place_name_text_id);
         // The registry is a dense index and this id is past its end, so the confirm hook cannot
         // resolve it from there. Still recorded even though no confirm can warp any more: an id the
-        // hook cannot resolve takes its UNRESOLVED path, which means "our registry and our rows
+        // hook cannot resolve takes its unresolved path, which means "our registry and our rows
         // disagree" and is a bug to chase. Registering it here keeps that signal honest, so the
         // only thing selecting a top-up pin reports is the policy refusal every other pin gives.
         record_top_up_target(entity_id, target);
@@ -545,7 +545,7 @@ pub unsafe fn top_up_live_pins() -> usize {
         claimed += 1;
     }
     // Hide what the new rows replaced. Only for blocks that actually got a replacement: a block
-    // whose points were all refused above must KEEP its whole-dungeon marker, or the refusal would
+    // whose points were all refused above must keep its whole-dungeon marker, or the refusal would
     // remove the only way to reach that dungeon from the map.
     let mut hidden = 0_usize;
     for block in &replaced_blocks {
@@ -569,7 +569,7 @@ pub unsafe fn top_up_live_pins() -> usize {
              layer, {unnamed} with no place name."
         ));
     } else {
-        // Every gate passed and there WERE fresh blocks, yet nothing was claimed. Without this the
+        // Every gate passed and there were fresh blocks, yet nothing was claimed. Without this the
         // outcome is indistinguishable from the gates never opening.
         refuse(if unnamed == candidates {
             "every fresh block projected onto the map but none is near a named place, and a row              with no label text id is never drawn -- a claimed slot would be an invisible pin"
@@ -596,7 +596,7 @@ pub unsafe fn top_up_live_pins() -> usize {
 /// clearing it is how a row stops being drawn without being removed -- and removal is exactly what
 /// is forbidden here, because shrinking the list would move every row after it.
 ///
-/// The row is found by scanning OUR span for the row that points at that param index, rather than
+/// The row is found by scanning our span for the row that points at that param index, rather than
 /// by assuming row order matches registry order. It does not: the injection drops targets no
 /// converter placed, so row `i` and registry entry `i` diverge after the first drop.
 ///

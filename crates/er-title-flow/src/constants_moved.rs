@@ -1,10 +1,10 @@
-//! Constants, statics, and plain data types moved VERBATIM out of the root
+//! Constants, statics, and plain data types moved verbatim out of the root
 //! er-quickload crate for the title-flow extraction (Stage B of
 //! docs/plans/title-flow-crate-extraction.md). Each item's original site now
 //! carries a `pub(crate) use er_title_flow::NAME;` shim, so the root crate and
 //! this crate share the single definition below. Only visibility changed
 //! (`pub(crate)` -> `pub`); bodies and doc comments are untouched.
-// PARITY: DEBT -- verbatim transcription of constants moved out of er-quickload, kept
+// PARITY: Debt -- verbatim transcription of constants moved out of er-quickload, kept
 // import-for-import identical to keep that move reviewable as a pure move. The unused
 // imports are the cost of that fidelity and should go once the move stops being audited.
 #![allow(unused_imports)]
@@ -126,9 +126,9 @@ pub const TITLE_ANIM_DIAG_INTERVAL: usize = 60;
 /// SM owner's vtable[0x150] and no-ops unless the current node is settled (`[node+0x20]&0x8f >= 2`), so
 /// it cannot corrupt the SM. This is the call CS::TitleTopDialog::update's input-skip branch makes to
 /// move FadeIn->Loop on a button press. bd fadein-* RE 2026-06-24.
-/// NOT an FD4 SetState: 0x7499e0 is a Scaleform **frame-label goto** on a SceneObjProxy
+/// Not an FD4 SetState: 0x7499e0 is a Scaleform **frame-label goto** on a SceneObjProxy
 /// (er-loading-portrait-core names it correctly as SCALEFORM_LABEL_GOTO_RVA and this now derives
-/// from it, 2026-08-01). Its operands are frame LABELS, not StateDescs. The old name is kept
+/// from it, 2026-08-01). Its operands are frame labels, not StateDescs. The old name is kept
 /// for its call sites in title_load_step_hooks.rs.
 #[cfg(windows)]
 pub const TITLE_FD4_SETSTATE_RVA: usize = er_loading_portrait_core::SCALEFORM_LABEL_GOTO_RVA;
@@ -205,13 +205,13 @@ pub const DIALOG_ROW_REGISTRY_A48_OFFSET: usize =
     core::mem::offset_of!(TitleTopDialogLayout, row_registry);
 
 /// GameMan+0xb80 (== GameMan.save_state == save_state) FSM values. The full-save read walks
-/// IDLE(0) -> OPENING(1) -> READING(2) -> RESIDENT(3); a healthy load then drains RESIDENT -> IDLE as
+/// idle(0) -> opening(1) -> reading(2) -> resident(3); a healthy load then drains resident -> idle as
 /// the deserialize consumes the 0x280000 buffer. `save_state_b80_name` (constants::return_title)
 /// gives the display names. The finalize case-7 gate (FUN_14067a170 == save_state==0) waits on b80
-/// reaching IDLE; on the warm reload it is stuck at RESIDENT because the deserialize never consumes it.
+/// reaching idle; on the warm reload it is stuck at resident because the deserialize never consumes it.
 pub const GAME_MAN_SAVE_STATE_IDLE: i32 = 0;
 
-/// GameMan+0xb80 == 3 == RESIDENT (the full-save read drained into the 0x280000 buffer). The DRAIN
+/// GameMan+0xb80 == 3 == resident (the full-save read drained into the 0x280000 buffer). The drain
 /// phase ticks the lane + poll each frame until b80 reaches this.
 pub const FULLREAD_B80_RESIDENT: i32 = 3;
 
@@ -248,9 +248,9 @@ pub const GAME_MAN_FLAG_BC4_OFFSET: usize =
     core::mem::offset_of!(GameMan, is_in_online_mode) - core::mem::size_of::<u32>();
 
 /// Submit-gate diagnostics (b80-submit-kick-exact-false-gate-decoded-2026). The b72
-/// autoload initiator 0x14067b750 sets GameMan+0xb80=1 ONLY if the async submit
-/// 0x140e6ec70 returns true; the submit body 0x140e6f940 bails FALSE if the IO device
-/// has a STALE request in-flight ([iodev+0x10]!=0) or a stale request handle
+/// autoload initiator 0x14067b750 sets GameMan+0xb80=1 only if the async submit
+/// 0x140e6ec70 returns true; the submit body 0x140e6f940 bails false if the IO device
+/// has a stale request in-flight ([iodev+0x10]!=0) or a stale request handle
 /// ([iodev+0x20]!=0). The IO device global is abs 0x144589390 (RVA 0x4589390); we read
 /// it both as a possible pointer-to-device and as a struct base so the log
 /// disambiguates. Also: the b72 effective-getter 0x1406793d0 zeroes b72 if
@@ -259,7 +259,7 @@ pub const IODEV_GLOBAL_RVA: usize = er_game_base::rva::SL_IODEV_GLOBAL_RVA;
 
 pub const IODEV_INFLIGHT_10_OFFSET: usize = 0x10;
 
-/// The async-IO request handle the poll 0x140e6e080 actually reads is the PAIR
+/// The async-IO request handle the poll 0x140e6e080 actually reads is the pair
 /// [iodev+0x18] && [iodev+0x20] (a *started* request). 0x14067b4e0's preview read
 /// (0x140e6ec80) is what populates these; 0x14067b200's queue (0x140e6eb80) goes to
 /// the file-device-mgr instead, so it never appears here. Logging both pins which
@@ -279,7 +279,7 @@ pub const ARM_PROBE_TICK_INTERVAL: u64 = 30;
 /// the game's node update writes inputmgr(0x143d6b7b0)+0xdc+eventId*4 = value.
 /// Injecting that event makes the game's own node update accept and run the real
 /// front-end bootstrap. Verdict is [job+0x1e8] >= 2.
-/// The press-any-button job (owner+0x130) is an AND-combiner (vtable RVA
+/// The press-any-button job (owner+0x130) is an and-combiner (vtable RVA
 /// 0x2aa2958) over child condition nodes at [job+0x18 + i*8], count [job+0x60].
 /// The real input node is the child with vtable RVA 0x2aa97e8; its keycode is at
 /// child+0x180. Accept = set the inputmgr keystate bitmap (inputmgr+0x90+keycode
@@ -289,11 +289,11 @@ pub const ARM_PROBE_TICK_INTERVAL: u64 = 30;
 /// ids 0..=0x15e). The leaf input node detects a press via this layer (then
 /// mirrors into the keystate bitmap), so injecting here is what actually accepts.
 /// **This is the engine's SHUTDOWN/CLEANUP flag, not a title latch.** The game writes this
-/// byte exactly ONCE in the whole image, at 0x140c8ff41 inside `MainLoop` (0x140c8fe90, sole
+/// byte exactly once in the whole image, at 0x140c8ff41 inside `MainLoop` (0x140c8fe90, sole
 /// caller `WinMain`) -- immediately after the `while (MainUpdate())` loop exits and immediately
 /// before the `while (CleanupUpdate())` teardown loop. It is false for the entire normal game
-/// lifetime. Of its 25 xrefs, 1 is that write and 24 are readers of MIXED polarity: some
-/// suppress on set (`SaveRequest_Profile`, `RequestSave`), some ACT on set
+/// lifetime. Of its 25 xrefs, 1 is that write and 24 are readers of mixed polarity: some
+/// suppress on set (`SaveRequest_Profile`, `RequestSave`), some act on set
 /// (`STEP_MenuJobWait` -> SetState(0xb)). Step machines short-circuit to terminal states at
 /// teardown, which is exactly why product code writing it appears to "work" -- it advances the
 /// title by telling the whole engine it is shutting down. See bd er-effects-rs-d4em.
@@ -328,11 +328,11 @@ pub const WND_SW_HIDE: i32 = 0;
 
 pub const WND_GET_SYSTEM_MENU_KEEP: i32 = false as i32;
 
-/// ONLINE-DISABLE (headless offline boot, no "Unable to start in online mode" modal).
+/// Online-disable (headless offline boot, no "Unable to start in online mode" modal).
 /// `GameMan::IsOnlineMode` getter 0x14067a030 = `mov rax,[rip+..]; movzx eax,[rax+0xbc8]; ret`
 /// (the canonical online/offline flag, default 1=online, read by ~22 consumers incl. the boot
 /// login flow). Patching the getter body to `xor eax,eax; ret` forces every consumer onto the
-/// game's own OFFLINE branch, so the boot never attempts online login and the connection-error
+/// game's own offline branch, so the boot never attempts online login and the connection-error
 /// modal is never raised. Single leaf accessor, no side effects -> equivalent to "Play Offline";
 /// no save/crash risk. Verified (self-disasm, online-disable RE 2026-06-17): first byte 0x48.
 pub const ONLINE_DISABLE_RVA: usize = 0x67a030;
@@ -342,7 +342,7 @@ pub const ONLINE_DISABLE_RVA: usize = 0x67a030;
 /// Moved here from the product's `constants/autoload_state.rs` with the code-patch primitives (S5):
 /// this crate now calls `er_hook::apply_xor_ret_stub` directly and must supply the byte itself.
 pub const ONLINE_DISABLE_EXPECTED_FIRST: u8 = 0x48;
-// Not a prologue: these three stubs are the payload WRITTEN INTO the game, not bytes compared
+// Not a prologue: these three stubs are the payload written into the game, not bytes compared
 // against a function entry, so there is nothing at any address for a generator to check them
 // against. They are the only machine code in this tree that is authored rather than matched.
 /// `xor eax,eax; ret` -- returns 0 (offline) for the whole getter (the original body is 15
@@ -350,7 +350,7 @@ pub const ONLINE_DISABLE_EXPECTED_FIRST: u8 = 0x48;
 pub const ONLINE_DISABLE_STUB: [u8; 3] = [0x31, 0xc0, 0xc3];
 
 /// Sign-in force (cold save-load gate). The SaveLoad2 storage-select op ctor (deobf 0x14240f1b0)
-/// creates its runnable ONLY if the sign-in check returns true AND the user index is <= 3; cold
+/// creates its runnable only if the sign-in check returns true and the user index is <= 3; cold
 /// (no signed-in user) both fail, so the op is null and the load FSM parks (the b80 wall). Patch
 /// both gate fns to pass so the cold menu-free path loads as if signed in as user 0. Addresses
 /// ground-truthed against the deobf/live binary (the Ghidra dump's FUN_1424129a0 / FUN_14240f480
@@ -372,23 +372,23 @@ pub const USERINDEX_FORCE_EXPECTED_FIRST: u8 = 0x4c;
 pub const USERINDEX_FORCE_STUB: [u8; 3] = [0x31, 0xc0, 0xc3];
 
 /// Login-readiness predicate 0x140cab230 (`sub rsp,0x18; ...`, returns 1 only if all 3 session
-/// mgrs == 2). The boot/menu network-flow step calls it to decide ONLINE-attempt vs OFFLINE; a
-/// non-zero return makes it attempt online login, which FAILS offline -> the connection-error
-/// modal re-pops on every menu transition (the popup LOOP). Patching it to `xor eax,eax; ret`
-/// (return "not ready") makes the flow take the clean OFFLINE fork and NEVER attempt online.
+/// mgrs == 2). The boot/menu network-flow step calls it to decide online-attempt vs offline; a
+/// non-zero return makes it attempt online login, which fails offline -> the connection-error
+/// modal re-pops on every menu transition (the popup loop). Patching it to `xor eax,eax; ret`
+/// (return "not ready") makes the flow take the clean offline fork and never attempt online.
 /// Same 3-byte stub; first byte 0x48 (verified disasm). Applied with the getter patch.
 pub const ONLINE_PREDICATE_DISABLE_RVA: usize = 0xcab230;
 
-/// MENU OFFLINE-NOTICE GATE -- the THIRD menu-open popup, root-caused 2026-06-23
+/// Menu offline-notice gate -- the third menu-open popup, root-caused 2026-06-23
 /// (bd `menu-open-3rd-popup-offline-mode-notice-2026-06-23`, Ghidra RE `er-effects-rs-yvf`).
-/// `Menu_IsEnableOnlineMode` (deobf 0x140e56310) is a lazy-init cached getter that DEFAULTS TRUE. The
+/// `Menu_IsEnableOnlineMode` (deobf 0x140e56310) is a lazy-init cached getter that defaults true. The
 /// TitleTopDialog ctx-init step (0x14082d0d0) computes
-/// `TitleFlowContext->notReleaseFlag55 (+0x18C) = !Menu_IsEnableOnlineMode()`. With the getter TRUE and the
+/// `TitleFlowContext->notReleaseFlag55 (+0x18C) = !Menu_IsEnableOnlineMode()`. With the getter true and the
 /// boot offline, `notReleaseFlag55 == 0` routes the title-flow offline step (0x14082fda0) into building the
-/// "Starting in offline mode" `GR_System_Message` (id 401170) `CS::MessageBoxDialog` -- which BLOCKS the
+/// "Starting in offline mode" `GR_System_Message` (id 401170) `CS::MessageBoxDialog` -- which blocks the
 /// Continue/Load/NewGame row build (the stage-3 / 0-node continue-readiness wall). Patching this getter to
-/// `xor eax,eax; ret` (return false) makes the game's OWN ctx-init set `notReleaseFlag55 = 1` every time it
-/// runs, so the offline step takes the clean no-popup branch and the menu rows build with ZERO MessageBoxDialog
+/// `xor eax,eax; ret` (return false) makes the game's own ctx-init set `notReleaseFlag55 = 1` every time it
+/// runs, so the offline step takes the clean no-popup branch and the menu rows build with zero MessageBoxDialog
 /// builds. Race-free (re-evaluated on each ctx-init, unlike a one-shot field poke). Applied with the
 /// IsOnlineMode getter patch (offline-gated -> Seamless online is unaffected). Verified prologue first byte 0x40
 /// (`push rbx`; deobf disasm). Reuses `ONLINE_DISABLE_STUB` (`xor eax,eax; ret`).
@@ -399,9 +399,9 @@ pub const MENU_ONLINE_MODE_EXPECTED_FIRST: u8 = 0x40;
 pub use er_game_base::rva::{MSGBOX_DIALOG_VTABLE_RVA, MsgBoxRva};
 
 /// CS::SaveRetryDialog vtable (RVA). A MessageBoxDialog SUBCLASS: the wrapper 0x1407af9a0 overrides
-/// the base vtable to this AFTER the builder 0x1409275b0 runs. It is the "save/load failed -- Retry?"
+/// the base vtable to this after the builder 0x1409275b0 runs. It is the "save/load failed -- Retry?"
 /// prompt the offline title flow builds (save-data/profile read error in a degraded/offline env). The
-/// auto-accept must recognize it by THIS vtable -- not the base MessageBoxDialog vtable (0x2b03550) --
+/// auto-accept must recognize it by this vtable -- not the base MessageBoxDialog vtable (0x2b03550) --
 /// or it bails before dismissing (the vtable mismatch is why auto-accept never fired). bd
 /// offline-title-modal-is-saveretrydialog + press-any-button-golden-lever-job1e8-readiness-2026-06-23.
 pub const SAVE_RETRY_DIALOG_VTABLE_RVA: usize = 0x2aaabf8;
@@ -435,7 +435,7 @@ pub const WORLDRES_RESMGR_10_OFFSET: usize = 0x10;
 pub const RESMGR_BLOCK_COUNT_B3140_OFFSET: usize = 0xb3140;
 
 /// m10 block load-state (mirrors 0x14066d3e0 readiness tail): loadstate =
-/// entry->vtable[+0x10](entry); ready iff [loadstate+0x2d]!=0 AND [loadstate+0x35]==0xa.
+/// entry->vtable[+0x10](entry); ready iff [loadstate+0x2d]!=0 and [loadstate+0x35]==0xa.
 /// Reading [+0x35] live shows which load phase the m10 block is stuck at (<0xa).
 pub const BLOCK_LOADSTATE_GETTER_VT_10_OFFSET: usize = 0x10;
 
@@ -443,14 +443,14 @@ pub const BLOCK_LOADSTATE_FLAG_2D_OFFSET: usize = 0x2d;
 
 pub const BLOCK_LOADSTATE_PHASE_35_OFFSET: usize = 0x35;
 
-/// PHASE-2 STALL DISCRIMINATORS (added 2026-07-30 for the profile-switch reload freeze:
-/// a warm reload parks at `[+0x35]==2` for 50s+ while the FIRST load in the same process
+/// Phase-2 stall DISCRIMINATORS (added 2026-07-30 for the profile-switch reload freeze:
+/// a warm reload parks at `[+0x35]==2` for 50s+ while the first load in the same process
 /// clears the same phase; run product-continue-direct-20260730-134058).
 ///
 /// Two 1.16.1-era RE accounts of what phase 2 polls disagree -- one says the FD4FileCaps
 /// hang off this WorldBlockRes at `[+0x40]`/`[+0x48]`, the other says they hang off the
 /// WorldAreaRes (which `fc_present`/`fc_notloaded` already scan, and which read all-loaded
-/// while the block stayed at phase 2). These offsets sample the BLOCK's own copies so the
+/// while the block stayed at phase 2). These offsets sample the block's own copies so the
 /// next run discriminates the accounts instead of assuming one. All read-only.
 ///
 /// `[+0x2f]` is the gate the phase machine recomputes every tick as `[+0x2f]=[+0x2d]` iff
@@ -465,16 +465,16 @@ pub const BLOCK_LOADSTATE_COUNTDOWN_3C_OFFSET: usize = 0x3c;
 /// Sticky "load gave up" byte the phase-2/3 handlers set alongside a fallback to phase 5.
 pub const BLOCK_LOADSTATE_GAVEUP_06_OFFSET: usize = 0x06;
 
-/// The block's own FD4FileCap pointers, populated by the phase-1 load requester. FOUR slots,
+/// The block's own FD4FileCap pointers, populated by the phase-1 load requester. Four slots,
 /// not two: the 1.16.2 handler at `0x1406158a0` reads `param_1[8]`, `[9]`, `[10]` and `[0xb]`
 /// (a `longlong*`, so byte offsets 0x40/0x48/0x50/0x58), taking `cap+0x90` from each.
 pub const BLOCK_LOADSTATE_FILECAP_SLOTS: [usize; 4] = [0x40, 0x48, 0x50, 0x58];
 
-// FD4FileCap / DLString / DLIO virtual-root LAYOUT AND WALKERS MOVED DOWN to
+// FD4FileCap / DLString / DLIO virtual-root layout and walkers moved down to
 // `er_game_base::filecap` (2026-08-25), re-exported here so every call site in this crate, and
 // the product's `constants/gaitem_restore.rs` re-export chain, are unchanged.
 //
-// WHY THEY MOVED: `er-diag-harness` now carries the msb-parse / DLC-root / loadlist-wait traces
+// Why they MOVED: `er-diag-harness` now carries the msb-parse / DLC-root / loadlist-wait traces
 // that used to compile into the product DLL, and each of those traces names a file cap or a
 // virtual root in its log line. A second image needed the same walks, and one game address must
 // have exactly one literal declaration (`scripts/check-rva-alias-drift.py`) -- so the owner sank
@@ -493,8 +493,8 @@ pub use er_game_base::filecap::{
     dlio_virtual_roots_summary, dlstring_wide_ascii, fd4_filecap_content_state, fd4_filecap_name,
 };
 
-/// `FD4ResCapHolderItem::referenceCount`. Discriminates a FRESH cap (the reload built it) from a
-/// CACHE-HIT SURVIVOR still held by the outgoing world -- the two remaining explanations for a
+/// `FD4ResCapHolderItem::referenceCount`. Discriminates a fresh cap (the reload built it) from a
+/// cache-hit survivor still held by the outgoing world -- the two remaining explanations for a
 /// null `msbResCap`.
 pub const FD4_FILECAP_REFCOUNT_58_OFFSET: usize = 0x58;
 
@@ -513,27 +513,27 @@ pub const FD4_FILECAP_FLAGS_89_OFFSET: usize = 0x89;
 #[cfg(windows)]
 pub const FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET: usize = core::mem::offset_of!(GameMan, save_slot);
 
-/// `CS::GameMan::saveState` -- the ONE-SLOT ARBITER over the single SL device, off the GameMan
-/// singleton `0x143d69918`. NOT a load flag, in either direction.
+/// `CS::GameMan::saveState` -- the one-slot ARBITER over the single SL device, off the GameMan
+/// singleton `0x143d69918`. Not a load flag, in either direction.
 ///
-/// CORRECTED 2026-08-31. This was `GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET`, and two more crates
+/// Corrected 2026-08-31. This was `GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET`, and two more crates
 /// spelled the same field `GAME_MAN_LOAD_PHASE_B80_OFFSET` (er-reload-trace) and
 /// `GAME_MAN_LOAD_FSM_B80_OFFSET` (er-input-harness). Three constants saying "load" is how the
-/// save-wedge diagnosis gets re-derived backwards: the wedge turned on the SAVE lane owning this
+/// save-wedge diagnosis gets re-derived backwards: the wedge turned on the save lane owning this
 /// slot while a clear-to-0 ran underneath it, which is unreadable if the field is a load flag.
 ///
-/// THREE WITNESSES, none of them the name it used to carry:
+/// Three witnesses, none of them the name it used to carry:
 ///
 ///   1. The type. Ghidra's curated 1.16.2 `CS::GameMan` names `+0xb80` `saveState`, `int`;
 ///      `fromsoftware-rs` independently declares `pub save_state: u32` at the same slot, which is
 ///      what the `offset_of!` below binds to and what the compiler checks.
 ///   2. The game's own predicates. `IsSaveState1` (`0x14067a010`) and `IsSaveState2`
 ///      (`0x140679ff0`) are two-instruction leaves -- `mov rax,[rip+GameMan] ; cmp dword ptr
-///      [rax+0xb80],N ; sete al ; ret` -- so the field's SPELLING is in the image, not inferred.
+///      [rax+0xb80],N ; sete al ; ret` -- so the field's spelling is in the image, not inferred.
 ///   3. The constructor. `mov %r14d,0xb80(%rsi)` at `0x14067616f` (1.17 `0x140676fbf`), pinned in
 ///      `scripts/check-object-field-offsets-1170.py`, 1296/1296 aligned across both images.
 ///
-/// THE VALUE TABLE, from a complete scan of every access in the 288 functions that reference the
+/// The value table, from a complete scan of every access in the 288 functions that reference the
 /// GameMan singleton (37 sites, all of them `[reg+0xb80]`):
 ///
 /// ```text
@@ -545,8 +545,8 @@ pub const FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET: usize = core::mem::offset_of!(Game
 ///   4  0x14067b0b0        7  0x14067b030 (tested back by 0x140679fd0)
 /// ```
 ///
-/// So BOTH lanes stamp it, which is exactly why "load in progress" was wrong and why the correct
-/// name is the game's: the field says WHO owns the device, not WHAT KIND of operation is running.
+/// So both lanes stamp it, which is exactly why "load in progress" was wrong and why the correct
+/// name is the game's: the field says who owns the device, not what kind of operation is running.
 /// A reader that only wants "is the device busy" should test `!= 0`, never `== 2`.
 #[cfg(windows)]
 pub const GAME_MAN_SAVE_STATE_B80_OFFSET: usize = core::mem::offset_of!(GameMan, save_state);
@@ -561,12 +561,12 @@ pub const CSFEMAN_SINGLETON_RVA: usize = 0x3d6b880;
 /// `g_GxDrawContext` -- the GXSR rendering system's draw-context singleton (absolute
 /// 0x1447ef360; RVA = 0x1447ef360 - 0x140000000 = 0x47ef360).
 ///
-/// CORRECTED 2026-08-30. This was declared as `SESSION_SINGLETON_RVA` /
+/// Corrected 2026-08-30. This was declared as `SESSION_SINGLETON_RVA` /
 /// `TitleSessionRva::MoveMapSession` and documented as a "session manager singleton;
 /// NULL at the title, built by the move-map/load path". Both halves were wrong. The
 /// 1.16.2 dump names the global itself `g_GxDrawContext`, typed `GxDrawContext *`.
 ///
-/// EVIDENCE. Of the global's 1242 xrefs exactly TWO are WRITES, and both are the
+/// Evidence. Of the global's 1242 xrefs exactly two are writes, and both are the
 /// ctor/dtor pair in the render region -- nothing in the move-map/load region (0x140a)
 /// writes it at all, which a "built by the move-map/load path" singleton would require:
 ///   * `0x1419e6340` allocates 0x1010 bytes (== `sizeof(GxDrawContext)`, corroborated
@@ -579,13 +579,13 @@ pub const CSFEMAN_SINGLETON_RVA: usize = 0x3d6b880;
 /// `GXSimpleDrawContextImplBase`, `FD4HkDrawSceneContext`, `render`, `SetupSubsystems`,
 /// `enter_/leave_gxrendermanager_critical_section`, `CSMovieGxTexture`, `~StageRend`.
 ///
-/// IT IS NOT NULL AT THE TITLE, so it is worthless as a readiness or progress gate --
+/// It is not NULL at the title, so it is worthless as a readiness or progress gate --
 /// testing `!= null` here tests a constant. `CS::CSMovieGxTexture::CSMovieGxTexture`
-/// dereferences it with NO null check (`FUN_1419e7990(g_GxDrawContext)`) and the title
+/// dereferences it with no null check (`FUN_1419e7990(g_GxDrawContext)`) and the title
 /// background movie is exactly such a texture; `CS::OptionSettingDialog`'s constructor
 /// reads it too, and that dialog opens from the title screen.
 ///
-/// The GENUINE title/boot session singleton is a DIFFERENT address --
+/// The genuine title/boot session singleton is a different address --
 /// `TitleSessionRva::SaveSafeBeginLogoSession` (0x4588e98), 38 xrefs, read by
 /// `STEP_BeginLogo` / `STEP_InitProfile` / `STEP_LoadList` / `STEP_PlayGame` /
 /// `STEP_Finish`. `title_tick_cover.rs`'s `PRODUCT_CORE_BLOCKER_SESSION` readiness gate
@@ -594,7 +594,7 @@ pub const CSFEMAN_SINGLETON_RVA: usize = 0x3d6b880;
 /// spelled `SESSION_SINGLETON_144588E98_RVA`, so two different log lines both printed
 /// `session=0x...` for two unrelated objects.
 ///
-/// Deliberately NOT spelled `GX_DRAW_CONTEXT_RVA`: `er-loading-portrait-core` declares
+/// Deliberately not spelled `GX_DRAW_CONTEXT_RVA`: `er-loading-portrait-core` declares
 /// that name for this same address, and the 1.16.2->1.17 data ledger emits one row per
 /// declaring name, so an exact name match would produce the byte-identical duplicate row
 /// that `check-no-duplicate-ledger-rows.py` R4 forbids. The two declarations remain
@@ -606,7 +606,7 @@ pub const GX_DRAW_CONTEXT_SINGLETON_RVA: usize = TitleSessionRva::GxDrawContextS
 pub const TITLE_INPUT_MANAGER_RVA: usize = er_game_base::rva::CS_MENU_MAN_GLOBAL_RVA;
 
 /// Pure-observe snapshot interval (game-task ticks). Logs the title->menu->load state
-/// every N ticks with NO forcing, to capture what the REAL button press does.
+/// every N ticks with no forcing, to capture what the real button press does.
 pub const OBSERVE_INTERVAL: u64 = 10;
 
 /// Observe change-detection: log a snapshot only when the packed signature changes
@@ -617,33 +617,33 @@ pub static OBSERVE_LAST_SIG: std::sync::atomic::AtomicI64 =
     std::sync::atomic::AtomicI64::new(i64::MIN);
 
 /// `CS::MenuJobQueue::PushBackJob` (live entry `0x1407a9250` -- prologue-grounded vs eldenring-deobf.bin:
-/// `mov [rsp+0x10],rdx; push rdi; sub rsp,0x30; movq $-2,[rsp+0x20]`; dump `FUN_1407a9340`). CORRECTED
-/// from the prior `0x7a9254`, which was +4 INTO the first instruction (mid-`mov`) and would execute
+/// `mov [rsp+0x10],rdx; push rdi; sub rsp,0x30; movq $-2,[rsp+0x20]`; dump `FUN_1407a9340`). Corrected
+/// from the prior `0x7a9254`, which was +4 into the first instruction (mid-`mov`) and would execute
 /// garbage -- a latent bug that likely helped kill the gated `own_load_install_job` path. APPENDS a job
 /// into a MenuJobQueue (`AtomicIncrement`s the job, then appends into the container at
 /// `owner+0x8`).
 ///
-/// CORRECTED 2026-08-01 -- the two safety properties this doc used to assert are BOTH FALSE, and
+/// Corrected 2026-08-01 -- the two safety properties this doc used to assert are both false, and
 /// the transmute at `er-quickload .../own_load/loaders.rs` cites them as its justification:
-///   * "does NOT ... zero `*src`" -- it DOES. The tail Unrefs the caller's reference and then
+///   * "does NOT ... zero `*src`" -- it does. The tail Unrefs the caller's reference and then
 ///     executes `*param_2 = 0`, clearing the source slot.
 ///   * "is overflow-safe (NOT the cap-8 FixOrderJobSequence)" -- the insert it delegates to,
 ///     `FUN_1407a8820`, is typed by the dump as `(undefined8, FixOrderJobSequence *)`. It is a
-///     BOUNDED, FAILABLE push: it inserts only when `capacity_field == 0 || count < capacity`,
+///     bounded, FAILABLE push: it inserts only when `capacity_field == 0 || count < capacity`,
 ///     and otherwise silently drops the job and returns 0. A caller that ignores the return can
 ///     lose an enqueue with no error.
 ///
 /// Win64 fastcall `(rcx = queue_base, rdx = src: *MenuJob* (a DLReferenceCount
 /// Pointer slot whose [0] is the job))`. Queue targets: `owner+0x130` (ring +0x138, count +0x178;
-/// STEP_MenuJobWait's ExecuteMenuJob ticks it) OR `dialog+0x10` (ring +0x18; the per-frame menu pump
+/// STEP_MenuJobWait's ExecuteMenuJob ticks it) or `dialog+0x10` (ring +0x18; the per-frame menu pump
 /// 0x1409aa680 over the active-screen array drains it -- the native Continue post target).
-/// bd continue-load-POST-primitive-pushbackjob-kick-2026-06-22.
+/// bd continue-load-post-primitive-pushbackjob-kick-2026-06-22.
 pub const MENUJOB_PUSHBACK_RVA: usize = MENU_JOB_SUBMIT_RVA as usize;
 
 // ===== moved verbatim from crates/er-quickload/src/constants/own_load_pump.rs =====
 
 /// `FD4::FD4Time` size (dump `/FD4/FD4Time` len 16): `+0x0 vtable ptr`, `+0x8 f32 time` (the frame
-/// delta the map-stream sub-job advances on). Run only READS `time+8`. Pass a 16-byte buffer with the
+/// delta the map-stream sub-job advances on). Run only reads `time+8`. Pass a 16-byte buffer with the
 /// f32 frame delta at +8 (a zeroed buffer => delta 0.0 is valid; the deser self-builds regardless).
 pub const FD4_TIME_SIZE: usize = 0x10;
 
@@ -652,58 +652,58 @@ pub const FD4_TIME_DELTA_8_OFFSET: usize = 0x8;
 pub const DIALOG_OWNER_CTX_A38_OFFSET: usize = 0xa38;
 
 /// CS::TitleFlowContext dispatch-state field (`tfc = *(TitleTopDialog+0xa38)`; `tfc+0x14c`). The
-/// live user-driven Continue capture (bd LIVE-continue-chain-via-selector-NOT-confirm-handler) showed
+/// live user-driven Continue capture (bd live-continue-chain-via-selector-not-confirm-handler) showed
 /// the load runs through the selector `0x1409a8eb0` which reads this field and dispatches to the load
 /// dispatcher `0x1409b3070` (0=idle, 1=load, 3/5=busy). Setting it to 1 at the settled main menu is
-/// the candidate DIRECT "Continue pressed" trigger (no input) -- the exact bit we change.
+/// the candidate direct "Continue pressed" trigger (no input) -- the exact bit we change.
 pub const TFC_DISPATCH_STATE_14C_OFFSET: usize = 0x14c;
 
 pub const TFC_DISPATCH_STATE_LOAD: i32 = 1;
 
 /// CS::TitleFlowContext `notReleaseFlag55` byte at `tfc+0x18c`. The load dispatcher `0x1409b3070`
-/// gates its BUILD-the-LoadGame-job branch on `IsNotReleaseFlag55` (`0x14082cd60`: `cmpb $0,0x18c(rcx)`
-/// -> returns 1 iff the byte is 0); the dispatcher takes the LOAD branch ONLY when that returns
-/// nonzero, i.e. when `*(u8*)(tfc+0x18c)==0`. The open-menu path sets this nonzero AFTER press-any-
-/// button, so a Continue trigger fired post-menu-open lands on the ABORT branch (empty job, no load).
+/// gates its build-the-LoadGame-job branch on `IsNotReleaseFlag55` (`0x14082cd60`: `cmpb $0,0x18c(rcx)`
+/// -> returns 1 iff the byte is 0); the dispatcher takes the load branch only when that returns
+/// nonzero, i.e. when `*(u8*)(tfc+0x18c)==0`. The open-menu path sets this nonzero after press-any-
+/// button, so a Continue trigger fired post-menu-open lands on the abort branch (empty job, no load).
 /// Force this to 0 before invoking the selector to guarantee the real LoadGame build. bd
 /// dispatcher-abort-branch-force-tfc-18c-zero-2026-06-23.
 pub const TFC_NOT_RELEASE_FLAG_18C_OFFSET: usize = 0x18c;
 
 pub const TFC_NOT_RELEASE_FLAG_CLEAR: u8 = 0;
 
-/// CS::TitleTopDialog Continue-item SELECTOR `0x1409a8eb0` -- the menu-item-action funclet that the
-/// engine invokes on Continue confirm (it is NOT pumped from the idle menu; setting tfc+0x14c alone
+/// CS::TitleTopDialog Continue-item selector `0x1409a8eb0` -- the menu-item-action funclet that the
+/// engine invokes on Continue confirm (it is not pumped from the idle menu; setting tfc+0x14c alone
 /// is dormant -- bd tfc-bit-dormant-even-at-open-menu). ABI `__fastcall(rcx = &dialog_slot, rdx = out
 /// MenuJobResult*)`: it does `rcx=*(rcx)` (dialog), `*(dialog+0xa38)`=tfc, reads `*(tfc+0x14c)`; when
-/// that == 1 (TFC_DISPATCH_STATE_LOAD) it takes the LOAD branch -- `r8=dialog+0x50`, calls the load
-/// dispatcher `0x1409b3070` (the PROPER CS::MenuJob::ChainMenuJobs enqueue, no FixOrderJobSequence
+/// that == 1 (TFC_DISPATCH_STATE_LOAD) it takes the load branch -- `r8=dialog+0x50`, calls the load
+/// dispatcher `0x1409b3070` (the proper CS::MenuJob::ChainMenuJobs enqueue, no FixOrderJobSequence
 /// overflow), and wraps the built job into rdx. Pass rcx = owner+0xe0 (its [0] is the live dialog).
 /// Verified by disasm of 0x1409a8eb0 + the live user-Continue capture (selector body 0x9a8f09 ->
-/// 0x9b3070). bd LIVE-continue-chain-via-selector-NOT-confirm-handler.
+/// 0x9b3070). bd live-continue-chain-via-selector-not-confirm-handler.
 pub const TITLE_CONTINUE_SELECTOR_RVA: usize = 0x9a8eb0;
 
-/// The load dispatcher `0x1409b3070` the selector above tail-calls on its LOAD branch -- the proper
+/// The load dispatcher `0x1409b3070` the selector above tail-calls on its load branch -- the proper
 /// `CS::MenuJob::ChainMenuJobs` enqueue. Named here because `fire_tfc_continue` used to print it as
 /// a bare `base + 0x9b3070usize` in the line that reports the dispatch, which on 1.17 named an
-/// address the dispatch did not go to. Nothing CALLS this constant; it exists so the log can
+/// address the dispatch did not go to. Nothing calls this constant; it exists so the log can
 /// resolve what it claims.
 pub const TITLE_CONTINUE_LOAD_DISPATCHER_RVA: usize = 0x9b3070;
 
 /// CS::TitleTopDialog MenuJobQueue at `dialog+0x10` (ring at +0x18) -- the queue the native Continue
 /// path posts the built LoadGame job into, drained each frame by the menu pump `0x1409aa680` (which
 /// iterates the active-screen array `0x143d6d8d0` that holds the live `owner+0xe0` dialog). The
-/// selector/dispatcher only BUILD + return the job; we PushBackJob it here so it is pumped to
-/// completion. bd continue-load-POST-primitive-pushbackjob-kick-2026-06-22.
+/// selector/dispatcher only build + return the job; we PushBackJob it here so it is pumped to
+/// completion. bd continue-load-post-primitive-pushbackjob-kick-2026-06-22.
 pub const DIALOG_MENU_QUEUE_10_OFFSET: usize = 0x10;
 
-/// Menu-pump KICK pointer: `*(base+0x3b37c98)` holds `0x1409b3ff0` (a `jmp` thunk into the obfuscated
+/// Menu-pump kick pointer: `*(base+0x3b37c98)` holds `0x1409b3ff0` (a `jmp` thunk into the obfuscated
 /// per-frame pump trigger). The native posts a MenuJob then calls this zero-arg to drain it promptly;
-/// we replicate that after PushBackJob. RVA = abs - base; the stored value is an ABSOLUTE code ptr.
+/// we replicate that after PushBackJob. RVA = abs - base; the stored value is an absolute code ptr.
 pub const MENU_PUMP_KICK_PTR_RVA: usize = 0x3b37c98;
 
-/// MenuJobQueue per-frame DRAIN wrapper (deobf `0x1407a90f0`; dump `FUN_1407a91e0`). The zero-input,
+/// MenuJobQueue per-frame drain wrapper (deobf `0x1407a90f0`; dump `FUN_1407a91e0`). The zero-input,
 /// input-free way to pump a job we PushBackJob'd -- this is what the native front-end `Update` /
-/// `STEP_MenuJobWait` call each frame (NOT the Arxan kick, which is a Scaleform render refresh needing
+/// `STEP_MenuJobWait` call each frame (not the Arxan kick, which is a Scaleform render refresh needing
 /// render-thread r8). `__fastcall(rcx = queue_owner /*the dialog: +0x8 active MenuJob* slot, +0x10 the
 /// MenuJobQueue we push into, +0x38 pending*/, rdx = *FD4Time {vtbl; f32 delta@+0x8})`: if the active
 /// slot is empty and a job is pending it pops (`0x1407a8780`) + Assigns (`0x1407a9460`) the queued job
@@ -716,9 +716,9 @@ pub const MENU_DRAIN_WRAPPER_RVA: usize = 0x7a90f0;
 /// `ExecuteMenuJob` (deobf `0x1407a9600`; dump `0x1407a96f0`). `__fastcall(rcx = *MenuJob* (slot),
 /// rdx = *FD4Time {vtbl; f32 delta@+0x8})`: `cur=*rcx; if(!cur) return; AtomicIncrement(cur+8);
 /// cur->vtable[+0x10](cur, &result, &{FD4Time vtbl, delta}); if(!MenuJobResult::ShouldContinue)
-/// *rcx=0; AtomicDecrement`. We call this directly on OUR built job each frame (rcx=&job_slot) to
-/// pump it via its OWN vtable[2] -- correct for the dispatcher's chained LoadGame job, and it avoids
-/// the dialog's `+0x8` slot (which is NOT a MenuJob and AV'd the queue-drain wrapper). Grounded by
+/// *rcx=0; AtomicDecrement`. We call this directly on our built job each frame (rcx=&job_slot) to
+/// pump it via its own vtable[2] -- correct for the dispatcher's chained LoadGame job, and it avoids
+/// the dialog's `+0x8` slot (which is not a MenuJob and AV'd the queue-drain wrapper). Grounded by
 /// prologue on eldenring-deobf.bin (the `vtable[2]` call site `0x1407a968b call *0x10(rax)`).
 pub const EXECUTE_MENU_JOB_RVA: usize = 0x7a9600;
 
@@ -732,7 +732,7 @@ pub const CSMENUMAN_POPUP_80_OFFSET: usize = 0x80;
 
 /// CSPopupMenu -> `currentTopMenuJob` (MenuJob*) at +0xB0 -- the single top-job slot the per-frame
 /// menu pump drains (no cap). Install our built LoadGame job here so the native pump runs its Run
-/// IN CONTEXT (vs our menu-jumping self-pump).
+/// in context (vs our menu-jumping self-pump).
 pub const CSPOPUP_TOP_JOB_B0_OFFSET: usize = 0xB0;
 
 /// `CS::MenuJob::Assign(rcx = dest MenuJob**, rdx = out MenuJob**, r8 = src MenuJob**)` (deobf
@@ -747,9 +747,9 @@ pub const MENU_JOB_REFCOUNT_8_OFFSET: usize = 0x8;
 
 /// CS::TitleTopDialog embedded MenuWindowJob `DLFixedVector<MenuJob*,8>` at `dialog+0x50` -- the push
 /// target our built load job's `CS::MenuWindowJob::Run` (`0x1407ad53b call 0x140733ef0`) inserts its
-/// window into. Pinned via the push-site sw-bp diagnostic (rcx=`dialog+0x50`). Cap-8 and already FULL
+/// window into. Pinned via the push-site sw-bp diagnostic (rcx=`dialog+0x50`). Cap-8 and already full
 /// with the dialog's windows, so the load window's push #9 overflows ("out of memory"
-/// DLFixedVector.inl:662). Reset its count to make room. bd OVERFLOW-VECTOR-PINNED-dialog-plus-0x50.
+/// DLFixedVector.inl:662). Reset its count to make room. bd overflow-vector-pinned-dialog-plus-0x50.
 pub const DIALOG_MENUWINDOW_VEC_50_OFFSET: usize = 0x50;
 
 /// DLFixedVector element-count field at +0x48 (the push reads/increments `[vector+0x48]`, panics >8).
@@ -785,7 +785,7 @@ pub const OWN_STEPPER_PHASE_DONE: usize = OwnStepperPhase::Done as usize;
 
 pub const OWN_STEPPER_SLOT_NONE: i32 = !OWN_STEPPER_SLOT_ZERO;
 
-/// Lowest valid save-slot index (used to bounds-check the dialog cursor in STAGE 2).
+/// Lowest valid save-slot index (used to bounds-check the dialog cursor in stage 2).
 pub const OWN_STEPPER_SLOT_ZERO: i32 = false as i32;
 
 /// Save slot to load (parsed from the trigger file "slot=N"; -1 => leave the game's
@@ -821,7 +821,7 @@ pub const SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF: usize = 4;
 pub const SWITCH_PHASE_TITLE_OWNER_SEEN_STALE_TICK_THRESHOLD: usize = 120;
 
 /// Child-done-query override (FUN_140eb5550, deobf 0x140eb5530). STEP_MoveMap_Update tears the
-/// MoveMapStep child down when this returns done; for load2 it returns done PREMATURELY (field25=0),
+/// MoveMapStep child down when this returns done; for load2 it returns done prematurely (field25=0),
 /// stranding the reload. The MoveMapStep child's EzChildStepBase = MoveMapStep + 0x108 (isolates its
 /// call from the generic query's other callers). We hold its result not-done while the finalize is
 /// mid-walk on a committed reload, so the child survives and the advancer completes.
@@ -847,11 +847,11 @@ pub const CSMENUMAN_LOADINGSCREEN_MODE_728_OFFSET: usize = 0x728;
 
 /// The "return-to-title / menu-rebuild requested" byte at menuData+0x5d.
 ///
-/// RE-CONFIRMED ON 1.17 (2026-09-04): the evaluator `FUN_140afb9f0` reads it as
+/// RE-confirmed on 1.17 (2026-09-04): the evaluator `FUN_140afb9f0` reads it as
 /// `MOVZX EAX, byte ptr [RAX + 0x5d]` with `RAX = *(CSMenuMan + 8)`, CSMenuMan global `0x143d6f820`.
 pub const CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET: usize = 0x5d;
 
-/// The "ending request" flag at menuData+0x5e that STEP_MoveMap's advancer WRITES each frame
+/// The "ending request" flag at menuData+0x5e that STEP_MoveMap's advancer writes each frame
 /// (`GLOBAL_CSMenuMan->menuData->field_0x5e = cVar10`). cVar10 = "an ending/load-completion
 /// condition holds" (return-title 0x5d, warp, session WaitReload, deadReset==2, a force-flag global,
 /// GameMan checks, state==8). STEP_MoveMap only walks the child toward its -1 terminal when this is 1;
@@ -859,17 +859,17 @@ pub const CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET: usize = 0x5d;
 /// (finished == MoveMapStep+0x48==-1) waits forever = the 2nd (runtime-accumulation) soft-lock. The
 /// linchpin diagnostic: read 0x5e (the output) + 0x5d and the force-flag (inputs) at the lock.
 ///
-/// RE-CONFIRMED ON 1.17 (2026-09-04): written by `FUN_140afb9f0` as `MOV byte ptr [RAX + 0x5e], BL`
+/// RE-confirmed on 1.17 (2026-09-04): written by `FUN_140afb9f0` as `MOV byte ptr [RAX + 0x5e], BL`
 /// @ `0x140afbd0c`, unconditional and ahead of the `0x12a` switch. Identity-checked against
 /// `eldenring-deobf-1.17.bin` (shift 0).
 ///
-/// THE ADVANCER'S NAME WAS WRONG HERE, ON BOTH BUILDS. This doc used to call it `FUN_140afa7c0`.
+/// The ADVANCER'S name was wrong here, on both builds. This doc used to call it `FUN_140afa7c0`.
 /// That is not a function entry on 1.16.2 (it lands 0xf0 inside `FUN_140afa6d0`, the real 1.16.2
 /// evaluator) and it is not one on 1.17 either. The 1.16.2 -> 1.17 pairing is
 /// `FUN_140afa6d0` -> `FUN_140afb9f0`, established by the unique wide literal
 /// `L"CSEzSelectBot.MoveMapStep"` (1.16.2 `0x142b60758`, 1.17 `0x142b637f8`) referenced at the same
 /// +0xc1 from entry in both, with identical body size 4491. `scripts/map-rvas-1162-to-1170.py`
-/// CANNOT carry this address -- it returns UNRESOLVED -- so use the literal, not the byte mapper.
+/// cannot carry this address -- it returns unresolved -- so use the literal, not the byte mapper.
 ///
 /// The force-flag global moved between builds (1.16.2 `0x143d856a0` -> 1.17 `0x143d89720`); it is
 /// deliberately not named as a number above, because only the 1.16.2 value was ever written down.
@@ -878,12 +878,12 @@ pub const CS_MENU_DATA_ENDING_FLAG_5E_OFFSET: usize = 0x5e;
 /// The force/ending latch global (BOOL_143d856a0) = one of the `cVar10` ending-request inputs.
 pub const ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA: usize = TITLE_ACCEPT_LATCH_RVA;
 
-/// The remaining `cVar10` ending-request INPUTS that read GameMan directly (the load-in signals a
+/// The remaining `cVar10` ending-request inputs that read GameMan directly (the load-in signals a
 /// normal load sets so STEP_MoveMap walks the child to its -1 terminal): GameMan+0xb7c, GameMan+0xb7d,
 /// and warpRequested at GameMan+0x10. On the stuck re-load one of these is 0 when it should be 1 --
 /// that's the stale runtime flag to reset.
 ///
-/// ALL THREE RE-CONFIRMED ON 1.17 (2026-09-04), each a one-line getter off the same GameMan global
+/// All three RE-confirmed on 1.17 (2026-09-04), each a one-line getter off the same GameMan global
 /// `DAT_143d6d988`:
 ///   * `FUN_14067a280` -> `*(GameMan + 0xb7c)`
 ///   * `FUN_14067a290` -> `*(GameMan + 0xb7d)`
@@ -895,36 +895,36 @@ pub const GAME_MAN_ENDING_FLAG_B7C_OFFSET: usize = 0xb7c;
 
 pub const GAME_MAN_ENDING_FLAG_B7D_OFFSET: usize = 0xb7d;
 
-/// `CS::GameMan::loadingScreenTextState` (+0xbf5), a bool -- NOT the loading mode itself.
+/// `CS::GameMan::loadingScreenTextState` (+0xbf5), a bool -- Not the loading mode itself.
 ///
-/// RENAMED 2026-08-31 from `GAME_MAN_LOADING_MODE_BF5_OFFSET`, whose own doc comment already
-/// described a GATE while its name claimed to be the MODE. The two accesses in the image are the
+/// Renamed 2026-08-31 from `GAME_MAN_LOADING_MODE_BF5_OFFSET`, whose own doc comment already
+/// described a gate while its name claimed to be the mode. The two accesses in the image are the
 /// whole story, and the cited `FUN_14067a410` does not exist in 1.16.2 (it is an address from the
 /// retired 1.16.1 dump; it lands inside `FUN_14067a3a0`):
 ///
-///   * WRITER `FUN_14067a860` -- a one-line setter, `GLOBAL_GameMan->loadingScreenTextState = arg`.
-///   * READER `FUN_14067a320` -- `if (loadingScreenTextState == false && mode == 2) mode = 0;`
+///   * writer `FUN_14067a860` -- a one-line setter, `GLOBAL_GameMan->loadingScreenTextState = arg`.
+///   * reader `FUN_14067a320` -- `if (loadingScreenTextState == false && mode == 2) mode = 0;`
 ///     then writes `mode` into `CSMenuMan->loadingScreenData.field_0x8`. So the byte decides
-///     whether loading-screen mode 2 SURVIVES; the mode is the caller's argument.
+///     whether loading-screen mode 2 survives; the mode is the caller's argument.
 ///
 /// `fromsoftware-rs` names the same slot `simple_loading_screen` and records the EMEVD command
 /// that sets it (`2003[80] ShowTextOnLoadingScreen`), which agrees on the mechanism.
 pub const GAME_MAN_LOADING_SCREEN_TEXT_STATE_BF5_OFFSET: usize = 0xbf5;
 
 /// `CS::GameMan::warpRequested`. The MoveMapStep ending-request evaluator reads it as one of its
-/// inputs, and `case 8` of that evaluator's `0x12a` walk CONSUMES it (writes 0), which is what makes
+/// inputs, and `case 8` of that evaluator's `0x12a` walk consumes it (writes 0), which is what makes
 /// `menuData+0x5e` go residual afterwards.
 ///
-/// RE-CONFIRMED ON 1.17 (2026-09-04): getter `FUN_14067a660` is `return *(GameMan + 0x10)` and the
+/// RE-confirmed on 1.17 (2026-09-04): getter `FUN_14067a660` is `return *(GameMan + 0x10)` and the
 /// consumer is `FUN_14067bcf0(0)` = `*(GameMan + 0x10) = 0`, both off the GameMan global
-/// `DAT_143d6d988`. `check-dump-deobf-identity.py 0x14067a660 --port 8767` -> MATCH, shift 0.
+/// `DAT_143d6d988`. `check-dump-deobf-identity.py 0x14067a660 --port 8767` -> match, shift 0.
 pub const GAME_MAN_WARP_REQUESTED_10_OFFSET: usize = 0x10;
 
 /// `CSMenuManImp::disableSaveMenu` BOOL at CSMenuMan+0x13c. RE of the 1.16.1 dump (2026-07-16, persistent
 /// Ghidra project): `CanShowSaveMenu` (dump 0x14080d150) returns `GLOBAL_CSMenuMan->disableSaveMenu != 0`,
 /// and the native quit-save (GameMan `bc4` 1->2 pump `FUN_14067b840`/`FUN_14067ba30`, and `ShouldSave`
 /// 0x1406794c0) ABORTS -- clearing `saveRequested` -- the instant this byte is non-zero. `bc4`
-/// (GameMan+0xbc4) is the return-title predicate: REQUEST `FUN_14067a490` sets it 1, the quit-save pumps
+/// (GameMan+0xbc4) is the return-title predicate: Request `FUN_14067a490` sets it 1, the quit-save pumps
 /// 1->2, `FUN_14067aa70` pumps 2->3, and the world only tears down once it reaches 3. On a 2nd in-process
 /// System->Quit switch `disableSaveMenu` is left set from the prior switch's menu flow, so the save never
 /// runs, `bc4` freezes at 1, and the world never tears down (the observed switch-2 soft-lock). Switch 1
@@ -943,11 +943,11 @@ pub const IN_GAME_STEP_REQUEST_CODE_D8_OFFSET: usize = 0xd8;
 /// lives. STEP_RequestWait ends the session when it reads 0 at request code 2.
 ///
 /// "Unnamed in fromsoftware-rs `unk748`" is what this comment used to offer as provenance, and it
-/// is not one: that a filler array SPANS a byte says nothing about where a member starts. The
+/// is not one: that a filler array spans a byte says nothing about where a member starts. The
 /// offset is now measured -- `CS::CSMenuManImp::CSMenuManImp` (1.16.2 0x1407650a0, 1.17
 /// 0x140765ef0) aligns 121/121 instructions with 30 field offsets, zero moved, and does
 /// `lea 0x798(%rbx),%rax` at 0x14076517b with 0x790 and 0x7a0 witnessed on either side. Frozen in
-/// `scripts/check-object-field-offsets-1170.py`. That fixes the BOUNDARY; that the member is a
+/// `scripts/check-object-field-offsets-1170.py`. That fixes the boundary; that the member is a
 /// `MenuJob*` is a separate claim resting on STEP_RequestWait's own read, not on this alignment.
 pub const CS_MENU_MAN_IN_GAME_MENU_JOB_798_OFFSET: usize = 0x798;
 
@@ -984,7 +984,7 @@ pub const INGAMESTEP_REQUEST_CODE_STABLE_IN_WORLD: i32 = 2;
 pub static SWITCH_ORACLE_REQUEST_CODE: AtomicI32 = AtomicI32::new(-1);
 
 /// Last sampled MoveMapStep finalize substate (+0x12a, 0..9) -- the real native sub-progression of
-/// the visible MOVE MAP (18) loading phase, published for the loading-bar parenthesized sub-milestone.
+/// the visible move map (18) loading phase, published for the loading-bar parenthesized sub-milestone.
 /// -1 = no live MoveMapStep. See MOVEMAPSTEP_FINALIZE_SUBSTATE_NAMES.
 pub static SWITCH_ORACLE_FINALIZE_12A: AtomicI32 = AtomicI32::new(-1);
 
@@ -1004,12 +1004,12 @@ pub static SWITCH_ORACLE_MMS_BLOCKS: AtomicI32 = AtomicI32::new(-1);
 
 /// Byte offset of the MoveMapStep finalize SUBSTATE within the STEP_MoveMap (step 18) phase. The
 /// native advancer `FUN_140afa7c0` (dump VA) drives this `switch`-based sub-state 0..9; the load
-/// orchestrator `FUN_140afb970` treats the world as ready ONLY when it is back to 0. So this is the
+/// orchestrator `FUN_140afb970` treats the world as ready only when it is back to 0. So this is the
 /// inner sub-progression of the visible "MOVE MAP 18" loading phase (see oracle finalize_substate_12a).
 pub const MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET: usize = 0x12a;
 
 /// The MoveMapStep child step index whose handler is `STEP_MoveMap` (dump registrar
-/// FUN_1400a40c0: MoveMapStep_StepperArray[0x12]). This is the FINAL fade/finalize step; index 19 =
+/// FUN_1400a40c0: MoveMapStep_StepperArray[0x12]). This is the final fade/finalize step; index 19 =
 /// Cleanup, 20 = Finish follow. The 3rd-load softlock parks the child here.
 pub const MOVEMAPSTEP_STEP_MOVEMAP_INDEX: i32 = 18;
 
@@ -1019,9 +1019,9 @@ pub const MOVEMAPSTEP_STEP_MOVEMAP_INDEX: i32 = 18;
 pub const MOVEMAPSTEP_STEP_MOVEMAP_RVA: usize = 0x00af7cf0;
 
 /// `CS::InGameStep::STEP_MoveMap_Update` (dump 0x140aec810 -> deobf 0x140aec720, content-unique shift
-/// -0xf0). This is the PARENT step handler: it polls input/flipper, then `if (FUN_140eb5550(child)==0)
+/// -0xf0). This is the parent step handler: it polls input/flipper, then `if (FUN_140eb5550(child)==0)
 /// return;` (its own per-frame wait), and only past that does `field24_0xd8 = 2; FUN_140eb54e0(child)`
-/// (advance requestCode to STABLE + tear the ending child down). On the warm reload FUN_140eb5550 (an
+/// (advance requestCode to stable + tear the ending child down). On the warm reload FUN_140eb5550 (an
 /// outer-stepper vtable done-query, DECOUPLED from the MoveMapStep finalize substate) reports finished
 /// while the ending advancer is only at substate 8, so the teardown races ahead of case 8 (which would
 /// post substate 9) and strands the reload -> revert to title (bd er-effects-rs-9fmm, fresh
@@ -1034,7 +1034,7 @@ pub const INGAMESTEP_STEP_MOVEMAP_UPDATE_RVA: usize = 0x00aec720;
 pub const INGAMESTEP_MOVEMAP_UPDATE_DEFER_MAX: usize = 120;
 
 /// MoveMapStep advance-gate byte (`field_0x4b8`). STEP_MoveMap sets the u16 at +0x4b8 to 1 each frame,
-/// then blockers knock it down; it advances only when the LOW byte (+0x4b8) stays nonzero. Low byte 0 =
+/// then blockers knock it down; it advances only when the low byte (+0x4b8) stays nonzero. Low byte 0 =
 /// blocked; +0x4b9 high byte 1 with low 0 = the WorldChrMan-not-ready (`0x100`) branch fired.
 pub const MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET: usize = 0x4b8;
 
@@ -1057,24 +1057,24 @@ pub const MOVEMAPSTEP_COUNTDOWN_100_OFFSET: usize = 0x100;
 
 pub const MOVEMAPSTEP_FINALIZE_REQ_248_OFFSET: usize = 0x248;
 
-/// TEARDOWN SAVE-REQUEST CLEAR (2026-07-16). The MoveMapStep ending sub-machine (FUN_140afa7c0) that
+/// TEARDOWN save-request clear (2026-07-16). The MoveMapStep ending sub-machine (FUN_140afa7c0) that
 /// walks the old world's child out of STEP_MoveMap(18) hangs at case 7 unless `ShouldSave() == false`
-/// AND `FUN_140679460() == false`. Those read `GameMan.saveRequested` (b72) and `GameMan+0xb73`, both
-/// set by our return-title REQUEST (which intends a quit-save we suppress by design). Clearing them each
-/// teardown frame makes the gate deterministically false so the world tears down with NO save. `_COUNT`
+/// and `FUN_140679460() == false`. Those read `GameMan.saveRequested` (b72) and `GameMan+0xb73`, both
+/// set by our return-title request (which intends a quit-save we suppress by design). Clearing them each
+/// teardown frame makes the gate deterministically false so the world tears down with no save. `_COUNT`
 /// = frames we cleared the flags (a switch that stalls-then-recovers shows it climbing during teardown).
 pub const GAME_MAN_SAVE_REQUESTED_B72_OFFSET: usize = 0xb72;
 
 pub const GAME_MAN_SAVE_REQUEST_COMPANION_B73_OFFSET: usize = 0xb73;
 
-/// STEP-3 (WORLD RES WAIT) DETERMINANT instrumentation (2026-07-16, Ghidra-proven). STEP_WorldResWait
+/// Step-3 (world RES wait) DETERMINANT instrumentation (2026-07-16, Ghidra-proven). STEP_WorldResWait
 /// (dump 0x140af9de0) advances 3->4 only when FUN_14066d4d0(worldInfoOwner, &currentBlockId) finds the
-/// block matching currentBlockId's areaId in the world block-list AND that block's load-state reaches
+/// block matching currentBlockId's areaId in the world block-list and that block's load-state reaches
 /// +0x35==10. FieldArea = MoveMapStep+0xf0 (the oracle's `mms_wrm`); currentBlockId (BlockId u32) =
 /// FieldArea+0x2c; worldInfoOwner = FieldArea+0x10 (`mms_resmgr`); block-list = worldInfoOwner+0xb3030
 /// (array of block ptrs, count = worldInfoOwner+0xb3140 = the oracle's `blocks`). Each list entry i:
 /// block_ptr=*(u64*)(list+i*8); inner=*(u64*)(block_ptr+0x8); block areaId=*(u32*)(inner+0xc). If, on a
-/// step-3 stall, currentBlockId's areaId is NOT among the listed blocks -> the target block was never
+/// step-3 stall, currentBlockId's areaId is not among the listed blocks -> the target block was never
 /// registered (teardown left the wrong block set); if present -> its stream-state is stuck below 10.
 pub const FIELDAREA_CURRENT_BLOCK_ID_2C_OFFSET: usize = 0x2c;
 
@@ -1087,10 +1087,10 @@ pub const WORLDINFO_BLOCK_AREA_ID_C_OFFSET: usize = 0xc;
 pub const MOVEMAPSTEP_STEP_WORLDRESWAIT_INDEX: i32 = 3;
 
 /// `CS::WorldInfoOwner::ProcessMsbLoadLists(WorldInfoOwner*, LoadlistlistFileCap*, LoadlistlistFileCap* dlc02)`.
-/// ADDRESS CORRECTION (2026-07-17): the previous value 0x0066b2c0 was the DUMP RVA; the deobf/RUNTIME
+/// Address correction (2026-07-17): the previous value 0x0066b2c0 was the dump RVA; the deobf/RUNTIME
 /// address is 0x0066b1d0 (shift -0xf0, ground-truthed by scripts/dump-deobf-shift.py 0x14066b2c0). The
-/// old value jumped 0xf0 INTO the function -> the "reactive ProcessMsbLoadLists AVs mid-stream" crash
-/// (commit c43879c) AND the init-point crash (2026-07-17) were BOTH this wrong-address bug, not a timing
+/// old value jumped 0xf0 into the function -> the "reactive ProcessMsbLoadLists AVs mid-stream" crash
+/// (commit c43879c) and the init-point crash (2026-07-17) were both this wrong-address bug, not a timing
 /// constraint. Runs ResetAreaResLists + PopulateLists to rebuild the per-block world-res from the loadlist;
 /// dlc02 is null-checked in the callee, so 0 is safe for base-game (non-dlc) areas.
 pub const WORLDINFO_PROCESS_MSB_LOADLISTS_RVA: u32 = 0x0066b1d0;
@@ -1109,8 +1109,8 @@ pub const WORLDINFO_OVERWORLD_LIST_B3148_OFFSET: usize = 0xb3148;
 
 pub const WORLDINFO_OVERWORLD_COUNT_B31D0_OFFSET: usize = 0xb31d0;
 
-/// LOADLIST ROOT LEAD (2026-07-16). STEP_MoveMap_LoadlistInit (InGameStep step 4, dump 0x140aec660)
-/// builds the world-res loadlist ONLY when `worldloadlistlistVirtualPath.size != 0`
+/// LOADLIST root lead (2026-07-16). STEP_MoveMap_LoadlistInit (InGameStep step 4, dump 0x140aec660)
+/// builds the world-res loadlist only when `worldloadlistlistVirtualPath.size != 0`
 /// (`CMP qword [InGameStep+0x220], 0`); it then stores the built cap in `loadlistlistFileCap`
 /// (`MOV [InGameStep+0x238], RAX`). If the path is empty, the loadlist is never built ->
 /// `loadlistlistFileCap` stays null -> no world-res block load-states -> STEP_WorldResWait's null
@@ -1128,30 +1128,30 @@ pub static SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG: AtomicUsize = Atomi
 
 /// The live MessageBoxDialog captured at build time (the connection-error / startup popup), so
 /// the game task can force its result fields (OK + decided) each frame until the caller consumes
-/// it. The finished-getter 0x1407b0cf0 is NOT polled for this dialog, so writing the fields
+/// it. The finished-getter 0x1407b0cf0 is not polled for this dialog, so writing the fields
 /// directly is the dismiss lever. 0 = none captured.
 pub static CONNECTION_ERROR_DIALOG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 
 // ===== moved verbatim from crates/er-quickload/src/constants/stage2_menu_drive.rs =====
 
-/// PHASE 6 (S2 INVOKE): fire d180's +0xa8 action functor to build the ProfileLoadDialog.
+/// Phase 6 (S2 invoke): fire d180's +0xa8 action functor to build the ProfileLoadDialog.
 pub const OWN_STEPPER_PHASE_S2_INVOKE: usize = OwnStepperPhase::S2Invoke as usize;
 
-/// PHASE 7 (S2 ACTIVATE): write the slot cursor [dialog+0xb0c]=N (bounds [dialog+0xb08]) then
+/// Phase 7 (S2 activate): write the slot cursor [dialog+0xb0c]=N (bounds [dialog+0xb08]) then
 /// call the dialog's vtable-slot-20 load_activate(rcx=dialog), registering the selector step.
 pub const OWN_STEPPER_PHASE_S2_ACTIVATE: usize = OwnStepperPhase::S2Activate as usize;
 
-/// PHASE 8 (S2 MOUNT_POLL): pass-through each frame so the native pump ticks the selector;
+/// Phase 8 (S2 MOUNT_POLL): pass-through each frame so the native pump ticks the selector;
 /// watch for the mount (ac0==N + io18/io20 set->clear; c30 leaving the new-game default).
 pub const OWN_STEPPER_PHASE_S2_MOUNT_POLL: usize = OwnStepperPhase::S2MountPoll as usize;
 
-/// PHASE 9 (S2 CONFIRM): guard (ac0==N && c30==latched-mount && io consumed) then
-/// continue_confirm -> SetState(5) so the native pump streams the real world. The ONLY
+/// Phase 9 (S2 confirm): guard (ac0==N && c30==latched-mount && io consumed) then
+/// continue_confirm -> SetState(5) so the native pump streams the real world. The only
 /// save-write-risking step; gated entirely by a verified real mount (fail-closed otherwise).
 pub const OWN_STEPPER_PHASE_S2_CONFIRM: usize = OwnStepperPhase::S2Confirm as usize;
 
 /// CS::ProfileLoadDialog vtable (RVA). The dialog built by d180's functor (dialog_factory
-/// 0x14081ead0 -> ctor 0x1409a3d90 writes this vtable). Used to VALIDATE the built dialog
+/// 0x14081ead0 -> ctor 0x1409a3d90 writes this vtable). Used to validate the built dialog
 /// before any dialog call (a wrong this-pointer would AV).
 pub const PROFILE_LOAD_DIALOG_VTABLE_RVA: usize =
     ProfileLoadMenuRva::ProfileLoadDialogVtable as usize;
@@ -1159,11 +1159,11 @@ pub const PROFILE_LOAD_DIALOG_VTABLE_RVA: usize =
 pub const DIALOG_LOAD_ACTIVATE_VTSLOT_A0_OFFSET: usize =
     core::mem::offset_of!(ProfileLoadDialogVtableLayout, load_activate);
 
-/// Dialog vtable slot 18: the embedded ProfileSelect ROW LIST (`FUN_1409a3480`).
+/// Dialog vtable slot 18: the embedded ProfileSelect row list (`FUN_1409a3480`).
 pub const DIALOG_ROW_LIST_VTSLOT_90_OFFSET: usize =
     core::mem::offset_of!(ProfileLoadDialogVtableLayout, row_list);
 
-/// `CS::MenuViewItemList<T>::at(index)` -- the row accessor, called with a LIST INDEX.
+/// `CS::MenuViewItemList<T>::at(index)` -- the row accessor, called with a list index.
 pub const MENU_VIEW_ITEM_LIST_AT_VTSLOT_20_OFFSET: usize =
     core::mem::offset_of!(MenuViewItemListVtableLayout, item_at);
 
@@ -1187,7 +1187,7 @@ pub struct ProfileLoadDialogLayout {
 }
 
 /// Dialog selected-list-index cursor (= [dialog+0xa38+0xd4]); load_activate reads it as the
-/// slot. WRITE the desired slot N here before calling load_activate.
+/// slot. Write the desired slot N here before calling load_activate.
 pub const DIALOG_SLOT_CURSOR_B0C_OFFSET: usize =
     core::mem::offset_of!(ProfileLoadDialogLayout, slot_cursor);
 
@@ -1212,15 +1212,15 @@ pub const TITLE_STEP_PLAY_GAME: i32 = TitleStepState::PlayGame as i32;
 
 pub const TITLE_STEP_MENU_JOB_WAIT: i32 = TitleStepState::MenuJobWait as i32;
 
-/// STEP_BeginLogo splash gate at [owner+0xb8]. CORRECTED 2026-06-23 (2 independent Ghidra REs +
+/// STEP_BeginLogo splash gate at [owner+0xb8]. Corrected 2026-06-23 (2 independent Ghidra REs +
 /// deobf disasm, bd `beginlogo-builds-LOGO-not-menu-REFUTES-bd-2026-06-23`): 0x14081f180 builds the
-/// boot LOGO/LEGAL SPLASH chain (05_905_Logo_Copyright / 05_900_Logo_FromSoft / 05_901_Logo_BNE /
-/// 05_902_Logo_ESRB / 05_903_Warn_IllegalCopy), NOT the Continue/Load/NewGame menu. STEP_BeginLogo
+/// boot LOGO/LEGAL splash chain (05_905_Logo_Copyright / 05_900_Logo_FromSoft / 05_901_Logo_BNE /
+/// 05_902_Logo_ESRB / 05_903_Warn_IllegalCopy), not the Continue/Load/NewGame menu. STEP_BeginLogo
 /// 0x140b0c2a0 branches at 0x140b0c356 (`cmpb 0,[owner+0xb8]; je 0x140b0c3b2`): [0xb8]==0 -> 0x3b2 =
 /// play logos (call 0x14081f180) then commit to owner+0x130 + SetState(10); [0xb8]!=0 -> SetState(3)
-/// = STEP_BeginTitle, which SKIPS the logos and is what actually builds the Scaleform `05_000_Title`
+/// = STEP_BeginTitle, which skips the logos and is what actually builds the Scaleform `05_000_Title`
 /// menu (builder 0x14081f9f0). The splash-skip patch (0xb0c35d je->jg) makes [0xb8]==0 fall through to
-/// SetState(3), so splash-skip ALREADY routes to the menu builder -- do NOT clear this gate + SetState(2)
+/// SetState(3), so splash-skip already routes to the menu builder -- do not clear this gate + SetState(2)
 /// to "build the menu" (that just replays the logos). The real continue-blocker is the offline-mode
 /// notice popup; see bd `menu-open-3rd-popup-offline-mode-notice-2026-06-23`. Field kept for the (now
 /// deprecated) own_stepper SetState(2) path only.
@@ -1231,17 +1231,17 @@ pub const TITLE_OWNER_BEGINLOGO_LIST_GATE_B8_OFFSET: usize =
 pub const TITLE_OWNER_MENU_HOLDER_E0_OFFSET: usize =
     core::mem::offset_of!(TitleOwnerLayout, menu_holder);
 
-/// owner+0x130 = where STEP_BeginLogo COMMITS the main-menu list (Continue/Load d180/NewGame).
+/// owner+0x130 = where STEP_BeginLogo commits the main-menu list (Continue/Load d180/NewGame).
 /// Decoded from the commit fn 0x140b0e530: `lea rcx,[owner+0x130]; call 0x1407a9460` stores the
 /// 0x14081f180-built list there, then SetState(owner,10). So the Load-Game d180 item lives under
-/// owner+0x130, NOT owner+0xe0 -- walk this to find/invoke it.
+/// owner+0x130, not owner+0xe0 -- walk this to find/invoke it.
 pub const TITLE_OWNER_MENU_LIST_130_OFFSET: usize =
     core::mem::offset_of!(TitleOwnerLayout, menu_list);
 
 /// Session singleton 0x144588e98 (RVA = abs - base). Asserted by STEP_BeginLogo(2) and the
 /// MoveMapListStep load menu. Built by the boot/session bootstrap (may be non-null at the
 /// splash-skipped parked title -- UNVERIFIED, hence read it live before SetState(2)).
-/// RUNTIME-CONFIRMED non-null at the parked splash-skipped title (STAGE 1c).
+/// Runtime-confirmed non-null at the parked splash-skipped title (stage 1c).
 pub const SESSION_SINGLETON_144588E98_RVA: usize =
     TitleSessionRva::SaveSafeBeginLogoSession as usize;
 
@@ -1253,10 +1253,10 @@ pub const TITLE_TOP_DIALOG_VTABLE_RVA: usize = TitleDialogRva::Vtable as usize;
 
 /// CS::TitleTopDialog::update (the per-frame title menu pump) = deobf 0x1409aac10 = vtable slot 2
 /// (`*(vtable+0x10)`, verified by reading the deobf vtable + the prologue). `__fastcall(rcx =
-/// TitleTopDialog*, xmm1 = f32 delta, r8 = *InputData)`. It runs each frame with the LIVE dialog and,
+/// TitleTopDialog*, xmm1 = f32 delta, r8 = *InputData)`. It runs each frame with the live dialog and,
 /// at its tail, calls MenuWindow::Update (the FD4 job pump) which drains the menu jobs. Hooking it
 /// lets our in-context Continue build run in the pump's frame (live dialog fields) -- the timing our
-/// game-task build lacked (mis-context crash). bd HOOK-DESIGN-titletopdialog-update-0x1409aac10.
+/// game-task build lacked (mis-context crash). bd hook-design-titletopdialog-update-0x1409aac10.
 pub const TITLE_TOP_DIALOG_UPDATE_RVA: usize = 0x9aac10;
 
 /// CS::TitleTopDialog cleanup/destructor body 0x1409a8890 (RVA). Static disassembly shows it
@@ -1270,18 +1270,18 @@ pub const TITLE_TOP_DIALOG_CLEANUP_RVA: usize = TitleDialogRva::Cleanup as usize
 /// Profile model-renderer table 0x143d6d8d0 (RVA): 10 contiguous `CS::CSMenuProfModelRend*`
 /// slots (stride 8), one per profile/save slot. The per-frame pump 0x1409aa680 iterates it.
 ///
-/// CORRECTED 2026-08-30 (was `ACTIVE_SCREEN_ARRAY_RVA`, "10 contiguous screen* slots ... the
-/// LIVE-dialog scan reads each slot's [scr] vtable to find the live TitleTopDialog and
+/// Corrected 2026-08-30 (was `ACTIVE_SCREEN_ARRAY_RVA`, "10 contiguous screen* slots ... the
+/// live-dialog scan reads each slot's [scr] vtable to find the live TitleTopDialog and
 /// MenuWindow"). These are not screens and no TitleTopDialog vtable will ever appear in them.
 /// Evidence, 1.16.2 dump -- 9 xrefs total, all in the title-dialog region:
-///   * `0x1409af3a0` BUILDS the table: it calls the clear below, then loops 10 times doing
+///   * `0x1409af3a0` builds the table: it calls the clear below, then loops 10 times doing
 ///     `HeapAlloc(0xa30, 0x10, GLOBAL_GfxHeapAllocator)` and
 ///     `CS::CSMenuProfModelRend::CSMenuProfModelRend(mem, i)`, storing each into
 ///     `DAT_143d6d8d0[i]`.
-///   * `0x1409b2db0` CLEARS it: for all 10 slots it hands the pointer to
+///   * `0x1409b2db0` clears it: for all 10 slots it hands the pointer to
 ///     `GLOBAL_CSDelayDeleteMan` and writes 0 back. `TitleTopDialog::Cleanup` (0x1409a8890)
 ///     calls it, which is why counting non-null slots after cleanup is a real signal.
-///   * `0x1409aa680` PUMPS it: `CS::GameDataMan::GetProfileSummary()`, then per slot feeds
+///   * `0x1409aa680` pumps it: `CS::GameDataMan::GetProfileSummary()`, then per slot feeds
 ///     `CS::FaceData::GetFaceDataBuffer(...)` and friends into the renderer -- it is building
 ///     each save slot's character portrait, which is what `CSMenuProfModelRend` renders.
 ///
@@ -1304,23 +1304,23 @@ pub const PROFILE_MODEL_REND_SLOT_START: usize = usize::MIN;
 pub const PROFILE_MODEL_REND_SLOT_STEP: usize = true as usize;
 
 /// TitleTopDialog SceneProxy capture slot: [dialog+0xa38] holds the live SceneProxy* the
-/// TitleTopDialog ctor 0x1409a81a0 stored at 0x1409a8213. The LIVE-dialog factory 0x14081ead0
+/// TitleTopDialog ctor 0x1409a81a0 stored at 0x1409a8213. The live-dialog factory 0x14081ead0
 /// reads the SceneProxy from [rcx], so we pass rcx = dialog+0xa38 (factory r8 = *(dialog+0xa38)).
 pub const DIALOG_SCENE_PROXY_CAPTURE_A38_OFFSET: usize =
     core::mem::offset_of!(TitleTopDialogLayout, scene_proxy_capture);
 
 /// CS::ProfileLoadDialog build factory 0x14081ead0 (RVA). Called as
 /// `extern "system" fn(rcx = dialog+0xa38, rdx = MenuWindow*) -> dialog*` to build + register the
-/// LIVE ProfileLoadDialog (vtable 0x142b229f8) into the active-screen set + menu group.
+/// live ProfileLoadDialog (vtable 0x142b229f8) into the active-screen set + menu group.
 pub const LIVE_DIALOG_FACTORY_RVA: usize = TitleDialogRva::LiveDialogFactory as usize;
 
-/// CONVERGED ACQUISITION RECIPE (2026-06-18, bd live-dialog-menuwindow-via-sceneproxy-backref-0x20):
+/// CONVERGED acquisition recipe (2026-06-18, bd live-dialog-menuwindow-via-sceneproxy-backref-0x20):
 /// the live MenuWindow* (factory rdx) is read DETERMINISTICALLY from the SceneProxy we already hold
-/// at [td+0xa38] -- NOT via the menu MANAGER. CS::SceneObjProxy ctor 0x14074a700 does
+/// at [td+0xa38] -- Not via the menu manager. CS::SceneObjProxy ctor 0x14074a700 does
 /// `mov [proxy+0x20], rbx` where rbx is the MenuWindow (0x14074a735), so the back-ref lives at
 /// proxy+0x20. The dead menu-manager/registry/menu-step scans (and the owner/dialog field scans) are
 /// removed. CS::SceneObjProxy vtable 0x142a94a70 (RVA): require *(proxy) == base+this before reading
-/// the +0x20 back-ref; LOG *(proxy) regardless (self-diagnostic).
+/// the +0x20 back-ref; Log *(proxy) regardless (self-diagnostic).
 pub const SCENE_OBJ_PROXY_VTABLE_RVA: usize = 0x2a94a70;
 
 /// Generic CS::SceneObjProxy context/back-ref slot. The named-child constructor 0x14074a7c0
@@ -1376,14 +1376,14 @@ pub static TITLE_LOGO_GFX_HIDE_LAST_LOGO: AtomicUsize =
 pub static TITLE_LOGO_GFX_HIDE_LAST_CALLER_PHASE: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 
-/// FD4 StateMachine sub-object EMBEDDED at dialog+0xa60. NB: the registrar / set_state /
-/// is_in_state receiver is the ADDRESS dialog+0xa60 (they do `add rcx,0xa60; call`), NOT
+/// FD4 StateMachine sub-object embedded at dialog+0xa60. NB: the registrar / set_state /
+/// is_in_state receiver is the address dialog+0xa60 (they do `add rcx,0xa60; call`), not
 /// `*(dialog+0xa60)`. Its first qword is the SM vtable.
 pub const TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET: usize =
     core::mem::offset_of!(TitleTopDialogLayout, state_machine);
 
 /// Byte latch at [dialog+0xa40]: 0 = menu not opened (the native non-input registrar path
-/// requires it ==0), 1 = registrar ran. We READ it (never write/clear it -- pre-setting it
+/// requires it ==0), 1 = registrar ran. We read it (never write/clear it -- pre-setting it
 /// poisons the native non-input open path, bd titletopdialog-loop-ready-gate-2026).
 pub const TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET: usize =
     core::mem::offset_of!(TitleTopDialogLayout, menu_opened);
@@ -1392,9 +1392,9 @@ pub const TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET: usize =
 pub const TITLE_TOP_DIALOG_LATCH_BYTE_MASK: usize = u8::MAX as usize;
 
 /// CS FD4 `is_in_state(rcx = sm-receiver = dialog+0xa60, rdx = state descriptor ptr) -> bool`
-/// (0x140749b20). Returns true iff the SM's CURRENT node is SETTLED (flags&0x8f>=2) AND its name
+/// (0x140749b20). Returns true iff the SM's current node is settled (flags&0x8f>=2) and its name
 /// matches the descriptor's inline ASCII name. We call the game's own checker to read the live
-/// state by NAME -- robust, no hand pointer-chase / SSO parsing.
+/// state by name -- robust, no hand pointer-chase / SSO parsing.
 pub const TITLE_TOP_DIALOG_IS_IN_STATE_RVA: usize = TitleDialogRva::IsInState as usize;
 
 /// FD4 state name-descriptor RVAs (inline ASCII at the VA). FadeIn = the intro-fade node;
@@ -1432,15 +1432,15 @@ pub const TITLE_JOB_OBSERVE_TICK_INTERVAL: u64 = 30;
 pub const FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA: usize = er_save_loader::SET_SAVE_SLOT_RVA as usize;
 
 /// Corrected play-game submit recipe (play-game-submit-and-continue-load-recipe-2026):
-/// the Continue/Load handler 0x140b0e180 sets owner+0xbc to a PACKED MAP id, clears
+/// the Continue/Load handler 0x140b0e180 sets owner+0xbc to a packed map id, clears
 /// the new-game flag owner+0x284, and calls SetState 0x140b0d960(owner, 5=PlayGame)
 /// -- then the existing pump runs PlayGame -> child MoveMap_Init -> builds CSFeMan.
 /// (force_play_game wrote owner+0x4c=5 raw + a raw slot in +0xbc, so it orphaned.)
 pub const TITLE_SET_STATE_RVA: usize = 0xb0d960;
 
-/// `CS::GameMan::stayInMultipleAreaBlockId` (+0xc30). KEPT UNDER THE PRODUCT NAME "saved map"
-/// after a 2026-08-31 audit, because that is what the value IS in the window every consumer reads
-/// it in -- but the field has THREE writers and only one of them is the save, so read this before
+/// `CS::GameMan::stayInMultipleAreaBlockId` (+0xc30). Kept under the product name "saved map"
+/// after a 2026-08-31 audit, because that is what the value is in the window every consumer reads
+/// it in -- but the field has three writers and only one of them is the save, so read this before
 /// using it anywhere else.
 ///
 /// The complete access set (5 sites, from a scan of every function referencing the GameMan
@@ -1448,7 +1448,7 @@ pub const TITLE_SET_STATE_RVA: usize = 0xb0d960;
 ///
 ///   * `FUN_14067bd70`, the slot DESERIALIZER: `param_1->stayInMultipleAreaBlockId =
 ///     local_50._4_4_` -- the dword at slot body+0x04, which is exactly what
-///     `er_save_loader::bnd4::slot_saved_map` reads off the file. THIS is the writer the
+///     `er_save_loader::bnd4::slot_saved_map` reads off the file. This is the writer the
 ///     `oracle_saved_map_c30` contract rests on, and it makes "saved map" literally true at mount.
 ///   * `FUN_14067dc00`, the slot SERIALIZER: reads it back out through the getter below.
 ///   * `FUN_14067afa0`: writes it when `CS::GameMan::UpdateStayInMultiplayPosition` succeeds.
@@ -1458,7 +1458,7 @@ pub const TITLE_SET_STATE_RVA: usize = 0xb0d960;
 ///   * `FUN_140679560`: a one-line getter. Its consumer is `SetMoveMapStepBlockId`
 ///     (`0x14067abd0`), which writes `GameMan::moveMapStepBlockId` at **+0x14**.
 ///
-/// TWO CONSEQUENCES. (a) +0xc30 is the SOURCE of the map you load into, not the map you are in --
+/// Two consequences. (a) +0xc30 is the source of the map you load into, not the map you are in --
 /// so it is not "the current map"; er-reload-trace called it that until this audit and no longer
 /// does. (b) During play it is stay-in-multiplay bookkeeping, so a mid-session read is not a
 /// "saved map" at all. Every current consumer reads it inside the load window, where writer 1
@@ -1475,7 +1475,7 @@ pub const GAME_MAN_SAVED_MAP_C30_OFFSET: usize =
 
 /// Unnamed native Quit Game / return-title job-chain predicate field.
 /// Ghidra labels this `GameMan::field143_0xbc4`; known writes are 1 -> 2 -> 3, and
-/// the native wait predicate tests `== 3`. This is NOT a named enum until further RE proves one.
+/// the native wait predicate tests `== 3`. This is not a named enum until further RE proves one.
 pub const GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET: usize = 0xbc4;
 
 /// Terminal value for `GameMan::field143_0xbc4` observed after the native return-title job tail.
@@ -1483,8 +1483,8 @@ pub const GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET: usize = 0xbc4;
 pub const GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY: usize = 3;
 
 /// "Return-title requested, save not yet pumped" value for `GameMan::field143_0xbc4`: the native
-/// return-title REQUEST (`FUN_14067a490`) sets bc4 = 1, then the quit-save pump advances it 1 -> 2 -> 3.
-/// The switch-2 soft-lock is bc4 FROZEN at this value because the quit-save (`ShouldSave`) aborts on a
+/// return-title request (`FUN_14067a490`) sets bc4 = 1, then the quit-save pump advances it 1 -> 2 -> 3.
+/// The switch-2 soft-lock is bc4 frozen at this value because the quit-save (`ShouldSave`) aborts on a
 /// stale `CSMenuMan->disableSaveMenu` (see [`CS_MENU_MAN_DISABLE_SAVE_MENU_OFFSET`] in return_title.rs).
 pub const GAME_MAN_RETURN_TITLE_JOB_PREDICATE_PENDING: usize = 1;
 
@@ -1499,7 +1499,7 @@ pub const MENU_EVENT_PRESSED_BIT: u8 = true as u8;
 
 pub const MENU_EVENT_CONFIRM_3D: usize = MenuEventId::Confirm as usize;
 
-/// AUTO-CONFIRM (observe natural flow past the modal): tap Confirm on a SET/GAP cycle slow enough
+/// AUTO-confirm (observe natural flow past the modal): tap Confirm on a SET/GAP cycle slow enough
 /// that the connection-error modal (which appears ~90 frames after the press) gets its own tap.
 pub const AUTO_CONFIRM_CYCLE_FRAMES: u64 = 120;
 
@@ -1512,14 +1512,14 @@ pub const AUTO_CONFIRM_LOG_INTERVAL: u64 = 60;
 /// XINPUT_GAMEPAD.wButtons D-pad Down bit (the menu "move down" gamepad input).
 pub const XINPUT_GAMEPAD_DPAD_DOWN: u16 = 0x0002;
 
-// The INJECT-NAV tap/gap schedule constants (SETTLE_FRAMES / TAP_LEN / GAP_LEN / CYCLE /
+// The inject-NAV tap/gap schedule constants (SETTLE_FRAMES / TAP_LEN / GAP_LEN / cycle /
 // MAX_CYCLES) lived here. They only ever fed `inject_nav_buttons` (title_tick_cover.rs), the D-pad-Down
 // fabrication schedule for the `inject_nav_enabled()` gate -- a gate that could only return `false`.
 // Gate, schedule and constants were deleted together (2026-08-26). XINPUT_GAMEPAD_DPAD_DOWN above
 // stays: the System->Quit repro autopilot and the DInput/VK translation tables still use it.
 
 /// Latched true once a load sustained >=MOVE_PROBE_REQUIRED_FRAMES consecutive frames of havok-position
-/// motion under the injected stick (input-causes-movement PROVEN). Cleared when a new load epoch begins.
+/// motion under the injected stick (input-causes-movement proven). Cleared when a new load epoch begins.
 pub static CAN_MOVE_CONFIRMED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -1579,7 +1579,7 @@ pub const SELECTBOT_PUMP_RAN_FLAG_OFFSET: usize = 0x6b0;
 /// `title-accept-lever-143d856a0`) shows inner MenuJobWait (state 10, 0xb0d400)
 /// advances to state 11 (Finish) iff the global byte `[0x143d856a0]` (==
 /// `SELECTBOT_LOAD_GATE_RVA`) is non-zero — it is the title-accept/"proceed"
-/// latch, not a load-downstream flag. We set it ONCE, only while the inner owner
+/// latch, not a load-downstream flag. We set it once, only while the inner owner
 /// is confirmed at MenuJobWait, to drive the native title-accept with zero input,
 /// then keep sampling to observe the cascade.
 pub const TITLE_STEP_MENU_JOB_WAIT_STATE: i32 = TITLE_STEP_MENU_JOB_WAIT;
@@ -1589,31 +1589,31 @@ pub const TITLE_PROCEED_GATE_SET_VALUE: u8 = true as u8;
 /// Global menu-accept byte 0x144589bdc (RVA 0x4589bdc): the decoded "a button was accepted"
 /// flag the input pipeline sets on press, read via getter 0x140e85f50 from TitleTopDialog::update
 /// (and 22 other menu accept-gates). When non-zero at the parked title, update runs the open-menu
-/// registrar 0x1409b24e0 NATURALLY (build Continue/Load + transfer focus -> select-layer build) --
+/// registrar 0x1409b24e0 naturally (build Continue/Load + transfer focus -> select-layer build) --
 /// unlike a direct registrar self-fire which opened a competing dialog and reverted. Setting this
-/// flag zero-input is the ToS-style "satisfy the accept side-effect" advance (NOT a synthesized
+/// flag zero-input is the ToS-style "satisfy the accept side-effect" advance (not a synthesized
 /// DInput/keystate/XInput event). bd title-global-accept-byte-144589bdc-zeroinput-advance-2026.
 pub const TITLE_GLOBAL_ACCEPT_BYTE_RVA: usize = 0x4589bdc;
 
 /// The title press-accept handler 0x1409b1260 does
 /// `mov rax,[0x143d5dea8]; if rax: movb [rax],1; jmp registrar 0x1409b24e0` -- it writes the
-/// singleton's +0 byte then opens the main menu IN PLACE. Replicating this (write the byte, then
-/// registrar on the validated TitleTopDialog) is the NARROW title-specific advance that should
-/// reach the main menu WITHOUT the language/ToS build that the broad global accept byte
+/// singleton's +0 byte then opens the main menu in place. Replicating this (write the byte, then
+/// registrar on the validated TitleTopDialog) is the narrow title-specific advance that should
+/// reach the main menu without the language/ToS build that the broad global accept byte
 /// over-triggers, and without the competing-dialog revert a bare registrar self-fire caused.
 /// bd title-accept-to-registrar-narrow-path-143d5dea8-2026.
 ///
-/// WHAT THAT GLOBAL AND THAT BYTE ACTUALLY ARE, corrected 2026-08-25. This name said "menu-system
+/// What that global and that byte actually are, corrected 2026-08-25. This name said "menu-system
 /// manager singleton" and called +0 "a menu-open in progress flag". Both were guesses read off
 /// this one write site. `0x143d5dea8` is `GLOBAL_CSPcKeyConfig` -- the key-configuration singleton
-/// holding the player's keyboard, mouse and pad bindings -- and +0 is its input-device SOURCE
+/// holding the player's keyboard, mouse and pad bindings -- and +0 is its input-device source
 /// byte: `FUN_1409b0800` writes 0 there for a pad press and this handler writes 1 for a key press,
 /// which is how the title screen decides whether to draw pad or keyboard button glyphs. The
 /// advance may still work (the registrar jump is what opens the menu, and the byte write is a
 /// side-effect the real handler also performs), but nothing here is a menu-open flag.
 ///
 /// The name is kept because the call sites describe the title advance, not the singleton; the
-/// VALUE now comes from the one place that declares it, so a 1.16.x correction lands in both.
+/// value now comes from the one place that declares it, so a 1.16.x correction lands in both.
 pub const TITLE_MENU_TRANSITION_SINGLETON_RVA: usize =
     er_game_base::rva::CS_PC_KEY_CONFIG_SINGLETON_RVA;
 
@@ -1821,8 +1821,8 @@ pub struct TitleDialogState {
 
 // ===== moved verbatim from crates/er-quickload/src/experiments/own_load/drive.rs =====
 
-/// How often (in own_stepper frames) the OWN-LOAD world-stream stall telemetry emits a throttled
-/// debug line. The oracle_* atomics are refreshed EVERY frame; only the human-readable log is
+/// How often (in own_stepper frames) the own-load world-stream stall telemetry emits a throttled
+/// debug line. The oracle_* atomics are refreshed every frame; only the human-readable log is
 /// throttled so a probe log shows the trend without flooding.
 pub const OWN_LOAD_STREAM_LOG_INTERVAL: u64 = 30;
 
@@ -1836,8 +1836,8 @@ pub enum TitleSessionRva {
     SaveSafeBeginLogoSession = 0x4588e98,
     SessionA = 0x3d687a0,
     SessionB = 0x3d67bd0,
-    /// `g_GxDrawContext`, the GXSR render draw-context singleton -- NOT a session and
-    /// NOT null at the title. See `GX_DRAW_CONTEXT_SINGLETON_RVA` for the evidence.
+    /// `g_GxDrawContext`, the GXSR render draw-context singleton -- Not a session and
+    /// not null at the title. See `GX_DRAW_CONTEXT_SINGLETON_RVA` for the evidence.
     GxDrawContextSingleton = 0x47ef360,
 }
 
@@ -1947,16 +1947,16 @@ pub enum ProfileLoadMenuRva {
     ProfileSlotActivate = 0x262250,
     MenuItemUpdate = 0x007ad1c0,
     /// `vt[2]` (slot +0x10) of the `CS::MenuJobWithContext<LoadJobContext, lambda>` vtable
-    /// below -- the load job's Run/Execute virtual, NOT a per-frame "selector tick".
+    /// below -- the load job's Run/Execute virtual, not a per-frame "selector tick".
     ///
-    /// CORRECTED 2026-08-30 (was `ProfileLoadSelectorTick`). Evidence, 1.16.2 dump: the
-    /// function at `0x140826d50` has NO callers and only three DATA xrefs (it is reached
+    /// Corrected 2026-08-30 (was `ProfileLoadSelectorTick`). Evidence, 1.16.2 dump: the
+    /// function at `0x140826d50` has no callers and only three data xrefs (it is reached
     /// through a vtable); Ghidra types it `MenuJobResult *FUN_140826d50(longlong this,
     /// MenuJobResult *out, undefined8 *time, ...)` and its body calls
     /// `MenuJobResult::SetResult(out, Failed, 0)` before dispatching through
     /// `(**(this + 0x70))(...)`. Taking a `MenuJobResult` out-param and setting the job
-    /// result is the MenuJob Run signature. One of its DATA xrefs is `0x142ac71f0`, which
-    /// is `SelectorStepVtable`'s address + 0x10 -- i.e. this function IS that vtable's
+    /// result is the MenuJob Run signature. One of its data xrefs is `0x142ac71f0`, which
+    /// is `SelectorStepVtable`'s address + 0x10 -- i.e. this function is that vtable's
     /// third slot, and the RTTI on that vtable names the class (see below).
     ///
     /// `er-quickload`'s `SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA` was the accurate name of the
@@ -1969,9 +1969,9 @@ pub enum ProfileLoadMenuRva {
     MenuMemberFuncJobRun = 0x9aaba0,
     MenuLoadGameFunctorVtable = 0x02ac3ea8,
     /// Vtable of `CS::MenuJobWithContext<LoadJobContext, lambda_1af212c996936ea2325f4f98c4366979>`
-    /// -- a MenuJob vtable, NOT a "selector step" vtable.
+    /// -- a MenuJob vtable, not a "selector step" vtable.
     ///
-    /// CORRECTED 2026-08-30 (was `SelectorStepVtable`). Proven by RTTI rather than
+    /// Corrected 2026-08-30 (was `SelectorStepVtable`). Proven by RTTI rather than
     /// inference, read out of `eldenring-deobf.bin` (flat image, `VA = 0x140000000 + file
     /// offset`, shift 0): `vtable[-1]` at `0x142ac71d8` -> complete-object-locator
     /// `0x1432fc230` (signature 1) -> `COL+0x0c` type-descriptor RVA `0x3ca5d40` ->
@@ -1982,13 +1982,13 @@ pub enum ProfileLoadMenuRva {
     /// `er-quickload`'s `MENUJOB_LOADGAME_VTABLE_DUMP_VA` was the accurate name of the two.
     MenuJobLoadContextVtable = 0x2ac71e0,
     ProfileLoadDialogVtable = 0x2b229f8,
-    /// `CS::ProfileLoadDialog::SelectSaveSlot(this, int slot) -> bool` -- the game's OWN
+    /// `CS::ProfileLoadDialog::SelectSaveSlot(this, int slot) -> bool` -- the game's own
     /// "park the list cursor on the row that describes slot N". Its constructor
     /// (`0x1409a3d90`) calls it with `GetMenuSystemSaveLoad()->saveSlot`, which is the only
     /// caller in the image, so driving the cursor through it is exactly what the engine does.
     ///
     /// It is also the inverse of what `load_activate` reads, and its disassembly is the proof
-    /// that the cursor indexes ROWS rather than slots (byte-identical in the 1.16.2 dump and
+    /// that the cursor indexes rows rather than slots (byte-identical in the 1.16.2 dump and
     /// `eldenring-deobf.bin`, shift 0):
     ///
     /// ```text
@@ -2006,7 +2006,7 @@ pub enum ProfileLoadMenuRva {
 /// Dialog vtable slot 20 (offset 0xa0) = load_activate 0x1409a4670. Read the live slot from
 /// the dialog vtable (robust to relocation) rather than hard-calling the RVA.
 ///
-/// Slot 18 (offset 0x90) is the dialog's ROW LIST accessor -- `FUN_1409a3480`, which is just
+/// Slot 18 (offset 0x90) is the dialog's row list accessor -- `FUN_1409a3480`, which is just
 /// `return this + 0x1260`, the embedded
 /// `CS::BasicViewItemList<CS::MenuSaveDataSummary, 10>` the constructor fills. Both
 /// `load_activate` and `SelectSaveSlot` reach the rows through this slot rather than through a
@@ -2020,7 +2020,7 @@ pub struct ProfileLoadDialogVtableLayout {
 }
 
 /// `CS::MenuViewItemList<T>` vtable. Slot 4 (offset 0x20) is `at(index) -> T*`: the row accessor
-/// both `load_activate` and `SelectSaveSlot` call with a LIST INDEX.
+/// both `load_activate` and `SelectSaveSlot` call with a list index.
 #[repr(C)]
 pub struct MenuViewItemListVtableLayout {
     pub unknown_slots_00_03: [usize; 4],
@@ -2077,7 +2077,7 @@ pub const TITLE_STEP_END_FLOW_WAIT: i32 = TitleStepState::EndFlowWait as i32;
 /// advances the FD4 state machine at [dialog+0xa60] to the menu-list state, and
 /// constructs+registers the Continue / Load-Game(d180) / New-Game MenuWindowJobs into the
 /// holder. It is normally called from TitleTopDialog::update gated on the global accept byte
-/// 0x144589bdc, but the registrar itself reads NO input -- calling it directly with rcx=dialog
+/// 0x144589bdc, but the registrar itself reads no input -- calling it directly with rcx=dialog
 /// is the zero-input menu-open (no input synthesis, no save write). (NB: a subagent first
 /// reported the entry as 0x1409b1ae0 -- a foff->VA conversion slip of 0xa00; the disasm-verified
 /// entry is 0x1409b24e0.)
@@ -2088,7 +2088,7 @@ pub enum TitleDialogRva {
     Cleanup = 0x9a8890,
     OpenMenu = 0x9b24e0,
     Vtable = 0x2b26468,
-    /// 10-slot `CS::CSMenuProfModelRend*` table -- profile portrait renderers, NOT screens.
+    /// 10-slot `CS::CSMenuProfModelRend*` table -- profile portrait renderers, not screens.
     /// See `PROFILE_MODEL_REND_TABLE_RVA` for the evidence.
     ProfileModelRendTable = 0x3d6d8d0,
 }
@@ -2114,7 +2114,7 @@ pub struct TitleTopDialogLayout {
 
 /// Front-end menu event ids (verified): Confirm/OK, and the two vertical-move candidates (one is
 /// Down, one Up -- we inject both; only Down moves the cursor down, Up saturates at the top so it
-/// is harmless from Continue). We do NOT inject Confirm (STAGE 2 invokes d180's functor instead).
+/// is harmless from Continue). We do not inject Confirm (stage 2 invokes d180's functor instead).
 #[repr(usize)]
 pub enum MenuEventId {
     MoveA = 0x00,
@@ -2153,7 +2153,7 @@ pub enum RuntimeGlobalRva {
 
 // ----- from crates/er-quickload/src/constants/render_handoff.rs -----
 
-/// MoveMap child wrapper (`InGameStep+0xe0`) AFTER WorldRes is resident; may skip STEP_Finish teardown,
+/// MoveMap child wrapper (`InGameStep+0xe0`) after WorldRes is resident; may skip STEP_Finish teardown,
 /// so prefer satisfying the real sub-gate. Verify state before use.
 pub const EZ_CHILDSTEP_REQUEST_FINISH_RVA: usize = 0xeb5570;
 

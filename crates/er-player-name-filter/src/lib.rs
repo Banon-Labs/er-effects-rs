@@ -8,8 +8,8 @@
 //! One hook is not enough, because the overhead tag is not always built from that string.
 //! `CS::CSFeManImp::UpdateEnemyTags` builds each overhead nameplate through
 //! `CS::GetPlayerChrName`, which branches on `CS::GameSettings::ShowPlayerNames`: with Steam
-//! names switched OFF it takes the name out of `PlayerGameData` (the CHARACTER name, which is
-//! also the string Seamless Co-op syncs), and only with them switched ON does it read the
+//! names switched off it takes the name out of `PlayerGameData` (the character name, which is
+//! also the string Seamless Co-op syncs), and only with them switched on does it read the
 //! `steamName` the copy hook above rewrites. Measured live on 2026-08-22 with three remote
 //! players: both flags read 0, so every tag came from the character-name branch and the
 //! rewritten Steam names were never displayed. So this DLL hooks `GetPlayerChrName` as well and
@@ -50,7 +50,7 @@ const DL_ALLOCATOR_DEALLOCATE_VTABLE_OFFSET: usize = 0x68;
 const DL_STRING_IN_PLACE_CAPACITY: usize = 7;
 /// A displayed name longer than this is treated as a garbage read rather than a name.
 const DL_STRING_MAX_PLAUSIBLE_TEXT_UNITS: usize = 512;
-/// `CS::PlayerGameData::CopyChrName(PlayerGameData *pgd, const wchar_t *name)` -- the SOLE writer
+/// `CS::PlayerGameData::CopyChrName(PlayerGameData *pgd, const wchar_t *name)` -- the sole writer
 /// of `PlayerGameData::characterName`, reached for a remote player from the network receive path
 /// `TryDequeuePacket8@0x140ca3030`. Masking the name here masks it before anything can read it,
 /// including third-party overlays that read the field straight out of game memory rather than
@@ -58,7 +58,7 @@ const DL_STRING_MAX_PLAUSIBLE_TEXT_UNITS: usize = 512;
 /// needs no knowledge of them.
 ///
 /// Declared once in `er-game-base::rva`, where the full three-storage layout is written down: the
-/// build importer CALLS the same function to adopt a build's name, so the address is now shared
+/// build importer calls the same function to adopt a build's name, so the address is now shared
 /// and `check-rva-alias-drift.py` requires one declaration for it.
 const PLAYER_GAME_DATA_COPY_CHR_NAME_RVA: usize =
     er_game_base::rva::PLAYER_GAME_DATA_COPY_CHR_NAME_RVA;
@@ -66,7 +66,7 @@ const PLAYER_GAME_DATA_COPY_CHR_NAME_RVA: usize =
 /// save's name and the name they send to everyone else.
 const PLAYER_GAME_DATA_IS_MAIN_PLAYER_OFFSET: usize = 0x8f0;
 /// `PlayerGameData::characterName` is `wchar_t[17]`, and CopyChrName copies only when
-/// `len < 0x11`. A longer replacement is SILENTLY DROPPED and the real name survives, so the
+/// `len < 0x11`. A longer replacement is silently dropped and the real name survives, so the
 /// replacement is clamped to this many text units rather than trusted to fit.
 const CHARACTER_NAME_MAX_TEXT_UNITS: usize = 16;
 include!(concat!(env!("OUT_DIR"), "/generated_prologues.rs"));
@@ -77,7 +77,7 @@ const FILTER_REPLACEMENT_LOG_LIMIT: u64 = 16;
 /// unreadable on 2026-08-22: Copy spent all 16 lines before a single tag rendered, so "the hook
 /// never fired" and "the hook fired but logging was capped" produced an identical empty log.
 const CHR_NAME_REPLACEMENT_LOG_LIMIT: u64 = 16;
-/// The first calls into the chr-name hook are logged with their OUTCOME, including the ones that
+/// The first calls into the chr-name hook are logged with their outcome, including the ones that
 /// change nothing. Without this a run cannot distinguish "this function is not on the path for
 /// these players" from "it is on the path and declined to match".
 const CHR_NAME_CALL_LOG_LIMIT: u64 = 24;
@@ -807,7 +807,7 @@ mod windows_runtime {
 
     fn install_player_name_filter(module: *mut c_void) {
         // A rust_panic in a cdylib loaded into the game is otherwise anonymous: the message goes to a
-        // stderr nobody reads, and what survives is a 0xe06d7363 record naming the MODULE and nothing
+        // stderr nobody reads, and what survives is a 0xe06d7363 record naming the module and nothing
         // else. Two boots were lost to one before this existed. See er_game_base::panic_report.
         er_game_base::panic_report::report_panics_to("er-player-name-filter", log_message);
         er_hook::set_hook_logger(log_message);
@@ -832,7 +832,7 @@ mod windows_runtime {
         // switched back on without a restart, which is the whole point of the reload.
 
         let mut attempts = 0_u64;
-        // BOUNDED (2026-08-29): an unbounded `loop { yield_now() }` in two other shells starved the
+        // Bounded (2026-08-29): an unbounded `loop { yield_now() }` in two other shells starved the
         // wineserver and hung a whole boot -- see er_game_base::wait. Same shape, same fix.
         let found = er_game_base::wait::poll_until(|| match game_module_base() {
             Ok(base) => Some(base),
@@ -880,7 +880,7 @@ mod windows_runtime {
 
     /// Re-read the config file whenever it changes on disk.
     ///
-    /// What deliberately SURVIVES a reload, because live game state depends on it:
+    /// What deliberately survives a reload, because live game state depends on it:
     ///
     /// - the per-player ordinal assignments, so a player already displayed as "Dongerino 5"
     ///   keeps that number instead of being renumbered by the new rules;
@@ -891,9 +891,9 @@ mod windows_runtime {
     ///   the call, but they are never freed, so nothing the game holds can be left dangling by
     ///   a reload.
     ///
-    /// What a reload CANNOT do is restore a real name that has already been written into
+    /// What a reload cannot do is restore a real name that has already been written into
     /// `PlayerGameData::characterName`: the original is not kept anywhere the game can be
-    /// pointed back at, so turning the switch off stops NEW masking and leaves players already
+    /// pointed back at, so turning the switch off stops new masking and leaves players already
     /// on screen as they are until the session ends and the game rewrites them.
     fn spawn_config_watcher(config_path: PathBuf) {
         let _ = std::thread::Builder::new()
@@ -1322,7 +1322,7 @@ mod windows_runtime {
             ));
             return None;
         }
-        // Resolve BEFORE the allocation, so a refusal does not leak the box it would have filled.
+        // Resolve before the allocation, so a refusal does not leak the box it would have filled.
         let Ok(from_u16_addr) = er_game_base::mem::game_rva_named(
             DL_STRING_FROM_U16_ARRAY_RVA as u32,
             "DL_STRING_FROM_U16_ARRAY_RVA",
@@ -1378,7 +1378,7 @@ mod windows_runtime {
             return None;
         }
         let original_name = unsafe { read_wide_c_string(name, CHARACTER_NAME_MAX_TEXT_UNITS + 1) }?;
-        // An EMPTY name is not a player. CopyChrName is called with "" while a remote
+        // An empty name is not a player. CopyChrName is called with "" while a remote
         // PlayerGameData is still being constructed and before the name packet arrives, and a
         // wildcard pattern matches the empty string, so without this guard every one of those
         // writes is masked -- observed live stamping 'Dongerino 1' thirteen times over on
@@ -1448,7 +1448,7 @@ mod windows_runtime {
     /// `decorate = true` -- the multiplayer announcement banners -- returns the name wrapped in
     /// menu-text 0xbcc/0xbcd, which in English is a pair of spaces. Comparing the decorated
     /// string verbatim made `' Dongerino 5 '` look like a fresh name, so the banner re-matched
-    /// and issued a SECOND number: the tag and the overlay said "Dongerino 5" while the banner
+    /// and issued a second number: the tag and the overlay said "Dongerino 5" while the banner
     /// for the same player said "Dongerino 2".
     fn is_issued_mask(text: &str) -> bool {
         let Some(issued) = ISSUED_MASKS.get() else {

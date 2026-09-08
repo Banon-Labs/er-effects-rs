@@ -32,7 +32,7 @@
 //! `CSChrActionRequestModule::taeCancels`, `CS::ChrIns::PreBehaviorSafe` clears that bit every
 //! frame, and `CS::CSAiFunc::IsEnableCancelAttack` reads it to decide whether a creature's own AI
 //! may chain out of the swing it is in. So the game already computes, per creature, per frame,
-//! per animation, the exact predicate this layer needs -- for CREATURES, which is what a
+//! per animation, the exact predicate this layer needs -- for creatures, which is what a
 //! possession is wearing. Reading that bit is [`Availability::Chainable`], and the answer is the
 //! engine's rather than ours.
 //!
@@ -43,7 +43,7 @@
 //! # The offline window, which is the fallback and the report
 //!
 //! The same TimeAct event has a start and an end in animation-local seconds, and those are
-//! readable offline from the corpus -- so the shipped table carries the START as
+//! readable offline from the corpus -- so the shipped table carries the start as
 //! [`crate::moveset::table::Move::chain_from_cs`], and this layer compares it against
 //! `CSChrTimeActModule::animQueue[readIdx].localTime`, the creature's own playhead. That is the
 //! answer used when the module chain does not read, and it is also what lets
@@ -70,7 +70,7 @@
 //!
 //! The second is that every `Committed` answer below rests on evidence with no expiry of its own
 //! -- an engine bit that may never read, a window that was never measured -- so "unknown" could
-//! outlive the animation it was describing. The clip's own `animLength` is now checked FIRST, and
+//! outlive the animation it was describing. The clip's own `animLength` is now checked first, and
 //! nothing may hold a press past it. The worst case is one clip, not one session.
 //!
 //! Both are the same mistake in different clothes: a fail-closed default on an oracle that cannot
@@ -78,7 +78,7 @@
 //! [`Source`] exists and every branch says on whose authority it answered.
 //!
 //! The fallback is slightly more permissive than the engine, and only in one direction. The
-//! table carries the window's START and not its END, so once the offline window has opened this
+//! table carries the window's start and not its end, so once the offline window has opened this
 //! layer treats the rest of the clip as chainable, while the live bit goes false again when the
 //! event's end time passes. Measured on c4500, most windows run to within a frame or two of the
 //! clip's end, so the difference is a short tail at the very end of a recovery -- and it only
@@ -88,9 +88,9 @@
 //! # How much of the moveset this actually covers, and what the rest falls back to
 //!
 //! 5,086 of the 6,921 shipped moves carry a window. Split by what they are, that is **4,576 of
-//! the 4,669 ATTACKS (98.0%)** against 510 of the 2,252 movement moves -- and the split is the
+//! the 4,669 attacks (98.0%)** against 510 of the 2,252 movement moves -- and the split is the
 //! shape of the data rather than a hole in it, because FlagType 86 is the flag for cancelling an
-//! ATTACK and a dodge is not one. So a press during an attack chains on the game's own window
+//! attack and a dodge is not one. So a press during an attack chains on the game's own window
 //! almost always, and a press during a dodge usually waits the dodge out, which for a
 //! half-second clip is what waiting means anyway.
 //!
@@ -99,7 +99,7 @@
 //! The possession ticks in `CSTaskGroupIndex::FrameBegin`. `CS::ChrIns::PreBehaviorSafe` clears
 //! the transient `taeCancels` bits and the TimeAct events re-set them during the behaviour
 //! update, both later in the same frame -- so every value this layer reads describes the window
-//! the PREVIOUS frame established. 16 ms against a window whose median width is 800 ms, and
+//! the previous frame established. 16 ms against a window whose median width is 800 ms, and
 //! acting on the window the last frame established is the correct reading of a press anyway.
 
 // Pure state machine over observations; ungated so `cargo test` proves it on the host.
@@ -119,14 +119,14 @@ pub(crate) struct Playing {
     /// here can hold a press: once the playhead is past the end, the clip is over whatever the
     /// other two sources say.
     pub(crate) length_s: Option<f32>,
-    /// Is the animation being played one of THIS creature's shipped moves?
+    /// Is the animation being played one of this creature's shipped moves?
     ///
     /// The positive test, and it replaced "the id is below 3000" on 2026-09-02. A threshold
     /// cannot work here: the id the engine reports is a raw TimeAct id in a per-creature space
     /// that the table does not enumerate, and it is routinely five or seven digits. A possessed
     /// Battlemage idles in 43000 and spawns through 3009000/3009500 -- so a ceiling test called
     /// it "permanently mid-attack" and refused every press on a creature with thirteen melee
-    /// attacks. Asking whether the id is one this crate could have FIRED cannot be surprised by
+    /// attacks. Asking whether the id is one this crate could have fired cannot be surprised by
     /// a band nobody has seen.
     pub(crate) is_known_move: bool,
     /// `CSChrActionRequestModule::taeCancels`, resolved through the engine's own predicate.
@@ -158,7 +158,7 @@ impl Availability {
     }
 }
 
-/// Which source decided, so a run can say what the oracle READ and not only what it concluded.
+/// Which source decided, so a run can say what the oracle read and not only what it concluded.
 ///
 /// The 2026-09-02 run had to be diagnosed from four log lines and a hypothesis, because the
 /// resolver said "committed" without ever saying on whose authority. Every branch below names
@@ -205,7 +205,7 @@ pub(crate) struct Reading {
 ///
 /// The engine wins when it answers. `cancel_allowed` is the same predicate the game's own AI is
 /// gated on, evaluated by the game, for this creature, on this frame; the table's window is an
-/// offline reading of the TimeAct event that SETS that bit, so when the two could disagree the
+/// offline reading of the TimeAct event that sets that bit, so when the two could disagree the
 /// live one is the one that is right. The table is what answers when the module chain does not
 /// read, and it is what the derived report can print before a possession has even started.
 ///
@@ -471,10 +471,10 @@ mod tests {
         );
     }
 
-    /// THE 2026-09-02 REGRESSION. A creature that is animating nothing must resolve `Idle`, not
+    /// The 2026-09-02 regression. A creature that is animating nothing must resolve `Idle`, not
     /// `Committed`. `None` reaches this function for two different reasons -- the module pointer
     /// did not read, and the TimeAct queue held nothing driven this frame -- and both mean the
-    /// same thing to a player: there is no swing to protect, so the press must fire NOW.
+    /// same thing to a player: there is no swing to protect, so the press must fire now.
     #[test]
     fn a_creature_animating_nothing_is_idle_and_says_which_of_the_two_reasons_it_was() {
         let reading = resolve(None, Some(0.5));

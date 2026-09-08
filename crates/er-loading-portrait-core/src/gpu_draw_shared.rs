@@ -275,7 +275,7 @@ fn log_shader_error(stage: &str, err: Option<&ID3DBlob>) {
 /// # Safety
 ///
 /// `device` and `srv_heap` must be live, `srv_index` must be within `srv_heap`'s descriptor
-/// count, and every `*_slot` must be a static the CALLER owns exclusively for this texture: on
+/// count, and every `*_slot` must be a static the caller owns exclusively for this texture: on
 /// success the previous texture/upload pointers in those slots are OVERWRITTEN with newly leaked
 /// COM pointers (`into_raw`), so a shared slot would leak the old pair and hand two owners the
 /// same resource.

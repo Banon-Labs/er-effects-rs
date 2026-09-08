@@ -5,7 +5,7 @@
 //!
 //! Invasion locations are map markers, not fast-travel destinations
 //! ([`er_invasion_warp_core::warp::WarpPolicy::MarkersOnly`]), so F7/F8/F9 are refused along with the
-//! world map's own confirm. The refusal is taken HERE, at the top of the press handler, rather than
+//! world map's own confirm. The refusal is taken here, at the top of the press handler, rather than
 //! left to the warp call at the bottom: reaching that call means decoding the whole invasion
 //! catalog and resolving thousands of candidate coordinates, and doing all of that on every press
 //! to then decline is a stutter the player would feel for no reason.
@@ -16,12 +16,12 @@
 //! # The oracle is still live, and still needed
 //!
 //! [`note_external_warp`] is how the world-map confirm hook hands over a warp it issued, and the
-//! arrival classification below is the only thing that can say a warp ARRIVED rather than merely
+//! arrival classification below is the only thing that can say a warp arrived rather than merely
 //! being requested. That is a distinction worth keeping wired up even while nothing issues one:
 //! if the policy is ever revisited, the evidence path is the part that took real runs to build.
 //!
-//! What each key MEANT, kept because the selection helpers still implement it: F7 the nearest
-//! point, F8 the catalog's stable order, F9 another AREA entirely. Only F7 needed world
+//! What each key meant, kept because the selection helpers still implement it: F7 the nearest
+//! point, F8 the catalog's stable order, F9 another area entirely. Only F7 needed world
 //! coordinates -- see the note on the candidate set in [`InvasionWarpDrive::tick`] for why that
 //! distinction is load-bearing.
 //!
@@ -40,11 +40,11 @@
 //! # What "it worked" means here
 //!
 //! Not "the DLL loaded", not "no crash", and not "the hotkey fired". A warp counts only when
-//! the player is READ BACK in the destination block within
+//! the player is read back in the destination block within
 //! [`er_invasion_warp_core::oracles::INVASION_WARP_POSITION_TOLERANCE_METRES`] of the requested
 //! point ([`WarpArrival::Arrived`]). Landing in the right block at the wrong place is the
 //! signature of the explicit-spawn slot not taking -- the engine falls back to the block's
-//! default spawn -- and is reported as [`WarpArrival::Mislanded`], a FAILURE.
+//! default spawn -- and is reported as [`WarpArrival::Mislanded`], a failure.
 
 use er_invasion_warp_core::warp::{WARP_ARRIVAL_TICK_BUDGET, WarpArrival, WarpOutcome};
 
@@ -57,7 +57,7 @@ use er_invasion_warp_core::select::{
 #[cfg(windows)]
 use er_invasion_warp_core::warp::classify_arrival;
 
-/// `VK_F7`, the DEFAULT for "warp to the nearest invasion spawn point that is not the one under
+/// `VK_F7`, the default for "warp to the nearest invasion spawn point that is not the one under
 /// our feet" -- no longer the binding.
 ///
 /// # Why these became config keys
@@ -66,7 +66,7 @@ use er_invasion_warp_core::warp::classify_arrival;
 /// the same me3 profile had taken it too, so one press reached both features and a live session
 /// warped when the player meant the other thing. Neither side had a config key, so the only fix
 /// available was unloading a mod. The binding now comes from `warp_nearest_key` /
-/// `warp_next_key` / `warp_other_area_key` in `er-invasion-warp.toml`, by NAME, re-read while the
+/// `warp_next_key` / `warp_other_area_key` in `er-invasion-warp.toml`, by name, re-read while the
 /// game runs -- see [`crate::local_invasion_filter::warp_keys_in_force`]. The constants remain as
 /// the fallback when the config is unreadable, because losing the file should cost the player
 /// their lists, not their keyboard.
@@ -74,7 +74,7 @@ pub const VK_WARP_NEAREST: i32 = 0x76;
 /// `VK_F8`, the default for "step to the next invasion spawn point in the catalog's stable order".
 /// Unlike "nearest" this crosses the map, because the order is by block id rather than by distance.
 pub const VK_WARP_NEXT: i32 = 0x77;
-/// `VK_F9`, the default for "jump to the first spawn point in a DIFFERENT area than the one the
+/// `VK_F9`, the default for "jump to the first spawn point in a different area than the one the
 /// player is in" -- base game <-> Shadow of the Erdtree. A deliberate single action rather than
 /// something inferred from candidate counts, because "can the warp leave its own area" is the one
 /// question a filtered candidate list cannot answer.
@@ -183,7 +183,7 @@ impl KeyEdge {
     ///
     /// Returns whether the binding actually moved, so the caller can log it once.
     ///
-    /// The reset is the load-bearing half, and it is TWO resets. `was_down` is about the old key,
+    /// The reset is the load-bearing half, and it is two resets. `was_down` is about the old key,
     /// so leaving it set means the new key is treated as already held -- its first press either
     /// vanishes or, if the key happens to be down at the instant of the swap, its release invents
     /// one. The discarded `GetAsyncKeyState` read clears the OS's own per-thread "pressed since
@@ -212,13 +212,13 @@ enum DriveState {
     },
 }
 
-/// A warp issued from OUTSIDE this driver -- i.e. by the world-map confirm hook -- handed over so
+/// A warp issued from outside this driver -- i.e. by the world-map confirm hook -- handed over so
 /// the driver's arrival watcher can judge it.
 ///
-/// WHY THIS EXISTS. `classify_arrival` was wired only into the keyboard driver, so a warp the
+/// Why this exists. `classify_arrival` was wired only into the keyboard driver, so a warp the
 /// player triggered by selecting a map pin was never checked at all: the confirm hook logged
 /// "LOCAL warp to block ..." the moment the stage kick was issued and stopped there. That line
-/// says the explicit-spawn slot latched, NOT that the player went anywhere -- and on 2026-08-04 a
+/// says the explicit-spawn slot latched, not that the player went anywhere -- and on 2026-08-04 a
 /// user reported warping doing nothing while the log recorded a dozen consecutive "successes"
 /// and `er-invasion-warp-run.json` was never written at all, because nothing on that path ever
 /// published it. The product path now produces the same arrival evidence the driver does.
@@ -400,7 +400,7 @@ impl InvasionWarpDrive {
         // roster at our own DllMain would name only the DLLs the loader happened to reach first
         // and would read as "the others are missing" -- a false negative about the very thing
         // this line exists to measure. `latest_release` is None until the release lookup lands,
-        // so every mod reports `unknown`, which is deliberately NOT `STALE`.
+        // so every mod reports `unknown`, which is deliberately not `STALE`.
         if self.ticks == ROSTER_LOG_TICK {
             log(format_args!(
                 "{}",
@@ -420,7 +420,7 @@ impl InvasionWarpDrive {
         // driver all looked identical in the log.
         if self.ticks.is_multiple_of(HEARTBEAT_TICK_INTERVAL) {
             // (passed, queried) per bucket -- the visibility oracle. `ours 0/N` with a healthy
-            // shipped ratio means our rows are reaching the filter and being REJECTED, which is
+            // shipped ratio means our rows are reaching the filter and being rejected, which is
             // a field problem; `ours 0/0` means the filter never saw them at all, which is a
             // different bug entirely.
             let verdicts = crate::map_hooks::filter_verdicts();
@@ -435,8 +435,8 @@ impl InvasionWarpDrive {
             // could not be installed", which is otherwise a question only a screenshot answers.
             let (_, map_movies, red_served, red_failures) = crate::map_gfx::gfx_tallies();
             let player = unsafe { er_invasion_warp_core::warp::player_physics_position(base) };
-            // WHICH BLOCK the player is in. The position alone cannot answer "did the warp move
-            // me": it is BLOCK-LOCAL, so arriving in a different block can read as a similar
+            // Which block the player is in. The position alone cannot answer "did the warp move
+            // me": it is block-local, so arriving in a different block can read as a similar
             // triple, and on 2026-08-04 a whole run's worth of heartbeats could not distinguish
             // a warp that worked from one that did nothing. The block id can.
             let block = unsafe { er_invasion_warp_core::warp::current_block_id(base) };
@@ -445,17 +445,17 @@ impl InvasionWarpDrive {
             // not running -- a distinct failure from "running but nothing placed".
             let (msb_points, msb_maps) = crate::map_hooks::msb_coverage();
             // The rejection banner's counters. Surfaced here because a banner that never fires and
-            // a banner that fires perfectly are otherwise IDENTICAL in the log -- success was
+            // a banner that fires perfectly are otherwise identical in the log -- success was
             // silent, so the only evidence was the absence of a failure line, which is not
             // evidence at all for a feature whose whole job is to appear on screen. `shown` counts
             // banners whose text was read back out of the game's own rawString/length after
             // writing; `refused` counts attempts dropped before display.
             let (banners_shown, banners_refused) = crate::announce::tally();
-            // `shown` counts placements; `drawn`/`empty` count what the GAME measured afterwards.
+            // `shown` counts placements; `drawn`/`empty` count what the game measured afterwards.
             // The pair is the point: a blank banner shipped once with shown=1 and no way to see it
             // in telemetry, so the number that can disagree with success is the one worth printing.
             let (banners_drawn, banners_empty) = crate::announce::measurement_tally();
-            // WHAT THE LOCAL-INVASION FILTER ACTUALLY DID, as opposed to whether it is armed.
+            // What the local-invasion filter actually did, as opposed to whether it is armed.
             // `unenforced` is the one that matters: a match this module judged a rejection and then
             // could not cancel proceeds anyway, which from the player's seat is the mod being off.
             // It was reported that way on 2026-09-06 ("I didn't only invade locally. It might be
@@ -511,7 +511,7 @@ impl InvasionWarpDrive {
             "invasion-warp: hotkey edge detected (nearest={want_nearest} next={want_next})"
         ));
 
-        // Refuse BEFORE the catalog decode below. `request_invasion_warp` would refuse anyway --
+        // Refuse before the catalog decode below. `request_invasion_warp` would refuse anyway --
         // it is the single choke point and this is not a second gate that could disagree with it
         // -- but only after ~7000 targets had been collected and, for F7, run through coordinate
         // conversion. Declining early costs the player nothing; declining late costs a frame hitch
@@ -537,13 +537,13 @@ impl InvasionWarpDrive {
             return;
         };
 
-        // The FULL catalog is the candidate set for everything except "nearest".
+        // The full catalog is the candidate set for everything except "nearest".
         //
         // Only "nearest" needs world coordinates, because only it needs distances. The warp
-        // itself never does: the explicit-spawn slot takes BLOCK-LOCAL coordinates and
+        // itself never does: the explicit-spawn slot takes block-local coordinates and
         // MoveMapStep runs ConvertBlockCoordsToPhysicsCoords on them once the destination area
         // has loaded. Filtering every candidate through that conversion up front -- it resolves
-        // only blocks in the player's currently resident area -- silently made every OTHER area
+        // only blocks in the player's currently resident area -- silently made every other area
         // unreachable. A live run showed it as "2591 of 7073 targets converted" while standing
         // in the DLC: exactly the dlc02 count, with the whole base game excluded.
         let catalog = match unsafe {
@@ -784,12 +784,12 @@ pub fn warp_oracle_json(
     };
     let requested = encode_position_oracle(outcome.spawn_position);
     let final_encoded = final_position.map(encode_position_oracle);
-    // The two position fields are in DIFFERENT SPACES and must be labelled as such.
-    // `requested_position` is the BLOCK-LOCAL .aip value read back out of GameMan+0xc90 --
-    // that is what the engine was handed. `final_position` is the player's PHYSICS position.
+    // The two position fields are in different spaces and must be labelled as such.
+    // `requested_position` is the block-local .aip value read back out of GameMan+0xc90 --
+    // that is what the engine was handed. `final_position` is the player's physics position.
     // They coincide only where the block origin happens to be ~0, which made a live run look
     // self-consistent by luck. `expected_position_physics` is the requested point put through
-    // the engine's own conversion, and IS the value the arrival verdict compares against.
+    // the engine's own conversion, and is the value the arrival verdict compares against.
     let expected_encoded = expected_physics.map(encode_position_oracle);
     format!(
         "{{\"{ORACLE_INVASION_WARP_SELECTED_ID}\":{selected},\
@@ -881,7 +881,7 @@ mod tests {
         assert_eq!(built_in.warp_other_area_key, VK_WARP_OTHER_AREA);
     }
 
-    /// The five keys this crate binds must not SHIP colliding with each other. A player can still
+    /// The five keys this crate binds must not ship colliding with each other. A player can still
     /// create a collision by hand -- and is warned when they do -- but the defaults must not.
     #[test]
     fn the_shipped_keys_do_not_collide_with_each_other() {
@@ -907,7 +907,7 @@ mod tests {
 
     #[test]
     fn only_an_arrival_reports_passed() {
-        // The whole point: a warp that was merely ISSUED must never read as success.
+        // The whole point: a warp that was merely issued must never read as success.
         let cases = [
             (
                 WarpArrival::Arrived {
@@ -958,7 +958,7 @@ mod tests {
 
     #[test]
     fn the_two_position_fields_are_labelled_with_their_coordinate_space() {
-        // A live run had requested_position (block-local) numerically EQUAL to final_position
+        // A live run had requested_position (block-local) numerically equal to final_position
         // (physics) because that block's origin was ~0, which made a mixed-space document look
         // self-consistent by luck. The labels stop that reading.
         let json = warp_oracle_json(

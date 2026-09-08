@@ -1,4 +1,4 @@
-//! End-to-end NATIVE-SHADER DRAW proof: real FLVER geometry (c0000) bound to a real
+//! End-to-end native-SHADER draw proof: real FLVER geometry (c0000) bound to a real
 //! `.vpo`+`.ppo` via SPIR-V passthrough, with a synthesized studio MVP written at the
 //! reflected cbuffer offsets, drawn into an offscreen target and read back.
 //!
@@ -233,7 +233,7 @@ fn main() {
         "indices: vertex_count={vcount}, max_index={maxi}, oob(>=count)={oob}, restart(0xFFFFFFFF)={restart}"
     );
     // The native ER object `.vpo` deterministically faults a real GPU (hard reset). We
-    // therefore execute on a SOFTWARE Vulkan adapter (lavapipe): a shader fault there is
+    // therefore execute on a software Vulkan adapter (lavapipe): a shader fault there is
     // a CPU process error, not a display-killing GPU reset.
 
     // Translate native shaders + reflect their resource bindings.
@@ -247,7 +247,7 @@ fn main() {
     // and the SSBO descriptor doesn't bind under wgpu passthrough on lavapipe (null base).
     let sv = er_shaderkit::force_readonly_ssbo_loads_zero(&mut v_spv);
     let sp = er_shaderkit::force_readonly_ssbo_loads_zero(&mut p_spv);
-    // THE FIX: dxil-spirv emits the D3D register model (t1/s1/b1 all collide at binding 1,
+    // The FIX: dxil-spirv emits the D3D register model (t1/s1/b1 all collide at binding 1,
     // and different cbuffers across stages reuse registers) — invalid in a merged Vulkan
     // pipeline and a lavapipe descriptor-null. Assign every resource a globally-unique,
     // contiguous binding (no sharing); maps[0] = the vertex shader's (set,old)->new.
@@ -304,7 +304,7 @@ fn main() {
         pr.output_locations.len().max(1)
     );
     // Compare reflected SPIR-V (set,binding) to the D3D registers (dxc -dumpbin):
-    // cbSceneParam=b8, cbInstanceData=b4. If dxil-spirv is NOT identity, the matrix
+    // cbSceneParam=b8, cbInstanceData=b4. If dxil-spirv is not identity, the matrix
     // write slot is wrong (-> zero transform -> blank).
     println!("vertex-stage reflected bindings (set,binding,kind):");
     for b in &vr.bindings {
@@ -374,8 +374,8 @@ fn main() {
         draw_indices.len(),
         size
     );
-    // ISOLATION mode (NATIVE_PIXEL=false): replace the native pixel shader with a solid
-    // colour and bind only the vertex resources — proves the native VERTEX shader projects
+    // Isolation mode (NATIVE_PIXEL=false): replace the native pixel shader with a solid
+    // colour and bind only the vertex resources — proves the native vertex shader projects
     // geometry, separate from shading. NATIVE_PIXEL=true draws through the real .ppo with
     // the full union of vertex+pixel resources (textures stubbed, lighting zeroed for now).
     // NATIVE_PIXEL=true segfaults today: the .ppo samples ~23 textures with specific types
@@ -445,7 +445,7 @@ fn main() {
             let m = if store_t { transpose(&base) } else { base };
             let vp_bytes: Vec<u8> = m.iter().flat_map(|f| f.to_le_bytes()).collect();
 
-            // Identity for EVERY world-space matrix the shader multiplies, else a zeroed
+            // Identity for every world-space matrix the shader multiplies, else a zeroed
             // matrix collapses geometry to the origin: mWorld (cbInstanceData b4+0),
             // VC_aObjMatrix[0,1] (cbObjMatrix b5), VC_aClothCancelObjMatrix[0,1]
             // (cbClothCancelObjMatrix b12) — each a column-major float4x3 (48B, entries
@@ -469,7 +469,7 @@ fn main() {
             // The obj/cloth matrices are indexed per-vertex by NORMAL.w (idx = (matricesData
             // + NORMAL.w)*3 vec4s). matricesData=0, so idx is a multiple of 3 = a 48-byte
             // float4x3 slot. Fill both buffers with the identity float4x3 every 48 bytes so
-            // ANY NORMAL.w (0..~340) reads identity instead of a zeroed (collapsing) slot.
+            // any NORMAL.w (0..~340) reads identity instead of a zeroed (collapsing) slot.
             for off in (0..16_384u64).step_by(48) {
                 writes.push(UniformWrite {
                     set: 0,

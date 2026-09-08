@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Print a save container's ON-DISK per-slot occupancy evidence, side by side.
+"""Print a save container's on-disk per-slot occupancy evidence, side by side.
 
-WHY THIS EXISTS. Two readers in this repo answer "which character slots does this
+Why this exists. Two readers in this repo answer "which character slots does this
 container hold", and on 2026-08-25 they disagreed on the user's own file:
 
 * `er_save_loader::bnd4::active_slots` reads the `USER_DATA010` occupancy bitmap and
-  reported ONE occupant (slot 3) for `~/Downloads/ER0000.co2`;
-* `scripts/dump-save-slots.py` decodes each `USER_DATA00N` body and found TEN.
+  reported one occupant (slot 3) for `~/Downloads/ER0000.co2`;
+* `scripts/dump-save-slots.py` decodes each `USER_DATA00N` body and found ten.
 
 The game agrees with the second one, so the System>Quit "Load Character from File"
 preview offered one row out of ten. A disagreement like that is invisible until
 somebody prints both, which is what this does -- plus the raw bytes the bitmap read
-lands on, so a wrong OFFSET is distinguishable from a wrong FILE.
+lands on, so a wrong offset is distinguishable from a wrong file.
 
 It is read-only: it opens the container, never writes one.
 
@@ -95,9 +95,9 @@ def slot_body_is_populated(data: bytes, slot: int) -> bool:
 #
 # `er_save_loader::stats::located_stat_block` walks the body byte by byte and accepts the first
 # offset where eight in-range attributes sum to `level + 79`. `SerializedSaveSlot::player_game_data`
-# (er-quickload) instead finds the leading `FACE` magics and searches a fixed window BEFORE each
+# (er-quickload) instead finds the leading `FACE` magics and searches a fixed window before each
 # one. The second can only find a character whose FaceData happens to land inside that window, so
-# where they disagree the FACE-window locator is the one to distrust.
+# where they disagree the face-window locator is the one to distrust.
 RUNE_LEVEL_BASE = 79
 MIN_ATTR = 1
 MAX_ATTR = 99
@@ -149,7 +149,7 @@ def leading_face_offsets(body: bytes) -> list[int]:
 
 
 def face_window_finds(body: bytes, pgd_offsets: list[int]) -> bool:
-    """True when at least one real PGD lies inside a leading FACE magic's search window --
+    """True when at least one real PGD lies inside a leading face magic's search window --
     i.e. when the er-quickload locator would have found this character at all."""
     faces = leading_face_offsets(body)
     for face in faces:

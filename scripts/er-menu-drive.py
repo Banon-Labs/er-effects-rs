@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Drive the in-game menu to a save slot in ONE call.
+"""Drive the in-game menu to a save slot in one call.
 
-WHY THIS EXISTS. Reaching a save slot through the real menus is fourteen key presses. Until now each
+Why this exists. Reaching a save slot through the real menus is fourteen key presses. Until now each
 one was a separate shell round-trip: write a command file, wait several seconds, read the log, decide
 the next press. That is slow, it burns the operator's attention on bookkeeping, and it is fragile --
 a press issued while the previous one is still held is silently lost, and the only way to notice is
-to read the cursor back afterwards. The harness now QUEUES a whole file and paces it one command per
+to read the cursor back afterwards. The harness now queues a whole file and paces it one command per
 poll, so the entire route can be handed over at once; this script writes that file and then waits on
 the harness's own semaphores rather than on a clock.
 
-WHAT IT DOES NOT DO. It does not decide where to go. The route is explicit, because a script that
+What it does not do. It does not decide where to go. The route is explicit, because a script that
 guessed at row counts would fail the same way hand-counting did -- silently, and one row off.
 """
 
@@ -31,7 +31,7 @@ KEYS = {"up": 0xC8, "down": 0xD0, "left": 0xCB, "right": 0xCD, "confirm": 0x12, 
 # The route from an in-world pause menu to a save slot, as measured on 1.17 (runs br-20260905-201903
 # and -203643). Each entry is (key, holds). The two `confirm`s that open a dialog are held one poll
 # longer because the dialog build is what the next step reads back.
-# `openmenu` leads the route because the pause menu is NOT opened by a keypress -- it opens when
+# `openmenu` leads the route because the pause menu is not opened by a keypress -- it opens when
 # `CSPopupMenu+0x121` is set, which `CSPopupMenu::Update` consumes the next frame. A route that
 # assumed the menu was already up silently did nothing at all when it was not: measured on run
 # br-20260905-210305-c6a6, eleven presses landed on a closed menu and every grid read back cell 0.
@@ -83,7 +83,7 @@ def await_cursor(run_dir: pathlib.Path, want_bound: int, seconds: int) -> tuple[
     watch = er_run_lib.DirectoryWatch(run_dir)
     pattern = re.compile(r"PICKER dialog=0x([0-9a-f]+) grid=0x[0-9a-f]+ cursor=(-?\d+) bound=(-?\d+)")
     seen = 0
-    # A DEADLINE, not an iteration count. `watch.wait` returns the instant the directory changes, and
+    # A deadline, not an iteration count. `watch.wait` returns the instant the directory changes, and
     # during a drive the harness is appending constantly -- so a `for _ in range(seconds)` loop spent
     # its whole budget in milliseconds and reported "never appeared" while the drive was still on its
     # second press. Measured on run br-20260905-204256-755e.
@@ -139,7 +139,7 @@ def main() -> int:
         return 2
 
     if args.watch:
-        # LAUNCHED WITH THE GAME, not after it. The route used to be issued by hand once the operator
+        # Launched with the game, not after it. The route used to be issued by hand once the operator
         # noticed the menu was up, which made every run a manual timing exercise. The harness's own
         # `open_pause_menu ADVANCED` line is the event to wait on -- it is written the frame the menu
         # opens -- so this blocks on the log rather than on a clock.

@@ -109,20 +109,20 @@ pub(crate) fn config() -> CrashLogConfig {
 
 /// This crate's four output files, each with its own redirect knob.
 ///
-/// WHY THESE EXIST. Every one is SINGLE-SLOT in the game directory: the next launch renames it to
+/// Why these exist. Every one is single-slot in the game directory: the next launch renames it to
 /// `.prev` and truncates, so two launches destroy the run before last. This crate was the last
 /// writer in the repo with no knob at all, so no launcher could move it -- and it is the writer
 /// whose output is least reproducible, because a crash record cannot be re-run on demand. Not
 /// hypothetical: on 2026-09-04 a relaunch erased a 26-record log mid-investigation, the only copy
 /// of a 22-deep unwind cascade, and the crash had to be re-provoked from the user.
 ///
-/// WHY FOUR NEAR-IDENTICAL FUNCTIONS INSTEAD OF A TABLE. `scripts/er-artifact-redirect-audit.py`
+/// Why four near-identical functions instead of a table. `scripts/er-artifact-redirect-audit.py`
 /// parses the knobs out of this source, and it pairs an `env::var("ER_QUICKLOAD_*")` with the
-/// default filename that appears BESIDE it. A table of the same strings reads identically to a
+/// default filename that appears beside it. A table of the same strings reads identically to a
 /// human and is invisible to the audit -- the knob would exist, the audit would report no gap, and
 /// no launcher would ever be told to set it. The duplication is what makes the knob discoverable.
 ///
-/// One knob EACH, not one shared directory, because the four files are read for different
+/// One knob each, not one shared directory, because the four files are read for different
 /// verdicts: the log for the record history, `-latest` for the final fault, the breadcrumb for
 /// "did the DLL even attach", the module list for resolving addresses.
 fn game_directory() -> PathBuf {
@@ -157,7 +157,7 @@ fn default_modules_path() -> PathBuf {
     }
 }
 
-/// Matched on the DEFAULT names, not on `config()`'s. A shell that renames these files
+/// Matched on the default names, not on `config()`'s. A shell that renames these files
 /// (`er-quickload` does) is a different writer with its own knobs already in
 /// `scripts/er_artifact_env.py`; matching the default name is what stops one shell's redirect
 /// from capturing another shell's file.
@@ -427,7 +427,7 @@ const PE_IAT_DIRECTORY_INDEX: usize = 12;
 #[cfg(windows)]
 const PE_DATA_DIRECTORY_ENTRY_SIZE: usize = 8;
 /// Most anomalous IAT slots to name individually. A bulk wild write into `.idata` corrupts
-/// hundreds; naming them all would bury the record, and the COUNT is what distinguishes a bulk
+/// hundreds; naming them all would bury the record, and the count is what distinguishes a bulk
 /// write from a single targeted overwrite. The count is always reported, capped or not.
 #[cfg(windows)]
 const MAX_IAT_ANOMALIES_LISTED: usize = 16;
@@ -442,7 +442,7 @@ const CALLER_SITE_LOOKBEHIND: usize = 16;
 /// that PRECEDE them.
 ///
 /// `stack_modules` proves a module's code address sits somewhere on the stack. It cannot tell a
-/// LIVE return address from a STALE one a deeper call left at the same depth, and that is the
+/// live return address from a stale one a deeper call left at the same depth, and that is the
 /// whole question when the faulting address is code nothing in the image calls: the frames that
 /// look like the caller chain may be leftovers from a call that already returned. A genuine
 /// return address has a `call` whose next instruction is exactly it, decidable offline from these
@@ -757,30 +757,30 @@ unsafe fn pe_size_of_image(base: usize) -> Option<usize> {
 
 /// Nested `crash_vectored_handler` entries the re-entrancy latch refused.
 ///
-/// THE VEH stack-overflow semaphore for this shell. Non-zero means describing one fault faulted
+/// The VEH stack-overflow semaphore for this shell. Non-zero means describing one fault faulted
 /// again on the same thread. See [`enter_veh`].
 #[cfg(windows)]
 static VEH_REENTRANT_REFUSALS: AtomicUsize = AtomicUsize::new(0);
 
 /// Nested VEH entries the latch refused. Non-zero says the report you are reading is the
-/// outermost of a pile and the FIRST record is the real fault.
+/// outermost of a pile and the first record is the real fault.
 #[cfg(windows)]
 pub fn veh_reentrant_refusals() -> usize {
     VEH_REENTRANT_REFUSALS.load(Ordering::SeqCst)
 }
 
-/// `Some(token)` for the outermost VEH entry on this thread ANYWHERE IN THE PROCESS, `None` for a
+/// `Some(token)` for the outermost VEH entry on this thread anywhere in the process, `None` for a
 /// nested one.
 ///
 /// # Why a crash logger of all things needs this
 ///
 /// Describing a fault reads memory the fault just said is not trustworthy -- the faulting thread's
 /// stack, its registers' pointees, the loader list -- so the reporting path can fault in turn, and
-/// a VEH is re-entered for its OWN faults, on the SAME thread, on top of the frame it is already
+/// a VEH is re-entered for its own faults, on the same thread, on top of the frame it is already
 /// in. The record budget does not bound that: it is checked once per entry and each entry costs a
 /// whole handler frame, so the stack runs out first.
 ///
-/// MEASURED 2026-08-28 in the sibling handler in `er-quickload` on ELDEN RING 1.17: one execute
+/// Measured 2026-08-28 in the sibling handler in `er-quickload` on ELDEN RING 1.17: one execute
 /// fault, then 215 identical copies of a NULL read raised while reporting it, `rsp` marching down
 /// by exactly `0x1260` a line until the 1 MiB main-thread stack was gone. Wine then could not even
 /// raise the overflow -- `virtual_setup_exception` needs stack to build the exception frame -- so
@@ -789,14 +789,14 @@ pub fn veh_reentrant_refusals() -> usize {
 ///
 /// # Why it has to be process-wide, not the per-module `thread_local!` it started as
 ///
-/// That first fix latched a `thread_local!` declared in THIS crate -- and every DLL that links
+/// That first fix latched a `thread_local!` declared in this crate -- and every DLL that links
 /// this crate gets its own copy of it. So a fault raised while module A is describing a fault is
 /// still a *first* entry for modules B, C and D, each of which describes it, each of which can
 /// fault again. The amplifier came back multiplied by the number of loggers loaded.
 ///
-/// MEASURED 2026-09-02, same game build, 24 native DLLs: one `0xc000001d` at `game+0x10043`, then
+/// Measured 2026-09-02, same game build, 24 native DLLs: one `0xc000001d` at `game+0x10043`, then
 /// 214 identical `0xc0000005` inside ntdll's unwinder, `rsp` from `0x10f560` down to `0x13810`,
-/// the faulting thread dead and the session wedged with its window still up. FOUR crash logs each
+/// the faulting thread dead and the session wedged with its window still up. Four crash logs each
 /// recorded the same storm -- `er-quickload` 213, `er-net-effects` 214, `er-loading-bar` 64,
 /// `er-loading-portrait` 64 -- which is the 2026-08-28 latch working exactly as designed, four
 /// times over, on four private copies of the flag.
@@ -815,7 +815,7 @@ fn enter_veh() -> Option<er_game_base::reentry::process_wide::ProcessWideToken> 
 
 #[cfg(windows)]
 unsafe extern "system" fn crash_vectored_handler(info: *mut ExceptionPointersMin) -> i32 {
-    // FIRST, before `info` is dereferenced: a fault raised while describing a fault must not
+    // First, before `info` is dereferenced: a fault raised while describing a fault must not
     // re-enter this handler. See `enter_veh`.
     let Some(_not_nested) = enter_veh() else {
         return EXCEPTION_CONTINUE_SEARCH;
@@ -1321,10 +1321,10 @@ fn write_module_inventory(reason: &str) {
 /// # Why a crash logger reads the import table
 ///
 /// On 2026-09-03 ELDEN RING 1.17 died twice with `STATUS_ILLEGAL_INSTRUCTION` at
-/// `0x140010043` -- an address that is MID-INSTRUCTION inside a CRYPTOGAMS AES-NI blob with zero
+/// `0x140010043` -- an address that is mid-instruction inside a CRYPTOGAMS AES-NI blob with zero
 /// code xrefs in the whole image, reached from `call qword ptr [rip+...]` inside
 /// `DLKR::PlainAdaptiveMutexImpl::Unlock`. That indirect call reads the `KERNEL32!
-/// LeaveCriticalSection` import slot, and `.idata` is its own READ|WRITE section, so a stray
+/// LeaveCriticalSection` import slot, and `.idata` is its own read|write section, so a stray
 /// store can corrupt a slot with no `VirtualProtect` at all.
 ///
 /// The record could not settle it. It named the destination and the caller and said nothing about
@@ -1332,29 +1332,29 @@ fn write_module_inventory(reason: &str) {
 /// only. So the one fact that separates "the import table was corrupted" from "the unwind is
 /// lying" was the one fact nobody could read, and answering it meant another crash.
 ///
-/// # What the ANSWER distinguishes, which a single slot would not
+/// # What the answer distinguishes, which a single slot would not
 ///
-/// This walks the WHOLE table rather than the one slot that faulted, because the count is the
+/// This walks the whole table rather than the one slot that faulted, because the count is the
 /// diagnosis. One bad entry is a targeted overwrite and the hunt is for a single bad store; two
 /// hundred is a buffer overrun through `.idata` and the hunt is for whatever runs off the end of
 /// the allocation before it. Those send a reader to different places, and the difference is free
 /// to measure here and expensive to measure any other way.
 ///
-/// A slot pointing into a loaded module is not proof it is CORRECT -- a swap between two real
+/// A slot pointing into a loaded module is not proof it is correct -- a swap between two real
 /// functions would pass -- but every corruption seen here so far parks a value that belongs to no
 /// module at all, which this catches.
 #[cfg(windows)]
-/// Every loaded module's IAT, searched for a slot whose value IS the faulting RIP.
+/// Every loaded module's IAT, searched for a slot whose value is the faulting RIP.
 ///
 /// `iat_anomalies` walks only the main executable, and that is where its two tests were aimed:
 /// an import satisfied by an address outside every module, or by an address inside the importing
-/// image. Neither can see a corrupted import in a SYSTEM module -- and the fault this exists for
+/// image. Neither can see a corrupted import in a system module -- and the fault this exists for
 /// was entered from `kernelbase!ResetEvent`, whose one indirect call is
 /// `call qword ptr [__imp_NtResetEvent]` through kernelbase's own `.idata`. A pointer swapped
 /// there is invisible to a scan of `eldenring.exe`, so the record kept reporting the table clean
 /// while the process jumped through a rewritten slot every frame.
 ///
-/// The question asked here is narrower and answers itself: does ANY module's IAT hold, right now,
+/// The question asked here is narrower and answers itself: does any module's IAT hold, right now,
 /// the exact address the CPU faulted on? A hit names the corrupted slot outright -- module, slot
 /// address, and the import block it sits in -- and turns "something jumped to dead code" into
 /// "this pointer was overwritten". A miss is also worth having: it rules the import tables out and
@@ -1434,15 +1434,15 @@ fn iat_anomalies(modules: &[(usize, usize, String)]) -> String {
             // A zero slot is the terminator between one DLL's thunk block and the next, not a
             // corruption.
             Some(0) => {}
-            // TWO tests, and the second is the one this exists for.
+            // Two tests, and the second is the one this exists for.
             //
-            // OUTSIDE ANY MODULE catches a slot holding a value that is not code at all. That was
-            // the whole check on the first cut, and it is BLIND to the fault it was written to
-            // diagnose: the value seen at `0x140010043` is inside `eldenring.exe`, which IS a
+            // Outside any module catches a slot holding a value that is not code at all. That was
+            // the whole check on the first cut, and it is blind to the fault it was written to
+            // diagnose: the value seen at `0x140010043` is inside `eldenring.exe`, which is a
             // loaded module, so an overwritten `LeaveCriticalSection` sailed straight through and
             // the first instrumented run reported the table clean at the one slot that mattered.
             //
-            // INSIDE THE MAIN EXECUTABLE closes it. An import is by definition satisfied by
+            // Inside the main EXECUTABLE closes it. An import is by definition satisfied by
             // another module -- the loader writes the exporter's address, never an address in the
             // importing image -- so a slot pointing into the .exe is corrupt however plausible the
             // address looks. This is the precise shape of the crash under investigation.
@@ -1479,11 +1479,11 @@ fn iat_anomalies(modules: &[(usize, usize, String)]) -> String {
     out
 }
 
-/// The bytes immediately BEFORE each caller-frame return address inside the main executable.
+/// The bytes immediately before each caller-frame return address inside the main executable.
 ///
 /// # Why, after the import table came back clean
 ///
-/// A return address is the instruction AFTER a call, so the bytes just before it are the call
+/// A return address is the instruction after a call, so the bytes just before it are the call
 /// itself. Two instrumented crashes proved the IAT intact at fault time while the reconstructed
 /// stack still put the fault under `call qword ptr [rip+...]` inside
 /// `DLKR::PlainAdaptiveMutexImpl::Unlock`. Both cannot be true of an UNMODIFIED image -- so the
@@ -1551,7 +1551,7 @@ fn caller_site_bytes(modules: &[(usize, usize, String)]) -> String {
 ///
 /// [`iat_anomalies`] answers "does this slot point somewhere plausible", and three instrumented
 /// crashes answered yes for every slot that mattered. That is a weaker claim than it reads as: a
-/// slot holding the address of the WRONG export, or an address inside the right module but not at
+/// slot holding the address of the wrong export, or an address inside the right module but not at
 /// a function, passes it. Meanwhile the faults kept arriving through KERNEL32 indirect calls --
 /// `LeaveCriticalSection` (slot `0x144c115c4`) twice, then `CreateEventW` (slot `0x144c11884`) --
 /// each transferring to `0x140010043`, with every call site byte-identical to the shipped image.
@@ -1562,7 +1562,7 @@ fn caller_site_bytes(modules: &[(usize, usize, String)]) -> String {
 /// names the import and both addresses; no mismatches means the table the loader built is exactly
 /// what the loader would build today, and the transfer happened somewhere below it.
 ///
-/// The comparison is deliberately against the LIVE resolver rather than a table of expected
+/// The comparison is deliberately against the live resolver rather than a table of expected
 /// addresses: under Wine an export may forward, and only the running loader knows where it lands.
 #[cfg(windows)]
 fn iat_export_mismatches(modules: &[(usize, usize, String)]) -> String {
@@ -1588,7 +1588,7 @@ fn iat_export_mismatches(modules: &[(usize, usize, String)]) -> String {
         }
         let table = if ilt_rva != 0 { ilt_rva } else { iat_rva };
         let mut index = 0usize;
-        // A read that FAILS ends the walk the same way a null terminator does: an unreadable page
+        // A read that fails ends the walk the same way a null terminator does: an unreadable page
         // in the middle of an import table is not a mismatch to report, it is the end of what can
         // be said about this module -- and this runs inside a fault handler, where guessing past
         // an unreadable address is how a diagnostic becomes a second crash.
@@ -1684,18 +1684,18 @@ unsafe fn read_c_string(addr: usize, max: usize) -> String {
 /// # The question this answers and the four that came before could not
 ///
 /// The import table checks out against `GetProcAddress`, every dumped call site is byte-identical
-/// to `eldenring-deobf-1.17.bin`, and the caller VARIES between crashes -- indirect through
-/// `LeaveCriticalSection`, indirect through `CreateEventW`, then three DIRECT `rel32` calls in an
+/// to `eldenring-deobf-1.17.bin`, and the caller varies between crashes -- indirect through
+/// `LeaveCriticalSection`, indirect through `CreateEventW`, then three direct `rel32` calls in an
 /// unrelated range -- while the destination `0x140010043` never moves. Nothing about the callers
 /// explains a constant destination, so the remaining place to look is the destination itself.
 ///
 /// `0x140010043` sits mid-instruction inside a CRYPTOGAMS AES-NI blob at the head of `.text` that
-/// has ZERO code xrefs across all 366,673 functions of the de-Arxan'd image. An address nothing
+/// has zero code xrefs across all 366,673 functions of the de-Arxan'd image. An address nothing
 /// references, reached constantly at runtime, is what an anti-tamper trap looks like from the
 /// outside -- and it would look exactly like this in a de-Arxan'd image, because the tool strips
 /// the code that would reference it.
 ///
-/// So: dump what is REALLY there, at fault time, in the retail image. Diff it against the flat
+/// So: dump what is really there, at fault time, in the retail image. Diff it against the flat
 /// image (file offset == RVA, VA = 0x140000000 + offset). Different means the live image carries
 /// code the de-Arxan'd one does not, and the investigation moves to which patch trips it.
 /// Identical means the destination is untouched game bytes and the transfer is still unexplained
@@ -1882,7 +1882,7 @@ pub(crate) unsafe fn write_minidump_named(file_name: &str, info: *mut ExceptionP
     }
     let normal_error = unsafe { GetLastError() };
     if ok == 0 && !exception_param.is_null() {
-        // Last tier: no exception parameter at all. Proton's `dbghelp` fails BOTH tiers above with
+        // Last tier: no exception parameter at all. Proton's `dbghelp` fails both tiers above with
         // `ERROR_NOACCESS` (998) on the machines this ships to, and that error is raised while it
         // dereferences the `MINIDUMP_EXCEPTION_INFORMATION` it was handed -- so dropping that
         // struct is the one variable left to change. The dump loses the faulting thread's
@@ -1904,7 +1904,7 @@ pub(crate) unsafe fn write_minidump_named(file_name: &str, info: *mut ExceptionP
     unsafe { CloseHandle(file) };
     // `CreateFileW` above already created the file, so a failed dump leaves a 0-byte `.dmp` on
     // disk. That empty file is worse than no file: it is indistinguishable from a captured dump
-    // until someone opens it, and users dutifully collect and send it. Delete it, so the ONLY
+    // until someone opens it, and users dutifully collect and send it. Delete it, so the only
     // `.dmp` that ever exists is one with a dump in it.
     if ok == 0 {
         let removed = unsafe { DeleteFileW(wide.as_ptr()) } != 0;
@@ -2000,16 +2000,16 @@ fn scan_stack_modules(rsp: usize, modules: &[(usize, usize, String)]) -> String 
 
 /// Qwords dumped from whatever each general-purpose register points at, and how many.
 ///
-/// THE QUESTION THIS ANSWERS. `context_rcx == context_rip` says the fault was a call THROUGH A
-/// POINTER, and `iat_slots_holding_rip` has already proved the pointer is in no module's import
+/// The question this answers. `context_rcx == context_rip` says the fault was a call through a
+/// pointer, and `iat_slots_holding_rip` has already proved the pointer is in no module's import
 /// table (13,373 slots across 93 modules, zero hits). What is left is an object: a vtable, a
 /// callback slot, a function-pointer field. The innermost real call site on the stack of the
 /// `0x140010043` crash is `call qword ptr [rax+0xb8]` inside `lsteamclient.dll` -- so the corrupt
 /// slot is 0xb8 bytes into whatever `rax` held, and nothing in the record named that object.
 ///
-/// Dumping a window from EVERY register rather than just `rax` is deliberate: which register holds
+/// Dumping a window from every register rather than just `rax` is deliberate: which register holds
 /// the object depends on the call site, and the call site is exactly what is in doubt. A slot whose
-/// value equals the faulting RIP is marked, because that mark IS the answer -- it names the
+/// value equals the faulting RIP is marked, because that mark is the answer -- it names the
 /// register, the byte offset, and therefore the object whose field was overwritten.
 #[cfg(windows)]
 const REGISTER_POINTEE_QWORDS: usize = 32;
@@ -2043,7 +2043,7 @@ fn register_pointees(snapshot: &ExceptionSnapshot, modules: &[(usize, usize, Str
         if value < MIN_VALID_PTR {
             continue;
         }
-        // Only the slots that MATTER are printed. A full 32-qword dump per register is 15 KB of
+        // Only the slots that matter are printed. A full 32-qword dump per register is 15 KB of
         // record nobody reads; the marked slots are the finding, and the register's module tag is
         // enough context to say what kind of object it is.
         let mut marks = String::new();

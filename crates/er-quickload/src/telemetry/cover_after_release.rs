@@ -1,4 +1,4 @@
-// POST-RELEASE COVER WATCH: product re-export facade.
+// Post-release cover WATCH: product re-export facade.
 //
 // The watch itself -- the per-frame cover-plate sample, the in-game-menu open stamps, the log/
 // telemetry clock map and the oracle emitter -- moved to
@@ -17,7 +17,7 @@ pub(crate) fn cover_after_release_record(base: usize, now_ms: u64) {
     er_loading_portrait_core::cover_after_release::cover_after_release_record(base, now_ms)
 }
 
-/// Note one `02_000_IngameTop` `MenuWindowJob::Run` tick, and stamp the ones that START a menu
+/// Note one `02_000_IngameTop` `MenuWindowJob::Run` tick, and stamp the ones that start a menu
 /// session. Called from the product `MenuWindowJob::Run` post-hook.
 pub(crate) fn in_game_menu_note_run_tick(job: usize, window: usize) {
     crate::experiments::ensure_loading_cover_host();

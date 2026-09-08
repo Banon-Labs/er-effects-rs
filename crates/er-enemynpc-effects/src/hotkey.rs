@@ -62,7 +62,7 @@ type ReleaseFn = unsafe extern "system" fn(RawObj) -> u32;
 /// already logged by the call that installed the detour.
 const HOOK_ROUTE_WHEN_INSTALLED: HookRoute = HookRoute::LocalUnion;
 
-/// The hotkey in force, read by the detour below without a lock and REPLACED by
+/// The hotkey in force, read by the detour below without a lock and replaced by
 /// [`rebind`] when the config file changes. It was a `OnceLock`, which is why changing the
 /// hotkey used to mean quitting the game.
 static HOTKEY: AtomicChord = AtomicChord::unset();
@@ -79,10 +79,10 @@ static NON_KEYBOARD_READS: AtomicUsize = AtomicUsize::new(0);
 /// to. Only the trigger is blanked; the modifiers are left alone.
 static SUPPRESSED_TRIGGER_READS: AtomicUsize = AtomicUsize::new(0);
 
-/// Swap in a new hotkey and FORGET whatever the old one was doing.
+/// Swap in a new hotkey and forget whatever the old one was doing.
 ///
 /// The reset is the load-bearing half. `HOTKEY_HELD` latches "the combination was down on the
-/// previous poll", and it is about the OLD key. Leave it set across a rebind and the next poll
+/// previous poll", and it is about the old key. Leave it set across a rebind and the next poll
 /// that finds the new key down sees `swap(true)` return true -- so the press is swallowed -- or,
 /// worse, a key that happens to be held at the moment of the swap counts as already pressed and
 /// the release re-arms it into a toggle the player never asked for. Pending toggles are dropped
@@ -161,7 +161,7 @@ unsafe fn probe_get_device_state_address(
 
 /// The detour, in the union's four-`usize` shape.
 ///
-/// `GET_STATE_ORIG` may hold the NEXT handler in the chain rather than the game trampoline, so it
+/// `GET_STATE_ORIG` may hold the next handler in the chain rather than the game trampoline, so it
 /// has to be called through [`UnionFn`] and not through the narrower `GetDeviceStateFn`. The
 /// `usize` return carries the `HRESULT` in its low 32 bits, which is where the caller reads it
 /// from; it is passed straight back rather than reconstructed.
@@ -220,7 +220,7 @@ fn observe_keyboard_state(hr: i32, size: u32, data: *mut u8) {
 /// and `er-net-effects` both detour this same `GetDeviceState` slot, and two separately
 /// linked MinHook instances on one prologue silently overwrite each other's trampolines -- the
 /// loser reports installed and never runs. Routing through the product's union when the product
-/// is co-loaded puts one instance in charge and CHAINS the handlers instead.
+/// is co-loaded puts one instance in charge and chains the handlers instead.
 pub(crate) fn install_hotkey_hook(hotkey: Chord) -> Result<HookRoute, MH_STATUS> {
     if HOOK_INSTALLED.load(Ordering::Relaxed) {
         return Ok(HOOK_ROUTE_WHEN_INSTALLED);

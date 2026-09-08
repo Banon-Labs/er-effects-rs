@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A log describes exactly ONE process run. This makes that executable.
+"""A log describes exactly one process run. This makes that executable.
 
 Standing rule (2026-08-04): no product DLL, shell or harness in this repo may append to a log
 across runs. Each log file is truncated by the first write of the process that owns it; keeping
@@ -8,7 +8,7 @@ an older run means copying the file aside yourself, not letting it accumulate.
 The failure that set the rule: `crates/er-invasion-warp/src/lib.rs` opened its log with a
 plain `OpenOptions::new().append(true)` on a fixed name next to the game executable. Twelve
 separate launches piled into one 565 KB file, so a count taken over it ("37 confirms") read as
-ONE run doing something 37 times when it was really twelve runs, and per-run state could only be
+one run doing something 37 times when it was really twelve runs, and per-run state could only be
 recovered by hand-splitting on the module-base banner. Worse, lines from builds that no longer
 exist sat indistinguishably next to lines from the build under test.
 
@@ -16,13 +16,13 @@ A comment saying "don't append" is not enforcement -- this repo has been bitten 
 (see `check-me3-shell-coverage.py`, which exists because an array was kept correct by a comment).
 So the shape is pinned instead:
 
-  * `er_game_base::log::begin_fresh_run(path)` is the one-shot. The FIRST call for a path in a
+  * `er_game_base::log::begin_fresh_run(path)` is the one-shot. The first call for a path in a
     process rotates the previous run's file aside (`<name>.prev`, exactly one generation) and
     truncates. Every later call is a no-op, so a run never loses its own earlier lines.
   * `er_game_base::log::open_fresh_run_append(path)` runs that one-shot and hands back an
-    appending handle. It is the ONLY sanctioned appending opener.
-  * Therefore: an `OpenOptions`-style `.append(...)` may appear ONLY in the helper module, or in
-    a file listed in EXEMPT with a stated reason.
+    appending handle. It is the only sanctioned appending opener.
+  * Therefore: an `OpenOptions`-style `.append(...)` may appear only in the helper module, or in
+    a file listed in exempt with a stated reason.
 
 `Vec::append` / `String::append` take `&mut ...`, so an argument starting with `&` is not a file
 opener and is not flagged. `File::create` / `truncate(true)` are already fresh and are ignored.
@@ -50,7 +50,7 @@ from repo_source_scan import NOT_REPO_SOURCE, REPO_ROOT, rust_source_files  # no
 EXTRA_SKIP_DIRS = frozenset({"save-files", "docs"})
 SKIP_DIRS = NOT_REPO_SOURCE | EXTRA_SKIP_DIRS
 
-# `.append(` whose argument does NOT start with `&`. That one character separates an OpenOptions
+# `.append(` whose argument does not start with `&`. That one character separates an OpenOptions
 # builder (`.append(true)`, `.append(flag)`) from `Vec::append(&mut other)`.
 APPEND_CALL = re.compile(r"\.append\s*\(\s*(?!&)([^)]*)\)")
 
@@ -88,7 +88,7 @@ def append_openers(text: str) -> list[tuple[int, str]]:
 
 
 def defines_helper(text: str) -> bool:
-    """Whether `text` is the module that DEFINES the sanctioned helpers."""
+    """Whether `text` is the module that defines the sanctioned helpers."""
     return all(re.search(rf"fn\s+{name}\b", text) for name in HELPER_FUNCTIONS)
 
 
@@ -145,7 +145,7 @@ def check(root: Path, sources: list[Path] | None = None) -> list[str]:
 
 
 def selftest() -> int:
-    """Prove the checks fire, on synthetic inputs, in BOTH directions."""
+    """Prove the checks fire, on synthetic inputs, in both directions."""
     import tempfile
 
     failures = 0
@@ -156,7 +156,7 @@ def selftest() -> int:
             print(f"selftest FAIL: {name}", file=sys.stderr)
             failures += 1
 
-    # The real helper module: defines both one-shot entry points AND holds the repo's one
+    # The real helper module: defines both one-shot entry points and holds the repo's one
     # appending opener, which is exactly what its exemption covers.
     helper_source = (
         "pub fn begin_fresh_run(path: &Path) {}\n"
@@ -181,7 +181,7 @@ def selftest() -> int:
             target.write_text(body)
         return root
 
-    # NEGATIVE DIRECTION: a violating snippet must fail.
+    # Negative DIRECTION: a violating snippet must fail.
     with tempfile.TemporaryDirectory() as tmp:
         root = tree(
             tmp,
@@ -217,7 +217,7 @@ def selftest() -> int:
             any("crates/sneaky-dll/src/lib.rs:1" in p for p in problems),
         )
 
-    # POSITIVE DIRECTION: compliant sources must pass.
+    # Positive DIRECTION: compliant sources must pass.
     with tempfile.TemporaryDirectory() as tmp:
         root = tree(
             tmp,
@@ -284,7 +284,7 @@ def main() -> int:
         return selftest()
 
     root = args.root.resolve()
-    # Walked ONCE. `check()` enumerated the tree and then the success line called
+    # Walked once. `check()` enumerated the tree and then the success line called
     # `rust_files(root)` a second time purely to print a count, so a passing run paid for the
     # whole walk twice. The six selftest call sites still pass only `root` and enumerate
     # themselves -- their trees are a handful of files.

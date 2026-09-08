@@ -28,24 +28,24 @@ NATIVE_STATIC_CHECK = REPO_ROOT / "scripts" / "check-native-continue-static.py"
 CHECK_SH = REPO_ROOT / "scripts" / "check.sh"
 RUNTIME_PROBE = REPO_ROOT / ".auto" / "runtime_probe.sh"
 DIRECT_PROBE = REPO_ROOT / "scripts" / "run-product-continue-direct-probe.sh"
-# THE MEASURE CONTRACT IS GONE, AND SO ARE THE 18 ASSERTIONS THAT CHECKED IT (2026-08-19).
+# The measure contract is gone, and so are the 18 assertions that checked it (2026-08-19).
 #
 # This file used to assert that `.auto/measure.sh` scored the autoload happy path -- that it
 # exposed `readiness_gate_failures`, read the er-title-flow sources, penalised
 # Seamless-contaminated artifacts, and so on. Commit 40ed6c5a ("Add the crate-extraction plans
-# of record for experiments/", #193) DELETED 1573 lines of that file and replaced them with a
+# of record for experiments/", #193) deleted 1573 lines of that file and replaced them with a
 # 119-line crate-extraction roadmap progress measurer. The autoload measure did not move: a
 # tree-wide search for `readiness_gate_failures` finds this checker and nothing else.
 #
 # So the 18 failures were not telling anyone their branch was broken. They fired identically on
 # every branch, including a detached worktree of the base -- and because this runs at line 24 of
-# `scripts/check.sh` under `set -e`, EVERYTHING after it was skipped: `cargo fmt --check`, the
+# `scripts/check.sh` under `set -e`, everything after it was skipped: `cargo fmt --check`, the
 # me3 shell-coverage and DLL-conflict gates, the launcher selftests, and `check-rust-build.sh`.
 # A branch could be misformatted or fail to link every shell and still look merely
 # "gate-blocked for an unrelated reason". A permanently red gate does not protect anything; it
 # teaches people to walk past the one place the real failures would have shown up.
 #
-# The 69 remaining assertions check the PRODUCT source and are untouched -- they are what
+# The 69 remaining assertions check the product source and are untouched -- they are what
 # actually guards autoload behaviour. If a scored autoload measure is ever rebuilt, re-add its
 # contract here deliberately, against the file that then implements it. See bd er-effects-rs-ni41.
 
@@ -124,15 +124,15 @@ def require(condition: bool, message: str, failures: list[str]) -> None:
 def classifier_reaches(body: str, source: str, *tokens: str) -> bool:
     """Does `body` establish `tokens`, either inline or through a named helper it calls?
 
-    THE CHECK MUST FOLLOW AN EXTRACTION, OR IT PUNISHES ONE. These assertions read a function body
+    The check must follow an extraction, or it PUNISHES one. These assertions read a function body
     for the constants that prove the Continue classifier considers both accept predicates and the
     `_Do_call` identity. On 2026-08-30 those comparisons were extracted into
     `accept_predicate_is_idle`, `accept_predicate_is_native` and `continue_job_identity_matches` --
-    named, documented, and each screening a REFUSED (zero) resolution before comparing, which the
+    named, documented, and each screening a refused (zero) resolution before comparing, which the
     four copies they replaced did not. Reading only the caller's body, this gate scored that as
     three regressions.
 
-    So a token counts when it appears in the body OR in the body of a helper the body calls. The
+    So a token counts when it appears in the body or in the body of a helper the body calls. The
     invariant is unchanged -- the classifier must still be built from these constants -- and the
     separate assertions below hold each helper to resolving them for the running build rather than
     adding them to a raw module base, which is the defect this whole migration is about.
@@ -189,8 +189,8 @@ def fixed_wait_gates_absent(experiments: str, lib: str) -> bool:
 def optional_rust_fn_body(source: str, name: str) -> str:
     """Body of `name`, or "" when the function no longer exists.
 
-    This guard asserts that a path which EXISTS uses semantic readiness instead of
-    frame counts. A path that has been DELETED cannot regress, so its assertion is
+    This guard asserts that a path which exists uses semantic readiness instead of
+    frame counts. A path that has been deleted cannot regress, so its assertion is
     vacuous rather than failed -- returning "" would wrongly fail a `token in body`
     check, so callers must guard on presence (see product_path_uses_semantic_readiness).
 
@@ -372,14 +372,14 @@ def main() -> int:
     require("OWN_STEPPER_SLOT.store(slot" in arm_body, "product arm must propagate the requested slot", failures)
     require("PRODUCT_AUTOLOAD_ARMED.store" in arm_body, "product arm must latch PRODUCT_AUTOLOAD_ARMED", failures)
     require("append_autoload_debug" not in arm_body, "product arm must not perform early debug/file I/O", failures)
-    # DEPRECATE-ENV-MARKER-GATE-ALLOWLISTS-2026-07-19: env/marker feature gates are forbidden. The
-    # direct_menu_load/product_core experiment is a DISABLED experiment (the gate is a literal false
+    # DEPRECATE-ENV-marker-gate-ALLOWLISTS-2026-07-19: env/marker feature gates are forbidden. The
+    # direct_menu_load/product_core experiment is a disabled experiment (the gate is a literal false
     # with no env/marker read), which keeps it out of the product path even more strongly than the
-    # former env/file gate. Assert it is NOT env/marker-gated.
+    # former env/file gate. Assert it is not env/marker-gated.
     #
     # The product-side `fn experimental_direct_menu_load_enabled` was deleted as permanently-false
     # dead code; er-title-flow still declares the seam field, so what has to stay literal-false is
-    # now the BOOTSTRAP WIRING, not a function body. Check whichever of the two exists -- the
+    # now the BOOTSTRAP wiring, not a function body. Check whichever of the two exists -- the
     # er-title-flow shim body remains reachable here, and the wiring check is what actually pins the
     # value the shim returns.
     direct_menu_load_gate = optional_rust_fn_body(experiments, "experimental_direct_menu_load_enabled")
@@ -427,7 +427,7 @@ def main() -> int:
         "title native visual suppression hook must install at process attach before MenuWindow/title visual construction",
         failures,
     )
-    # The factory is pinned as the SHARED constant, not as a second literal. It used to be pinned
+    # The factory is pinned as the shared constant, not as a second literal. It used to be pinned
     # here as `0x7acbf0`, which is 0xf0 into `FUN_1407acb00` and lands on the third byte of a
     # `mov` -- a "RE-proven anchor" that was neither an instruction boundary nor a function entry.
     # The cause is recorded beside the constant: a `-0xf0` Ghidra-dump shift applied where the
@@ -459,7 +459,7 @@ def main() -> int:
         failures,
     )
     require(
-        # Assert the anchor still EXISTS and 0x81f6f0 is still declared somewhere, rather than
+        # Assert the anchor still exists and 0x81f6f0 is still declared somewhere, rather than
         # pinning one literal spelling. The RVA dedupe (2026-08-01) made this name derive from
         # the canonical PROFILE_SELECT_WRAPPER_RVA so the value has a single definition; pinning
         # `: usize = 0x81f6f0` here would have forced the duplicate literal to stay forever.
@@ -476,7 +476,7 @@ def main() -> int:
         failures,
     )
 
-    # `menu_window_latch_enabled` was DELETED as permanently-false dead code (its whole body was the
+    # `menu_window_latch_enabled` was deleted as permanently-false dead code (its whole body was the
     # literal `false`, so the hook it gated could only ever install via `product_autoload_enabled()`).
     # A deleted gate satisfies "not part of the product core path" outright, so this is an optional
     # lookup rather than a hard one -- it re-arms the moment anyone reintroduces the gate.
@@ -573,9 +573,9 @@ def main() -> int:
         "product diagnostics must hook native-accept MenuWindowJob constructor B without accepting idle rows",
         failures,
     )
-    # THE EXTRACTION IS ONLY AN IMPROVEMENT IF THE HELPER IS BETTER THAN WHAT IT REPLACED. Each
-    # Continue classifier must resolve its addresses for the RUNNING build and must refuse a zero
-    # resolution before comparing -- `game_data_addr` answers 0 for a refusal, and as a COMPARISON
+    # The extraction is only an improvement if the helper is better than what it replaced. Each
+    # Continue classifier must resolve its addresses for the running build and must refuse a zero
+    # resolution before comparing -- `game_data_addr` answers 0 for a refusal, and as a comparison
     # target a zero matches every unset field, which is worse than never matching at all.
     for helper in CONTINUE_CLASSIFIER_HELPERS:
         helper_body = rust_fn_body(experiments, helper)
@@ -828,7 +828,7 @@ def main() -> int:
         "telemetry must expose native Continue product phase/guard state for result-chain interpretation",
         failures,
     )
-    # oracle_continue_deser_fired / oracle_continue_confirmed REMOVED 2026-06-24 (tracked the
+    # oracle_continue_deser_fired / oracle_continue_confirmed removed 2026-06-24 (tracked the
     # own_stepper confirm-fire chain, not the load; misread as load-success). Real load semaphore
     # is world_loaded (player_present + world_stable + saved_map_c30).
 
@@ -852,7 +852,7 @@ def main() -> int:
     require("own_stepper_enabled()" in online_body, "product autoload must inherit offline mode via own_stepper_enabled()", failures)
     require("own_stepper_enabled()" in input_body, "product autoload must inherit input blocking via own_stepper_enabled()", failures)
 
-    # me3 is the ONLY supported loader (LazyLoader dinput8 proxy/chainload removed 2026-07-04
+    # me3 is the only supported loader (LazyLoader dinput8 proxy/chainload removed 2026-07-04
     # after the me3 production smoke passed: run me3-product-smoke-20260704-110507).
     require('profileVersion = "v1"' in stage, "release staging must write a v1 me3 ModProfile", failures)
     require("[[natives]]" in stage, "release staging profile must load the DLL as an me3 native", failures)

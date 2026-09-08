@@ -1,17 +1,17 @@
-//! The driver that turns one fault-closed read into ORACLE 1.
+//! The driver that turns one fault-closed read into oracle 1.
 //!
 //! # Why a sampler and not a single read
 //!
-//! `CS::InGameStayStep::STEP_InGameStayLoad` (`0x140ae9860`) requests BOTH
+//! `CS::InGameStayStep::STEP_InGameStayLoad` (`0x140ae9860`) requests both
 //! `other:/AutoInvadePoint.aipbnd` and `_dlc02` at boot, and each is parsed asynchronously by
 //! `AutoInvadePointBndFileCap::Process` (`0x140201660`) one `AddForBlockId` at a time. So a
 //! read taken at an arbitrary tick can legitimately see: nothing (`CatalogEmpty`), a partly
 //! built tree, base only, or base + dlc02. Reading once and reporting whatever came back is
-//! exactly how oracle 1 would report 257 blocks on a DLC install and call it a MATCH.
+//! exactly how oracle 1 would report 257 blocks on a DLC install and call it a match.
 //!
 //! [`CatalogSampler`] therefore keeps sampling until the totals stop moving:
 //!
-//! * it latches IMMEDIATELY on [`crate::oracles::EXPECTED_CATALOG_BASE_DLC02`], the maximal
+//! * it latches immediately on [`crate::oracles::EXPECTED_CATALOG_BASE_DLC02`], the maximal
 //!   state -- nothing can be added after it, so waiting longer proves nothing;
 //! * otherwise it latches once the same totals come back
 //!   [`CATALOG_STABLE_SAMPLES_TO_LATCH`] times running, which is how a base-only install (no
@@ -19,7 +19,7 @@
 //! * it gives up after [`CATALOG_SAMPLE_ATTEMPT_LIMIT`] attempts so a broken boot cannot keep
 //!   the walk running on the game thread forever.
 //!
-//! The state machine is deliberately platform-independent and takes the read RESULT as its
+//! The state machine is deliberately platform-independent and takes the read result as its
 //! input, so every path above is exercised by `cargo test` on the host with no game running.
 
 use crate::invasion_warp::InvasionWarpCatalogSummary;
@@ -30,7 +30,7 @@ use crate::oracles::{CatalogFingerprintVerdict, classify_catalog};
 /// sampler latches, which on a healthy boot is within a few seconds of the containers mounting.
 pub const CATALOG_SAMPLE_INTERVAL_TICKS: u64 = 60;
 
-/// Consecutive identical readings that latch a NON-maximal total. Long enough that a second
+/// Consecutive identical readings that latch a non-maximal total. Long enough that a second
 /// container still being parsed cannot be mistaken for a finished catalog.
 pub const CATALOG_STABLE_SAMPLES_TO_LATCH: u32 = 8;
 
@@ -85,7 +85,7 @@ impl CatalogSampler {
         }
     }
 
-    /// True once the sampler has latched or given up. The driver checks this BEFORE reading, so
+    /// True once the sampler has latched or given up. The driver checks this before reading, so
     /// a settled catalog costs the game thread nothing at all.
     #[must_use]
     pub const fn is_finished(&self) -> bool {
@@ -320,8 +320,8 @@ mod tests {
 
     #[test]
     fn a_dlc_container_that_mounts_late_is_not_latched_as_a_base_only_match() {
-        // THE failure this sampler exists to prevent: base parses first, the DLC arrives a few
-        // samples later, and a single-read oracle would have already reported 257/4482 MATCH.
+        // The failure this sampler exists to prevent: base parses first, the DLC arrives a few
+        // samples later, and a single-read oracle would have already reported 257/4482 match.
         let mut sampler = CatalogSampler::new();
         for _ in 0..CATALOG_STABLE_SAMPLES_TO_LATCH - 1 {
             let step = sampler.observe(Some(EXPECTED_CATALOG_BASE));

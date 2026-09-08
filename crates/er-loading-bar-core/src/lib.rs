@@ -44,7 +44,7 @@ pub const PHASE_PERMILLE: [usize; PHASE_COUNT] =
 /// Identity of a single loading phase, independent of which epoch's sequence contains it.
 ///
 /// A load "epoch" is one arm-to-teardown lifetime of the bar. The phases a process boot walks
-/// through are NOT the phases a later character reload walks through: a reload cannot start the
+/// through are not the phases a later character reload walks through: a reload cannot start the
 /// engine, construct GameMan, or acquire the title's Scaleform resources a second time. Naming the
 /// phase (rather than indexing a single global table) is what lets each epoch publish a sequence
 /// containing only the phases that can actually occur in it, so the visible `N/M` denominator is
@@ -105,7 +105,7 @@ impl LoadPhase {
 
 /// One epoch's ordered phase sequence plus that sequence's own fill targets.
 ///
-/// The permille targets belong to the SET, not to the phase: the same phase occupies a different
+/// The permille targets belong to the set, not to the phase: the same phase occupies a different
 /// slice of 0..1000 depending on how many phases share the bar with it in that epoch.
 pub struct PhaseSet {
     phases: &'static [LoadPhase],
@@ -139,7 +139,7 @@ impl PhaseSet {
         self.permille[idx.min(self.main_total())]
     }
 
-    /// Fill target of the NEXT phase, i.e. the ceiling the active phase fills toward.
+    /// Fill target of the next phase, i.e. the ceiling the active phase fills toward.
     /// The final phase fills toward a full bar.
     pub fn next_permille(&self, idx: usize) -> usize {
         let i = idx.min(self.main_total());
@@ -215,7 +215,7 @@ pub static RELOAD_PHASE_SET: PhaseSet = PhaseSet {
 /// ~0.8s (~4% of the load) while the world tail owns the remaining ~21s. An even spread therefore put
 /// 45% of the bar behind the first second and left the long streaming stretch crawling through the top
 /// half -- technically monotonic, but not paced. These targets track the measured wall-clock split:
-/// BUILDING WORLD ~3%, STREAMING ~22%, FINALIZING ~48%, ENTERING WORLD ~91%.
+/// Building world ~3%, streaming ~22%, FINALIZING ~48%, entering world ~91%.
 pub const RELOAD_PHASE_PERMILLE: [usize; 9] = [15, 25, 35, 45, 55, 70, 240, 480, 900];
 
 /// A single phase/subphase label suitable for the visible shape

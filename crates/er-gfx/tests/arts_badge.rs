@@ -1,4 +1,4 @@
-//! Verifies the Ash-of-War badge edit applies cleanly and round-trips for EVERY menu movie
+//! Verifies the Ash-of-War badge edit applies cleanly and round-trips for every menu movie
 //! in [`er_gfx::arts_badge::TARGETS`] (equipment loadout, equip menu, inventory, sort chest).
 //! Reads the vanilla movies from the local extraction corpus (`ER_GFX_CORPUS_ROOT`, e.g.
 //! `<ELDEN RING>/Game/menu`) and SKIPs when absent -- game-derived `.gfx` bytes are never
@@ -97,7 +97,7 @@ fn arts_badge_edit_applies_to_every_target() {
             "{}: edit must mount an ArtsIcon somewhere",
             target.file_name
         );
-        // Every mount must point at an INJECTED clip, never at a vanilla stub (whose subtree
+        // Every mount must point at an injected clip, never at a vanilla stub (whose subtree
         // is not instantiated on these tiles: it binds empty in 02_011 and is a completely
         // empty sprite in 02_020/03_050).
         for (owner, badge_clip_id) in &mounts {
@@ -107,9 +107,9 @@ fn arts_badge_edit_applies_to_every_target() {
                 target.file_name
             );
 
-            // The badge clip mirrors ItemIcon's TWO-LEVEL shape (its single NAMED child is
+            // The badge clip mirrors ItemIcon's two-level shape (its single named child is
             // `IconImage`, which is what SetIcon recurses into to size the drawn quad) and
-            // carries the Ash-of-War plate image as a sibling BEHIND it.
+            // carries the Ash-of-War plate image as a sibling behind it.
             let badge_clip = sprite(&movie, *badge_clip_id).expect("badge clip present");
             let icon_child = child_char(badge_clip, BADGE_ICONIMAGE_INSTANCE_NAME)
                 .expect("badge clip nests a named IconImage");
@@ -167,7 +167,7 @@ fn arts_badge_edit_applies_to_every_target() {
             );
         }
 
-        // The edit must NOT introduce a new named child on a CLASS-BOUND sprite: an injected
+        // The edit must not introduce a new named child on a class-bound sprite: an injected
         // name is dropped at instantiation where the AS3 class declares the members, which is
         // why the edit only re-points a vanilla child or nests inside a classless container.
         let classes: Vec<u16> = movie

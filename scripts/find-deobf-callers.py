@@ -2,8 +2,8 @@
 """Offline caller scan of eldenring-deobf.bin (base 0x140000000): find direct call sites to a target VA.
 
 Ghidra xref-free fallback (bd Ghidra-Runtime-Dump / when the persistent project is locked and the MCP is
-unavailable): scans the deobf image for `e8 rel32` (near CALL rel32) whose computed target equals the
-requested VA, and reports each caller VA. Answers "what calls FUN and (with a follow-up disasm of the
+unavailable): scans the deobf image for `e8 rel32` (near call rel32) whose computed target equals the
+requested VA, and reports each caller VA. Answers "what calls fun and (with a follow-up disasm of the
 caller) under what condition" -- e.g. why an input-array builder never fires in a given menu state.
 
 Usage: python3 scripts/find-deobf-callers.py 0x140240dc0 [--img eldenring-deobf.bin]

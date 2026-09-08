@@ -496,7 +496,7 @@
     fn shape_bitmap_fill_instance() {
         // Corpus 02_020_inventory.gfx DefineShape (tag 2): a 520x520
         // bitmap-filled square. fill[0] = bitmap type 0x40, bitmapId 6, with a
-        // scale-only MATRIX (NScaleBits=20, scale 266252).
+        // scale-only matrix (NScaleBits=20, scale 266252).
         let body = hx("bf005800410001040001400600d104031040300000101568200079504725f8e5bf1c882000");
         match parse_first(&rec(TAG_DEFINE_SHAPE, &body, false)) {
             Tag::DefineShape {

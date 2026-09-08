@@ -1,31 +1,31 @@
 //! In-DLL D3D12 GPU-timestamp oracle -- the goal-doc §3.3 `gpu_frame_us` semaphore
 //! (`docs/goals/switch-reload-framerate-parity-acceptance.md`; bd er-effects-rs-03ma).
 //!
-//! WHAT IT MEASURES. Per-frame GPU-busy time in microseconds, obtained by injecting two D3D12
-//! TIMESTAMP queries onto the GAME's own render `ID3D12CommandQueue`: a START stamp on the FIRST
-//! `ExecuteCommandLists` after a present, and an END stamp on every ECL (last-executed wins). The
-//! span START..END brackets the frame's real GPU command execution (first-ECL to last-ECL) and
-//! EXCLUDES the vsync/flip present-wait (that happens INSIDE the original `Present`, after the last
+//! What it measures. Per-frame GPU-busy time in microseconds, obtained by injecting two D3D12
+//! TIMESTAMP queries onto the game's own render `ID3D12CommandQueue`: a start stamp on the first
+//! `ExecuteCommandLists` after a present, and an end stamp on every ECL (last-executed wins). The
+//! span start..END brackets the frame's real GPU command execution (first-ECL to last-ECL) and
+//! excludes the vsync/flip present-wait (that happens inside the original `Present`, after the last
 //! ECL). So:
-//!   - `gpu_frame_us` large (~50ms on the reload) => the frame is genuinely RENDER-BOUND;
+//!   - `gpu_frame_us` large (~50ms on the reload) => the frame is genuinely render-bound;
 //!   - `gpu_frame_us` small while `oracle_present_qpc_delta_us` stays ~50ms => a present/vblank throttle.
 //!
 //! This is exactly the split issue 03ma asks for -- attributing the reload-20fps residual to GPU
 //! render cost vs present-wait -- and the localization tool the parity goal's §4 delta protocol uses.
 //!
-//! WHY SHARED-VTABLE HOOK + RUNTIME LATCH (no RVA). The game's render queue pointer is NOT read from a
+//! Why shared-VTABLE hook + runtime latch (no RVA). The game's render queue pointer is not read from a
 //! hardcoded RVA (a prior `GX_COMMAND_QUEUE_RVA=0x8012a8` was stale/unpopulated at runtime -> the
 //! oracle never left state 0). Instead we ride the already-RE'd present path: the game device comes
 //! RVA-free from the found swapchain's backbuffer (`GetBuffer(0).GetDevice()`), a probe queue on that
 //! device gives the shared `ID3D12CommandQueue` vtable, we swap its `ExecuteCommandLists` slot (all
 //! queues from one D3D12 runtime module share one vtable -- vkd3d under Wine, d3d12core.dll on native
 //! Windows -- like the shared dxgi swapchain vtable the present hook relies on), and
-//! the detour LATCHES the real render queue at runtime = the first DIRECT queue that submits.
+//! the detour LATCHES the real render queue at runtime = the first direct queue that submits.
 //!
-//! WHY PIGGYBACK (not a separate submit). The DLL previously AV'd submitting its own command lists on
+//! Why PIGGYBACK (not a separate submit). The DLL previously AV'd submitting its own command lists on
 //! the game queue from the Present hook (see `gpu_readback/resource_readback.rs` `GX_COMMAND_QUEUE_RVA`
-//! note). Timestamps MUST share the game queue's timeline to bracket the game's GPU work, so this
-//! oracle never issues its OWN `ExecuteCommandLists`/`Signal` on the game queue: it AUGMENTS the game's
+//! note). Timestamps must share the game queue's timeline to bracket the game's GPU work, so this
+//! oracle never issues its own `ExecuteCommandLists`/`Signal` on the game queue: it AUGMENTS the game's
 //! own ECL call by prepending/appending pre-recorded timestamp lists to the list array the game already
 //! submits -- the game's own submit, on the game's own render thread, in-order.
 //!
@@ -63,20 +63,20 @@ pub(crate) use er_telemetry_core::counters::GPU_FRAME_US_LAST;
 /// ID3D12DeviceChild(1) + ID3D12Pageable(0) = 8; then UpdateTileMappings(8), CopyTileMappings(9),
 /// ExecuteCommandLists(10).
 const ECL_VTABLE_INDEX: usize = 10;
-/// Query-heap slots: 0 = frame START (first ECL after a present), 1 = frame END (last ECL).
+/// Query-heap slots: 0 = frame start (first ECL after a present), 1 = frame end (last ECL).
 const TS_START_IDX: u32 = 0;
 const TS_END_IDX: u32 = 1;
 const QUERY_COUNT: u32 = 2;
 /// Two `u64` timestamps resolved into the readback buffer.
 const READBACK_BYTES: u64 = 16;
 /// Max command lists we augment on the stack (no per-ECL heap alloc on the render thread). An ECL with
-/// more lists than this is forwarded UNCHANGED that frame (instrumentation skipped, never a truncation).
+/// more lists than this is forwarded unchanged that frame (instrumentation skipped, never a truncation).
 const MAX_AUG_LISTS: usize = 128;
 /// Clamp for a sane per-frame GPU span (drop torn/stale readbacks): 1us..1s.
 const GPU_US_SANE_MIN: usize = 1;
 const GPU_US_SANE_MAX: usize = 1_000_000;
 
-/// The game's render queue pointer (== `this` we augment), latched at runtime from the first DIRECT
+/// The game's render queue pointer (== `this` we augment), latched at runtime from the first direct
 /// queue that submits; 0 until latched.
 static GAME_CMD_QUEUE: AtomicUsize = AtomicUsize::new(0);
 /// The probe queue we created on the game device to read the shared vtable -- excluded from latching.
@@ -92,28 +92,28 @@ static READBACK_RES_PTR: AtomicUsize = AtomicUsize::new(0);
 /// GPU timestamp frequency (ticks/sec) from `ID3D12CommandQueue::GetTimestampFrequency`.
 static TS_FREQ: AtomicU64 = AtomicU64::new(0);
 /// False at each present (via `gpu_frame_oracle_on_present`); the first ECL that finds it false is the
-/// frame's first ECL (prepend START + read the previous frame's resolved pair).
+/// frame's first ECL (prepend start + read the previous frame's resolved pair).
 static FRAME_STARTED: AtomicBool = AtomicBool::new(false);
 /// One-shot install latch (set once we commit to creating D3D12 objects; prevents a retry-crash).
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 
 type EclFn = unsafe extern "system" fn(*mut c_void, u32, *const *mut c_void);
 
-/// Diagnostic OPT-IN for the GPU-frame oracle -- DEFAULT OFF, and the primary safety gate. The
-/// ECL-piggyback (appending an EndQuery+ResolveQueryData list to EVERY game `ExecuteCommandLists`)
+/// Diagnostic OPT-in for the GPU-frame oracle -- Default off, and the primary safety gate. The
+/// ECL-piggyback (appending an EndQuery+ResolveQueryData list to every game `ExecuteCommandLists`)
 /// device-removed the game ~28s in on the native code path (bd
-/// `gpu-frame-us-ecl-piggyback-oracle-crashes-native-path-must-be-opt-in-2026-07-23`), so it must NEVER
+/// `gpu-frame-us-ecl-piggyback-oracle-crashes-native-path-must-be-opt-in-2026-07-23`), so it must never
 /// run on a product/user launch. A measurement run that accepts the current crash risk (pending the
 /// one-resolve-per-frame redesign) opts in by dropping `er-quickload-gpu-frame-oracle.txt` next to
-/// `eldenring.exe` (the game CWD). This is a DIAGNOSTIC-only gate, not a product feature gate, so a
+/// `eldenring.exe` (the game CWD). This is a diagnostic-only gate, not a product feature gate, so a
 /// marker file is the right mechanism (release default is unchanged: oracle absent).
 fn gpu_frame_oracle_opt_in() -> bool {
     std::path::Path::new("er-quickload-gpu-frame-oracle.txt").exists()
 }
 
-/// Enabled only when explicitly opted in (above) AND the present-cadence telemetry is being measured
+/// Enabled only when explicitly opted in (above) and the present-cadence telemetry is being measured
 /// (mirrors `try_install_game_present_hook`'s gate). The platform (Wine/Proton vs native Windows) is
-/// NOT assumed or gated on here -- that is decided at runtime by whatever the machine actually is, and
+/// not assumed or gated on here -- that is decided at runtime by whatever the machine actually is, and
 /// the D3D12 setup in `install_inner` fail-closes if the runtime cannot support the query-heap/piggyback.
 /// (An earlier `&& running_under_wine()` gate baked in a stale "this box is Wine" assumption and left
 /// the oracle permanently at state 0.) RenderDoc runs stand the overlay down, so skip there.
@@ -132,7 +132,7 @@ pub(crate) unsafe fn try_install_gpu_frame_oracle(_base: usize) {
     if INSTALLED.load(Ordering::SeqCst) || !gpu_frame_oracle_enabled() {
         return;
     }
-    // The present hook owns the frame-boundary reset AND provides the swapchain -> game device.
+    // The present hook owns the frame-boundary reset and provides the swapchain -> game device.
     if er_telemetry_core::counters::GAME_PRESENT_HOOKED.load(Ordering::SeqCst) == 0 {
         return;
     }
@@ -140,7 +140,7 @@ pub(crate) unsafe fn try_install_gpu_frame_oracle(_base: usize) {
     if sc <= 0x10000 {
         return;
     }
-    // Commit: latch BEFORE the D3D12 setup so a partial failure never retries (and never crashes).
+    // Commit: latch before the D3D12 setup so a partial failure never retries (and never crashes).
     if INSTALLED.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -156,7 +156,7 @@ pub(crate) unsafe fn try_install_gpu_frame_oracle(_base: usize) {
     }
 }
 
-/// D3D12 setup on the GAME device (obtained RVA-free from the swapchain backbuffer): query heap +
+/// D3D12 setup on the game device (obtained RVA-free from the swapchain backbuffer): query heap +
 /// readback buffer + the two pre-recorded timestamp lists, then the shared-vtable ECL hook. Returns
 /// `None` on any failure (state records how far it got).
 unsafe fn install_inner(sc_ptr: usize) -> Option<()> {
@@ -168,7 +168,7 @@ unsafe fn install_inner(sc_ptr: usize) -> Option<()> {
     unsafe { backbuffer.GetDevice(&mut device_opt) }.ok()?;
     let device = device_opt?;
 
-    // Probe queue on the GAME device: its vtable IS the game render queue's vtable (same device), and it
+    // Probe queue on the game device: its vtable is the game render queue's vtable (same device), and it
     // also answers GetTimestampFrequency. It never submits, so it is excluded from render-queue latching.
     let queue_desc = D3D12_COMMAND_QUEUE_DESC {
         Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
@@ -230,8 +230,8 @@ unsafe fn install_inner(sc_ptr: usize) -> Option<()> {
     let readback = rb?;
 
     // One allocator backs both tiny lists (recorded sequentially, never Reset -- so re-executing them
-    // every ECL forever is valid). START list: one timestamp write. END list: timestamp write + a
-    // resolve of the START..END pair into the readback buffer (in-list order = write-then-resolve).
+    // every ECL forever is valid). Start list: one timestamp write. End list: timestamp write + a
+    // resolve of the start..END pair into the readback buffer (in-list order = write-then-resolve).
     let allocator: ID3D12CommandAllocator =
         unsafe { device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }.ok()?;
     let start_list: ID3D12GraphicsCommandList =
@@ -266,8 +266,8 @@ unsafe fn install_inner(sc_ptr: usize) -> Option<()> {
     std::mem::forget(device); // owns all of the above.
     GPU_FRAME_ORACLE_STATE.store(1, Ordering::SeqCst); // objects created
 
-    // Hook ExecuteCommandLists via a vtable-slot swap on the SHARED vkd3d queue vtable (read from the
-    // probe queue; NOT MinHook -- Wine's d3d12core.dll refuses the code-page patch, same as dxgi.dll).
+    // Hook ExecuteCommandLists via a vtable-slot swap on the shared vkd3d queue vtable (read from the
+    // probe queue; Not MinHook -- Wine's d3d12core.dll refuses the code-page patch, same as dxgi.dll).
     let probe_raw = probe_queue.as_raw() as usize;
     let vt = unsafe { safe_read_usize(probe_raw) }.filter(|v| *v > 0x10000)?;
     let slot = vt + ECL_VTABLE_INDEX * 8;
@@ -283,7 +283,7 @@ unsafe fn install_inner(sc_ptr: usize) -> Option<()> {
     Some(())
 }
 
-/// True if `queue_ptr` borrows as an `ID3D12CommandQueue` whose desc Type is DIRECT.
+/// True if `queue_ptr` borrows as an `ID3D12CommandQueue` whose desc Type is direct.
 unsafe fn is_direct_queue(queue_ptr: *mut c_void) -> bool {
     let Some(q) = (unsafe { ID3D12CommandQueue::from_raw_borrowed(&queue_ptr) }) else {
         return false;
@@ -292,9 +292,9 @@ unsafe fn is_direct_queue(queue_ptr: *mut c_void) -> bool {
 }
 
 /// Detour for `ID3D12CommandQueue::ExecuteCommandLists(this, num, ppLists)`. Latches the game render
-/// queue (first DIRECT submitter that is not the probe queue), then splices the timestamp lists into
+/// queue (first direct submitter that is not the probe queue), then splices the timestamp lists into
 /// that queue's own submits; every other queue is forwarded byte-for-byte. Runs on the game render
-/// thread; must never panic and must ALWAYS forward exactly once.
+/// thread; must never panic and must always forward exactly once.
 unsafe extern "system" fn execute_command_lists_hook(
     this: *mut c_void,
     num: u32,
@@ -306,7 +306,7 @@ unsafe extern "system" fn execute_command_lists_hook(
     }
     let f: EclFn = unsafe { std::mem::transmute::<usize, EclFn>(orig) };
     // `augment_and_forward` calls `f` exactly once as its final act and returns true; a panic can only
-    // occur BEFORE that call, so on unwind we forward plain (never double-forward).
+    // occur before that call, so on unwind we forward plain (never double-forward).
     let forwarded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         augment_and_forward(f, this, num, pp)
     }))
@@ -326,7 +326,7 @@ unsafe fn augment_and_forward(
 ) -> bool {
     let mut game_q = GAME_CMD_QUEUE.load(Ordering::SeqCst);
     if game_q == 0 {
-        // Latch the game render queue = the first DIRECT queue that submits, excluding our probe queue.
+        // Latch the game render queue = the first direct queue that submits, excluding our probe queue.
         if this as usize != PROBE_QUEUE_PTR.load(Ordering::SeqCst)
             && num > 0
             && unsafe { is_direct_queue(this) }
@@ -352,7 +352,7 @@ unsafe fn augment_and_forward(
         unsafe { f(this, num, pp) };
         return true;
     }
-    // First ECL of the frame? (present reset the flag). If so, prepend START and read the PREVIOUS
+    // First ECL of the frame? (present reset the flag). If so, prepend start and read the previous
     // frame's resolved pair (the GPU had all of last frame to finish that resolve).
     let first = !FRAME_STARTED.swap(true, Ordering::SeqCst);
     if first {
@@ -368,14 +368,14 @@ unsafe fn augment_and_forward(
     let mut buf: [*mut c_void; MAX_AUG_LISTS] = [std::ptr::null_mut(); MAX_AUG_LISTS];
     let mut k = 0usize;
     if first {
-        buf[k] = start; // START before the game's work
+        buf[k] = start; // Start before the game's work
         k += 1;
     }
     for i in 0..n {
         buf[k] = unsafe { *pp.add(i) };
         k += 1;
     }
-    buf[k] = end; // END + resolve after the game's work (last ECL of the frame wins)
+    buf[k] = end; // End + resolve after the game's work (last ECL of the frame wins)
     k += 1;
     unsafe { f(this, k as u32, buf.as_ptr()) };
     true

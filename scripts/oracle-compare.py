@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""TOOL 2 of the real oracle (user 2026-07-20): compare a run against a known-good phase IMPRINT and
-emit a STACK-TRACE-LIKE divergence line.
+"""Tool 2 of the real oracle (user 2026-07-20): compare a run against a known-good phase imprint and
+emit a stack-trace-like divergence line.
 
 Given a phase imprint (from oracle-imprint.py / the store) and a run's telemetry timeseries, it walks
-the imprint's ordered semaphore transitions and matches each one, IN ORDER, against the run. The first
+the imprint's ordered semaphore transitions and matches each one, in order, against the run. The first
 imprint transition the run fails to reproduce is the divergence point -- reported as a single line that
 names the exact semaphore that left the known-good path (what to look at next), plus the last matched
 step and the run's actual tail state on that field. It also flags transitions that occurred but far
-outside the imprint's timing budget (a stall). This is what lets the oracle tear down with CERTAINTY.
+outside the imprint's timing budget (a stall). This is what lets the oracle tear down with certainty.
 
 Modes:
   post-hoc:  --imprint imprint.json --live timeseries.jsonl
@@ -91,7 +91,7 @@ def compare(imprint: dict, live_rows: list[dict], phase: str = "?") -> dict:
                 "timing_flags": timing_flags,
             }
         L = live[found]
-        # timing: compare the gap since the PREVIOUS matched transition (aligned pair) to the imprint gap.
+        # timing: compare the gap since the previous matched transition (aligned pair) to the imprint gap.
         if matched:
             live_gap = L["t_ms"] - matched[-1][1]["t_ms"]
             budget = E.get("gap_ms", 0) * GAP_TOLERANCE + GAP_SLACK_MS
@@ -167,7 +167,7 @@ def run_live(a) -> int:
             out.flush()
             rows.append(snap)
             res = compare(imprint, rows, a.phase)
-            # In live mode we only care about STRUCTURAL divergence once the run has progressed enough
+            # In live mode we only care about structural divergence once the run has progressed enough
             # that the missing step is truly overdue (its budget elapsed). Structural "not found" while
             # the run is still early is normal (the step just hasn't happened yet), so gate on the
             # expected step's imprint time + budget having passed.

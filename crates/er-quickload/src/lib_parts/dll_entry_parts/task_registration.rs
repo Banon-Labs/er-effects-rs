@@ -7,21 +7,21 @@ fn poll_cached_mms18_ending_request_advancer() {
     // while walking 12a->case8, but leaves it true after mms leaves 18; if it remains true into the
     // resident world, the player is torn down about a second later.
     //
-    // THE PHASE GATE IS NOT ENOUGH, AND THE RESIDUAL OUTLIVES IT (2026-09-04, black-screen run).
+    // The phase gate is not enough, and the residual OUTLIVES it (2026-09-04, black-screen run).
     //
-    // `SYSTEM_QUIT_QUICKLOAD_PHASE` is driven to IDLE the instant the native slot deserialize is
+    // `SYSTEM_QUIT_QUICKLOAD_PHASE` is driven to idle the instant the native slot deserialize is
     // proven -- `system-quit-quickload: native slot deserialize proof OK ... -> phase IDLE`, logged
     // at +2029210ms with `world_up=false`. The world then takes another ~14s to stream in. So on a
     // Load-Character-from-File switch this poll is already gated shut for the whole window in which
-    // the residual actually bites: measured ZERO `ENDING-FLAG POST-FINALIZE CLEAR` lines in a 5.9 MB
+    // the residual actually bites: measured zero `ENDING-FLAG POST-FINALIZE CLEAR` lines in a 5.9 MB
     // log of a run that reverted at +2043697ms.
     //
     // `SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE` is the durable "a switch reload committed"
-    // latch (set at the feed/continue_confirm commit, cleared only when a NEW switch arms), so it
+    // latch (set at the feed/continue_confirm commit, cleared only when a new switch arms), so it
     // survives that phase reset and covers the same window the phase gate was meant to cover.
     //
     // The sibling clear in `er_title_flow::product_core_autoload_tick`
-    // (`reload-ending-latch-residual-clear`) has the RE-correct CONDITION but is unreachable here:
+    // (`reload-ending-latch-residual-clear`) has the RE-correct condition but is unreachable here:
     // that tick early-returns at its `title_owner()` gate, which is None during stable in-world.
     // Same run: `product_core_autoload_ticks=71` against `product_core_callsite_ticks=36814`, with
     // `product_core_ready_blocks=69` -- its ending-latch code ran at most twice all session.
@@ -67,24 +67,24 @@ fn poll_cached_mms18_ending_request_advancer() {
         .filter(|mms| *mms != TITLE_OWNER_SCAN_START_ADDRESS && *mms > 0x10000)
         .and_then(|mms| unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_RE_OFFSET) })
         .unwrap_or(-1);
-    // WHY `warpRequested == 0` IS THE RIGHT SECOND CONDITION, AND WHY THE mms/requestCode SHAPE IS
-    // NOT (RE er-effects-rs-9fmm, re-confirmed by the 2026-09-04 revert).
+    // Why `warpRequested == 0` is the right second condition, and why the mms/requestCode shape is
+    // not (RE er-effects-rs-9fmm, re-confirmed by the 2026-09-04 revert).
     //
-    // RE-GROUNDED ON 1.17 (2026-09-04). The reading below was originally decompiled off the 1.16.2
-    // dump on :8765; the INSTALLED game is 1.17. Every address here is now measured on the 1.17
+    // RE-grounded on 1.17 (2026-09-04). The reading below was originally decompiled off the 1.16.2
+    // dump on :8765; the installed game is 1.17. Every address here is now measured on the 1.17
     // dump (:8767, `proj1170`) and identity-checked against `eldenring-deobf-1.17.bin`
-    // (`check-dump-deobf-identity.py` -> MATCH, shift 0). The 1.16.2 addresses are kept only as the
+    // (`check-dump-deobf-identity.py` -> match, shift 0). The 1.16.2 addresses are kept only as the
     // pairing evidence, never as current.
     //
     // The evaluator is `FUN_140afb9f0` on 1.17 (1.16.2: `FUN_140afa6d0`; the `FUN_140afa7c0` this
-    // comment used to name is not a function entry on EITHER build -- it lands 0xf0 inside the
+    // comment used to name is not a function entry on either build -- it lands 0xf0 inside the
     // 1.16.2 one). Paired by the unique wide literal `L"CSEzSelectBot.MoveMapStep"` -- 1.16.2
-    // `0x142b60758`, 1.17 `0x142b637f8` -- which both functions reference at the SAME +0xc1 from
-    // entry, with the SAME body size (4491). The byte mapper cannot carry this address: it reports
-    // UNRESOLVED (111 shape matches, none at the nearest anchor delta), so the literal is the proof.
+    // `0x142b60758`, 1.17 `0x142b637f8` -- which both functions reference at the same +0xc1 from
+    // entry, with the same body size (4491). The byte mapper cannot carry this address: it reports
+    // unresolved (111 shape matches, none at the nearest anchor delta), so the literal is the proof.
     //
     // Measured on 1.17, at instruction level:
-    //   * `MOV byte ptr [RAX + 0x5e], BL` @ `0x140afbd0c` -- the write, UNCONDITIONAL and ahead of
+    //   * `MOV byte ptr [RAX + 0x5e], BL` @ `0x140afbd0c` -- the write, unconditional and ahead of
     //     the switch, so it happens on every call.
     //   * `MOVZX EAX, byte ptr [RAX + 0x5d]` -- +0x5d feeds the same disjunction it always did.
     //   * `RAX` is `*(CSMenuMan + 8)` (menuData); CSMenuMan global = `0x143d6f820` on 1.17.
@@ -96,53 +96,53 @@ fn poll_cached_mms18_ending_request_advancer() {
     //
     // So while warpRequested==1 the flag is the live finalize driver and clearing it SABOTAGES the
     // finalize. Once case 8 has consumed the warp (warpRequested 1->0) nothing re-evaluates the
-    // flag and it stays 1 RESIDUAL.
+    // flag and it stays 1 residual.
     //
-    // That makes this a residual SCRUB, not a suppression: if any genuine end condition still holds,
+    // That makes this a residual scrub, not a suppression: if any genuine end condition still holds,
     // the native evaluator re-asserts 0x5e on its very next frame. The residual is only reachable
-    // BECAUSE the evaluator has stopped.
+    // because the evaluator has stopped.
     //
-    // WHAT THE SCRUB CANNOT RACE (measured on both builds, 2026-09-04). Scanning every RIP-relative
+    // What the scrub cannot race (measured on both builds, 2026-09-04). Scanning every RIP-relative
     // load of the CSMenuMan global (779 sites on each build) and decoding 100 instructions forward,
-    // `menuData+0x5e` is touched by exactly TWO instructions per build -- one write and one read:
+    // `menuData+0x5e` is touched by exactly two instructions per build -- one write and one read:
     //   1.16.2  write `0x140afa9ec` (evaluator)      read `0x140844023`
     //   1.17    write `0x140afbd0c` (evaluator)      read `0x140845013`
-    // The evaluator is the ONLY writer, which is what makes a scrub safe: nothing else can be
+    // The evaluator is the only writer, which is what makes a scrub safe: nothing else can be
     // mid-write, and the evaluator overwrites us next frame whenever it is still running.
     //
-    // THE REVERT IS NOT CAUSED BY THIS FLAG. MEASURED, NOT INFERRED (2026-09-04).
+    // The revert is not caused by this flag. Measured, not inferred (2026-09-04).
     //
     // This comment used to claim "STEP_EndFlow reads that as return-to-title -> SetState(6 -> 2)".
     // That is false on both builds, and the real decider has now been read end to end.
     //
     // A `SetState(owner, 2=BeginLogo)` from committed=6 comes from `STEP_GameStepWait`
     // (1.16.2 `0x140b0cde0` / 1.17 `FUN_140b0e480`, both size 437, delta +0x16a0; the 1.17 one
-    // identity-checked against the image, shift 0). Its ENTIRE decision is three reads:
+    // identity-checked against the image, shift 0). Its entire decision is three reads:
     //
     //     if (InGameStep->requestCode_0xd8 == 0) {        // else: returns, no SetState at all
     //       if (GameMan+0xb7c == 0) {                     // else: state 7
     //         if (GameMan+0xb7d == 0) -> state 2 BeginLogo // else: state 9
     //
     // `menuData+0x5e` does not appear. `CS::TitleStep::STEP_EndFlow` (1.16.2 `0x140b0cc00`) never
-    // references the byte either, and the ONLY reader of it anywhere reachable through the CSMenuMan
+    // references the byte either, and the only reader of it anywhere reachable through the CSMenuMan
     // global is `AddEntry(SummonMsgQueue*, SummonMsgData*)` (1.16.2 `0x140843f70` /
     // 1.17 `0x140844f60`, both size 398, read at the same +0xa3), which merely refuses to enqueue a
     // summon message while the flag is set.
     //
-    // WHY THE WRONG SUSPECT LOOKED GUILTY: the `title-setstate-trace` line that motivated the theory
-    // logged `warp/b73/bc4/md5d/md5e` and NOT `b7c`/`b7d` -- it sampled the MoveMapStep evaluator's
+    // Why the wrong suspect looked GUILTY: the `title-setstate-trace` line that motivated the theory
+    // logged `warp/b73/bc4/md5d/md5e` and not `b7c`/`b7d` -- it sampled the MoveMapStep evaluator's
     // inputs, not GameStepWait's. md5e was simply the only logged field that was set. That line now
     // also logs `GAMESTEPWAIT[req_d8, b7c, b7d]`, so the next run names the branch instead of us
     // guessing.
     //
-    // CONSEQUENCE FOR THIS SCRUB: it is safe (single writer, re-asserted next frame while the
-    // evaluator runs) but it is NOT the fix for the revert. To hold off BeginLogo during the
+    // Consequence for this SCRUB: it is safe (single writer, re-asserted next frame while the
+    // evaluator runs) but it is not the fix for the revert. To hold off BeginLogo during the
     // streaming window the lever is `InGameStep+0xd8 != 0` -- which skips the SetState branch
     // entirely -- not this byte. Left in place rather than ripped out, because it is harmless and
     // removing it is a behaviour change that deserves its own runtime run; do not cite it as the
     // black-screen fix.
     //
-    // Scan caveat, unchanged: the reader search only sees code that reaches menuData THROUGH the
+    // Scan caveat, unchanged: the reader search only sees code that reaches menuData through the
     // global, so a callee handed the pointer as an argument would be missed.
     //
     // The old `mms_step == -1 && request_code == MOVEMAP_PENDING` shape is exactly the class of
@@ -153,7 +153,7 @@ fn poll_cached_mms18_ending_request_advancer() {
     // requirement.
     //
     // `md_5d == 0` stays the SAFETY discriminator and is what makes this poll safe to run always:
-    // a genuine user/return-title request carries BOTH flags (measured: the intended switch teardown
+    // a genuine user/return-title request carries both flags (measured: the intended switch teardown
     // at +2028671ms logged `md5d=1 md5e=1`, the spurious revert at +2043697ms logged `md5d=0
     // md5e=1`), so a real return-to-title is never scrubbed.
     let gm = game_man_ptr_or_null();
@@ -167,17 +167,17 @@ fn poll_cached_mms18_ending_request_advancer() {
     let warp_consumed = warp_requested == 0;
     let legacy_post_finalize =
         mms_step == -1 && request_code == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING;
-    // OBSERVE-ONLY SINCE 2026-09-04 -- THE WRITE IS GONE, DELIBERATELY. Read the next paragraph
+    // Observe-only since 2026-09-04 -- The write is gone, deliberately. Read the next paragraph
     // before restoring it.
     //
     // The comment above concluded this scrub was "harmless" and left it in. Two live runs then
     // measured it firing 5ms (br-20260904-231726-2f1a, +64388 -> +64393) and 6ms
     // (br-20260904-181251-0586, +75610 -> +75616) before `MMS-CLEANUP: child leaving STEP_MoveMap ->
-    // Cleanup`, and firing EXACTLY ONCE PER RUN -- only on the load that ends in the black screen,
+    // Cleanup`, and firing exactly once per run -- only on the load that ends in the black screen,
     // never on the stable teardown earlier in the same session. "Harmless" is not supported by that.
     //
-    // Its own trigger is the problem: `warpRequested == 0` becomes true the INSTANT case 8 of the
-    // ending evaluator consumes the warp, which is INSIDE the finalize, not after it. The child
+    // Its own trigger is the problem: `warpRequested == 0` becomes true the instant case 8 of the
+    // ending evaluator consumes the warp, which is inside the finalize, not after it. The child
     // still has to reach its terminal. So the scrub does not clear a settled residual -- it writes
     // into the middle of a live finalize, on the one code path where the world is being streamed in.
     //
@@ -238,7 +238,7 @@ fn poll_autoload_handoff_parent_state_guard() {
 }
 
 /// RAII timer: records the DLL main game-task body duration (any return path) into GAME_TASK_LAST_US,
-/// to split a DLL per-frame CODE cost from a game-side loop cost for the playable-window fps.
+/// to split a DLL per-frame code cost from a game-side loop cost for the playable-window fps.
 struct GameTaskTimer(std::time::Instant);
 impl Drop for GameTaskTimer {
     fn drop(&mut self) {
@@ -293,7 +293,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 tick_before_player_lookup(task_data);
                 poll_autoload_handoff_parent_state_guard();
                 // Startup save-picker: input/navigation runs on the render thread (the Present hook),
-                // the only thread that reads OS keys under Wine. Only the one-shot pick COMPLETION
+                // the only thread that reads OS keys under Wine. Only the one-shot pick completion
                 // (redirect + MinHook install) runs here on the game task -- it is alive at pick time
                 // (loading starts only after the pick releases the hold).
                 save_picker_overlay_process_completion();
@@ -303,25 +303,25 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     // Answer the container question DllMain could not (bd er-effects-rs-1742).
                     // Idempotent after the first call; a no-op on every run that did not defer.
                     resolve_deferred_save_override();
-                    // REPAIR THE PROFILE SUMMARY BEFORE THE TITLE BUILDS ITS CONTINUE ROW.
+                    // Repair the profile summary before the title builds its continue row.
                     // The game deserializes `CS::ProfileSummary` exactly once per boot, and a boot
                     // whose save-data read completes with no data leaves all ten records zeroed
                     // with nothing to retry it. The title then inserts Continue through its
-                    // DISABLED edge and never re-arms it: measured run 2026-09-05 21:29:58, the
+                    // disabled edge and never re-arms it: measured run 2026-09-05 21:29:58, the
                     // records were repaired at +13956ms but the row had been built at +11131ms, so
                     // the autoload still parked on "waiting for native Continue MenuWindowJob
                     // result" with 260/260 candidate observations carrying the idle accept
-                    // predicate. Running the same repair from HERE -- the pre-player boot tick --
+                    // predicate. Running the same repair from here -- the pre-player boot tick --
                     // puts real records in front of the row builder instead of behind it.
                     // Self-throttling, and a no-op once the records and the container agree.
                     refresh_boot_default_profile_summary();
                     // Read-only observer on the MoveMap ending-request evaluator. Installed from the
-                    // BOOT tick, not from the switch path, because the black screen now reproduces on
+                    // boot tick, not from the switch path, because the black screen now reproduces on
                     // the first autoload: the world loads and is playable, then ~2.2 s after world
                     // entry this evaluator raises `menuData+0x5e` and the session ends. Idempotent.
                     er_title_flow::install_movemap_advancer_probe();
                     // Install the MessageBoxDialog builder hook for native telemetry. Product
-                    // autoload must NOT auto-accept: every pre/post-load message box is a hard
+                    // autoload must not auto-accept: every pre/post-load message box is a hard
                     // investigation trigger whose semantic side effect must be skipped directly.
                     // The legacy OK-handler dismiss path remains only for non-product probes.
                     if online_disable_enabled() {
@@ -330,7 +330,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                             force_dismiss_startup_dialog();
                         }
                     }
-                    // Observe the natural flow PAST the modal: tap Confirm (game's own input).
+                    // Observe the natural flow past the modal: tap Confirm (game's own input).
                     if auto_confirm_enabled() {
                         auto_confirm_tap();
                     }
@@ -341,7 +341,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     // Product autoload: run the native title open-menu predicate + minimal
                     // native save-load core from the recurring game task, before the idx10
                     // MenuJobWait hook path is needed. This bypasses title-accept/input
-                    // injection while still advancing the data-driven PressStart/PRESS BUTTON
+                    // injection while still advancing the data-driven PressStart/PRESS button
                     // component through its native open-menu registrar; readiness is checked
                     // inside product_core_autoload_tick.
                     if product_autoload_enabled() {
@@ -358,13 +358,13 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         {
                             Some(quickload_slot as i32)
                         } else {
-                            // DELIBERATE BEHAVIOR CHANGE (bd er-effects-rs-91zb; IMPLEMENTED BUT
+                            // Deliberate behavior change (bd er-effects-rs-91zb; Implemented but
                             // UNPROVEN -- no live run has exercised it). The missing-save picker
                             // cannot set a config slot; its character sub-picker records the chosen
                             // slot here. This used to be `autoload.slot().or_else(picker)` --
-                            // "configured slots still win" -- while the OTHER resolver for the same
+                            // "configured slots still win" -- while the other resolver for the same
                             // question, `continue_load::slot_resolution::native_fullread_slot`,
-                            // puts the picker FIRST. Two resolvers disagreeing about which slot the
+                            // puts the picker first. Two resolvers disagreeing about which slot the
                             // user meant is how a portrait ends up targeting one character while
                             // another loads. Resolved in the picker's favour on both sides: a
                             // user's explicit on-screen pick outranks a config default, which is a
@@ -380,10 +380,10 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                             unsafe {
                                 product_core_autoload_tick(base, slot, state.game_task_ticks)
                             };
-                            // FIRST-CHARACTER PORTRAIT BAKE YOINKED (user 2026-07-03). This one-shot
-                            // (LOADING_BG_PORTRAIT_GX_KEPT, set once) captured the BOOT autoload
+                            // First-character portrait bake YOINKED (user 2026-07-03). This one-shot
+                            // (LOADING_BG_PORTRAIT_GX_KEPT, set once) captured the boot autoload
                             // target's portrait CSGxTexture and baked it into the now-loading forge --
-                            // the reason the FIRST character (and only the first) had its portrait
+                            // the reason the first character (and only the first) had its portrait
                             // baked into the loading screen, distinct from the per-frame overlay path
                             // the System->Quit switch characters use. Suppressing just this leaves the
                             // switch portraits untouched. (The forge/checker + loading-art coupling is
@@ -394,8 +394,8 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         write_telemetry_throttled(&mut state, false);
                         return;
                     }
-                    // FORCE LIVE PROFILE PORTRAIT RENDER (diagnostic, default-OFF): while the user
-                    // holds the ProfileSelect/Load-Game screen (valid menu render context, NO
+                    // Force live profile portrait render (diagnostic, default-off): while the user
+                    // holds the ProfileSelect/Load-Game screen (valid menu render context, no
                     // Continue commit), mark the target slot used + kick the async character-model
                     // build so the renderer renders the live 3D head into its offscreen. Menu-phase
                     // only -> no Continue/teardown/world-load crash path. The capture keeps the gx
@@ -409,10 +409,10 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         write_telemetry_throttled(&mut state, false);
                         return;
                     }
-                    // OWN-THE-STEPPER: patch the idx10 step-fn slot to our handler so
-                    // the FD4 scheduler runs OUR code in-context (step 1: verify the
+                    // Own-the-STEPPER: patch the idx10 step-fn slot to our handler so
+                    // the FD4 scheduler runs our code in-context (step 1: verify the
                     // control point with a logging pass-through).
-                    // OWN-STEPPER installs the idx10 patch so OUR handler runs each frame.
+                    // Own-STEPPER installs the idx10 patch so our handler runs each frame.
                     if own_stepper_enabled() || native_continue_enabled() || own_load_enabled() {
                         if let Ok(base) = game_module_base() {
                             unsafe { own_stepper_patch_once(base) };
@@ -455,7 +455,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         return;
                     }
                     // Recipe Option 1 (flagless): drive the genuine offline
-                    // continue (MoveMapList dispatcher + b73) to load the REAL slot.
+                    // continue (MoveMapList dispatcher + b73) to load the real slot.
                     if continue_drive_enabled() {
                         if let (Ok(base), Some(slot)) = (game_module_base(), state.autoload.slot())
                         {
@@ -472,22 +472,22 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
 
                 let mut state = state_or_return(&state);
                 state.game_task_ticks += GAME_TASK_TICK_INCREMENT;
-                // In-world: latch OFF the startup popup auto-accept (in-game dialogs need real
+                // In-world: latch off the startup popup auto-accept (in-game dialogs need real
                 // choices), optionally clean stale title-dialog render resources, then run the
                 // one-shot correctness dump.
                 IN_WORLD_REACHED.store(IN_WORLD_REACHED_YES, Ordering::SeqCst);
-                // CAN-MOVE PROBE (2026-07-18, user-directed): in-world, inject a forward stick and prove
-                // the character actually MOVES for >=60 consecutive frames. Movement is the ONLY signal
+                // Can-move probe (2026-07-18, user-directed): in-world, inject a forward stick and prove
+                // the character actually moves for >=60 consecutive frames. Movement is the only signal
                 // that distinguished a playable load from a frozen one (the render/draw_group oracles read
-                // FALSE even for a visibly-rendered, controllable load). Frozen loads never accumulate.
+                // false even for a visibly-rendered, controllable load). Frozen loads never accumulate.
                 // Game-thread only, so driving input here is safe.
                 // The old OPEN_MENU..CONFIRM menu-nav exclusion is GONE: those autopilot states no longer
-                // exist. `system_quit_repro_tick` now runs WAIT_WORLD -> WAIT_RELOAD -> DONE only, and all
-                // three are in-world settle states where the probe MUST run (that is where load1 and each
+                // exist. `system_quit_repro_tick` now runs WAIT_WORLD -> WAIT_RELOAD -> done only, and all
+                // three are in-world settle states where the probe must run (that is where load1 and each
                 // reload prove movement). Nothing injects a menu cursor any more, so there is nothing to
                 // exclude.
-                // Only inject once the char is actually RENDERED in-world (render_group 1c4 + enable_render
-                // 1c5), NOT merely present. `player present` goes true mid-load (mms=13, ~14s before
+                // Only inject once the char is actually rendered in-world (render_group 1c4 + enable_render
+                // 1c5), not merely present. `player present` goes true mid-load (mms=13, ~14s before
                 // render_group), and injecting there latched an invalid DISPROVEN before the char could be
                 // controllable -- then the verdict was frozen and never re-tested (run 092119: verdict at
                 // t=79.9s during loading; render_group did not fire until t=86s). Gating on the rendered
@@ -501,7 +501,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 }
                 // NO PROGRAMMATIC SWITCH TRIGGER LIVES HERE ANY MORE (deleted 2026-09-05, user
                 // directive). `poll_switch_slot_control_file` used to read a game-directory control
-                // file and arm a MENU-FREE character switch straight into
+                // file and arm a menu-free character switch straight into
                 // `own_load_switch_reload_fire`, so every second and third load this project ever
                 // measured skipped the Quit-menu path a real player has to take. That made it the
                 // wrong instrument for the only thing it was used for: proving the menu flow works.
@@ -512,29 +512,29 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         profile_editor_necromancy_tick(base);
                     }
                 }
-                // SPURIOUS RETURN-TITLE ARM DISARM (2026-07-18, bd angre-reload-full-causal-chain-and-fix,
+                // SPURIOUS return-title arm disarm (2026-07-18, bd angre-reload-full-causal-chain-and-fix,
                 // refined by repeatable-multi-save-consolidated-plan-2026-07-18).
                 // Root cause of the angrE repeated-load crash: the boot autoload navigates the ProfileSelect
-                // LOAD flow, which trips `system_quit_arm_quickload_autoload` and arms a post-load return-title
-                // reload (QUICKLOAD_PHASE = RETURN_TITLE_REQUESTED) of the character we JUST loaded. Load #1 then
+                // load flow, which trips `system_quit_arm_quickload_autoload` and arms a post-load return-title
+                // reload (QUICKLOAD_PHASE = RETURN_TITLE_REQUESTED) of the character we just loaded. Load #1 then
                 // completes and is stable in-world, but because the phase stays armed the in-world branch below
                 // keeps driving product_core_autoload_tick until the return-title chain submits, tears down the
                 // good load, and the reload sticks at MoveMapStep 18 and crashes (game assert AV 0x1eb9999).
                 // DISCRIMINATOR: the earlier pure time-based gate (disarm after N continuous armed in-world
-                // frames) also cancelled GENUINE cross-slot/cross-file switches whose old world lingers past
+                // frames) also cancelled genuine cross-slot/cross-file switches whose old world lingers past
                 // the threshold (the switch-regression). The correct, index-space-free discriminator is the
-                // player-presence AT ARM TIME: the spurious boot self-reload arms from the title/menu (player
-                // ABSENT); a genuine switch arms in-world (player PRESENT). So the time-based disarm now fires
+                // player-presence at arm TIME: the spurious boot self-reload arms from the title/menu (player
+                // absent); a genuine switch arms in-world (player present). So the time-based disarm now fires
                 // only when SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT==1 -- it kills the spurious boot self-reload
-                // (latching load #1 DONE via phase IDLE, which gates OFF both this destructive branch and the
+                // (latching load #1 done via phase idle, which gates off both this destructive branch and the
                 // return-title chain submit) and never touches a real switch. Reset the counter whenever
                 // nothing is armed so only *continuous* armed presence counts. The completed-switch success
-                // latch (recognising a genuine switch's NEW stable world so the DLL stops re-driving) is
+                // latch (recognising a genuine switch's new stable world so the DLL stops re-driving) is
                 // handled separately by the in-world stable-load proof, not by this disarm.
-                // SLOT-AWARE-BY-CAUSE discriminator (2026-07-18, supersedes the pure time-based gate).
-                // Only the SPURIOUS boot self-reload is disarmed: it is armed while the player is ABSENT
+                // Slot-aware-by-cause discriminator (2026-07-18, supersedes the pure time-based gate).
+                // Only the SPURIOUS boot self-reload is disarmed: it is armed while the player is absent
                 // (the boot autoload's own ProfileSelect navigation queuing a post-load reload of the very
-                // character it is loading). A GENUINE in-world switch arms with the player PRESENT and must
+                // character it is loading). A genuine in-world switch arms with the player present and must
                 // be left to run its return-title teardown+reload -- disarming it by elapsed time is the
                 // switch-regression (bd angre-4loads-goal-met-but-switch-regression-2026-07-18), where the
                 // old world lingers past the threshold and the switch gets cancelled ("world resolves and
@@ -557,12 +557,12 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 } else {
                     SYSTEM_QUIT_INWORLD_ARMED_STABLE_TICKS.store(0, Ordering::SeqCst);
                 }
-                // MENU-FREE RELOAD COMPLETION LATCH (2026-07-18, repeatability fix, bd
+                // Menu-free reload completion latch (2026-07-18, repeatability fix, bd
                 // repeatability-menu-free-phase-reset-fix-2026-07-18). own_load_switch_reload_fire committed
                 // the picked slot (FRESH_DESER_DONE=1) and its native SetState5 began streaming the new
                 // character, but the switch phase is still armed. Left armed after the load is genuinely
                 // playable, the return-title branch can keep re-driving state that belongs to the next switch.
-                // FRESH_DESER_DONE is only a deserialize/SetState5 handoff proof, NOT a playable-world
+                // FRESH_DESER_DONE is only a deserialize/SetState5 handoff proof, not a playable-world
                 // proof. The driver now owns the stricter per-epoch movement/native-settle gate before it may
                 // start another switch. This latch has a different job: disarm product_core_autoload_tick as
                 // soon as the native MoveMap child is done so title-loop ownership does not take the loaded
@@ -571,7 +571,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // drains and the player disappears before movement." Keep handoff armed until the current reload
                 // epoch has epoch-scoped movement proof too. Normal user sessions keep the original non-input
                 // player-present latch and are not forced to walk the character.
-                // DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): marker feature gates are
+                // De-gated (deprecate-env-marker-gate-allowlists-2026-07-19): marker feature gates are
                 // forbidden; the movement-proof harness marker is retired, so no epoch is ever forced
                 // to walk the character (proof-only behavior, never product).
                 let movement_proof_required = false;
@@ -652,8 +652,8 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                             cleanup_title_dialog_after_world_once(base, state.game_task_ticks)
                         };
                     }
-                // In-world correctness oracle: on the FIRST frame the local player exists, log
-                // the load-correctness record + the T_controllable timeline marker ONCE. Fires
+                // In-world correctness oracle: on the first frame the local player exists, log
+                // the load-correctness record + the T_controllable timeline marker once. Fires
                 // for both a native-menu load (observe) and a DLL-driven load (own-stepper), so
                 // the two records are directly comparable (field-for-field == correct load).
                 if (own_stepper_enabled() || native_continue_enabled())
@@ -690,7 +690,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
             BOOTSTRAP_EVENT_GAME_TASK_RECURRING_REGISTERED,
             BOOTSTRAP_DETAIL_DONE,
         );
-        // LIVE LOADING PORTRAIT render/publish pump: register in each candidate DRAW phase so exactly
+        // Live loading portrait render/publish pump: register in each candidate draw phase so exactly
         // one active phase can run on the render thread inside a live GX frame. This keeps the portrait
         // visible/refreshing during loading; cursor/head tracking remains retired.
         let portrait_phases = [
@@ -715,7 +715,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
             move |_task_data: &FD4TaskData| profile_lookat_phase_diag_tick(),
             CSTaskGroupIndex::FrameBegin,
         );
-        // BUILD IMPORT (System>Quit "Load Build from URL"). FrameBegin is the game thread, which is
+        // Build import (System>Quit "Load Build from URL"). FrameBegin is the game thread, which is
         // what every step of the import needs -- it mutates the inventory, `CSGaitemImp`,
         // `PlayerGameData` and the equipment slots through the game's own functions. Registered
         // unconditionally and from boot because it is inert until a row press queues a build: the
@@ -730,8 +730,8 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
             },
             CSTaskGroupIndex::FrameBegin,
         );
-        // BUILD EXPORT (System>Quit "Generate Build Link"). Same thread and the same reason, from
-        // the other direction: this one READS `PlayerGameData`, the equipment slots and the message
+        // Build export (System>Quit "Generate Build Link"). Same thread and the same reason, from
+        // the other direction: this one reads `PlayerGameData`, the equipment slots and the message
         // repository, none of which may be touched off the game thread. Also inert until pressed --
         // and it deliberately ticks even when idle, because its tick counter is the witness the
         // stale-latch check measures against (see `er_build_import_runtime::export`).
@@ -743,20 +743,20 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
             },
             CSTaskGroupIndex::FrameBegin,
         );
-        // BUILD-OWN LIVE-RENDER DRIVER (gated, FrameBegin = GAME thread, ticks EVERY frame incl. the
+        // Build-own live-render driver (gated, FrameBegin = game thread, ticks every frame incl. the
         // loading screen). force_profile_render_tick's only other call sites are menu-phase-only (they
         // `return` before Continue), so maybe_build_profile_table_for_loading + the mark/refresh feed never
         // ran post-Continue -> loadbuilds=0, the loaded character never re-built. Driving it here gives the
-        // build-own path a post-Continue game-thread driver: it builds our OWN profile renderers (engine
-        // 10-slot builder), which self-register their ResMan model build/draw tasks and OWN their model with
-        // OUR lifetime (no teardown-free -> no AV, unlike re-attaching the dying menu model). The fn
+        // build-own path a post-Continue game-thread driver: it builds our own profile renderers (engine
+        // 10-slot builder), which self-register their ResMan model build/draw tasks and own their model with
+        // our lifetime (no teardown-free -> no AV, unlike re-attaching the dying menu model). The fn
         // self-gates heavily (table-ready, feature gates, one-shots), so an every-frame call is idempotent.
         // Gated by portrait_render_drive_enabled so it can be A/B'd against the safe checker baseline.
         cs_task.run_recurring(
             move |_task_data: &FD4TaskData| {
                 let _bt = std::time::Instant::now();
                 if let Ok(base) = game_module_base() {
-                    // Stats-panel neutral-bg register: runs on EVERY frame regardless of the autoload
+                    // Stats-panel neutral-bg register: runs on every frame regardless of the autoload
                     // path (the `save_requested` product path never enters product_core_autoload_tick,
                     // so the register cannot live there). Self-gating (stats_panel_enabled + repos-ready
                     // + idempotent per slot via the registered mask), so an every-frame call is cheap

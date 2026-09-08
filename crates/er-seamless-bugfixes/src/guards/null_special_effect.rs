@@ -163,7 +163,7 @@ mod tests {
     use super::*;
 
     /// These RVAs are the whole safety argument for the hook: if one drifts, the install-time
-    /// prologue check is comparing against the wrong thing. The BYTES are pinned where they are
+    /// prologue check is comparing against the wrong thing. The bytes are pinned where they are
     /// produced -- `build.rs` asserts the assembled sequence against the pin and, when a copy of
     /// `eldenring-deobf.bin` is present, against the real image at the same VA -- so repeating
     /// them here would only be a third transcription to keep in step.

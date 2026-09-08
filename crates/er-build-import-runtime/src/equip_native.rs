@@ -10,7 +10,7 @@
 //! # Two traps it hides
 //!
 //! * It takes an **inventory index**, not a param id. The index is only valid after the item is
-//!   granted, and WHICH index it is is the subject of the section below.
+//!   granted, and which index it is is the subject of the section below.
 //! * Equipping an item into the slot it **already occupies toggles it off**. So every equip
 //!   is preceded by `GetSlotIndexByItemIndex`, and skipped when the item is already there.
 //!   Without that check a re-run strips the gear it just put on.
@@ -22,14 +22,14 @@
 //! `0x000FB9C8`, and there is no id-shaped question whose answer is "the third one".
 //! `EquipInventoryData::GetItemInventoryIdx` (`0x14024c560`) is exactly such a question -- its
 //! whole body is `if (*itemId != -1) GetItemIndex(&inv->itemsData, itemId)` plus a null-handle
-//! rejection -- and `InventoryItemsData::InsertItemIntoLookupMap` keeps the LOWEST index for a
+//! rejection -- and `InventoryItemsData::InsertItemIntoLookupMap` keeps the lowest index for a
 //! repeated id. So it returns the same copy for all four positions, and `GetParamIdInSlot`, which
 //! compares only the param id, then reports every one of them as verified.
 //!
 //! `plan.rs` grants the worn copy first to make that one answer the right one. That mitigates
 //! exactly one position per id and cannot do more, which is why it is a mitigation and this is
 //! the fix: the grant now hands each minted armament's `GaItemHandle` forward and the equip
-//! resolves the inventory index from THAT, through
+//! resolves the inventory index from that, through
 //! `GET_ITEM_INDEX_BY_GAITEM_HANDLE_RVA`. Where no handle is available the id lookup is still used
 //! -- and [`EquipOutcome::by_item_id`] records that it was, because an unannounced fall back to
 //! the ambiguous question is how this bug stayed invisible.
@@ -68,7 +68,7 @@ const GET_GAITEM_HANDLE_BY_INDEX_RVA: usize = 0x24c7b0;
 /// * **stackable** ids -- consumables, which have no per-instance identity -- fall back to the
 ///   same `GetItemIndex` the id lookup uses, because there is nothing to distinguish;
 /// * **everything else**, armaments included, is answered by walking `0..=itemEntriesCount` and
-///   returning the index of the entry whose own `InventoryItemEntry::GetGaitemHandle` EQUALS the
+///   returning the index of the entry whose own `InventoryItemEntry::GetGaitemHandle` equals the
 ///   handle asked about. That is the exact-instance answer, and `-1` when the handle names
 ///   nothing in this inventory.
 ///
@@ -80,7 +80,7 @@ const GET_ITEM_INDEX_BY_GAITEM_HANDLE_RVA: usize = 0x24c460;
 /// `CS::EquipGameData::SetEquipmentEntries(egd, slot, uint *gaitemHandle, int itemIdx,
 /// bool force, bool writeEntry, bool isArrowOrBolt)` -- the actual equipment writer.
 ///
-/// # `isArrowOrBolt` IS INERT ON THIS PATH, and the `false` below is not an ammunition bug
+/// # `isArrowOrBolt` is inert on this path, and the `false` below is not an ammunition bug
 ///
 /// Ammunition goes through this call like every other `ChrAsm` position, so a reader adding arrows
 /// will look for that flag. Its whole body is:
@@ -93,7 +93,7 @@ const GET_ITEM_INDEX_BY_GAITEM_HANDLE_RVA: usize = 0x24c460;
 /// }
 /// ```
 ///
-/// The flag is read only in the `else`, i.e. only when the slot ALREADY holds this exact handle
+/// The flag is read only in the `else`, i.e. only when the slot already holds this exact handle
 /// and index -- a no-op write, which for a stackable arrow still needs the entry's item id
 /// refreshed. Every call here passes `force = true`, which takes the first branch unconditionally
 /// and does that refresh anyway, so the third flag can never be reached. Setting it for ammo would
@@ -115,9 +115,9 @@ const SET_QUICK_OR_POUCH_OR_RUNE_RVA: usize = 0x249a50;
 /// [`read_physick`] for why writing it directly produced error icons in the flask.
 const EQUIP_GAME_DATA_PHYSIC_TEARS: usize = 0x3e4;
 /// `CS::EquipGameData::GetItemIdByQuickSlotIndex(egd, int *out, uint index) -> int*` --
-/// THE QUICKBAR READ-BACK, and another out-parameter getter. Its whole body is
+/// The QUICKBAR read-back, and another out-parameter getter. Its whole body is
 /// `if (index < 10) *out = entries[index + 0x16]; else *out = -1;`, so it answers for the ten
-/// quickbar positions and refuses the pouch. The value it hands back is the CATEGORY-TAGGED item
+/// quickbar positions and refuses the pouch. The value it hands back is the category-tagged item
 /// id, not a bare param id.
 const GET_ITEM_ID_BY_QUICK_SLOT_INDEX_RVA: usize = 0x247ee0;
 /// `EquipGameData::equipmentEntries`, a `ChrAsmEquipEntries` -- 39 `int`s of category-tagged item
@@ -152,7 +152,7 @@ type EquipFn = unsafe extern "system" fn(i32, *const u8);
 type GetInventoryFn = unsafe extern "system" fn(usize) -> usize;
 type GetItemIdxFn = unsafe extern "system" fn(usize, *const i32) -> i32;
 /// `GetItemIndexByGaitemHandle(EquipInventoryData*, uint *gaitemHandle) -> int`. The handle is
-/// read THROUGH the pointer and never written, so it is `*const`.
+/// read through the pointer and never written, so it is `*const`.
 type GetItemIdxByHandleFn = unsafe extern "system" fn(usize, *const u32) -> i32;
 type GetSlotFn = unsafe extern "system" fn(usize, i32) -> i32;
 type GetParamIdInSlotFn = unsafe extern "system" fn(usize, i32) -> i32;
@@ -167,13 +167,13 @@ type SetQuickFn = unsafe extern "system" fn(usize, u32, *const u32, u32);
 type GetQuickIdFn = unsafe extern "system" fn(usize, *mut i32, u32) -> *mut i32;
 /// `CS::EquipGameData::GetPhysicTearBySlot(egd, int *out, uint slot) -> int*`.
 ///
-/// An OUT-PARAMETER form, not a return-value getter: the body is literally
+/// An out-parameter form, not a return-value getter: the body is literally
 /// `*out = egd->physicTears[slot]`. Calling it as `(egd, slot)` puts the slot index in RDX and
 /// the function writes through it -- a store to address 0, which took the game down once.
 type GetTearFn = unsafe extern "system" fn(usize, *mut i32, u32) -> *mut i32;
 /// `CS::EquipItemData::GetEquippedGreatrune(EquipItemData*, int *out, int slot)`.
 ///
-/// THREE arguments, and the third is not optional -- see [`equipped_great_rune`] for the run of
+/// Three arguments, and the third is not optional -- see [`equipped_great_rune`] for the run of
 /// wrong answers that produced.
 type GreatRuneFn = unsafe extern "system" fn(usize, *mut i32, i32) -> *mut i32;
 
@@ -190,7 +190,7 @@ type GreatRuneFn = unsafe extern "system" fn(usize, *mut i32, i32) -> *mut i32;
 /// the ash mounted on it. That pair is complete -- two copies agreeing on both are genuinely
 /// interchangeable instances, so it does not matter which of them a position takes -- and it is
 /// the smallest thing that is. An entry is consumed once claimed, so two positions asking for the
-/// same armament with the same ash get two DIFFERENT copies rather than the same one twice.
+/// same armament with the same ash get two different copies rather than the same one twice.
 ///
 /// The ash side of the pair comes from [`er_build_import_core::plan::equipped_armament_skills`], the
 /// same table the post-import read-back is adjudicated against, and the gem encoding is decoded
@@ -232,12 +232,12 @@ impl WornInstances {
     /// claiming one position. The last entry wins here, which is payload order;
     /// `equip::settle` breaks the same tie by the rows' `order` field, and
     /// `equipped_armament_skills` selects rows by the bare `equipIndex` while `equip_plan` selects
-    /// them by the ACTIVE SET. Those agree on an ordinary payload and can disagree on a
+    /// them by the active set. Those agree on an ordinary payload and can disagree on a
     /// self-contradicting one -- which the import already reports as `CONTESTED`.
     ///
     /// When they do disagree this looks up an ash the plan did not place, finds no minted copy
     /// carrying it, and returns `Resolved::ById` with a reason. So the disagreement degrades to
-    /// the old id lookup WITH A LOG LINE saying so, never to a confidently-wrong handle.
+    /// the old id lookup with a log line saying so, never to a confidently-wrong handle.
     pub fn new(armaments: &[crate::grant::ArmamentOutcome], wants: &[ArmamentSkill]) -> Self {
         Self {
             minted: armaments
@@ -269,12 +269,12 @@ impl WornInstances {
                 "this position is not an armament, so the grant minted no instance for it",
             );
         };
-        // MATCHED WITHOUT THE UPGRADE LEVEL, which is the last two digits of an armament's item
+        // Matched without the upgrade level, which is the last two digits of an armament's item
         // id. The grant mints at the level the build asked for (`60500125`) while the equip plan
         // names the armament (`60500100`) -- it has no business deciding a level, and could not
         // anyway, since the clamp against this armament's real `ReinforceParamWeapon` rows is a
         // runtime question. Comparing the raw ids made every armament fall to the id lookup, and
-        // then miss THERE too because the unlevelled id names nothing in the inventory: measured
+        // then miss there too because the unlevelled id names nothing in the inventory: measured
         // 2026-08-23 as `0 position(s) found by minted gaitem handle` and 10/10 gear -> 8/10.
         let identity = armament_identity(item_id);
         let Some(found) = self
@@ -314,10 +314,10 @@ fn armament_identity(item_id: u32) -> u32 {
 
 /// What the equip pass observed while filling the plan.
 ///
-/// # Where the counts are NOT
+/// # Where the counts are not
 ///
 /// Deliberately: this struct holds evidence, never a score. The score lives in the
-/// [`EquipLedger`] the caller opened over the PLAN, so a position the pass never visits stays
+/// [`EquipLedger`] the caller opened over the plan, so a position the pass never visits stays
 /// in the denominator instead of leaving with it. The field this replaced -- `quick_written`,
 /// incremented once per dispatcher call and read back by nothing -- was both halves of that
 /// mistake at once: a call count presented as a result, over a denominator that had already
@@ -338,30 +338,30 @@ pub struct EquipOutcome {
     /// itself is holding it. Reading it costs one getter call on a path that was about to give
     /// up anyway, and it turns "not in the inventory" -- which for two flasks was wrong twice in
     /// a row and unfalsifiable from the log -- into a line naming the row that is actually
-    /// there. When that row IS one the build's name resolves to, the position is already correct
+    /// there. When that row is one the build's name resolves to, the position is already correct
     /// and is recorded as such instead of as a casualty.
     pub position_holds_instead: Vec<(i32, u32, i32)>,
     /// Positions whose inventory index came from the exact instance the grant minted.
     pub by_handle: usize,
     /// `(kind, slot, item id, why)` for every position that fell back to the item-id lookup.
     ///
-    /// Kept in full rather than counted, and carrying its KIND, because the two cases are not
+    /// Kept in full rather than counted, and carrying its kind, because the two cases are not
     /// equally serious. A talisman or a quickbar consumable has no per-instance identity to lose,
-    /// so the id lookup is the right question for it and the entry is bookkeeping. An ARMAMENT
+    /// so the id lookup is the right question for it and the entry is bookkeeping. An armament
     /// falling back is the importer admitting it may have equipped an arbitrary twin, and that
     /// admission is worthless if the log buries it among the harmless ones.
     pub by_item_id: Vec<(PositionKind, i32, u32, &'static str)>,
     /// `(kind, slot, the id the build named, the id the inventory actually held)` for every
     /// position that was found under one of [`EquipRef::also_known_as`].
     ///
-    /// NOT bookkeeping. The build names an item; the character owns a DIFFERENT ROW of that same
+    /// Not bookkeeping. The build names an item; the character owns a different row of that same
     /// item because they have upgraded it, and the two are different ids. Every entry here is a
     /// position that would previously have been recorded `NotInInventory` and left empty, so the
     /// log has to name the substitution rather than let a silent id swap look like a plain
     /// success.
     pub by_upgrade_variant: Vec<(PositionKind, i32, u32, u32)>,
-    /// `(slot, expected, actual)` for armament positions holding the RIGHT armament at a
-    /// DIFFERENT upgrade level.
+    /// `(slot, expected, actual)` for armament positions holding the right armament at a
+    /// different upgrade level.
     ///
     /// Counted as the position being filled -- the equip's job is which armament is in which
     /// hand, and the level is the grant's job, reported on its own `ARMAMENT` line. Kept
@@ -371,7 +371,7 @@ pub struct EquipOutcome {
     /// `(slot, item id, inventory index, the slot that already claimed it)` for every position
     /// whose inventory index was already spoken for by an earlier position in the same pass.
     ///
-    /// EQUIPPING ONE ENTRY TWICE STRIPS THE FIRST SLOT. `EquipItemToChrAsmSlot` (`0x140787c30`)
+    /// Equipping one entry twice strips the first slot. `EquipItemToChrAsmSlot` (`0x140787c30`)
     /// calls `FUN_140247160(egd, oldSlot, true)` -- unequip it from where it already sits --
     /// before writing the new slot, so a later position naming an entry an earlier position is
     /// already wearing tears the earlier one back off. The per-position read-back cannot see it:
@@ -381,12 +381,12 @@ pub struct EquipOutcome {
     pub index_collisions: Vec<(i32, u32, i32, i32)>,
     /// `(slot, expected, actual)` for the first few positions that read back wrong.
     pub mismatches: Vec<(i32, i32, i32)>,
-    /// `(slot, expected, actual)` for positions that PASSED their own read-back and were wrong
+    /// `(slot, expected, actual)` for positions that passed their own read-back and were wrong
     /// again by the end of the pass.
     ///
-    /// The per-position read-back proves a write landed; only the final sweep proves it SURVIVED
+    /// The per-position read-back proves a write landed; only the final sweep proves it survived
     /// the rest of the pass. A position that passes the first and fails the second was taken back
-    /// off by something later, which is a different defect from one that never took -- so ONLY
+    /// off by something later, which is a different defect from one that never took -- so only
     /// that case lands here. A position that was already wrong at its own read-back is not
     /// evidence of a stripper and must not be reported as one: the sweep re-reads it, finds it
     /// still wrong, and leaves the failure it already had. Saying "something took them back off"
@@ -395,7 +395,7 @@ pub struct EquipOutcome {
     pub stripped_after_verifying: Vec<(i32, i32, i32)>,
     /// The equip game data pointer was unusable, so nothing at all was attempted.
     pub no_inventory: bool,
-    /// Game functions with no verified mapping for the RUNNING build, so the positions that
+    /// Game functions with no verified mapping for the running build, so the positions that
     /// needed them were not attempted.
     ///
     /// Kept as names rather than a bool because the useful next action is a `docs/recon` row for
@@ -411,7 +411,7 @@ pub struct EquipOutcome {
 /// claiming "verified 1.16.2 RVAs within the loaded image". Every one was a direct call into game
 /// code at an address from a previous patch, and the shared comment made them look like one
 /// decision that had been checked once. Grouping them makes the resolution a single decision that
-/// really is checked once -- and makes the two OPTIONAL families below visible as families rather
+/// really is checked once -- and makes the two optional families below visible as families rather
 /// than as thirteen equally-load-bearing addresses.
 struct EquipNatives {
     equip: EquipFn,
@@ -424,7 +424,7 @@ struct EquipNatives {
     set_entries: SetEntriesFn,
     refresh: RefreshFn,
     broadcast: BroadcastFn,
-    /// The menu path's permission gate. PROBE ONLY -- its answer is recorded and then used to
+    /// The menu path's permission gate. Probe only -- its answer is recorded and then used to
     /// choose between two write paths that are both available. `None` means it could not be
     /// resolved, which is treated as "not permitted": that is the branch that writes through the
     /// engine's own setters, i.e. the one that does not need the gate's opinion at all.
@@ -451,7 +451,7 @@ struct QuickNatives {
 impl EquipNatives {
     /// Resolve every function the equip pass calls, or say which ones have no mapping.
     ///
-    /// The REQUIRED ten are the ones both write paths need; missing any of them means the pass
+    /// The required ten are the ones both write paths need; missing any of them means the pass
     /// cannot run and `Err` names all of them, because fixing them one rebuild at a time is how a
     /// morning disappears.
     fn resolve(module_base: usize) -> Result<Self, Vec<&'static str>> {
@@ -562,7 +562,7 @@ impl EquipNatives {
 
 /// Read what a quick/pouch/rune position currently holds. `-1` means empty.
 ///
-/// Returns the CATEGORY-TAGGED item id, which is what all three of these positions store --
+/// Returns the category-tagged item id, which is what all three of these positions store --
 /// so the comparison is against [`EquipRef::item_id`], never `param_id`. Getting that wrong is
 /// how the physick "verified 2/2" while showing error icons: a read-back only proves a value
 /// round-tripped, so it has to be compared against the value the game would have written.
@@ -570,7 +570,7 @@ impl EquipNatives {
 /// # Safety
 ///
 /// Game thread, `egd` live, `index` in `0..=16`. `quick` must be the natives resolved for the
-/// RUNNING build -- which is what having a [`QuickNatives`] at all means.
+/// running build -- which is what having a [`QuickNatives`] at all means.
 unsafe fn read_quick_position(
     quick: QuickNatives,
     egd: usize,
@@ -628,21 +628,21 @@ pub unsafe fn equip_all(
     // position cannot name an entry an earlier one is wearing. See the guard below for why that
     // is destructive rather than merely redundant.
     let mut claimed: Vec<(i32, i32)> = Vec::new();
-    // WHAT EACH POSITION WAS LEFT HOLDING, and whether its own read-back agreed, indexed the same
-    // way as `planned`. The final sweep needs both: the id to re-compare against (which is NOT the
+    // What each position was left holding, and whether its own read-back agreed, indexed the same
+    // way as `planned`. The final sweep needs both: the id to re-compare against (which is not the
     // one the plan names, once an upgrade level is in play) and whether this position was ever
-    // right, because only a position that WAS right and then went wrong was stripped by something
+    // right, because only a position that was right and then went wrong was stripped by something
     // later. `None` is a position the pass never reached.
     let mut placements: Vec<Option<Placement>> = vec![None; ledger.planned().len()];
     // Cloned so the ledger stays writable while the pass walks it. The list is at most ~20
     // entries, and holding a borrow of the thing being recorded into is not worth the saving.
     let planned: Vec<PlannedPosition> = ledger.planned().to_vec();
 
-    // RESOLVED FOR THE RUNNING BUILD, not added blind. Every address below is a 1.16.2 RVA and
+    // Resolved for the running build, not added blind. Every address below is a 1.16.2 RVA and
     // the installed game is 1.17: a call through an unresolved one lands wherever that code moved
     // to, which is a control transfer into the middle of an unrelated function.
     //
-    // A refusal here costs the equip pass and NOTHING ELSE -- the grants, the stats and the
+    // A refusal here costs the equip pass and nothing else -- the grants, the stats and the
     // spells are separate steps and still run. Every planned position is recorded as not
     // attempted, so the ledger's denominator keeps them rather than quietly shrinking.
     let natives = match EquipNatives::resolve(module_base) {
@@ -722,7 +722,7 @@ pub unsafe fn equip_all(
             continue;
         };
 
-        // THE ID TO ASK THE INVENTORY ABOUT, which for an armament is not the one the plan names:
+        // The ID to ask the inventory about, which for an armament is not the one the plan names:
         // the plan names the armament, the grant minted it at a level, and the level is part of
         // the id. Asking about the unlevelled id reports a +25 weapon as not in the inventory.
         let lookup_id = instances
@@ -730,7 +730,7 @@ pub unsafe fn equip_all(
             .unwrap_or(position.item.item_id);
         let id = lookup_id as i32;
 
-        // WHICH COPY. Asking by item id cannot answer that -- see the module header -- so the
+        // Which copy. Asking by item id cannot answer that -- see the module header -- so the
         // handle the grant minted for this exact position is tried first, and the fall back to
         // the ambiguous question is recorded rather than taken quietly.
         let mut fell_back_to_id = None;
@@ -765,8 +765,8 @@ pub unsafe fn equip_all(
                 .push((position.kind, slot, lookup_id, why));
         }
 
-        // THE ROW THIS CHARACTER ACTUALLY OWNS. An id is not a stable name for an item the
-        // player can upgrade: an upgraded flask or talisman is a DIFFERENT `EquipParamGoods`
+        // The row this character actually owns. An id is not a stable name for an item the
+        // player can upgrade: an upgraded flask or talisman is a different `EquipParamGoods`
         // row from the unupgraded one, under a name the game suffixes ` +N`. So a character who
         // has drunk one Sacred Tear holds none of the ids the build's name resolved to, and
         // asking only about those reports an item that is visibly in the pouch as missing --
@@ -794,7 +794,7 @@ pub unsafe fn equip_all(
         let placed = placed_id as i32;
 
         if item_idx < 0 {
-            // BEFORE GIVING UP, ASK THE POSITION. See `position_holds_instead`.
+            // Before giving up, ask the position. See `position_holds_instead`.
             let mut holds = None;
             if position.kind.is_quick_dispatch()
                 && let Some(quick) = quick
@@ -874,12 +874,12 @@ pub unsafe fn equip_all(
             continue;
         }
 
-        // ONE INVENTORY ENTRY, ONE SLOT. Equipping an entry that an earlier position in this very
+        // One inventory entry, one slot. Equipping an entry that an earlier position in this very
         // pass is already wearing does not add a second copy -- `EquipItemToChrAsmSlot` unequips it
         // from the earlier slot first (`FUN_140247160(egd, oldSlot, true)`), so the later write
         // silently strips the earlier one and the earlier position's read-back, taken before this
         // one ran, still says Verified. Refusing here keeps a wrong answer out of the character
-        // AND out of the log; the position is recorded as a failure, which is what it is.
+        // and out of the log; the position is recorded as a failure, which is what it is.
         if let Some((held_by, _)) = claimed
             .iter()
             .copied()
@@ -902,7 +902,7 @@ pub unsafe fn equip_all(
         // Safety: same context. Asking where the item currently sits.
         let current = unsafe { get_slot(egd, item_idx) };
         if current == slot {
-            // Calling the handler here would TOGGLE the item off.
+            // Calling the handler here would toggle the item off.
             placements[at] = Some(Placement {
                 expected: (placed_id & ITEM_ROW_MASK) as i32,
                 verified: true,
@@ -911,7 +911,7 @@ pub unsafe fn equip_all(
             continue;
         }
 
-        // Ask the menu path's gate what it thinks, purely to record it. An UNRESOLVED gate reads
+        // Ask the menu path's gate what it thinks, purely to record it. An unresolved gate reads
         // as "not permitted", which is not a guess: that answer selects the branch that writes
         // through the engine's own setters, i.e. the one that never needed the gate's opinion.
         // Safety: a pure predicate over engine singletons, already known non-null here.
@@ -950,9 +950,9 @@ pub unsafe fn equip_all(
         // Read the slot back. The handler returns void and declines silently, so this is the
         // only thing that distinguishes "equipped" from "asked politely and was ignored".
         // The ChrAsm getter masks the category nibble off, so the comparison here is against
-        // the BARE param id -- the opposite of the quick/pouch/rune read-back above.
+        // the bare param id -- the opposite of the quick/pouch/rune read-back above.
         //
-        // AGAINST THE ROW THAT WAS EQUIPPED, NOT THE ROW THE PLAN NAMED. For an armament those
+        // Against the row that was equipped, not the row the plan named. For an armament those
         // are different numbers by construction: the plan names the armament (`7100000`) and the
         // grant mints it at the level the build asked for (`7100010`), so comparing against
         // `position.item.param_id` asks whether the hand holds a +0 Eclipse Shotel and reports
@@ -971,15 +971,15 @@ pub unsafe fn equip_all(
         ledger.record(at, result);
     }
 
-    // THE SWEEP THAT ACTUALLY PROVES IT. Every read-back above happened before the positions after
+    // The sweep that actually proves it. Every read-back above happened before the positions after
     // it were written, so each one proves only that its own write landed -- not that it was still
     // there at the end. A position stripped by a later equip passes the first check and fails this
     // one, and that difference is the whole reason the two are recorded separately.
     //
-    // IT IS A DETECTOR AND IT ONLY GETS TO ACCUSE WHAT IT CAN SEE. A position that was already
+    // It is a detector and it only gets to accuse what it can see. A position that was already
     // wrong at its own read-back is not evidence that anything stripped it, so re-reading it and
     // finding it still wrong adds no fact: it keeps the failure it already had, and stays out of
-    // `stripped_after_verifying`. Only a position that was VERIFIED and is now wrong supports the
+    // `stripped_after_verifying`. Only a position that was verified and is now wrong supports the
     // sentence "something later in the pass took it back off".
     for (at, position) in planned.iter().enumerate() {
         // Same exclusions the pass itself uses: the physick is not a ChrAsmSlot, and the
@@ -1042,7 +1042,7 @@ struct Placement {
 
 /// Whether `actual` is the item the pass placed.
 ///
-/// Exact for everything except an armament, whose UPGRADE LEVEL is the last two digits of its
+/// Exact for everything except an armament, whose upgrade level is the last two digits of its
 /// param id and is not part of which armament it is. The game normalises the same way --
 /// `EquipParamWeapon::GetEntry` looks up `(paramId / 100) * 100` for exactly this reason -- and
 /// `lib.rs`'s ash read-back already adjudicates the worn armament on the same rule. The level is
@@ -1087,7 +1087,7 @@ fn verdict(
 /// `EquipGameData::physicTears` is `int[3]` at `+0x3e4` (empty == `-1`), confirmed by the
 /// getter's own addressing `MOV ECX,[RCX + RAX*4 + 0x3e4]`. No native setter for it exists in
 /// the dump under any searchable name, so this writes the field -- but it now writes the right
-/// KIND of value, which the first attempt did not.
+/// kind of value, which the first attempt did not.
 ///
 /// The first attempt stored the tear's bare param id and produced error icons in game. The
 /// field actually holds the **category-tagged** id: a flask populated by the game itself reads
@@ -1106,10 +1106,10 @@ pub unsafe fn fill_physick(
     egd: usize,
     tears: &[Option<EquipRef>],
 ) -> Option<usize> {
-    // THE WRITE IS A STRUCT FIELD; ONLY THE READ-BACK IS A GAME FUNCTION. The store below goes to
+    // The write is a STRUCT field; Only the read-back is a game function. The store below goes to
     // `egd + 0x3e4`, a field offset -- a different kind of 1.17 risk, owned by
     // `scripts/detect-struct-field-drift.py`, not by the address gate. The getter is code, and
-    // code moved. So an unresolvable getter means the tears are still written and NOTHING is
+    // code moved. So an unresolvable getter means the tears are still written and nothing is
     // verified, which is what `None` says: `0` would be indistinguishable from "the game read the
     // flask back and it held something else", and that is the exact confusion the first version
     // of this function shipped (it "verified 2/2" against the wrong value it had itself written).
@@ -1121,7 +1121,7 @@ pub unsafe fn fill_physick(
     let mut verified = 0;
     for (index, tear) in tears.iter().enumerate().take(2) {
         let Some(tear) = tear else { continue };
-        // The TAGGED id, not param_id.
+        // The tagged id, not param_id.
         let wanted = tear.item_id as i32;
         // Safety: one int of an int[3] at a verified offset in live save data.
         unsafe { *((egd + EQUIP_GAME_DATA_PHYSIC_TEARS + index * 4) as *mut i32) = wanted };
@@ -1144,7 +1144,7 @@ pub unsafe fn fill_physick(
 ///
 /// Game thread, `egd` live.
 pub unsafe fn read_physick(module_base: usize, egd: usize) -> Option<[i32; 2]> {
-    // `None`, not `[-1, -1]`: in this field `-1` MEANS empty, so a refusal returned as `-1`
+    // `None`, not `[-1, -1]`: in this field `-1` means empty, so a refusal returned as `-1`
     // would be reported to the reader as an empty flask on a character that may be carrying two
     // tears. A refusal has to be unrepresentable as a value.
     let get_tear = crate::native::resolve(
@@ -1166,7 +1166,7 @@ pub unsafe fn read_physick(module_base: usize, egd: usize) -> Option<[i32; 2]> {
 
 /// Read back the equipped great rune. `-1` means none.
 ///
-/// Another OUT-PARAMETER getter, like `GetPhysicTearBySlot`: the disassembly is
+/// Another out-parameter getter, like `GetPhysicTearBySlot`: the disassembly is
 /// `ADD RCX,0x288 / MOV RBX,RDX / CALL ... / MOV RAX,RBX`, i.e. RDX is a pointer the callee
 /// writes through and RAX is just that same pointer handed back. Treating it as a scalar
 /// getter passes the caller's second argument as a destination address and stores through it.
@@ -1175,14 +1175,14 @@ pub unsafe fn read_physick(module_base: usize, egd: usize) -> Option<[i32; 2]> {
 ///
 /// Game thread, `egd` live.
 pub unsafe fn equipped_great_rune(module_base: usize, egd: usize) -> Option<i32> {
-    // THREE arguments. The outer wrapper at 0x140247900 is only
-    //     ADD RCX,0x288 / MOV RBX,RDX / CALL 0x14024f390 / MOV RAX,RBX
+    // Three arguments. The outer wrapper at 0x140247900 is only
+    //     add RCX,0x288 / MOV RBX,RDX / call 0x14024f390 / MOV RAX,RBX
     // -- it never writes R8, so the slot argument passes straight through from the caller into
     // `CS::EquipItemData::GetEquippedGreatrune(EquipItemData*, int *out, int slot)`, whose body
     // begins `*out = -1; if (slot == 0 && ...)`. Calling it with two arguments leaves R8 holding
     // whatever the call site happened to have, the `slot == 0` test fails, and it reports -1 no
     // matter what is equipped. That produced three runs of "the rune will not equip" when the
-    // rune was fine and the QUESTION was malformed.
+    // rune was fine and the question was malformed.
     //
     // `None` for a refusal for the same reason the malformed call was worth fixing: `-1` is this
     // getter's own answer for "no rune equipped", so returning it for "could not ask" reports a

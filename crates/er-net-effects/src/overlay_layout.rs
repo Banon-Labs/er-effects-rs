@@ -18,7 +18,7 @@ pub(crate) const PANEL_PADDING: f32 = 14.0;
 
 /// Blank space between two text rows.
 ///
-/// Deliberately NOT folded into a row's height: the old layout advanced by a 26px row for 13px
+/// Deliberately not folded into a row's height: the old layout advanced by a 26px row for 13px
 /// text, so the leftover 13px landed under the last row and the bottom margin was twice the top.
 pub(crate) const ROW_GAP: f32 = 8.0;
 
@@ -46,7 +46,7 @@ pub(crate) struct PanelLayout {
     /// The full background panel.
     pub(crate) panel: Rect,
     /// The clickable region that minimizes/maximizes the bar. Collapsed, this is the whole
-    /// panel -- the bar IS the button. Expanded, it is the header row only, so a click near the
+    /// panel -- the bar is the button. Expanded, it is the header row only, so a click near the
     /// effect list cannot collapse the thing the player is reading.
     pub(crate) toggle: Rect,
     /// Left edge of every text row.

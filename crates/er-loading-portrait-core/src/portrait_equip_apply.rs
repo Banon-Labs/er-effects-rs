@@ -1,15 +1,15 @@
 //! Put the character's own equipment back into the ChrAsm the native feed just stripped.
 //!
-//! The WHY, the disassembly it rests on, and the reason this is param-ids-only are all in
+//! The why, the disassembly it rests on, and the reason this is param-ids-only are all in
 //! [`crate::portrait_equip_restore`]. This module is the unsafe half: it reads the two live
 //! `equipment_param_ids` arrays, asks that module what differs, writes the record's values into the
 //! renderer inbox, and publishes the semaphores.
 //!
-//! ORDERING IS THE WHOLE CORRECTNESS ARGUMENT. This must run AFTER `set_model_source` (which is what
-//! does the damage) and BEFORE the `+0x754` build kick (which is what consumes the result). The call
+//! Ordering is the whole correctness argument. This must run after `set_model_source` (which is what
+//! does the damage) and before the `+0x754` build kick (which is what consumes the result). The call
 //! site in the loading-cover per-slot kick is the only place both of those are true.
 //!
-//! A FAILED WRITE IS NOT A SILENT ONE. Every read is fault-guarded and a failure at any point bumps
+//! A failed write is not a silent one. Every read is fault-guarded and a failure at any point bumps
 //! `PORTRAIT_EQUIP_RESTORE_FAILURES` and returns `None`, so a run whose portrait was built from the
 //! mutilated array says so in telemetry instead of looking like a run where the repair simply had
 //! nothing to do -- the exact false negative that let PR #128 report a pass over a nude character.
@@ -22,7 +22,7 @@ use crate::prelude::*;
 /// the shape every other loading-cover log line in this pipeline uses.
 const RESTORE_LOG_KICK_LIMIT: usize = 4;
 
-/// Count and NAME a failed restore. A portrait built from the feed's stripped ChrAsm must say so,
+/// Count and name a failed restore. A portrait built from the feed's stripped ChrAsm must say so,
 /// or it is indistinguishable from a run where the repair had nothing to do.
 fn restore_failed(slot: i32) {
     PORTRAIT_EQUIP_RESTORE_FAILURES.fetch_add(1, Ordering::SeqCst);
@@ -41,7 +41,7 @@ fn chr_asm_param_id_offset(index: usize) -> usize {
 /// # Safety
 ///
 /// `chr_asm` must be a live `CS::ChrAsm`. Every read is fault-guarded, so a stale pointer yields
-/// `None` rather than a fault -- but a pointer to a DIFFERENT object would be read as one.
+/// `None` rather than a fault -- but a pointer to a different object would be read as one.
 unsafe fn read_param_ids(chr_asm: usize) -> Option<[i32; PORTRAIT_EQUIP_ENTRY_COUNT]> {
     let mut ids = [PORTRAIT_EQUIP_EMPTY_ID; PORTRAIT_EQUIP_ENTRY_COUNT];
     for (index, id) in ids.iter_mut().enumerate() {
@@ -60,7 +60,7 @@ unsafe fn read_param_ids(chr_asm: usize) -> Option<[i32; PORTRAIT_EQUIP_ENTRY_CO
 ///
 /// `renderer` must be a live `CSMenuProfModelRend` whose `set_model_source` has already run, and
 /// `record_chr_asm` the `ChrAsm` inside the matching `ProfileSummary` record. Must be called on the
-/// GAME thread, between the feed and the build kick -- the renderer's own steps read this memory.
+/// game thread, between the feed and the build kick -- the renderer's own steps read this memory.
 pub unsafe fn portrait_equip_restore_apply(
     renderer: usize,
     record_chr_asm: usize,
@@ -90,13 +90,13 @@ pub unsafe fn portrait_equip_restore_apply(
         unsafe { core::ptr::write_volatile(address as *mut i32, *wanted) };
     }
     // The record's own grip, latched here because this is the one place the record's `ChrAsm` is in
-    // hand on the game thread. The renderer's live stage does NOT carry it (see the counter's own
+    // hand on the game thread. The renderer's live stage does not carry it (see the counter's own
     // doc), so the idle-anim choice reads this rather than `renderer+0x130`.
     if let Some(arm_style) = unsafe { safe_read_i32(record_chr_asm + CHR_ASM_EQUIPMENT_OFFSET) } {
-        // STORED PER KICK, NOT LATCHED FIRST-SAMPLE. Every other value here is latched, because for
+        // Stored per kick, not LATCHED first-sample. Every other value here is latched, because for
         // those the question is "what did this window start with" and a later frame must not erase a
-        // bad early one. This one is different: it is an INPUT to the next model build, read once per
-        // kick, and each kick may be a DIFFERENT character. Latching it froze the first character's
+        // bad early one. This one is different: it is an input to the next model build, read once per
+        // kick, and each kick may be a different character. Latching it froze the first character's
         // grip onto every portrait after it -- a two-handed character followed by a dual-wielder drew
         // the dual-wielder with the two-handed idle, both weapons still attached.
         PORTRAIT_EQUIP_RECORD_ARM_STYLE.store(portrait_equip_pack(arm_style), Ordering::SeqCst);
@@ -120,7 +120,7 @@ pub unsafe fn portrait_equip_restore_apply(
     portrait_equip_latch_first(&PORTRAIT_EQUIP_RESTORE_RECORD_ID[1], report.left_weapon_id);
     portrait_equip_latch_first(&PORTRAIT_EQUIP_RESTORE_RECORD_ID[2], report.hands_id);
     portrait_equip_latch_first(&PORTRAIT_EQUIP_RESTORE_RECORD_ID[3], report.legs_id);
-    // Logging lives HERE rather than at the call site: `scripts/check-crate-extraction-roadmap.py`
+    // Logging lives here rather than at the call site: `scripts/check-crate-extraction-roadmap.py`
     // ratchets er-quickload's `experiments/**` down and never up, so the shim keeps only the seam
     // that has to sit between the native feed and the build kick, and everything that can be
     // reasoned about outside the DLL crate is reasoned about outside it.
@@ -141,14 +141,14 @@ pub unsafe fn portrait_equip_restore_apply(
 
 /// Put the record's whole `ChrAsmEquipment` block back over the one the feed left in the inbox.
 ///
-/// WHY THE PARAM IDS WERE NOT ENOUGH. Restoring `equipment_param_ids` gives the portrait its
+/// Why the PARAM IDS were not enough. Restoring `equipment_param_ids` gives the portrait its
 /// weapons back, but it does not give it the GRIP: `armStyle` lives in a different block
 /// (`ChrAsm+0x08`), and the per-frame model-resource request reads it -- `getSelectedWeaponSlotIndex
-/// (&equipment.armStyle, 0|1)` in `FUN_1409e6fb0` -- to decide both handedness and WHICH of the
+/// (&equipment.armStyle, 0|1)` in `FUN_1409e6fb0` -- to decide both handedness and which of the
 /// three slots per hand is the active armament. Writing the model instance's own `chrAsmArmStyle`
 /// (`CSChrAsmModelIns+0x328`) after the fact did stick (writes 4 / read-back 3, run
 /// br-20260907-191016-4020) and changed nothing on screen, which is the signature of a value that
-/// is consumed when the parts are ATTACHED rather than read per frame. This write happens in the
+/// is consumed when the parts are attached rather than read per frame. This write happens in the
 /// one window where that is still ahead of us: after the feed, before the `+0x754` build kick.
 ///
 /// The whole 28-byte block, not just the first dword, because the selected-slot indices that follow

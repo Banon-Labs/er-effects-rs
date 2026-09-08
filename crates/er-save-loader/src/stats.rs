@@ -9,11 +9,11 @@
 //! variable-length data that precedes it (event flags, inventory, ...) shifts it
 //! per slot (offsets from 0xe0b6..0xe8a4 observed across real saves). We locate it
 //! by the Elden Ring identity **`RuneLevel == (sum of the 8 attributes) − 79`**,
-//! which holds for every class and every level the GAME assigned. All offsets below
+//! which holds for every class and every level the game assigned. All offsets below
 //! are relative to the located `PlayerGameData` and were verified against real saves
 //! 2026-07-04.
 //!
-//! That identity is a LOCATOR, not a licence to exist: a stored `level` word can
+//! That identity is a locator, not a licence to exist: a stored `level` word can
 //! disagree with its own attribute sum (a build importer or save editor that writes
 //! one side without the other), and such a character must still decode. See
 //! [`slot_stats_from_body`] for the measured case and the structural fallback.
@@ -43,7 +43,7 @@ const PGD_MAX_HP: usize = 0x14;
 const PGD_MAX_FP: usize = 0x20;
 const PGD_MAX_STAMINA: usize = 0x30;
 
-/// `matchmakingWeaponLevel` -- the character's HIGHEST weapon upgrade level, which the game already
+/// `matchmakingWeaponLevel` -- the character's highest weapon upgrade level, which the game already
 /// maintains for multiplayer matchmaking.
 ///
 /// Verified in the 1.16.2 Ghidra dump as `PlayerGameData + 0xe2`, type `byte`, and independently in
@@ -79,9 +79,9 @@ const MAX_RUNE_LEVEL: i32 = 713;
 pub struct SlotStats {
     /// Rune Level.
     pub level: i32,
-    /// The eight attributes in struct order (VIG, MND, END, STR, DEX, INT, FAI, ARC).
+    /// The eight attributes in struct order (VIG, MND, end, STR, DEX, INT, FAI, ARC).
     pub attributes: [i32; STAT_COUNT],
-    /// Effective max HP as STORED in the save (SL2.bt `MaxHealth` == runtime
+    /// Effective max HP as stored in the save (SL2.bt `MaxHealth` == runtime
     /// `current_max_hp`, incl. talisman/buff modifiers). 0 when unreadable.
     pub max_hp: i32,
     /// Effective max FP as stored (SL2.bt `MaxFP` == runtime `current_max_fp`).
@@ -100,11 +100,11 @@ fn rd_i32(b: &[u8], off: usize) -> Option<i32> {
     Some(i32::from_le_bytes(b.get(off..off + 4)?.try_into().ok()?))
 }
 
-/// Read the eight attributes, level and stored vitals at a KNOWN stat-block base,
+/// Read the eight attributes, level and stored vitals at a known stat-block base,
 /// with range checks only -- no Rune Level identity. `stat_base` is the offset of
 /// the first attribute (`PlayerGameData + 0x3c`).
 ///
-/// Split out of [`stat_block_at`] so the identity can stay the SCAN's filter without
+/// Split out of [`stat_block_at`] so the identity can stay the scan's filter without
 /// also being the only way a located block may be read. See
 /// [`slot_stats_from_body`] for the character this distinction exists for.
 fn read_stat_block(body: &[u8], stat_base: usize) -> Option<SlotStats> {
@@ -120,7 +120,7 @@ fn read_stat_block(body: &[u8], stat_base: usize) -> Option<SlotStats> {
     if !(MIN_ATTR..=MAX_RUNE_LEVEL).contains(&level) {
         return None;
     }
-    // Vitals are best-effort reads of STORED values: a missing/implausible vital
+    // Vitals are best-effort reads of stored values: a missing/implausible vital
     // decodes as 0 ("unknown") rather than rejecting the located block or inventing
     // a formula.
     let pgd = stat_base.checked_sub(PGD_STAT_BASE);
@@ -171,7 +171,7 @@ fn located_stat_block(body: &[u8]) -> Option<(usize, SlotStats)> {
 /// Locate the `PlayerGameData` stat block in a slot body and return the level +
 /// eight attributes. Returns `None` only for a slot with no locatable character.
 ///
-/// # THE IDENTITY IS A LOCATOR, NOT A LICENCE TO EXIST (2026-09-01)
+/// # the identity is a locator, not a licence to exist (2026-09-01)
 ///
 /// The Rune Level identity used to be the only way in, which meant a character it
 /// does not hold had no attributes, no vitals and no `WL` -- anywhere. On the live
@@ -181,18 +181,18 @@ fn located_stat_block(body: &[u8]) -> Option<(usize, SlotStats)> {
 /// whole 0x280000-byte body found nothing else. The container decoded 9/10 slots while
 /// naming 10/10 (the name has always had a structural fallback through
 /// `bnd4::active_character_slots`), and the Load Character row for that one character
-/// rendered its merged header with an EMPTY attribute line and no `WL` -- the
+/// rendered its merged header with an empty attribute line and no `WL` -- the
 /// user-reported defect, measured in run `br-20260901-161521-9f7d` at +80815ms.
 ///
 /// A stored level can disagree with the attribute sum: `er-build-import-runtime` writes
-/// the level slot from a planner payload's CLAIMED `rl` while writing the attributes
+/// the level slot from a planner payload's claimed `rl` while writing the attributes
 /// from the payload's stat block (`character.rs::apply_stats`), and planner links with
 /// exactly that inconsistency are known (`lib.rs` records `rl: 150` beside attributes
 /// summing to 228). A save editor does the same thing by hand.
 ///
-/// So the identity stays the SCAN's filter -- it is what makes a blind byte-walk over
-/// megabytes trustworthy -- and a body it rejects falls back to the STRUCTURAL locator
-/// `bnd4::slot_player_game_data_offset` (FACE-anchored + `slot_pgd_core_plausible`:
+/// So the identity stays the scan's filter -- it is what makes a blind byte-walk over
+/// megabytes trustworthy -- and a body it rejects falls back to the structural locator
+/// `bnd4::slot_player_game_data_offset` (face-anchored + `slot_pgd_core_plausible`:
 /// real name, level `1..=713`, sane health/flasks/gender, eight attributes `1..=99`).
 /// That locator is not a new risk: it is the same one `active_character_slots` already
 /// uses, and it is proven to resolve this exact slot -- it is where slot 1's name came
@@ -212,21 +212,21 @@ pub fn slot_stats_from_body(body: &[u8]) -> Option<SlotStats> {
 ///
 /// # Why this is exported
 ///
-/// This crate ships TWO ways to find a serialized `PlayerGameData` in a slot body, and they do not
+/// This crate ships two ways to find a serialized `PlayerGameData` in a slot body, and they do not
 /// agree on real saves:
 ///
 /// * [`located_stat_block`] scans the body and accepts the offset where the **Rune Level
 ///   invariant** holds -- eight attributes in `1..=99` whose sum is `level + 79`. It is
 ///   self-validating: nothing but a real attribute block satisfies it.
 /// * `bnd4::slot_player_game_data_offset` (and the DLL's `SerializedSaveSlot::player_game_data`)
-///   instead find the leading `FACE` magics and search a FIXED `0xa000..=0xa600` window before
+///   instead find the leading `FACE` magics and search a fixed `0xa000..=0xa600` window before
 ///   each. That window is an observation, not an invariant, and the observation was too narrow:
 ///   measured across the ten characters of one real container the true delta ran
-///   `0x9d14..=0xa05c`, so NINE of the ten fell below the window's low bound and decoded as empty
+///   `0x9d14..=0xa05c`, so nine of the ten fell below the window's low bound and decoded as empty
 ///   slots. The System>Quit "Load Character from File" preview offered one row out of ten
 ///   (`slot_mask=0x8`, 2026-08-25) while the same file's stats cache decoded nine.
 ///
-/// Exporting the stat-block offset lets the FACE-window locators keep their own acceptance test
+/// Exporting the stat-block offset lets the face-window locators keep their own acceptance test
 /// while adding this candidate, instead of a third copy of the search drifting from both.
 #[must_use]
 pub fn located_stat_block_offset(body: &[u8]) -> Option<usize> {
@@ -285,15 +285,15 @@ pub fn all_slot_stats(sl2: &[u8]) -> [Option<SlotStats>; 10] {
     out
 }
 
-/// Slots that decoded a NAME but no stat block, as a bitmask (bit N = slot N).
+/// Slots that decoded a name but no stat block, as a bitmask (bit N = slot N).
 ///
-/// THE SEMAPHORE FOR A ROW WITH A HEADER AND NOTHING UNDER IT. The two caches the
+/// The SEMAPHORE for a row with a header and nothing under it. The two caches the
 /// ProfileSelect rows read are filled by two locators, so they can disagree per slot --
 /// and when they do, that slot's Load Character row renders its merged header with an
 /// empty attribute line and no `WL`. That reached the user as a visual observation on
 /// 2026-09-01 while the log already carried the aggregate (`9/10 slots decoded, 10/10
 /// names decoded`) and no oracle carried the disagreement. A count cannot name the
-/// affected row; this can. Non-zero is a DEFECT, not a state.
+/// affected row; this can. Non-zero is a defect, not a state.
 #[must_use]
 pub fn named_without_stats_mask(
     names: &[Option<String>; 10],
@@ -412,7 +412,7 @@ mod tests {
 
     #[test]
     fn distinct_characters_decode_distinctly() {
-        // A save with distinct characters must decode DIFFERENT per-slot stats —
+        // A save with distinct characters must decode different per-slot stats —
         // the whole point of the per-slot read (vs pushing the loaded char to all).
         let Some(data) = fixture("45-Slots") else {
             eprintln!("fixture missing; skipping");
@@ -430,7 +430,7 @@ mod tests {
         );
         // Oracle ground truth (decode_save_slot, 2026-07-29): slot 2 max vitals
         // 769/95/130; slot 9 max vitals 396/95/94. Slot 9 is the offset
-        // discriminator: its CURRENT fp is 78 while MaxFP is 95, so an off-by-4
+        // discriminator: its current fp is 78 while MaxFP is 95, so an off-by-4
         // read (current instead of max) would return 78 here and fail.
         assert_eq!((s2.max_hp, s2.max_fp, s2.max_stamina), (769, 95, 130));
         assert_eq!(
@@ -452,10 +452,10 @@ mod tests {
     const SAVE_PGD_GENDER: usize = 0xb6;
     const SAVE_PGD_MAX_CRIMSON: usize = 0xf9;
     const SAVE_PGD_MAX_CERULEAN: usize = 0xfa;
-    /// Inside `bnd4`'s `0xa000..=0xa600` PGD->FACE window.
+    /// Inside `bnd4`'s `0xa000..=0xa600` PGD->face window.
     const FACE_DELTA: usize = 0xa300;
 
-    /// A slot body holding ONE structurally valid character at a known offset, whose
+    /// A slot body holding one structurally valid character at a known offset, whose
     /// `level` word and attribute sum are whatever the caller says. No game bytes: every
     /// field is written here.
     fn synthetic_slot_body(name: &str, level: u32, attributes: [u32; STAT_COUNT]) -> Vec<u8> {
@@ -484,11 +484,11 @@ mod tests {
         body
     }
 
-    /// THE REPORTED DEFECT (2026-09-01), as a unit test.
+    /// The reported defect (2026-09-01), as a unit test.
     ///
     /// The live default container's slot 1, `Dark Moon Bean`: `level` 150 beside attributes
     /// summing to 226, which implies RL 147. The Rune Level identity refuses that block, so
-    /// the identity-only locator decoded the slot as EMPTY -- and the Load Character row for
+    /// the identity-only locator decoded the slot as empty -- and the Load Character row for
     /// the one character the user was playing rendered its merged header with no attribute
     /// line and no `WL`. Both the numbers and the shape are the measured ones.
     #[test]
@@ -554,7 +554,7 @@ mod tests {
         names[1] = Some("Dark Moon Bean".to_owned());
         assert_eq!(named_without_stats_mask(&names, &decoded), 1 << 1);
 
-        // A stat block with no name is the other direction and is NOT this defect.
+        // A stat block with no name is the other direction and is not this defect.
         names[1] = None;
         decoded[1] = Some(stats);
         assert_eq!(named_without_stats_mask(&names, &decoded), 0);

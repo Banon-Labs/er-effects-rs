@@ -1,19 +1,19 @@
-//! ORACLE-2 / SEMAPHORE-C: CSWorldGeomMan streaming-active vs player-movable
+//! Oracle-2 / SEMAPHORE-C: CSWorldGeomMan streaming-active vs player-movable
 //! SIMULTANEITY -- the single highest-value missing signal for the switch-reload
 //! dip.
 //!
-//! STEP4 root cause (bd STEP4-reload-dip-is-NOT-GPU-bound-renderdoc-proven): the
-//! mod own_load reload loads IN-PLACE, so the character becomes MOVABLE WHILE
+//! STEP4 root cause (bd STEP4-reload-dip-is-not-GPU-bound-renderdoc-proven): the
+//! mod own_load reload loads in-place, so the character becomes movable while
 //! CSWorldGeomMan block streaming is still running -> the streaming pipeline
 //! OVERLAPS the playable window = the per-frame CPU dip. The native reload settles
-//! streaming BEFORE movability (no dip). This oracle reads, in the SAME tick,
-//! whether streaming is active AND the player is movable, plus a
+//! streaming before movability (no dip). This oracle reads, in the same tick,
+//! whether streaming is active and the player is movable, plus a
 //! consecutive-overlap-tick counter (the dip-window length), correlated with the
 //! game's own frame time (`flip_task_delta`). The fix should collapse the overlap
 //! window toward 0.
 //!
 //! All reads are passive: `CSWorldGeomMan`/`WorldChrMan` singletons are resolved
-//! via the eldenring `FromStatic` reflection lookup (NO vtable-fn call, NO D3D12),
+//! via the eldenring `FromStatic` reflection lookup (no vtable-fn call, no D3D12),
 //! then raw Update fields are read with fault-safe `safe_read_*`.
 
 use std::sync::atomic::{AtomicI64, AtomicU8, AtomicU32, Ordering};
@@ -21,13 +21,13 @@ use std::sync::atomic::{AtomicI64, AtomicU8, AtomicU32, Ordering};
 use er_game_base::mem::{safe_read_i32, safe_read_u8};
 use fromsoftware_shared::FromStatic;
 
-// --- CS::CSWorldGeomMan::Update fields. GHIDRA-CONFIRMED against the dump
+// --- CS::CSWorldGeomMan::Update fields. GHIDRA-confirmed against the dump
 // (CS::CSWorldGeomMan::Update @ 0x1406d31f0): field_0xd0/0xf0/0xf8/0x100 are reset
 // to 0 at the top of Update; field_0xd0 is set to 1 when a block update returns
 // work; 0xf0/0xf4/0xf8/0x100 are per-block work accumulators added across the
 // block tree; 0x104 = pending count `(int)*(field_0xc0)`; 0x108/0x109 are the
 // all-blocks-ready flags (written 0 when any block's ready byte is 0). Struct
-// FIELD offsets are version-stable (dump == live). ---
+// field offsets are version-stable (dump == live). ---
 /// `field_0xd0` (u8): 1 == a block update returned streaming work this frame.
 const GEOM_DID_WORK_D0_OFFSET: usize = 0xd0;
 /// `field_0xf0` (i32): per-frame block work accumulator (reset to 0 each Update).
@@ -48,7 +48,7 @@ const GEOM_ALL_READY_B_109_OFFSET: usize = 0x109;
 /// WorldChrMan world-stable oracle: `WorldChrMan+0x1e524 == 2` = world genuinely
 /// stable/ready (FUN_140508d30). Source: constants/return_title.rs
 /// `WORLD_CHR_MAN_WORLD_STABLE_1E524_OFFSET` / `WORLD_CHR_MAN_WORLD_STABLE_VALUE`.
-/// Emitted as a cross-check diagnostic; NOT part of the spec's movable definition.
+/// Emitted as a cross-check diagnostic; Not part of the spec's movable definition.
 const WORLD_CHR_MAN_WORLD_STABLE_1E524_OFFSET: usize = 0x1e524;
 const WORLD_STABLE_VALUE: i32 = 2;
 
@@ -129,7 +129,7 @@ pub fn tick(epoch: u64, play_time_ms: i64, flip_task_delta: f32) {
     let ready_pending = matches!(ready_a, Some(0)) || matches!(ready_b, Some(0));
     let streaming_active = work_active || ready_pending;
 
-    // --- player_movable: main_player present AND play_time advanced this tick ---
+    // --- player_movable: main_player present and play_time advanced this tick ---
     let prev = PREV_PT.swap(play_time_ms, Ordering::SeqCst);
     let play_advancing = play_time_ms > 0 && prev >= 0 && play_time_ms > prev;
     let present = player_present();
@@ -144,7 +144,7 @@ pub fn tick(epoch: u64, play_time_ms: i64, flip_task_delta: f32) {
     };
     let world_stable = matches!(world_stable_raw, Some(v) if v == WORLD_STABLE_VALUE);
 
-    // --- overlap = both true in the SAME tick; run = consecutive-overlap ticks ---
+    // --- overlap = both true in the same tick; run = consecutive-overlap ticks ---
     let overlap = streaming_active && player_movable;
     let overlap_run = if overlap {
         OVERLAP_RUN.fetch_add(1, Ordering::SeqCst) + 1

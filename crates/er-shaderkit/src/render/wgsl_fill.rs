@@ -84,7 +84,7 @@ mod tests {
         }
     "#;
 
-    // The decisive Tier-B proof: a real ER vertex shader that naga REJECTS
+    // The decisive Tier-B proof: a real ER vertex shader that naga rejects
     // (DrawParameters capability) is nonetheless accepted by the GPU via SPIR-V
     // passthrough — the path the viewer (er-effects-rs-f9t) uses for real shaders.
     // Gated on GPU + dxil-spirv + a locally extracted member (game bytecode is not

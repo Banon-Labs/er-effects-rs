@@ -12,13 +12,13 @@ pub struct RequestedSlotIdentity {
     pub pgd_name_len: usize,
 }
 
-/// OWN-THE-STEPPER idx6 (STEP_GameStepWait) handler: runs IN-CONTEXT after idx10's
+/// Own-the-STEPPER idx6 (STEP_GameStepWait) handler: runs in-context after idx10's
 /// placeholder SetState(5) builds the MoveMapStep, whose native update 0x140aff640 ticks
-/// the b80 dispatchers (disp1 0x140afbad0 + disp2 0x140afb880). idx6 does NOT call the
+/// the b80 dispatchers (disp1 0x140afbad0 + disp2 0x140afb880). idx6 does not call the
 /// deserialize itself -- it keeps the b78-route armed (re-plant GameMan+0xb78=slot, clear
-/// b72, only while b80 is idle) so the NATIVE disp2 b78-route initiates and disp1
+/// b72, only while b80 is idle) so the native disp2 b78-route initiates and disp1
 /// deserializes the real slot into GameMan+0xc30. When c30 turns real, idx6 re-targets
-/// owner+0xbc to that map and SetState(5) ONCE so the load streams the character's real
+/// owner+0xbc to that map and SetState(5) once so the load streams the character's real
 /// world instead of the m60 placeholder. Pass-through (watch+log) otherwise.
 pub unsafe extern "system" fn own_stepper_idx6(owner: usize, framectx: usize) {
     let base = OWN_STEPPER_BASE.load(Ordering::SeqCst);
@@ -43,7 +43,7 @@ pub unsafe extern "system" fn own_stepper_idx6(owner: usize, framectx: usize) {
         }
     };
     let _ = phase;
-    // NO-WRITE CHECKPOINT. The Path A re-target (re-plant b78 / re-SetState(5) on c30=real)
+    // No-write checkpoint. The Path A re-target (re-plant b78 / re-SetState(5) on c30=real)
     // is REMOVED: it MISFIRED on the native new-game default c30=0xa010000 and reloaded an
     // m10 null character (pathA-b78-route-falsified-b80-stuck-latch-gate-2026). idx10 no
     // longer SetState(5)s, so this idx6 (state 6) is not reached in normal flow; it remains a
@@ -64,7 +64,7 @@ pub unsafe extern "system" fn own_stepper_idx6(owner: usize, framectx: usize) {
         TITLE_STEP_PLAY_GAME,
         &OWN_STEPPER_SLOT,
     );
-    // WATCH the native load that the idx10 Continue confirm kicked off (state 6
+    // Watch the native load that the idx10 Continue confirm kicked off (state 6
     // GameStepWait). Mirrors the observe snapshot so the in-context load can be compared
     // directly to the real user-driven load: csfeman + MoveMapStep build, mms_state
     // advance (1 MsbLoad -> 2 MsbLoadWait -> 3 WorldResWait), b80 deserialize, c30 -> real
@@ -107,4 +107,4 @@ pub unsafe extern "system" fn own_stepper_idx6(owner: usize, framectx: usize) {
 // (The 0x1407b0cf0 "finished-poll" auto-accept hook was removed: RE showed 0x1407b0cf0 is a
 // "has >= 2 buttons" layout query, not a finished-poll -- it is never called for the
 // connection-error dialog, and writing +0x25e0/+0x25e8 corrupts the dialog (+0x25e8 is the
-// button COUNT). The dismiss is force_dismiss_startup_dialog -> OnDecide 0x140927ba0.)
+// button count). The dismiss is force_dismiss_startup_dialog -> OnDecide 0x140927ba0.)

@@ -3,7 +3,7 @@
 //!
 //! Moved out of `er-quickload`'s `constants::autoload_state` with the row-identity code that is
 //! their only reader; that module now re-exports them from here, so each address and offset still
-//! has exactly ONE declaration (`scripts/check-rva-alias-drift.py`).
+//! has exactly one declaration (`scripts/check-rva-alias-drift.py`).
 
 use er_game_base::mem::safe_read_u16;
 
@@ -22,7 +22,7 @@ pub const PROPERTY_EDIT_DIALOG_PROPERTIES_1268_OFFSET: usize = 0x1268;
 pub const PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET: usize = 0x1af0;
 pub const EDIT_PROPERTY_SIZE: usize = 0x88;
 pub const EDIT_PROPERTY_CONTROLLER_OFFSET: usize = 0x78;
-/// `CS::EditProperty.label` (a `CS::MenuHelpLabelComponent`, 0x70 bytes) whose FIRST field is the
+/// `CS::EditProperty.label` (a `CS::MenuHelpLabelComponent`, 0x70 bytes) whose first field is the
 /// `MenuString`'s raw UTF-16 pointer -- `CS::MenuString::MenuString` stores the pointer it is handed,
 /// so a row built from this DLL's static label arrays is identifiable by pointer equality, and every
 /// row is identifiable by its text. This is the only per-row identity in the Quit dialog that the
@@ -31,7 +31,7 @@ pub const EDIT_PROPERTY_CONTROLLER_OFFSET: usize = 0x78;
 pub const EDIT_PROPERTY_LABEL_OFFSET: usize = 0x8;
 /// `CS::CSEzMenuViewerPad` predicates that `PropertyNewButtonController`'s should-invoke predicate
 /// (`FUN_140974b00`, deobf 0x974b00) itself calls to classify the dispatched event. The first
-/// short-circuits the predicate with NO positional test (pad/keyboard confirm); the second is the one
+/// short-circuits the predicate with no positional test (pad/keyboard confirm); the second is the one
 /// whose result the native code then hit-tests against the row's display object (mouse click).
 pub const MENU_VIEWER_PAD_CONFIRM_PRESSED_RVA: u32 =
     er_game_base::rva::MENU_VIEWER_PAD_CONFIRM_PRESSED_RVA;
@@ -41,7 +41,7 @@ pub const MENU_VIEWER_PAD_MOUSE_CLICKED_RVA: u32 =
 /// `GenericListSelectDialog` at `+0xa38`. Its geometry fields, measured once at dialog construction
 /// by `GridControl::MeasureGridFromMovie` (vtable `+0x18`, `FUN_140737c60`) from which
 /// `Item_<row>_<col>` components the movie actually contains:
-///   `+0xd0` item count, `+0xd4` cursor, `+0xd8` COLUMNS, `+0xdc` ROWS.
+///   `+0xd0` item count, `+0xd4` cursor, `+0xd8` columns, `+0xdc` rows.
 /// `GridControl::Update` (`FUN_1407392f0`) enables up/down only at `rows >= 2` and left/right only at
 /// `cols != 1 || rows < 2`, and the mouse hit test (`FUN_140736c90`) walks exactly `cols * rows`
 /// cells -- so these two numbers are the whole navigation and hover model of the dialog.

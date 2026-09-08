@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Turn `er-invasion-path.log` into a BUG VERDICT, live, while somebody plays.
+"""Turn `er-invasion-path.log` into a bug verdict, live, while somebody plays.
 
-WHY THIS EXISTS
+Why this exists
 ---------------
 `er-invasion-path.log` is a heartbeat, not a diagnosis. Its `status:` line carries eleven
 counters and reads identically whether the feature is working, whether the overlay never
 reached the swapchain, whether the roster is empty, or whether the navmesh is answering
 "no route" to every question because its addresses were measured on a build the game is no
 longer running. A human watching that scroll past sees numbers; the difference between
-those four states is a RELATION between numbers, and nobody spots a relation in a scroll.
+those four states is a relation between numbers, and nobody spots a relation in a scroll.
 
 So this reads the same lines and asserts the relations. Every rule below is a defect the
 DLL cannot report about itself, because from inside the DLL each of these is a legal state:
@@ -17,11 +17,11 @@ DLL cannot report about itself, because from inside the DLL each of these is a l
   enabled but draws frozen       the overlay is on and the Present hook is not calling us
   targets but no routes/arrows   the roster works and the navmesh chain does not
   routes but zero segments       routes exist and every one projects off-screen
-  navmesh refuses persistently   a refusal is normal ONCE; the same one forever is not
+  navmesh refuses persistently   a refusal is normal once; the same one forever is not
   key pressed, no toggle line    the input read never saw it -- the feature is unreachable
   crash log grew                 something faulted; the invasion log just stops
 
-THE STOP CONDITION IS THE GAME EXITING, not a timer. Wait slices are 30s or less and every
+The stop condition is the game exiting, not a timer. Wait slices are 30s or less and every
 one of them re-checks the process, so this can never outlive the session it is watching and
 never sleeps. Pass `--launcher-pid` (the me3 pid `er-run-branch.py` prints) to get that;
 without it the watch runs until interrupted, which is the honest fallback rather than a
@@ -54,7 +54,7 @@ SLICE_SECONDS = 30.0
 
 PATH_LOG = "er-invasion-path.log"
 # Echoed, not judged. `er-invasion-warp` is what puts another player in front of you, so when the
-# route overlay has nobody to draw to, the answer is in ITS log and not in this one -- and the
+# route overlay has nobody to draw to, the answer is in its log and not in this one -- and the
 # reader would otherwise have to guess which of the two features failed.
 COMPANION_LOGS = ("er-invasion-warp.log",)
 # er-crash-logging's artifacts. Growth in any of them outranks everything else in this file:
@@ -166,7 +166,7 @@ def parse_status(line: str) -> Status | None:
 
 
 def judge_lines(lines: list[str], verdict: Verdict, previous: Status | None) -> tuple[list[dict], Status | None]:
-    """Apply every rule to a batch of new lines. Returns the findings raised by THIS batch."""
+    """Apply every rule to a batch of new lines. Returns the findings raised by this batch."""
     raised: list[dict] = []
 
     def raise_(level: str, rule: str, detail: str) -> None:
@@ -187,7 +187,7 @@ def judge_lines(lines: list[str], verdict: Verdict, previous: Status | None) -> 
             name = refusal.group("refusal")
             verdict.refusals[name] = verdict.refusals.get(name, 0) + 1
             # One refusal is the engine saying "not now" -- a shared request ring, a target in an
-            # unstreamed section. Five of the SAME one is the chain never answering.
+            # unstreamed section. Five of the same one is the chain never answering.
             if verdict.refusals[name] == 5:
                 raise_(
                     "DEFECT",
@@ -240,7 +240,7 @@ def judge_lines(lines: list[str], verdict: Verdict, previous: Status | None) -> 
                 "route request",
             )
 
-        # NOT `routes_found` -- that is a LIFETIME `fetch_add` (lib.rs:488) and `last_segments` is
+        # Not `routes_found` -- that is a lifetime `fetch_add` (lib.rs:488) and `last_segments` is
         # a single frame (render.rs:147), so comparing them says only "a route was found at some
         # point and this one frame drew nothing", which is true of every working session the moment
         # the player looks away. Both sides of this comparison are live: `tracked_targets` is
@@ -248,7 +248,7 @@ def judge_lines(lines: list[str], verdict: Verdict, previous: Status | None) -> 
         #
         # WARN, not DEFECT: `LAST_SEGMENTS` is also zeroed when the snapshot slot is empty
         # (render.rs:80) and when the camera singleton is not up (render.rs:89), and every tracked
-        # target being inside `near_suppress_meters` draws nothing BY DESIGN. Two consecutive
+        # target being inside `near_suppress_meters` draws nothing by design. Two consecutive
         # status lines ~10s apart rules out a blink, not those three.
         if (
             previous is not None
@@ -274,7 +274,7 @@ def judge_lines(lines: list[str], verdict: Verdict, previous: Status | None) -> 
     return raised, previous
 
 
-# The fields er-crash-logging writes per record. Naming the SITE in the verdict is the whole point
+# The fields er-crash-logging writes per record. Naming the site in the verdict is the whole point
 # of an A/B: "the crash log grew" is the same sentence for a different crash, and reading two files
 # by hand to notice `exception_address` changed is exactly the comparison a reader gets wrong.
 FAULT_FIELDS = ("exception_label", "exception_code", "exception_address", "fatal", "thread_id")
@@ -336,7 +336,7 @@ def summarize(verdict: Verdict, reason: str) -> int:
         print(f"  navmesh refusals  {verdict.refusals}", flush=True)
 
     if verdict.toggles == 0 and verdict.statuses > 0:
-        # Not a DEFECT on its own -- nobody may have pressed the key. Said plainly so the reader
+        # Not a defect on its own -- nobody may have pressed the key. Said plainly so the reader
         # does not read "no findings" as "the feature was exercised".
         print(
             "\n  NOTE  the overlay was never toggled on during this watch, so every rule that\n"
@@ -367,8 +367,8 @@ def watch(game_dir: Path, launcher_pid: int | None, once: bool) -> int:
     verdict = Verdict()
     previous: Status | None = None
     offset = 0
-    # START AT EOF, not at 0. A companion log is single-slot and survives between runs, so opening
-    # it at offset 0 replays the PREVIOUS run's entire history stamped with the current clock --
+    # Start at EOF, not at 0. A companion log is single-slot and survives between runs, so opening
+    # it at offset 0 replays the previous run's entire history stamped with the current clock --
     # which reads as "this DLL is running right now" for a DLL that is not even loaded. That is the
     # exact false positive an A/B cannot afford: the run withheld er_invasion_warp and the watcher
     # printed its whole map-inject sequence anyway.

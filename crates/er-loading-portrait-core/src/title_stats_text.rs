@@ -54,7 +54,7 @@ const TITLE_STATS_LABELS: [&str; STATS_ATTR_COUNT] =
 const TITLE_STATS_VALUE_COLORS: [&str; STATS_ATTR_COUNT] = [
     "#e0736b", // VIG - red
     "#6fb4e0", // MND - blue
-    "#7fc27a", // END - green
+    "#7fc27a", // end - green
     "#e0973f", // STR - orange
     "#d7d06a", // DEX - yellow
     "#79cfe0", // INT - cyan
@@ -143,7 +143,7 @@ fn build_title_stats_html_utf16_with(
 
 /// Which of a ProfileSelect row's fields should be on screen.
 ///
-/// This must name EVERY field any row kind writes, not just the native per-slot ones. The row clips
+/// This must name every field any row kind writes, not just the native per-slot ones. The row clips
 /// are recycled between the character-slot list, the file-browse list and the drive list, so a field
 /// that one kind writes and another never mentions keeps the first kind's text. That is not
 /// hypothetical: the attribute line (`ErCharStats`) written on character rows reappeared over the
@@ -178,7 +178,7 @@ pub struct RowSlotFieldVisibility {
 
 impl RowSlotFieldVisibility {
     /// What a row the picker does not own gets: the game's own per-slot fields, plus our attribute
-    /// line, and explicitly NOT the browse/drive text.
+    /// line, and explicitly not the browse/drive text.
     ///
     /// `er_stats` and `drive_cells` are false here on purpose. They are the fields the file and
     /// drive lists write, and stating them false is the only thing that stops those lists' text
@@ -198,7 +198,7 @@ impl RowSlotFieldVisibility {
     /// string in `PlayerName` (see `profile_row_label`), so the separate `Level` FMG caption and
     /// level value must go.
     ///
-    /// This is a DISTINCT constant rather than a change to [`Self::NATIVE`] on purpose. The row
+    /// This is a distinct constant rather than a change to [`Self::NATIVE`] on purpose. The row
     /// pass only applies visibility when the wanted state differs from `NATIVE` (or when a row was
     /// previously hidden), so flipping `NATIVE.level` to false would make the wanted state equal
     /// `NATIVE` again and skip the very pass that has to hide the fields -- the caption would
@@ -208,7 +208,7 @@ impl RowSlotFieldVisibility {
     ///
     /// Every other field matches `NATIVE`: this is a character row, so it still denies the browse
     /// and drive text that would otherwise survive onto a recycled clip.
-    /// `play_time` is false here for a LAYOUT reason, not a data one (user 2026-08-07): the row's
+    /// `play_time` is false here for a layout reason, not a data one (user 2026-08-07): the row's
     /// bottom-right play-time box overlaps the top-right `Location` box, so as long as it is drawn,
     /// `Location` cannot be widened past it and long place names clip. Dropping the play-time frees
     /// that whole band for the location, which is the field the user actually reads. A row that
@@ -371,7 +371,7 @@ mod tests {
         assert!(cells[2..].iter().all(|visible| !*visible));
     }
 
-    /// Dropping a row's unsourceable location must drop ONLY that field. A merged row still owes the
+    /// Dropping a row's unsourceable location must drop only that field. A merged row still owes the
     /// same statement about every other field, or the browse/drive text it denies starts surviving
     /// onto it -- the recycled-clip leak this struct exists to prevent.
     #[test]
@@ -387,7 +387,7 @@ mod tests {
             },
             with
         );
-        // And it is still distinguishable from NATIVE, so the visibility pass fires for it.
+        // And it is still distinguishable from native, so the visibility pass fires for it.
         assert_ne!(without, RowSlotFieldVisibility::NATIVE);
     }
 
@@ -414,7 +414,7 @@ mod tests {
         assert!(native.level && !browse.level && !drive.level);
         assert!(native.play_time && !browse.play_time && !drive.play_time);
 
-        // Every picker kind differs from NATIVE, so the visibility pass fires on its first row.
+        // Every picker kind differs from native, so the visibility pass fires on its first row.
         assert_ne!(native, browse);
         assert_ne!(native, drive);
         assert_ne!(browse, drive);

@@ -1,6 +1,6 @@
 //! Noticing that a config file changed, while the game is running.
 //!
-//! # Why the file's TEXT and not its mtime
+//! # Why the file's text and not its mtime
 //!
 //! The obvious cheap check is the modification time, and this workspace used it twice. It has a
 //! resolution problem: several filesystems -- and every network/VM share a Wine prefix is likely to
@@ -102,7 +102,7 @@ impl HotFile {
         (self.polls, self.reads, self.changes)
     }
 
-    /// Adopt text this process just WROTE, so the write is not reported back as somebody's edit.
+    /// Adopt text this process just wrote, so the write is not reported back as somebody's edit.
     ///
     /// Several of these DLLs rewrite their own config -- a mark key appending to a list, a stack
     /// edit rewriting a line. Without this the next poll sees text it has not seen before and
@@ -113,7 +113,7 @@ impl HotFile {
 
     /// The decision, with the clock and the read injected.
     ///
-    /// `read` is called ONLY when the interval has elapsed, so a caller polling every frame pays
+    /// `read` is called only when the interval has elapsed, so a caller polling every frame pays
     /// one comparison. It returns `None` for a file that could not be read at all.
     pub fn poll_with(
         &mut self,
@@ -235,7 +235,7 @@ mod tests {
     }
 
     /// A file that has never existed is not a change, and must not be reported once a second
-    /// forever. A file that existed and then vanished IS one.
+    /// forever. A file that existed and then vanished is one.
     #[test]
     fn a_missing_file_is_only_a_change_if_it_used_to_be_there() {
         let mut hot = HotFile::with_interval("er-test.toml", 0);

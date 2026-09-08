@@ -44,7 +44,7 @@ def main():
         if rm in (4, 5):  # SIB or RIP form -> base not a plain reg
             continue
         va = BASE + (i - 1)
-        # look back for a RIP-rel load of GAMEMAN_GLOBAL into ANY reg within WINDOW
+        # look back for a RIP-rel load of GAMEMAN_GLOBAL into any reg within window
         gm_load = None
         for j in range(max(0, i - 1 - WINDOW), i - 1):
             r = rip_load_target(data, j)

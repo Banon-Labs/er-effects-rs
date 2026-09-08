@@ -1,4 +1,4 @@
-//! THE LIVE SIDE: read the creature's size, patch a free `LockCamParam` row, and point
+//! The live SIDE: read the creature's size, patch a free `LockCamParam` row, and point
 //! `ChrExFollowCam+0x468` at it. Everything reversible, everything reversed on release.
 //!
 //! # It resolves no game address and installs no detour
@@ -8,15 +8,15 @@
 //! construction, there is no RVA to go stale) or a struct-field offset out of
 //! [`crate::camera::layout`]. There is no call, no prologue, no hook.
 //!
-//! It IS the first layer of this crate to write a param row, which is a different kind of write
+//! It is the first layer of this crate to write a param row, which is a different kind of write
 //! from a struct field -- see `scripts/me3-dll-conflicts.toml` for why that is still co-loadable.
 //!
 //! # Why patching the row is the mechanism, rather than writing camera state
 //!
-//! `CS::ChrExFollowCam::ApplyZoomLerp` (1.17 `0x1403b7570`) runs EVERY frame from
+//! `CS::ChrExFollowCam::ApplyZoomLerp` (1.17 `0x1403b7570`) runs every frame from
 //! `ChrExFollowCam::Update`, calls `LookupLockCamParam` afresh each time, and re-derives distance,
 //! pivot height, pitch minimum, FOV and chase rate from the row it gets back. Writing the derived
-//! camera state directly would be overwritten before the next frame drew; writing the ROW is read
+//! camera state directly would be overwritten before the next frame drew; writing the row is read
 //! by the same code every frame with no fight and no per-frame work of ours. That the lookup is
 //! per-frame is also what makes the patch live: there is no load-time copy to miss.
 //!
@@ -24,11 +24,11 @@
 //!
 //! * **A missing row id is worse than no override.** `LookupLockCamParam` returns a NULL row for
 //!   an id that is not in the table, and `ApplyZoomLerp` then does *nothing at all* -- the camera
-//!   freezes at whatever it was last frame, no crash, no fallback. So the row is looked up BEFORE
+//!   freezes at whatever it was last frame, no crash, no fallback. So the row is looked up before
 //!   `+0x468` is written, and a missing one refuses.
 //! * **A row somebody else uses.** Patching a row that a `NpcParam.lockCameraParamId` or
 //!   `RideParam.rideCamParamId` names would move that character's camera too. The check is done
-//!   against the LIVE regulation rather than a table generated offline, so a player running a
+//!   against the live regulation rather than a table generated offline, so a player running a
 //!   regulation mod gets a refusal naming the row instead of a silently wrong camera.
 //! * **A rebuilt `ChrExFollowCam`.** The constructor writes `+0x464|+0x468 = -1`, so a camera
 //!   rebuilt mid-possession (a warp, a map load) would silently drop the override.
@@ -51,11 +51,11 @@ use crate::log::possess_log;
 use crate::possess::layout::{chr_ins, modules};
 use crate::settings::CameraSettings;
 
-/// COMPILE-TIME CROSS-CHECK, same idea as [`crate::possess::game`]'s.
+/// Compile-time cross-check, same idea as [`crate::possess::game`]'s.
 ///
 /// `ChrCam.chrExFollowCam` is a private field in the crate, so it cannot be named by
 /// `offset_of!`. It is the field immediately after `ChrCam`'s `CSPersCam` superclass, though, so
-/// the superclass's size IS its offset -- and that the crate and this table agree on where the
+/// the superclass's size is its offset -- and that the crate and this table agree on where the
 /// follow camera lives is the thing worth failing the build over.
 const _: () = {
     assert!(core::mem::offset_of!(WorldChrMan, chr_cam) == layout::world_chr_man::CHR_CAM);
@@ -76,14 +76,14 @@ struct Installed {
     /// What that slot held before -- `-1` on a camera the game constructed and nothing has
     /// touched, which is every camera, because nothing in the game writes this field.
     original_param_id: i32,
-    /// The patched row's contents before the patch, restored WHOLE rather than field by field:
+    /// The patched row's contents before the patch, restored whole rather than field by field:
     /// the install writes the whole row, so the exact inverse is writing the whole row back.
     original_row: LOCK_CAM_PARAM_ST,
 }
 
 /// One possession's worth of camera adaptation.
 ///
-/// Constructed even when nothing is installed, because the REPORT is the product too: a possession
+/// Constructed even when nothing is installed, because the report is the product too: a possession
 /// whose camera did not change has to say why in the derived file.
 pub(crate) struct Session {
     report: Report,
@@ -109,7 +109,7 @@ impl Session {
         Self::install(chr_ins, chr_id, settings, distance_scale, generation, None)
     }
 
-    /// Re-apply after a config reload MOVED something, so `[camera]` is live the way
+    /// Re-apply after a config reload moved something, so `[camera]` is live the way
     /// `[movement].speed_scale` is: save the file, watch the framing change.
     ///
     /// Rebuilds rather than edits the row in place, because that is the same code path a fresh
@@ -125,7 +125,7 @@ impl Session {
         if settings == self.settings && distance_scale == self.distance_scale {
             return false;
         }
-        // THE BASE ROW IS CARRIED OVER, NOT RE-READ. `ChrExFollowCam+0x460` still holds OUR row id
+        // The base row is carried over, not RE-read. `ChrExFollowCam+0x460` still holds our row id
         // -- `ApplyZoomLerp` will not refresh it until next frame -- so re-reading it would copy
         // the untouched fields out of the row this reload is abandoning. That is invisible while
         // `param_row` stays put (the mirror equals the target and the fallback catches it) and
@@ -180,7 +180,7 @@ impl Session {
         let Some(shape) = shape(height, radius, distance_scale, settings) else {
             return refuse(Refusal::NoHeight);
         };
-        // Resolved BEFORE the row is patched, so the commonest failure needs no rollback.
+        // Resolved before the row is patched, so the commonest failure needs no rollback.
         let Some(follow_cam) = follow_cam(offsets) else {
             return refuse(Refusal::NoFollowCam);
         };
@@ -206,7 +206,7 @@ impl Session {
             return refuse(Refusal::RowInUse(user));
         }
 
-        // The fields the size law does NOT decide -- FOV, the PITCH MINIMUM, the lock vertical
+        // The fields the size law does not decide -- FOV, the pitch minimum, the lock vertical
         // offset, the chase rate, the lock-on radii -- come from whatever row the camera resolved
         // a frame ago rather than from the target row's own values, which belong to some unrelated
         // creature. Row 1000 ships `camFovY = 54.5` and `chrTransChaseRateForNormal = 0.2` against
@@ -215,7 +215,7 @@ impl Session {
         //
         // `rotRangeMinX` is on that list deliberately. It used to be written, lerped towards -15
         // degrees for a large subject on the theory that a tall creature needs more overhead --
-        // but it is the limit on how far BELOW the subject the camera may drop, not above (see
+        // but it is the limit on how far below the subject the camera may drop, not above (see
         // `crate::camera::geometry`), so that bought nothing and cost a shot. Copying it means a
         // map region that narrowed the pitch range keeps its narrowing through a possession.
         let base_row = base_override
@@ -293,7 +293,7 @@ impl Session {
             return true;
         };
         // Both writes land in one call, so no frame can see a half-restored camera. The order is
-        // about which HALF survives a partial failure: with the slot cleared first, a row that
+        // about which half survives a partial failure: with the slot cleared first, a row that
         // will not write back is unreferenced garbage and the camera is already vanilla. The other
         // way round leaves `+0x468` naming a row that now holds the base row's numbers, which is a
         // camera nobody asked for and nothing will fix.
@@ -363,7 +363,7 @@ fn holder_ready<P: SoloParam>(repo: &SoloParamRepository) -> bool {
         .is_some()
 }
 
-/// The row id whose fields the patch is built on: whatever the camera resolved LAST frame, read
+/// The row id whose fields the patch is built on: whatever the camera resolved last frame, read
 /// out of the `ChrExFollowCam+0x460` mirror `ApplyZoomLerp` writes for free.
 ///
 /// Falls back to the player row when the mirror is unreadable, negative, or -- the case that
@@ -377,7 +377,7 @@ fn base_row(follow_cam: usize, offsets: Offsets, target: u32) -> u32 {
     }
 }
 
-/// The first param row in the LIVE regulation that names `row`, or `None` when it is free.
+/// The first param row in the live regulation that names `row`, or `None` when it is free.
 ///
 /// `NpcParam.lockCameraParamId` and `RideParam.rideCamParamId` are the only two fields in any of
 /// the 179 paramdefs that reference a `LockCamParam` id, so these two scans are the whole search.
@@ -429,14 +429,14 @@ fn follow_cam(offsets: Offsets) -> Option<usize> {
     unsafe { er_game_base::mem::is_heap_aligned_ptr(follow) }.then_some(follow)
 }
 
-/// WHERE THE PLAYER IS LOOKING: the camera's own yaw, or `None` when the camera is not up.
+/// Where the player is LOOKING: the camera's own yaw, or `None` when the camera is not up.
 ///
 /// One `f32` at `ChrExFollowCam+0x154 anglesEuler.y`, which the engine derives as
 /// `atan2(look.x, look.z)` -- see [`layout::chr_ex_follow_cam::ANGLES_EULER_YAW`] for the four
 /// lines of `Update` that compute it and the byte window that pins it on both builds. This layer
 /// still resolves no game function address.
 ///
-/// **The sign is NOT a character heading.** A body facing this direction has yaw
+/// **The sign is not a character heading.** A body facing this direction has yaw
 /// `anglesEuler.y + PI`; [`crate::possess::intent::aim`] is the only place that conversion is
 /// made, so there is one copy of it.
 ///
@@ -446,7 +446,7 @@ fn follow_cam(offsets: Offsets) -> Option<usize> {
 /// camera is aimed at, and a held lock is what moves that point. So "where the camera looks"
 /// already points at the locked target, which is why [`crate::possess::intent::aim`] treats the
 /// camera as the always-available answer and the subject's own `ChrIns+0xd0 lockOnTargetPos` as a
-/// REFINEMENT it accepts only when the two agree.
+/// refinement it accepts only when the two agree.
 pub(crate) fn look_yaw() -> Option<f32> {
     let offsets = layout::offsets(game_file_version())?;
     let follow_cam = follow_cam(offsets)?;

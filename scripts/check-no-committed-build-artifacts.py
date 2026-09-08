@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail if any build output is tracked in git.
 
-WHY THIS EXISTS. `.gitignore` opened with a root-anchored `/target`, which ignores
+Why this exists. `.gitignore` opened with a root-anchored `/target`, which ignores
 only the workspace's own build directory. A cargo project nested anywhere else --
 `scripts/oodle-dcx-probe/` was the first -- has its `target/` completely unignored,
 so `git add -A` sweeps the whole build in. That is exactly how 19 files and 6.5 MB
@@ -10,7 +10,7 @@ of `.exe`/`.pdb`/fingerprint state reached main, and nothing in `check.sh` looke
 The ignore rule is fixed (`target/`, unanchored, matches at any depth), but an
 ignore rule only stops files that are not already tracked: git keeps updating a
 tracked path even when a later rule would ignore it. So this check is the part that
-actually holds -- it reads the INDEX, not the working tree.
+actually holds -- it reads the index, not the working tree.
 
 Two independent rules, because either alone has a blind spot:
   1. no tracked path may sit under a directory named `target`
@@ -26,14 +26,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Compiler/linker output. Deliberately NOT `.bin` or `.dcx` -- this repo has
+# Compiler/linker output. Deliberately not `.bin` or `.dcx` -- this repo has
 # legitimate reasons to discuss those, and game assets are covered by their own rule
 # in AGENTS.md.
 BINARY_SUFFIXES = {".exe", ".pdb", ".dll", ".so", ".dylib", ".a", ".lib", ".obj", ".o", ".rlib"}
 
-# A directory named `target` is NOT enough: a crate may legitimately be called
+# A directory named `target` is not enough: a crate may legitimately be called
 # `target` (`crates/target/src/lib.rs` is source, not build output). What identifies
-# a cargo build directory is what sits directly INSIDE it, so require that.
+# a cargo build directory is what sits directly inside it, so require that.
 BUILD_DIR_CHILDREN = {"debug", "release", "CACHEDIR.TAG", ".rustc_info.json", "package", "doc"}
 TARGET_TRIPLE_MARKERS = ("-pc-windows-", "-unknown-linux-", "-apple-darwin", "-unknown-none")
 
@@ -105,8 +105,8 @@ def selftest() -> None:
         "scripts/oodle-dcx-probe/target/CACHEDIR.TAG",
         "scripts/oodle-dcx-probe/target/x86_64-pc-windows-msvc/release/a.pdb",
     ], build
-    # Must NOT match: `target_resolver.rs` is a substring, not a path component, and
-    # `crates/target/` is a crate NAMED target whose child is `src` -- source, not a
+    # Must not match: `target_resolver.rs` is a substring, not a path component, and
+    # `crates/target/` is a crate named target whose child is `src` -- source, not a
     # build directory. Both were live false positives in this checker's first draft.
     assert binary == ["tools/prebuilt/helper.pdb"], binary
     print(

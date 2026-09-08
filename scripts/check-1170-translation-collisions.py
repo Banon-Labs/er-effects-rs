@@ -1,41 +1,41 @@
 #!/usr/bin/env python3
-"""Refuse a 1.16.2 -> 1.17 row whose DESTINATION is also some other row's SOURCE.
+"""Refuse a 1.16.2 -> 1.17 row whose destination is also some other row's source.
 
-WHAT GOES WRONG, in the one sentence that matters
+What goes wrong, in the one sentence that matters
 -------------------------------------------------
-Translating an address twice does not fail. It SUCCEEDS, and returns a third, unrelated
+Translating an address twice does not fail. It succeeds, and returns a third, unrelated
 function.
 
 `er-game-base/build.rs` emits a table keyed by 1.16.2 RVA whose values are 1.17 RVAs. Given a
 bare address the table cannot tell which side of the arrow it came from -- an address is just an
-address. So if `A -> B` is a row and `B -> C` is ALSO a row, then resolving A gives B (correct),
+address. So if `A -> B` is a row and `B -> C` is also a row, then resolving A gives B (correct),
 and resolving B gives C (wrong, and silent). No error, no log line, no refusal: the second lookup
 hits a real entry and hands back a confident answer for a function nobody asked about. A detour
 installed on C writes five bytes into an unrelated live body; a call through C enters it.
 
-MEASURED, 2026-08-30. `er-reload-trace`'s `native_submit_7ac890` resolved `0x7ac890 -> 0x7ad710`
-through `register_shared_hook`, which handed the RESOLVED address to the product's union register,
+Measured, 2026-08-30. `er-reload-trace`'s `native_submit_7ac890` resolved `0x7ac890 -> 0x7ad710`
+through `register_shared_hook`, which handed the resolved address to the product's union register,
 which resolved again -- and `0x7ad710` is itself a tracked source, `-> 0x7ae590`. Both rows are
 verdict-clean (`BYTE-IDENTICAL`, `BOTH-ENTRIES`), so nothing anywhere had a reason to complain.
-That call path has since been restructured so the address travels UNRESOLVED and each branch
+That call path has since been restructured so the address travels unresolved and each branch
 resolves exactly once, and `register_shared_hook_resolved` was deleted. Nothing prevents the next
 row from recreating the shape, which is what this is for.
 
-HOW A COLLISION IS BORN, and it is not by accident
+How a collision is born, and it is not by accident
 --------------------------------------------------
 All three collisions in the tree share one provenance. Their second row's `constant` column reads
 `(refused at runtime 0x<its own source>)` -- somebody read `ADDRESS REFUSED ... 0x7ad710` out of a
-game log and added a mapping for it. But that refusal was the SYMPTOM of a double resolve: the
+game log and added a mapping for it. But that refusal was the symptom of a double resolve: the
 address was refused because it is a 1.17 destination, and destinations are not keys. Adding the
 row did not fix the refusal, it converted a loud refusal into a silent misroute -- exactly the
 trade this repo refuses everywhere else, since a missing address costs a feature and a confident
 wrong one corrupts.
 
 So the gate calls that provenance out by name, and reports whether anything in `crates/` actually
-declares the address -- through `scripts/rva_symbols.py`, which resolves VALUES rather than
+declares the address -- through `scripts/rva_symbols.py`, which resolves values rather than
 searching for a spelling.
 
-IT USED TO SEARCH FOR A SPELLING, AND THAT ADVICE WAS DESTRUCTIVE (fixed 2026-08-30)
+It used to search for a spelling, and that advice was destructive (fixed 2026-08-30)
 ------------------------------------------------------------------------------------
 The test was `grep -E "const [A-Z0-9_]+: *usize *= *0x<addr>;"` over `crates/`, and a miss printed
 "row B is claimed by no feature: deleting it removes this collision at zero cost." For 0xb0d400
@@ -49,50 +49,50 @@ Following this gate's own remediation line would have deleted a working feature'
 Two things changed. The question is now asked of a resolver that evaluates every declaration form
 this tree uses -- literal consts and statics, enum discriminants, `use X as Y` aliases,
 `const A = path::B` indirection, module-qualified names, arrays, `Range` bands, and bare hex
-literals in table fields. And the ANSWER now has three values, not two: CLAIMED, PROVEN UNCLAIMED,
-and NOT PROVEN. Only the second may license a deletion. "I found no reference" and "there is no
+literals in table fields. And the answer now has three values, not two: Claimed, proven UNCLAIMED,
+and not proven. Only the second may license a deletion. "I found no reference" and "there is no
 reference" are different facts, and printing them as the same sentence is what made a silent gate
 into a destructive one.
 
-WHAT IS AND IS NOT A COLLISION
+What is and is not a collision
 ------------------------------
 Fatal shape -- `A -> B` with `A != B`, and `B -> C` with `B != C`. Double resolution yields C.
 
-NOT a collision -- a row that did not move (`X -> X`). It is a destination and a source at once by
+Not a collision -- a row that did not move (`X -> X`). It is a destination and a source at once by
 construction, and both answers are the same address, so a second resolve is idempotent. There are
 22 such rows and flagging them would bury the three that matter. Nor is `A -> B` where the only
 row keyed by B is `B -> B`: the second resolve returns B, which is the right answer.
 
-IS A COLLISION ALWAYS FATAL?
+Is a collision always fatal?
 ----------------------------
 No -- and the gate fails anyway, on purpose. A collision is inert while every address is resolved
 exactly once, because a single resolve of A is simply correct. It becomes wrong the moment any
-path resolves twice, and "resolve exactly once" is a CONVENTION spread across call graphs in six
+path resolves twice, and "resolve exactly once" is a convention spread across call graphs in six
 crates and two DLLs. It has already been violated once, by a helper that looked entirely
 reasonable at its call site. A convention that has been broken once, cannot be seen when it is
 broken, and is one refactor away from breaking again is not a safeguard; it is a hope. The data
 condition is checkable, so it is checked.
 
 The runtime's own mitigation does not close this. `already_translated_in` hands an address back
-untranslated when it is a destination -- but only when it is NOT also a source of a move, because
+untranslated when it is a destination -- but only when it is not also a source of a move, because
 translation has to win for real sources. A collision address is both, so the shortcut declines and
 the table answers. And `game_build.rs`'s doc for `resolve_on_running_build` states the opposite
-("the only addresses that are BOTH a 1.17 destination and a 1.16.2 source are the ones that did
+("the only addresses that are both a 1.17 destination and a 1.16.2 source are the ones that did
 not move"), citing `verified_map_is_idempotent` as its enforcement -- a test that filters to rows
 where `from != moved` and then asks a predicate that requires `from == moved`, so it is a tautology
 that cannot fail. There is no existing machine check for this. That is why this file exists.
 
-WHY THE RULES ARE PARSED OUT OF `build.rs` AND NOT COPIED
+Why the rules are PARSED out of `build.rs` and not copied
 ---------------------------------------------------------
 Because copying them is a defect this repo has committed twice in one day. A sibling simulator
 mirrored a stale `EXHAUSTIVE_VERDICTS` and reported the detour table as 42 rows instead of 374, a
 confident number wrong by nine-fold; another gate still string-compares `"IDENTICAL"` while
 `build.rs` carries three exhaustive verdicts. So every admission rule, every field index, every
-ledger path and the `DIVERGES` literal are READ from `build.rs` at run time. If its shape changes
-so the parse fails -- or if it grows a table constant this file does not model -- the gate REFUSES
+ledger path and the `DIVERGES` literal are read from `build.rs` at run time. If its shape changes
+so the parse fails -- or if it grows a table constant this file does not model -- the gate refuses
 rather than reporting a collision count it cannot stand behind.
 
-BASELINE
+Baseline
 --------
 `scripts/1170-translation-collisions.baseline.tsv` records the collisions that have been looked at.
 A collision that is not in it, or a baselined one that reaches a table it did not reach before,
@@ -100,10 +100,10 @@ fails the run. Baselined ones are printed in full on every run -- an allowlist t
 contents is how this class stays invisible. `--strict` ignores the baseline entirely and is the
 mode to run once a collision has actually been cleared from the ledgers.
 
-PROVEN UNCLAIMED IS NOT A DELETION LICENCE (2026-08-30, the SECOND correction)
+Proven UNCLAIMED is not a deletion licence (2026-08-30, the second correction)
 ------------------------------------------------------------------------------
 `rva_symbols` can now evaluate every address-capable declaration in `crates/`, so all three
-baselined addresses come back PROVEN unclaimed. That is a fact about this repo's SOURCE, and this
+baselined addresses come back proven unclaimed. That is a fact about this repo's source, and this
 gate used to turn it straight into "deleting it removes this collision at zero cost." It must not,
 for two reasons the resolver cannot see:
 
@@ -111,20 +111,20 @@ for two reasons the resolver cannot see:
     constant, read out of a live vtable, recovered from a call site. Not hypothetical:
     `docs/recon/rva-1170-observed-refusals.txt` exists because 42 of the 54 addresses the running
     game asked for on 2026-08-29 were invisible to a declaration scan;
-  * DELETING THE ROW DOES NOT MAKE A LATER REQUEST FAIL LOUDLY. With row B gone its source is a
+  * Deleting the row does not make a later request fail loudly. With row B gone its source is a
     destination and no longer a source, so `already_translated_in` claims it and
-    `resolve_on_running_build` hands the address BACK UNTRANSLATED -- no refusal, no log line --
-    and on 1.17 that address is a DIFFERENT function. `deletion_failure_mode` computes this per row
+    `resolve_on_running_build` hands the address back UNTRANSLATED -- no refusal, no log line --
+    and on 1.17 that address is a different function. `deletion_failure_mode` computes this per row
     from the tables and prints it, because "if I am wrong the failure is loud" is the assumption
     the delete-it advice rested on, and for this shape it is false.
 
-So the PROVEN branch reports what is proven and what is still owed, and NO branch may print a
+So the proven branch reports what is proven and what is still owed, and no branch may print a
 sentence this file's own `COSTLESS_CLAIM` / `DELETION_ADVICE` detectors would refuse in a baseline
 note -- the gate held notes to a standard its own prose did not meet. What actually settles a row
 is a RUN: the log must show the address arriving only as some other row's translated output, never
 as a first request. For all three baselined rows it does; the evidence is in the baseline notes.
 
-USAGE
+Usage
     python3 scripts/check-1170-translation-collisions.py            # gate mode
     python3 scripts/check-1170-translation-collisions.py --strict   # no baseline
     python3 scripts/check-1170-translation-collisions.py --list     # every collision, verbose
@@ -155,7 +155,7 @@ BASELINE = os.path.join(ROOT, "scripts", "1170-translation-collisions.baseline.t
 BASE = 0x140000000
 
 # The table constants in `build.rs` and the job each one does in `emit_address_map`. Parsing tells
-# us WHERE the files are; this says what they MEAN, which is structure and cannot be read off a
+# us where the files are; this says what they mean, which is structure and cannot be read off a
 # string literal. A constant that appears in build.rs and is not here (and is not inert) stops the
 # run: a table this file does not model is a table whose collisions it cannot see, and reporting
 # "0 collisions" over a partial view is the failure mode the whole file is about.
@@ -203,9 +203,9 @@ def build_rules(path=BUILD_RS):
     with open(path, encoding="utf-8") as handle:
         text = handle.read()
 
-    # Only the TABLE constants: build.rs also declares plain string constants (`SHA_LENGTH`,
+    # Only the table constants: build.rs also declares plain string constants (`SHA_LENGTH`,
     # `UNKNOWN`) that are not ledgers. A path ending in `.tsv` is what a ledger constant looks
-    # like, and a NEW one appearing is exactly the drift this must not sleep through.
+    # like, and a new one appearing is exactly the drift this must not sleep through.
     declared = dict(re.findall(r'const (\w+): &str = "([^"]*\.tsv)";', text))
     # `let _ = NAME;` is build.rs's own way of saying a constant is declared but not read
     # (AUDITED_DETOURS, kept as a reading aid after it was unwired). Not modelling an unread
@@ -250,7 +250,7 @@ def build_rules(path=BUILD_RS):
                 ).group(1),
             )
         ),
-        # The SECOND floor-exempt class: verdicts where the bodies differ and the patch site does
+        # The second floor-exempt class: verdicts where the bodies differ and the patch site does
         # not. Read with `_one`, so a rename empties nothing quietly -- it stops the gate. A gate
         # that silently forgot this class would under-report the detour table, which is the safe
         # direction and still drift.
@@ -264,7 +264,7 @@ def build_rules(path=BUILD_RS):
                 ).group(1),
             )
         ),
-        # The CALL-ONLY class, and the only place the two maps take different rows from the SAME
+        # The call-only class, and the only place the two maps take different rows from the same
         # table. Read with `_one` like the rest, so losing it stops the gate rather than quietly
         # reverting the model to the world before the split -- which is precisely the drift this
         # gate caught in itself on 2026-08-30, reporting `CALL modelled 497 vs generated 499`.
@@ -288,7 +288,7 @@ def build_rules(path=BUILD_RS):
                 ).group(1),
             )
         ),
-        # The PREFIX verdict, held to the floor. Spelled out in a match arm, not a constant --
+        # The prefix verdict, held to the floor. Spelled out in a match arm, not a constant --
         # which is exactly why another gate is stale on it today.
         "prefix_verdict": _one(
             r'\n\s+"([A-Z-]+)" => \{', body, "the prefix verdict match arm"
@@ -379,7 +379,7 @@ def _verdict_rows(path, rules):
 
 
 def _callable_only_rows(path, rules):
-    """`callable_only_pairs`: rows a verdict table gives the CALL map and no other.
+    """`callable_only_pairs`: rows a verdict table gives the call map and no other.
 
     Its own reader beside `_verdict_rows`, mirroring the two separate functions in `build.rs` --
     the detour model must not be able to pick these up by sharing a code path with them.
@@ -404,7 +404,7 @@ def _callable_only_rows(path, rules):
 
 
 def _refuted(path, rules):
-    """Sources a verdict table positively disagrees with. Subtracted from BOTH maps."""
+    """Sources a verdict table positively disagrees with. Subtracted from both maps."""
     out = set()
     for _, line in _lines(path):
         fields = line.split("\t")
@@ -453,9 +453,9 @@ def _finish(rows, held_back):
 def emit(rules):
     """`{CALL: [Row], DETOUR: [Row]}` -- what `emit_address_map` writes, with provenance."""
     paths = rules["paths"]
-    # DETOUR is taken from the detourable rows alone, and taken FIRST. `list(call)` was right only
-    # while the two seeds were the same set; since the CALL-only verdict exists they are not, and
-    # copying `call` after the extend below would hand every CALL-only row a detour licence.
+    # Detour is taken from the detourable rows alone, and taken first. `list(call)` was right only
+    # while the two seeds were the same set; since the call-only verdict exists they are not, and
+    # copying `call` after the extend below would hand every call-only row a detour licence.
     detour = _verdict_rows(paths["VERIFIED_MAP"], rules) + _verdict_rows(
         paths["NEEDED_VERIFIED_MAP"], rules
     )
@@ -505,7 +505,7 @@ def collisions(tables):
     """Every double-resolve triple, over every ordered pair of tables a caller might use.
 
     Both orders and both tables, because the resolvers are separate functions over separate
-    tables: `resolve_game_address` reads the CALL map and `resolve_detour_address` the DETOUR
+    tables: `resolve_game_address` reads the call map and `resolve_detour_address` the detour
     map. The path that bit resolved through one and then the other, so checking each table
     against itself would have missed it.
     """
@@ -529,12 +529,12 @@ def collisions(tables):
     return sorted(found.values(), key=lambda c: c.key())
 
 
-# THE MATCHER THIS REPLACED, frozen as a LITERAL so the selftest's controls keep meaning what
+# The MATCHER this replaced, frozen as a literal so the selftest's controls keep meaning what
 # they say. Until 2026-08-30 the question "does anything claim this address" was asked as a text
 # search for `const NAME: usize = 0x<addr>;`, and a miss was reported to the reader as
 # "claimed by no feature: deleting it removes this collision at zero cost."
 #
-# IT WAS WRONG ON A REAL ADDRESS. 0xb0d400 is declared `MenuJobWait = 0x00b0d400` inside
+# It was wrong on a real address. 0xb0d400 is declared `MenuJobWait = 0x00b0d400` inside
 # `#[repr(u32)] pub enum MenuTraceRva`, and reached as
 # `pub const TITLE_MENU_JOB_WAIT_RVA: usize = MenuTraceRva::MenuJobWait as usize;` -- an enum
 # DISCRIMINANT, so the shape this pattern demands never occurs, and its three live uses sit on the
@@ -557,7 +557,7 @@ def claims_on(rva):
 
     Delegates to `scripts/rva_symbols.py`, which is shared with `check-stale-rva-calls.py` rather
     than being a third dialect of the same regex. The result carries `proven_unclaimed`, which is
-    NOT the same fact as "found nothing" and is the only thing that may license a deletion.
+    not the same fact as "found nothing" and is the only thing that may license a deletion.
     """
     try:
         return rva_symbols.index().claims(rva)
@@ -569,8 +569,8 @@ def claims_on(rva):
 def _already_translated_in(pairs, rva):
     """`already_translated_in` from `crates/er-game-base/src/game_build.rs`, on `(src, dst)` pairs.
 
-    Reproduced rather than imported because it is Rust, and reproduced HERE rather than assumed
-    because the whole point below is what the RUNTIME would do with a row this gate suggests
+    Reproduced rather than imported because it is Rust, and reproduced here rather than assumed
+    because the whole point below is what the runtime would do with a row this gate suggests
     removing. Kept byte-for-byte equivalent to that function: a destination of some other row that
     is not itself the source of a move.
     """
@@ -580,17 +580,17 @@ def _already_translated_in(pairs, rva):
 
 
 # What a genuine, first-time request for the collision address would get once row B is gone.
-LOUD = "REFUSED"  # `resolve_on_running_build` logs ADDRESS REFUSED and returns None
+LOUD = "REFUSED"  # `resolve_on_running_build` logs address refused and returns None
 SILENT = "HANDED BACK UNTRANSLATED"  # `already_translated_in` claims it; no log line at all
 STILL_MAPPED = "STILL TRANSLATED"  # another row keys the same source
 
 
 def deletion_failure_mode(tables, collision):
-    """`{table: (kind, address)}` -- what asking for the collision address gets AFTER row B goes.
+    """`{table: (kind, address)}` -- what asking for the collision address gets after row B goes.
 
-    THIS IS THE QUESTION THE OLD "AT ZERO COST" SENTENCE ASSUMED AN ANSWER TO. Deleting a row is
+    This is the question the old "AT ZERO COST" sentence assumed an answer to. Deleting a row is
     only cheap-if-wrong when being wrong is LOUD: a missing address costs a feature and says so.
-    For this exact shape it is not. Row B's source is row A's DESTINATION, so once row B is deleted
+    For this exact shape it is not. Row B's source is row A's destination, so once row B is deleted
     the source is a destination that no row claims as a source -- which is precisely the condition
     `already_translated_in` tests -- and the resolver hands the address straight back with no
     translation, no refusal and no log line. On 1.17 that address is a different function.
@@ -641,18 +641,18 @@ def read_baseline(path=BASELINE):
     return out
 
 
-# A BASELINE NOTE IS ALSO ADVICE, AND IT WAS WRONG FOR MONTHS. All three notes used to end
+# A baseline NOTE is also advice, and it was wrong for months. All three notes used to end
 # "the row carries no feature: delete it from both ledgers" -- copied from the gate's own
 # claimed-by-no-feature line, which was a text search for one spelling. The notes are printed on
 # every run, so a stale one is read far more often than the code that produced it. This refuses a
-# note that advises deletion unless the address is PROVEN unclaimed right now.
+# note that advises deletion unless the address is proven unclaimed right now.
 #
-# TWO detectors, because the two phrases are refused for different reasons and one of them can
+# Two detectors, because the two phrases are refused for different reasons and one of them can
 # never be earned. "Claimed by no feature" is a statement about `crates/`, which `rva_symbols` can
 # settle. "At zero cost" is a statement about the whole system -- source, ledgers and the running
-# game -- and NOTHING in this repo establishes it. It is also false in the specific direction that
+# game -- and nothing in this repo establishes it. It is also false in the specific direction that
 # matters here: see `deletion_failure_mode`, where deleting one of these rows makes a later request
-# for the address silently WRONG rather than loudly refused.
+# for the address silently wrong rather than loudly refused.
 DELETION_ADVICE = re.compile(
     r"carries no feature|claimed by no feature|safe to delete|deleting it removes", re.I
 )
@@ -666,7 +666,7 @@ def unearned_deletion_advice(known, baseline):
 
     * a COSTLESS claim, refused unconditionally -- no check in this repo computes the cost of a
       deletion, and for a collision row the cost of being wrong is a silent misroute;
-    * DELETION advice about an address that is not PROVEN unclaimed -- "I found no reference" read
+    * Deletion advice about an address that is not proven unclaimed -- "I found no reference" read
       as "there is no reference", which is the failure this whole file exists for.
     """
     out = []
@@ -709,7 +709,7 @@ def baseline_line(collision, note):
 # --------------------------------------------------------------------------------------------
 
 # The layers that own address resolution. A `pub` entry point here whose name says its argument is
-# ALREADY resolved is the exact shape that reintroduces a second resolve at a call site where it
+# already resolved is the exact shape that reintroduces a second resolve at a call site where it
 # looks reasonable -- `register_shared_hook_resolved`, deleted 2026-08-30. er-hook keeps
 # `register_union_hook_resolved` private on purpose and says why in its own doc.
 RESOLVE_OWNERS = ("crates/er-hook/src", "crates/er-game-base/src")
@@ -758,10 +758,10 @@ def parse_generated(path):
 
 
 def newest_generated(rules):
-    """A cargo-generated map, only if it is NEWER than every input that feeds it.
+    """A cargo-generated map, only if it is newer than every input that feeds it.
 
     A stale artifact would fail the comparison for a reason that has nothing to do with this
-    gate -- a sibling edited a ledger and has not rebuilt -- so staleness is a SKIP, not a red.
+    gate -- a sibling edited a ledger and has not rebuilt -- so staleness is a skip, not a red.
     """
     candidates = glob.glob(
         os.path.join(ROOT, "target", "**", "build", "er-game-base-*", "out", "address_map_1170.rs"),
@@ -785,7 +785,7 @@ def newest_generated(rules):
 
 
 def describe(collision, out, tables=None):
-    """Print one collision in full. `tables` lets it compute what DELETING row B would do.
+    """Print one collision in full. `tables` lets it compute what deleting row B would do.
 
     Without `tables` the deletion-failure-mode paragraph is replaced by a line saying it could not
     be computed -- never by silence, because its absence is what let the old "at zero cost"
@@ -903,7 +903,7 @@ def describe(collision, out, tables=None):
             file=out,
         )
     else:
-        # "I FOUND NO REFERENCE" AND "THERE IS NO REFERENCE" MUST NOT PRINT THE SAME SENTENCE.
+        # "I FOUND NO REFERENCE" and "THERE IS NO REFERENCE" must not print the same sentence.
         # This branch is the first one, and it recommends nothing. The old gate collapsed the two
         # and told a reader to delete a row on a search that had simply not looked in the right
         # shape.
@@ -1055,7 +1055,7 @@ def selftest():
             failures.append(f"{name}: got {got!r}, want {want!r}")
 
     with tempfile.TemporaryDirectory() as scratch:
-        # THE SHAPE. A -> B and B -> C, both real moves.
+        # The shape. A -> B and B -> C, both real moves.
         build = _synthetic_tree(
             os.path.join(scratch, "collide"),
             [_verdict(0x1000, 0x2000), _verdict(0x2000, 0x3000)],
@@ -1070,14 +1070,14 @@ def selftest():
                 ["DETOUR>DETOUR"],
             )
 
-        # A CLEAN TABLE. Two rows that move, sharing nothing.
+        # A clean table. Two rows that move, sharing nothing.
         build = _synthetic_tree(
             os.path.join(scratch, "clean"),
             [_verdict(0x1000, 0x2000), _verdict(0x4000, 0x5000)],
         )
         check("clean table is clean", collisions(emit(build_rules(build))), [])
 
-        # THE LOOKALIKE THAT IS NOT A COLLISION. `X -> X` is a destination and a source at once,
+        # The LOOKALIKE that is not a collision. `X -> X` is a destination and a source at once,
         # and both answers are the same address, so a second resolve is idempotent.
         build = _synthetic_tree(
             os.path.join(scratch, "identity"),
@@ -1085,8 +1085,8 @@ def selftest():
         )
         check("an identity row alone is not a collision", collisions(emit(build_rules(build))), [])
 
-        # THE HARDER LOOKALIKE. A -> B where the only row keyed by B is `B -> B`: the second
-        # resolve returns B, which is the RIGHT answer. Flagging it would bury the real ones.
+        # The harder LOOKALIKE. A -> B where the only row keyed by B is `B -> B`: the second
+        # resolve returns B, which is the right answer. Flagging it would bury the real ones.
         build = _synthetic_tree(
             os.path.join(scratch, "benign-chain"),
             [_verdict(0x1000, 0x2000), _verdict(0x2000, 0x2000)],
@@ -1097,8 +1097,8 @@ def selftest():
             [],
         )
 
-        # THE CROSS-TABLE PAIRING, driven straight at the rule. `resolve_game_address` reads the
-        # CALL map and `resolve_detour_address` the DETOUR map, and the path that bit went through
+        # The cross-table pairing, driven straight at the rule. `resolve_game_address` reads the
+        # call map and `resolve_detour_address` the detour map, and the path that bit went through
         # one and then the other -- so a chain that starts in one table and lands in the other is
         # the real shape, and checking each table only against itself would miss it.
         crossed = {
@@ -1116,7 +1116,7 @@ def selftest():
             sorted(crossed_found[0].routes) if crossed_found else "nothing found",
             ["CALL>DETOUR"],
         )
-        # ...but a row that did not MOVE still cannot start one, even when the OTHER table keys
+        # ...but a row that did not move still cannot start one, even when the other table keys
         # its address to somewhere else. Nothing was translated by the first lookup, so there is
         # no second translation; that shape is a CALL/DETOUR disagreement, which
         # `every_detour_row_agrees_with_the_call_map` in er-game-base already owns.
@@ -1131,7 +1131,7 @@ def selftest():
             [],
         )
 
-        # THE RULES ARE LIVE, NOT COPIED -- mutation test one. Raise the floor above the row's
+        # The rules are live, not copied -- mutation test one. Raise the floor above the row's
         # instruction count and the row must leave the table, taking the collision with it.
         build = _synthetic_tree(
             os.path.join(scratch, "floor"),
@@ -1152,7 +1152,7 @@ def selftest():
         )
         check("raising MIN_VERIFIED_INSNS in build.rs drops them", collisions(emit(build_rules(build))), [])
 
-        # MUTATION TEST TWO, and the one a sibling already got wrong: shrink EXHAUSTIVE_VERDICTS
+        # Mutation test two, and the one a sibling already got wrong: shrink EXHAUSTIVE_VERDICTS
         # and the rows carrying the removed verdict must disappear. A hard-coded copy would not
         # notice, which is how a detour table got reported as 42 rows instead of 374.
         build = _synthetic_tree(
@@ -1177,7 +1177,7 @@ def selftest():
             [],
         )
 
-        # MUTATION TEST THREE. The PREFIX verdict is spelled in a match arm rather than a
+        # Mutation test three. The prefix verdict is spelled in a match arm rather than a
         # constant, which is exactly why a sibling gate still compares against a stale
         # `"IDENTICAL"`. Rename it in build.rs and the rows carrying the new word must still be
         # admitted; a hard-coded copy would silently drop every one of them.
@@ -1193,7 +1193,7 @@ def selftest():
         check("the prefix verdict is read from the match arm", rules["prefix_verdict"], "PREFIXMATCH")
         check("rows carrying the renamed prefix verdict are still admitted", len(collisions(emit(rules))), 1)
 
-        # REFUSE RATHER THAN GUESS. A table constant the model does not know about must stop the
+        # Refuse rather than guess. A table constant the model does not know about must stop the
         # run, not be silently skipped -- a partial view reporting zero collisions is the whole
         # defect wearing a green tick.
         build = _synthetic_tree(os.path.join(scratch, "unknown"), [])
@@ -1224,7 +1224,7 @@ def selftest():
         except Refuse:
             pass
 
-        # THE TRIPWIRE. A public `*_resolved` entry point in a resolving layer is the shape that
+        # The TRIPWIRE. A public `*_resolved` entry point in a resolving layer is the shape that
         # reintroduces the second resolve.
         owner = os.path.join(scratch, "tripwire", "crates", "er-hook", "src")
         _write(os.path.join(owner, "lib.rs"), "unsafe fn register_union_hook_resolved() {}\n")
@@ -1242,13 +1242,13 @@ def selftest():
         check("a public *_resolved fn is caught", [name for _, _, name in hits], ["register_shared_hook_resolved"])
 
     # ------------------------------------------------------------------------------------
-    # THE CLAIMED-BY-NO-FEATURE TEST. This gate did not merely miss something; it PASSED and
+    # The claimed-by-no-feature test. This gate did not merely miss something; it passed and
     # recommended a destructive action on the strength of a search that had looked in one
     # spelling. Every control below is checked against `legacy_names_the_address` as well: a
-    # control the OLD matcher also catches would pass on the broken gate and prove nothing.
+    # control the old matcher also catches would pass on the broken gate and prove nothing.
     # ------------------------------------------------------------------------------------
 
-    # POSITIVE CONTROL -- an address declared ONLY as an enum discriminant. This is the live case
+    # Positive control -- an address declared only as an enum discriminant. This is the live case
     # (`TITLE_MENU_JOB_WAIT_RVA` / `MenuTraceRva::MenuJobWait`, 0xb0d400, on the autoload path)
     # that the old matcher called unclaimed while telling the reader deleting it cost nothing.
     enum_only = (
@@ -1280,8 +1280,8 @@ def selftest():
             )
             check("...so it is not proven unclaimed", claimed.proven_unclaimed, False)
 
-            # AND THE REMEDIATION LINE MUST CHANGE WITH IT. The failure was not the matcher on its
-            # own; it was the SENTENCE the matcher's silence produced. So the sentence is asserted.
+            # And the remediation line must change with it. The failure was not the matcher on its
+            # own; it was the sentence the matcher's silence produced. So the sentence is asserted.
             import io
 
             spoken = io.StringIO()
@@ -1298,7 +1298,7 @@ def selftest():
             check("...and the declaring symbol is named", "MenuTraceRva::MenuJobWait" in said, True)
             check("...as is the constant that reaches it", "TITLE_MENU_JOB_WAIT_RVA" in said, True)
 
-            # AN ADDRESS NOTHING DECLARES, in a tree the resolver fully understands: PROVEN, and
+            # An address nothing declares, in a tree the resolver fully understands: Proven, and
             # only here may the gate advise a deletion.
             unclaimed = claims_on(0x555000)
             check("an unclaimed address in a resolved tree is PROVEN", unclaimed.proven_unclaimed, True)
@@ -1306,8 +1306,8 @@ def selftest():
             collision = Collision(0x1000, 0x555000, 0x3000)
             collision.rows["first"] = Row(0x1000, 0x555000, "synthetic", 1, "")
             collision.rows["second"] = Row(0x555000, 0x3000, "synthetic", 2, "")
-            # PROVEN must be DISTINGUISHABLE from the other two branches (or the control is
-            # vacuous) and must STILL not license a deletion -- the second correction, 2026-08-30.
+            # Proven must be DISTINGUISHABLE from the other two branches (or the control is
+            # vacuous) and must still not license a deletion -- the second correction, 2026-08-30.
             proven_tables = {
                 CALL: [
                     Row(0x1000, 0x555000, "synthetic", 1, ""),
@@ -1337,7 +1337,7 @@ def selftest():
                 SILENT in proven_said,
                 True,
             )
-            # Called WITHOUT tables, the cost paragraph must be replaced by an admission, never
+            # Called without tables, the cost paragraph must be replaced by an admission, never
             # dropped: its silence is what made "at zero cost" sound finished.
             blind = io.StringIO()
             describe(collision, blind)
@@ -1349,7 +1349,7 @@ def selftest():
         finally:
             rva_symbols.index = saved
 
-    # ...AND WHEN THE RESOLVER CANNOT READ EVERYTHING, THE ADVICE IS WITHHELD. Finding nothing in
+    # ...AND when the RESOLVER cannot read everything, the advice is withheld. Finding nothing in
     # a tree with an unevaluated declaration is "I did not see it", which must not print as "it is
     # not there" -- that collapse is the whole defect.
     with tempfile.TemporaryDirectory() as scratch:
@@ -1383,7 +1383,7 @@ def selftest():
         finally:
             rva_symbols.index = saved
 
-    # THE NOTE IS ADVICE TOO. A baselined note that says a row costs nothing to delete is refused
+    # The NOTE is advice too. A baselined note that says a row costs nothing to delete is refused
     # unless the address is proven unclaimed, because a note outlives the reasoning behind it and
     # is what a reader actually sees.
     noted = Collision(0x1000, 0xB0D400, 0x3000)
@@ -1402,7 +1402,7 @@ def selftest():
         ),
         [],
     )
-    # ...AND A COSTLESS CLAIM IS REFUSED EVEN WHEN THE ADDRESS *IS* PROVEN UNCLAIMED. Nothing in
+    # ...AND A COSTLESS claim is refused even when the address *is* proven UNCLAIMED. Nothing in
     # this repo computes the cost of a deletion, and for this shape the cost of being wrong is a
     # silent misroute, so the phrase can never be earned. 0x555000 is unclaimed in the real tree.
     free = Collision(0x1000, 0x555000, 0x3000)
@@ -1423,7 +1423,7 @@ def selftest():
         True,
     )
 
-    # THE COST OF BEING WRONG, computed rather than assumed. `A -> B` and `B -> C`: delete row B
+    # The cost of being wrong, computed rather than assumed. `A -> B` and `B -> C`: delete row B
     # and B is a destination that no row sources, so `already_translated_in` claims it and the
     # resolver hands it back UNTRANSLATED. That is the silent direction, and it is why "at zero
     # cost" could never be said about one of these rows.
@@ -1434,7 +1434,7 @@ def selftest():
         deletion_failure_mode({CALL: rows, DETOUR: rows}, shape),
         {CALL: (SILENT, 0x2000), DETOUR: (SILENT, 0x2000)},
     )
-    # The control that makes it non-vacuous: an address that is NOT any surviving row's
+    # The control that makes it non-vacuous: an address that is not any surviving row's
     # destination is genuinely refused, which is the loud direction the old advice assumed.
     lone = Collision(0x1000, 0x2000, 0x3000)
     check(
@@ -1458,7 +1458,7 @@ def selftest():
         {CALL: (STILL_MAPPED, 0x4000)},
     )
     # And the reproduction of `already_translated_in` must agree with the Rust on the case the
-    # whole rule turns on: an address that is BOTH a destination and a source is NOT claimed by
+    # whole rule turns on: an address that is both a destination and a source is not claimed by
     # the shortcut, because translation has to win for real sources.
     check(
         "the shortcut declines on an address that is both a destination and a source",
@@ -1476,10 +1476,10 @@ def selftest():
         False,
     )
 
-    # THE LIVE CASE, against the real tree rather than a fixture: 0xb0d400 is claimed today, and
+    # The live case, against the real tree rather than a fixture: 0xb0d400 is claimed today, and
     # the frozen legacy matcher still cannot see it. If this ever fails because the constant was
     # legitimately renamed or retired, pick another enum-discriminant address from
-    # `crates/er-title-flow/src/constants_moved.rs` -- do NOT delete the control, which is the only
+    # `crates/er-title-flow/src/constants_moved.rs` -- do not delete the control, which is the only
     # thing standing between this gate and the advice it used to give.
     live_claims = claims_on(0xB0D400)
     check(
@@ -1497,7 +1497,7 @@ def selftest():
             [],
         )
 
-    # THE CALL/DETOUR SPLIT, driven end to end on a synthetic tree. A CALL-only verdict must reach
+    # The CALL/DETOUR split, driven end to end on a synthetic tree. A call-only verdict must reach
     # one map and not the other, and the control beside it is a detourable row in the same file --
     # without that, a model which simply dropped the whole verified table would pass the first
     # assertion and be wrong about everything.
@@ -1529,7 +1529,7 @@ def selftest():
             ),
             (True, True),
         )
-        # And the negative control on the RULE rather than on the row: with the CALL-only
+        # And the negative control on the rule rather than on the row: with the call-only
         # vocabulary spelled differently in build.rs, the same table admits the row nowhere. A
         # model that had hard-coded the verdict word would still admit it and pass above.
         renamed = _synthetic_tree(
@@ -1615,7 +1615,7 @@ def main():
                 name: [Row(src, dst, generated_path, 0, "") for src, dst in generated[name]]
                 for name in (CALL, DETOUR)
             }
-            # Routes count, not just the triples: which TABLE carries a collision decides whether
+            # Routes count, not just the triples: which table carries a collision decides whether
             # it can misplace a detour, and it is what the baseline's escalation check compares.
             def fingerprint(rows):
                 return [(c.key(), sorted(c.routes)) for c in collisions(rows)]

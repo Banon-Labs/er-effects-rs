@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Apply `audit-1170-hook-targets.py`'s detour checks to an ARBITRARY candidate map file.
+"""Apply `audit-1170-hook-targets.py`'s detour checks to an arbitrary candidate map file.
 
 `audit-1170-hook-targets.py` only reads the tracked `docs/recon/*.tsv` inputs, so a
 migration agent holding fresh candidate rows cannot ask it the one question that matters
-before a row is proposed: is the 1.17 destination a real function ENTRY, and do its first
+before a row is proposed: is the 1.17 destination a real function entry, and do its first
 five bytes relocate? Those are exactly MinHook's two preconditions, and a row that fails
 either corrupts a live function rather than merely losing a feature.
 
@@ -12,7 +12,7 @@ This reuses that script's own `entry_verdict` / `patch_safe` / `pdata_entry_star
 the same format `verify-rva-map-1170.py --map` accepts. It reads only; it writes nothing
 into `docs/recon`.
 
-USAGE
+Usage
     uv run --with capstone python3 scripts/audit-1170-detour-mapfile.py <map.tsv>
 """
 
@@ -66,7 +66,7 @@ def main():
     for a, b in sorted(pairs, key=lambda p: p[1]):
         entry_ok, entry_why = audit.entry_verdict(hits[b], starts, b)
         patch_ok, patch_why = audit.patch_safe(blob, b)
-        # The same two questions asked of the 1.16.2 ORIGINAL. A row whose SOURCE also fails
+        # The same two questions asked of the 1.16.2 original. A row whose source also fails
         # is not evidence the translation is wrong -- it is a hook that was already like that.
         src_entry_ok, src_entry_why = audit.entry_verdict(src_hits[a], src_starts, a)
         src_patch_ok, _src_patch_why = audit.patch_safe(src_blob, a)

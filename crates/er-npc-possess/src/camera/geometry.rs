@@ -1,6 +1,6 @@
-//! THE SIZE LAW: one creature height in, one camera row out. Pure arithmetic, no game.
+//! The size LAW: one creature height in, one camera row out. Pure arithmetic, no game.
 //!
-//! # What the law is FOR, stated as a measurement
+//! # What the law is for, stated as a measurement
 //!
 //! Possessing something six times your size used to crop its head off the top of the screen. The
 //! user reported the vanilla composition they wanted in the same breath: *"when I'm in my normal
@@ -39,14 +39,14 @@
 //! * **The FOV does not appear in the answer.** It was needed to learn *what* the vanilla framing
 //!   is (1.09 heights of headroom); it is not needed to *hold* it. The patched row copies
 //!   `camFovY` from the base row untouched, so whatever the FOV is, the framing follows.
-//! * **The camera's PITCH does not appear either.** Angles are scale-invariant, so the shot is the
+//! * **The camera's pitch does not appear either.** Angles are scale-invariant, so the shot is the
 //!   player's at every pitch the player can reach -- level, orbiting overhead, or looking up from
 //!   below. That is why this module writes no pitch limit; see "What it deliberately does not do".
 //!
 //! Condition 1 is written as the pivot solve rather than as `1.45 * H / 1.5` on purpose. The two
 //! agree exactly whenever the distance follows condition 2, but the distance can be pushed off it
 //! -- by the clearance floor, by the configured ceiling, by a per-creature `camera_distance_scale`
-//! -- and solving the pivot against the distance that will ACTUALLY be used keeps the head on
+//! -- and solving the pivot against the distance that will actually be used keeps the head on
 //! screen anyway. It degrades to "the framing is wider than the player's" instead of to "the head
 //! is cropped".
 //!
@@ -63,7 +63,7 @@
 //! | [`PLAYER_FOV_Y_DEG`] | 48.0 | `LockCamParam` row 0 `camFovY` |
 //!
 //! Read them back with `python3 scripts/er-param-read.py LockCamParam --row 0`. That
-//! `camFovY` is a VERTICAL angle in DEGREES is proven, not assumed:
+//! `camFovY` is a vertical angle in degrees is proven, not assumed:
 //! `CS::ChrExFollowCam::ApplyZoomLerp` (1.16.2 `0x1403b7560`) multiplies it by
 //! `GLOBAL_DegreeToRadian` into `CSCam.fov`, and `CS::CSPersCam::ToPerspective` (`0x1403e9ac0`)
 //! builds the projection as `m11 = cot(fov/2)` with `m00 = cot(fov/2) / aspectRatio` -- the extra
@@ -76,8 +76,8 @@
 //! `camDistTarget ~ 3.75 * H^0.10` with `chrOrgOffset_Y` almost flat at 1.3-2.15 m across a range
 //! running from 0.6 m to 42 m. Reading that as the size law would be a category error.
 //!
-//! Those rows describe **a 1.5 m player fighting an H-metre TARGET**, not an H-metre subject.
-//! `ApplyZoomLerp` applies `chrOrgOffset_Y` to the camera's SUBJECT, and the subject in vanilla is
+//! Those rows describe **a 1.5 m player fighting an H-metre target**, not an H-metre subject.
+//! `ApplyZoomLerp` applies `chrOrgOffset_Y` to the camera's subject, and the subject in vanilla is
 //! always the player -- which is exactly why the offset stays at human chest height however big
 //! the thing being fought is. The row is *selected* by the target and *applied* to the subject.
 //! Possession swaps the subject, so the selection side of that dataset says nothing about what we
@@ -95,11 +95,11 @@
 //! `data/moveset.tbl` with a usable height (0.30 m to 59.00 m, median 2.00 m) the head sits at
 //! `+0.0296` half-frames and the headroom is `1.0946` subject-heights -- the player's numbers, for
 //! every one of them, at every pitch. The two exceptions are `c5472`/`c6082` Great Dragonfly,
-//! 0.8 m tall and 2.0 m wide, where the clearance floor pushes the camera FURTHER out than the law
+//! 0.8 m tall and 2.0 m wide, where the clearance floor pushes the camera further out than the law
 //! asks and the headroom grows to 1.35 heights. Wider is a safe direction; cropped is not.
 //! [`tests::the_framing_is_the_players_for_every_size_the_game_ships`] pins that in Rust.
 //!
-//! # What it deliberately does NOT do
+//! # What it deliberately does not do
 //!
 //! * **It writes no pitch limit.** `rotRangeMinX` used to be lerped from -40 to -15 degrees as the
 //!   subject grew, on the theory that a tall creature needs the camera to swing higher. It does
@@ -112,14 +112,14 @@
 //!   fields, the same constants and the same shape, are present on the installed 1.17 build at
 //!   `+0x10`: `uv run --with capstone python3 scripts/scan-struct-field-access.py --image
 //!   eldenring-deobf-1.17.bin --range 0x1403b0000-0x1403c0000 --disp 0x258,0x25c,0x2d4`). So
-//!   `rotRangeMinX` is the limit on how far BELOW the subject the camera may drop to look UP at
+//!   `rotRangeMinX` is the limit on how far below the subject the camera may drop to look up at
 //!   it, and raising it from -40 to -15 took away a shot without buying a single degree of
 //!   overhead. The lever for overhead is `+0x25c`, it is a field of the camera rather than of the
 //!   row, and it needs no change because the framing is pitch-invariant. Leaving `rotRangeMinX`
 //!   alone also means a map region that narrowed the pitch range keeps its narrowing through a
 //!   possession.
 //! * **It does not chase the model, only the physics capsule.** `hitHeight` is the capsule, and a
-//!   creature whose MODEL is proportionally taller than its capsule gets proportionally less
+//!   creature whose model is proportionally taller than its capsule gets proportionally less
 //!   headroom. It was worth measuring how badly, so it was measured: the FLVER bounding box of
 //!   every chr in the game, against that chr's `NpcParam.hitHeight`, 400 pairs
 //!   (`scripts/chr-flver-bbox-census.py` + `scripts/chr-hitheight-bbox-ratio.py`). The ratio runs
@@ -140,8 +140,8 @@
 //!   manager uses for its search-origin height, i.e. it is the game's own answer to "how tall is
 //!   this".
 //! * **The mount blend.** `ApplyZoomLerp`'s second branch, taken when `ChrExFollowCam+0x488` is
-//!   set, ADDS a constructor-cached delta to everything derived here and then clamps the pivot to
-//!   10 m. A 59 m subject wants a 57 m pivot, so possessing a giant WHILE MOUNTED will be clamped
+//!   set, adds a constructor-cached delta to everything derived here and then clamps the pivot to
+//!   10 m. A 59 m subject wants a 57 m pivot, so possessing a giant while mounted will be clamped
 //!   into a wrong shot. Nobody has measured how it looks; the alternative is fighting the game's
 //!   own Torrent zoom, which is worse.
 
@@ -158,12 +158,12 @@ pub(crate) const PLAYER_CAM_DIST: f32 = 3.8;
 /// `LockCamParam` row 0 `chrOrgOffset_Y` -- the camera pivot, just below head height on a 1.5 m
 /// body.
 pub(crate) const PLAYER_PIVOT: f32 = 1.45;
-/// `LockCamParam` row 0 `camFovY`, the VERTICAL field of view in degrees. See the module docs for
+/// `LockCamParam` row 0 `camFovY`, the vertical field of view in degrees. See the module docs for
 /// the two functions that prove both halves of that sentence.
 ///
 /// It is never written -- the patched row copies it from the base row -- and it is not an input to
 /// the size law. It is here because it is what turns the law's output into a statement about the
-/// SCREEN, which is the only place the user can see whether the law is right.
+/// screen, which is the only place the user can see whether the law is right.
 pub(crate) const PLAYER_FOV_Y_DEG: f32 = 48.0;
 
 /// How far the player's head sits above their camera's aim point: 0.05 m.
@@ -191,12 +191,12 @@ pub(crate) const MAX_PLAUSIBLE_HEIGHT: f32 = 200.0;
 /// A ceiling is only a guard if it cannot fire on a real subject, and the previous ones could: at
 /// 40 m it cropped everything above 3.8 m tall, and even at 120 m it cropped the 59 m Walking
 /// Mausoleum, whose framing distance is 149.5 m. Nonsense heights are already handled one step
-/// earlier and better, by clamping the HEIGHT -- which keeps the distance and the pivot consistent
+/// earlier and better, by clamping the height -- which keeps the distance and the pivot consistent
 /// with each other, where clamping only the distance breaks the composition. So this is derived
 /// from that clamp instead of guessed, and is by construction unable to crop any height the law
 /// will accept. It remains a real knob for anyone who wants their camera closer.
 ///
-/// The exact derived value is `3.8 * 200 / 1.5 = 506.67`, rounded UP to the next power of two so
+/// The exact derived value is `3.8 * 200 / 1.5 = 506.67`, rounded up to the next power of two so
 /// that the shipped `er-npc-possess.toml` can spell it as a decimal literal that parses back to
 /// the same `f32` -- the round trip a config file has to survive. [`tests::the_shipped_ceiling_
 /// cannot_crop_the_tallest_creature_that_exists`] pins that it is still above the derivation.
@@ -219,7 +219,7 @@ pub(crate) struct Shape {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Framing {
     /// The top of the subject, in half-screen-heights above the centre of the screen. `0.0` is
-    /// dead centre, `1.0` is the top edge, and anything above `1.0` is CROPPED. The player's own
+    /// dead centre, `1.0` is the top edge, and anything above `1.0` is cropped. The player's own
     /// body sits at `+0.0296`.
     pub(crate) head_screen_y: f32,
     /// The gap from the top of the subject to the top edge of the frame, measured in subject
@@ -245,7 +245,7 @@ pub(crate) enum Refusal {
     /// `SoloParamRepository` is not up, or its `LockCamParam` / `NpcParam` holder has not
     /// streamed in yet.
     ParamsNotReady,
-    /// A `NpcParam.lockCameraParamId` or `RideParam.rideCamParamId` in the LIVE regulation names
+    /// A `NpcParam.lockCameraParamId` or `RideParam.rideCamParamId` in the live regulation names
     /// the row `[camera].param_row` picked, so patching it would change some other character's
     /// camera. Carries that row.
     RowInUse(u32),
@@ -390,14 +390,14 @@ pub(crate) fn shape(
     } else {
         f32::MAX
     };
-    // THE FRAMING DISTANCE, then the two things allowed to override it. The clearance floor is
-    // applied LAST and wins over the ceiling on purpose: a camera outside a 120 m box is a bad
+    // The framing distance, then the two things allowed to override it. The clearance floor is
+    // applied last and wins over the ceiling on purpose: a camera outside a 120 m box is a bad
     // shot, a camera inside the model is not a shot at all.
     let distance = (PLAYER_CAM_DIST * scale.powf(exponent) * per_chr)
         .clamp(MIN_DISTANCE, ceiling)
         .max(radius * RADIUS_CLEARANCE);
 
-    // THE PIVOT SOLVE. Put the top of the subject exactly where the top of the player's head sits
+    // The pivot solve. Put the top of the subject exactly where the top of the player's head sits
     // on screen: the same fraction of the distance above the aim point. Solved against the
     // distance that will actually be used -- so a shot the clearance floor pushed out, or the
     // ceiling pulled in, or the player's own `camera_distance_scale` moved, still frames the head
@@ -424,7 +424,7 @@ pub(crate) fn shape(
 /// thinks the framing is wrong has a number rather than an impression. It is not an input to
 /// anything.
 ///
-/// `pitch_deg` is `ChrExFollowCam.anglesEuler.x` in degrees, POSITIVE meaning the camera is above
+/// `pitch_deg` is `ChrExFollowCam.anglesEuler.x` in degrees, positive meaning the camera is above
 /// the subject looking down -- see the module docs for the proof of that sign. The answer barely
 /// moves with it (the headroom runs 1.0915 to 1.1119 across the whole -40..+70 range the game
 /// allows), which is the pitch-invariance of similarity showing up as a number.
@@ -455,7 +455,7 @@ mod tests {
         shape(PLAYER_HIT_HEIGHT, 0.4, 1.0, settings()).expect("a real height")
     }
 
-    /// THE ANCHOR. A subject the size of the player must come out as `LockCamParam` row 0, to the
+    /// The anchor. A subject the size of the player must come out as `LockCamParam` row 0, to the
     /// float -- otherwise possessing a human-sized NPC would visibly move the camera for no
     /// reason, and the whole extrapolation would be resting on nothing.
     #[test]
@@ -466,7 +466,7 @@ mod tests {
         assert_eq!(shape.pivot_height, PLAYER_PIVOT);
     }
 
-    /// THE PRODUCT. Every creature the game ships must land where the player lands.
+    /// The product. Every creature the game ships must land where the player lands.
     ///
     /// This is the test the old law would have failed and the old tests did not catch, because
     /// they asked only whether distance rose with height -- which the old law did, while cropping
@@ -525,7 +525,7 @@ mod tests {
 
     /// The composition the whole module exists to hold, stated as the two numbers the user
     /// described it with. A change that moves either of these is a change to what possession
-    /// LOOKS like, and should have to say so.
+    /// looks like, and should have to say so.
     #[test]
     fn the_player_framing_is_the_one_the_complaint_described() {
         let got = framing(player(), PLAYER_HIT_HEIGHT, 0.0);
@@ -595,7 +595,7 @@ mod tests {
             (4600, 7.2, 1.8),
             (5210, 2.4, 3.5),
             // The two creatures in the whole game wider than the law's own distance: 0.8 m tall,
-            // 2.0 m across. The floor pushes the camera out, which only ever ADDS headroom.
+            // 2.0 m across. The floor pushes the camera out, which only ever adds headroom.
             (5472, 0.8, 2.0),
         ];
         for (chr, height, radius) in CREATURES {
@@ -624,7 +624,7 @@ mod tests {
             "{}",
             got.head_screen_y
         );
-        // ...and the extra distance shows up as MORE room above it, never less.
+        // ...and the extra distance shows up as more room above it, never less.
         assert!(
             got.headroom_heights > want.headroom_heights,
             "{} vs {}",
@@ -650,7 +650,7 @@ mod tests {
             "the head must not be cropped by a low ceiling: {}",
             got.head_screen_y
         );
-        // The shot IS worse -- there is less room above a 29 m body seen from 20 m -- and the
+        // The shot is worse -- there is less room above a 29 m body seen from 20 m -- and the
         // report says so rather than the head disappearing.
         assert!(
             got.headroom_heights < want.headroom_heights,
@@ -704,7 +704,7 @@ mod tests {
     ///
     /// The old law converged on `0.65 * height`, which put a 29 m subject's head at `+0.31`
     /// half-frames -- ten times the player's `+0.03`, three quarters of the way to the top edge --
-    /// and cost a quarter of the headroom. That IS the "not high enough" half of the complaint.
+    /// and cost a quarter of the headroom. That is the "not high enough" half of the complaint.
     #[test]
     fn a_big_body_is_framed_where_the_player_is_and_not_on_its_chest() {
         let huge = shape(29.0, 0.0, 1.0, settings()).expect("h");
@@ -742,7 +742,7 @@ mod tests {
         assert!(shape.distance.is_finite());
         assert!(shape.pivot_height.is_finite());
         assert!(shape.distance <= MAX_FRAMING_DISTANCE);
-        // The clamp is on the HEIGHT, so the pivot is consistent with the distance and the shot is
+        // The clamp is on the height, so the pivot is consistent with the distance and the shot is
         // still the player's rather than merely finite.
         let got = framing(shape, MAX_PLAUSIBLE_HEIGHT, 0.0);
         let want = framing(player(), PLAYER_HIT_HEIGHT, 0.0);

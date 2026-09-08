@@ -1,17 +1,17 @@
-//! EVERY GAME STRUCT OFFSET THE ENGINE TOUCHES, IN ONE PLACE, AND NOTHING ELSE.
+//! Every game STRUCT offset the engine touches, in one place, and nothing else.
 //!
 //! # Why a module of constants rather than the `eldenring` crate's structs
 //!
 //! `fromsoftware-rs` models most of these fields already, and the engine could reach half of them
 //! through a typed reference. It deliberately does not, for one reason that is worth the
-//! duplication: **one of these offsets MOVED between the two builds this repo supports** --
+//! duplication: **one of these offsets moved between the two builds this repo supports** --
 //! `ChrIns.debugFlags` is `+0x530` on 1.16.2 and `+0x538` on 1.17 (byte-proven: the same three
 //! sites test `[reg+0x538]` in 1.17). A typed field access compiles to one offset and cannot say
 //! which build it is for, so on the wrong build it writes into `stamina_recovery` and reports
 //! success. [`debug_flags_offset`] answers `None` on a build nobody has measured, which is the
 //! only honest third answer and the one a struct field cannot give.
 //!
-//! Having decided that for one field, the rest follow it: an offset table that is HALF typed
+//! Having decided that for one field, the rest follow it: an offset table that is half typed
 //! fields and half constants is a table where nobody can tell which half was checked.
 //!
 //! # What checks them
@@ -20,7 +20,7 @@
 //!   against `core::mem::offset_of!` on the `eldenring` struct that models the same field. That
 //!   is a compile-time cross-check of two independently derived layouts, and it costs nothing at
 //!   runtime. Only the crate's `pub` fields can be asserted; the ones it spells `unkNNN` are
-//!   marked RE-ONLY below.
+//!   marked RE-only below.
 //! * On the host, the tests at the foot of this file check the invariants that are arithmetic --
 //!   the build gate, the flag bits, and that the override slot is nobody else's field.
 //!
@@ -48,7 +48,7 @@ pub(crate) const FILE_VERSION_1170: FileVersion = FileVersion {
 pub(crate) mod chr_ins {
     /// `ChrIns.chrSetEntry` -- back to the `ChrSetEntry` this character occupies. Cross-checked.
     ///
-    /// THE SLOT, WITHOUT SEARCHING FOR IT. `ChrInsFactory::CreateCharacter` is handed the entry and
+    /// The slot, without searching for it. `ChrInsFactory::CreateCharacter` is handed the entry and
     /// the `ChrIns` constructor keeps it here, so a spawn's slot index is
     /// `(chrSetEntry - chrSet->entries) / `[`super::chr_set::ENTRY_STRIDE`] rather than a scan --
     /// and the division having no remainder, plus the quotient landing inside
@@ -57,15 +57,15 @@ pub(crate) mod chr_ins {
     pub(crate) const CHR_SET_ENTRY: usize = 0x10;
     /// `ChrIns.chrRes` -- the per-character asset step machine.
     ///
-    /// RE-ONLY: the `eldenring` crate models this field but keeps it PRIVATE, so there is no
+    /// RE-ONLY: the `eldenring` crate models this field but keeps it private, so there is no
     /// `offset_of!` cross-check to be had. The evidence is byte-level instead, and is stronger
-    /// than a cross-check would have been: `ChrIns::GetEneDat` is BYTE-IDENTICAL between 1.16.2
+    /// than a cross-check would have been: `ChrIns::GetEneDat` is byte-identical between 1.16.2
     /// `0x1403ef830` and 1.17 `0x1403efa60`, and it opens `48 8b 43 28` -- `MOV RAX,[RBX+0x28]`.
     /// See [`super::chr_res`].
     pub(crate) const CHR_RES: usize = 0x28;
     /// `ChrIns.chrCtrl`. Cross-checked against `offset_of!(ChrIns, chr_ctrl)`.
     pub(crate) const CHR_CTRL: usize = 0x58;
-    /// `ChrIns.teamType`, one byte. **THE FIELD THE WHOLE LOCK-ON DEFECT TURNS ON.**
+    /// `ChrIns.teamType`, one byte. **the field the whole lock-on defect turns on.**
     ///
     /// `CS::ChrIns::GetTeamType` (1.16.2 `0x1403f1a60`) is `MOVZX EAX,byte [RCX+0x6c]; MOV [RDX],AL`
     /// and then two overrides: a `SpecialEffect` with state info `0x84` (charm) replaces the answer
@@ -91,7 +91,7 @@ pub(crate) mod chr_ins {
     /// teams (1, 2, 4) and `Rival` to every hostile team, and row 6 column 15 is `Rival` back. So
     /// one byte delivers all three things possession needs -- the player's own co-located body
     /// stops being a legal lock-on candidate (`Friend` fails `friendlyTarget: false`), real enemies
-    /// START being legal ones (`Rival` passes on `opposeTarget`), and hostiles treat the worn
+    /// start being legal ones (`Rival` passes on `opposeTarget`), and hostiles treat the worn
     /// creature as a combatant. Writing the player's team id would do the first two as well but
     /// would also make an `EnemyIns` claim to be a player to every PvP and invasion path that asks.
     ///
@@ -101,9 +101,9 @@ pub(crate) mod chr_ins {
     /// `ChrIns.lockOnTargetPos`, a `FloatVector4` in physics space. Cross-checked against
     /// `offset_of!(ChrIns, lock_on_target_position)`.
     ///
-    /// Written on the lock-on SUBJECT, which possession has made the creature: `FUN_140716260`
+    /// Written on the lock-on subject, which possession has made the creature: `FUN_140716260`
     /// copies the chosen lock point's cached world position into it with
-    /// `MOVUPS [R15+0xd0],XMM0` (1.16.2 `0x140717251`). Read-only here, and only as a REFINEMENT of
+    /// `MOVUPS [R15+0xd0],XMM0` (1.16.2 `0x140717251`). Read-only here, and only as a refinement of
     /// the camera aim -- nothing clears it when the lock is dropped, so a bare read of it is a
     /// stale point. See [`super::intent::aim`] for the agreement test that makes it safe.
     pub(crate) const LOCK_ON_TARGET_POS: usize = 0xd0;
@@ -117,7 +117,7 @@ pub(crate) mod chr_ins {
     pub(crate) const CHR_FLAGS_1C5: usize = 0x1c5;
     /// The invincibility bit inside [`CHR_FLAGS_1C5`].
     ///
-    /// **IT IS ALSO THE GRAB GATE, and that is settled rather than suspected.**
+    /// **it is also the grab gate, and that is settled rather than suspected.**
     /// `ChrIns::IsImmuneToAttack` (ChrIns vtable `+0x1D8`; 1.16.2 `0x1403f3b90`, 1.17
     /// `0x1403f3dc0` -- both read `+0x1c5 & 0x10` verbatim) answers "immune" on this bit unless
     /// the landed `AtkParam` row sets `isDisableNoDamage`. Every route into a throw is behind it:
@@ -129,37 +129,37 @@ pub(crate) mod chr_ins {
     /// `ThrowParam.DefChrId` makes the only legal victim for 189 of the game's 190 creature rows
     /// -- refuses the grab, and the initiator plays as a swing that misses. There is no
     /// per-attacker exemption to find: the predicate's only attacker-dependent term
-    /// (`actionModifiersFlags` bit 5) makes it MORE immune to a non-player attacker, never less.
+    /// (`actionModifiersFlags` bit 5) makes it more immune to a non-player attacker, never less.
     pub(crate) const INVINCIBLE: u8 = 0x10;
     /// `ChrIns.tintAlphaMultiplier`. 0.0 is invisible, 1.0 is opaque. Cross-checked.
     pub(crate) const TINT_ALPHA_MULTIPLIER: usize = 0x240;
-    /// `ChrIns.tintAlphaMultiplierModifier` -- a per-frame DECAY toward 0 (negative) or 1
-    /// (positive). `SetFadeInOut` writes this, which is why calling it FADES rather than holds:
+    /// `ChrIns.tintAlphaMultiplierModifier` -- a per-frame decay toward 0 (negative) or 1
+    /// (positive). `SetFadeInOut` writes this, which is why calling it fades rather than holds:
     /// we write both fields directly and keep the modifier at zero so the alpha stays put.
     /// Cross-checked.
     pub(crate) const TINT_ALPHA_MULTIPLIER_MODIFIER: usize = 0x244;
 
-    /// `ChrIns.chrFlags1c8` -- the byte that carries the SOUND MUTE. Cross-checked, and unchanged
+    /// `ChrIns.chrFlags1c8` -- the byte that carries the sound MUTE. Cross-checked, and unchanged
     /// on 1.17 (it is below the `+0x3b8` insertion point).
     pub(crate) const CHR_FLAGS_1C8: usize = 0x1c8;
-    /// `chrFlags1c8` bit `0x40`: SET means SILENT.
+    /// `chrFlags1c8` bit `0x40`: Set means silent.
     ///
     /// All four TAE sound handlers (event ids 129/132/133/134) open with
     /// `if (FUN_1403f4680(chrIns)) return;`, and that gate's first instruction is
     /// `TEST byte [rcx+0x1c8],0x40` -- set means `MOV AL,1; RET`, i.e. drop the sound.
     ///
-    /// The POLARITY is not inferred from the name: the engine's own writer is a distance
-    /// hysteresis (`FUN_140401d80`) that SETS this bit once a character is further from the player
+    /// The polarity is not inferred from the name: the engine's own writer is a distance
+    /// hysteresis (`FUN_140401d80`) that sets this bit once a character is further from the player
     /// than `NpcParam.enableSoundObjDist`, or while it is ragdolling. Distant NPCs going quiet is
     /// shipped behaviour using this exact bit.
     ///
     /// It also does not fight us per frame, which is what makes it usable: that whole recompute
     /// sits inside `if (!IsPlayerIns(chrIns))`, so nothing recalculates it on the player's body.
-    /// The only writers that can reach us are four CLEARS at (re)spawn/teleport -- in
+    /// The only writers that can reach us are four clears at (re)spawn/teleport -- in
     /// `PlayAnimation`, `Respawn`, `FUN_1403fc9a0` and `SummonHorse` -- which is why the
     /// per-frame block re-asserts it rather than setting it once.
     pub(crate) const MUTE_SOUND: u8 = 0x40;
-    /// `chrFlags1c8` bit `0x80`: a ONE-SHOT that stops sounds already playing.
+    /// `chrFlags1c8` bit `0x80`: a one-shot that stops sounds already playing.
     ///
     /// `PostPhysicsSafe` sees `flags1c8 >= 0x80`, clears the bit, and walks
     /// `CSChrDataModule+0x98` stopping every sound in flight on that character. The engine writes
@@ -169,11 +169,11 @@ pub(crate) mod chr_ins {
 
     /// `ChrIns.debugFlags` on ELDEN RING 1.16.2.
     pub(crate) const DEBUG_FLAGS_1162: usize = 0x530;
-    /// `ChrIns.debugFlags` on ELDEN RING 1.17. IT MOVED; see the module docs.
+    /// `ChrIns.debugFlags` on ELDEN RING 1.17. It moved; see the module docs.
     pub(crate) const DEBUG_FLAGS_1170: usize = 0x538;
     /// `debugFlags` bit `0x10`: the character issues no attack requests.
     ///
-    /// In `PadManipulator::Tick` this is tested BEFORE `IsMainPlayerIns`, so it works on the main
+    /// In `PadManipulator::Tick` this is tested before `IsMainPlayerIns`, so it works on the main
     /// player -- which is the whole reason it is the lever for neutering the possessing player's
     /// own body. It routes to `padManip+0x1e4` and skips the entire 16-entry `ChrActionType`
     /// request loop: R1/R2/L1/L2, guard, the action button, USE_ITEM and the quick slots.
@@ -183,7 +183,7 @@ pub(crate) mod chr_ins {
     pub(crate) const DEBUG_FLAG_NO_ATTACK: u32 = 0x10;
     /// `debugFlags` bit `0x20`: the move vector is forced to zero.
     ///
-    /// DELIBERATELY LEFT CLEAR by the possession engine. The player's body is co-located with the
+    /// Deliberately left clear by the possession engine. The player's body is co-located with the
     /// creature every frame by writing the proxy request directly, and freezing its move vector
     /// buys nothing while making the body fight that write.
     pub(crate) const DEBUG_FLAG_NO_MOVE: u32 = 0x20;
@@ -197,20 +197,20 @@ pub(crate) mod chr_ins {
 /// [`crate::spawn`] calls -- opens `index = 6` and loops `while (index < 0x14)`, taking the first
 /// entry whose `chrIns` is null. It reads `entries[6..20)` **without consulting `chrInsCapacity`
 /// at all**, so the bound that matters is not on our index (we never form one) but on the ARRAY: a
-/// `ChrSet` smaller than twenty entries would have the GAME read past its own allocation.
+/// `ChrSet` smaller than twenty entries would have the game read past its own allocation.
 /// [`CAPACITY`] is therefore read at runtime and the spawn refused unless it covers [`BAND_END`].
 ///
 /// The buddy `ChrSet` allocates `0x500` bytes and sets `chrInsCapacity = 0x50` (`FUN_140494f50`,
 /// whose init loop also confirms [`ENTRY_STRIDE`]: `0x500 / 0x50 == 0x10`, and it walks the array
 /// in `0x10` steps). So the check passes on a stock game and exists for the case where it does not
-/// -- another mod having resized it, or a build where the constant moved. It is deliberately NOT
+/// -- another mod having resized it, or a build where the constant moved. It is deliberately not
 /// the fix for a full roster: fourteen slots is what the game gives its own dynamic spawner, and
 /// widening that allocation is the one change that could corrupt a Seamless Co-op session, which
 /// lives in this same `ChrSet`.
 ///
 /// # Every value here is byte-identical on 1.17
 ///
-/// The loop is thirty-seven bytes and they are the SAME thirty-seven bytes in both images -- 1.16.2
+/// The loop is thirty-seven bytes and they are the same thirty-seven bytes in both images -- 1.16.2
 /// `0x140492abf`, 1.17 `0x14049301f`, reached by decoding the `rel32` in the spawn wrapper:
 ///
 /// ```text
@@ -255,7 +255,7 @@ pub(crate) mod chr_set {
 /// so this table is a transcription of working code rather than an inference from a struct
 /// definition.
 ///
-/// # What the CREATURE path actually reads, which is less than the struct suggests
+/// # What the creature path actually reads, which is less than the struct suggests
 ///
 /// `ChrInsFactory::CreateCharacter` branches on [`CHARA_INIT_PARAM`]: negative takes the
 /// `HeapAlloc(0x5e0)` + `EnemyIns` path, non-negative the `HeapAlloc(0x740)` + `PlayerIns` one. On
@@ -266,13 +266,13 @@ pub(crate) mod chr_set {
 ///
 /// **So a spawned creature does not appear where the request says.** This crate fills the two
 /// vectors anyway, because the retail caller does and a well-formed request costs nothing, and
-/// then PLACES the creature itself once it is ready, through the same proxy-drain write
+/// then places the creature itself once it is ready, through the same proxy-drain write
 /// co-location already uses. A layer that trusted the position field would have shipped a mod that
 /// spawns everything at wherever `InitEnemyChrBaseData` leaves it.
 pub(crate) mod chr_spawn_request {
     /// `sizeof(ChrSpawnRequest)`.
     pub(crate) const SIZE: usize = 0xc8;
-    /// `position`, a `FloatVector4`. See the module note: NOT read on the creature path.
+    /// `position`, a `FloatVector4`. See the module note: Not read on the creature path.
     pub(crate) const POSITION: usize = 0x00;
     /// `orientation`, a `FloatVector4`. Likewise.
     pub(crate) const ORIENTATION: usize = 0x10;
@@ -281,7 +281,7 @@ pub(crate) mod chr_spawn_request {
     pub(crate) const SCALE: usize = 0x20;
     /// The unnamed fourth vector, written with the same value as [`SCALE`].
     pub(crate) const UNK30: usize = 0x30;
-    /// `npcParamId`, `i32`. THE ROW THAT DRIVES THE CREATURE: an id `NpcParam` has no row for falls
+    /// `npcParamId`, `i32`. The row that drives the CREATURE: an id `NpcParam` has no row for falls
     /// back to row 0, and the row is what selects the model, animation and sound resources the
     /// `ChrRes` step machine then goes and acquires.
     pub(crate) const NPC_PARAM_ID: usize = 0x40;
@@ -289,19 +289,19 @@ pub(crate) mod chr_spawn_request {
     /// `{-1, NULL, -1, -1}`, no `luabnd` is requested, and `LoadWait` treats the NULL `LuaDat` caps
     /// as already satisfied.
     pub(crate) const NPC_THINK_ID: usize = 0x44;
-    /// `charaInitParam`, `i32`. **NEGATIVE SELECTS THE CREATURE PATH**; see the module note.
+    /// `charaInitParam`, `i32`. **negative selects the creature path**; see the module note.
     pub(crate) const CHARA_INIT_PARAM: usize = 0x48;
-    /// `eventEntityId`, `u32`. ZERO IS THE SAFE VALUE and the one the retail caller uses:
+    /// `eventEntityId`, `u32`. Zero is the safe value and the one the retail caller uses:
     /// `FUN_140494240` returns immediately on 0, so a zero id is never inserted into the `ChrSet`'s
-    /// `eventEntityIdMap` and cannot shadow a map entity. Any nonzero id we invented WOULD be.
+    /// `eventEntityIdMap` and cannot shadow a map entity. Any nonzero id we invented would be.
     pub(crate) const EVENT_ENTITY_ID: usize = 0x4c;
     /// `talkId`, `i32`. Zero for a creature nobody talks to.
     pub(crate) const TALK_ID: usize = 0x50;
     /// `model`, a `DLTX::DLInplaceStr`. The `cNNNN` name, and the whole of how a chr id reaches the
     /// asset loader.
     pub(crate) const MODEL: usize = 0x58;
-    /// `model.backingString.pointer`, a `wchar_t*`. **THE ONLY FIELD OF `model` THAT ANY CONSUMER
-    /// ON THE SPAWN PATH READS** -- `FUN_140492a90` passes it to `Format(L"%s_%04d", ptr, index)`
+    /// `model.backingString.pointer`, a `wchar_t*`. **the only field of `model` that any consumer
+    /// on the spawn path reads** -- `FUN_140492a90` passes it to `Format(L"%s_%04d", ptr, index)`
     /// and `CreateCharacter` passes it straight into `ChrInitData`. Neither reads `len`, and
     /// neither dispatches through the string's vtable, which is why [`MODEL_VFTABLE`] can stay
     /// null.
@@ -325,15 +325,15 @@ pub(crate) mod chr_spawn_request {
     /// `DLInplaceStr<1,32,DLCodedStr<1>>` vtable, so thirty-two is the capacity that vtable's own
     /// grow check would report; `cNNNN` needs six including the terminator.
     pub(crate) const MODEL_BUFFER_WCHARS: usize = 32;
-    /// `model`'s vtable slot, LEFT NULL BY THIS CRATE -- and that is the deliberate part.
+    /// `model`'s vtable slot, left NULL by this crate -- and that is the deliberate part.
     ///
     /// The retail caller stores `DLTX::DLInplaceStr<1,32,DLCodedStr<1>>::vftable` (1.16.2
     /// `0x142a425a0`) because it then calls `[vtable+0x30]`, the capacity check, before `memcpy`ing
-    /// in a name of unknown length. This crate writes a name of KNOWN length -- six wchars into a
+    /// in a name of unknown length. This crate writes a name of known length -- six wchars into a
     /// thirty-two wchar buffer -- so it never needs that call, and nothing on the spawn path
     /// dispatches through this pointer: `FUN_140492a90`'s only touch of `model` is
     /// `MOV R8,[R14+0x60]`, the backing pointer, and `CreateCharacter`'s two indirect calls are
-    /// both `InitializeCharacter` on the NEW character's vtable. Writing it would cost a third
+    /// both `InitializeCharacter` on the new character's vtable. Writing it would cost a third
     /// resolved game address for a pointer nobody follows.
     pub(crate) const MODEL_VFTABLE: usize = 0x00;
 }
@@ -348,14 +348,14 @@ pub(crate) mod chr_spawn_request {
 /// with `vft[10]` being `MOV EAX,[RCX+0x40]; RET`. So the entire predicate is one bounds test on
 /// one `i32` field, and the readiness oracle reads it rather than making three calls.
 ///
-/// BOTH BUILDS, byte-proven. `GetEneDat` is BYTE-IDENTICAL at 1.16.2 `0x1403ef830` and 1.17
+/// Both builds, byte-proven. `GetEneDat` is byte-identical at 1.16.2 `0x1403ef830` and 1.17
 /// `0x1403efa60` -- `48 8b 43 28` is [`chr_ins::CHR_RES`] and `48 8b 80 30 01 00 00` is [`ENE_DAT`]
 /// -- and 1.17's `ChrRes` vtable, located by RTTI at `0x142a400c8`, has `MOV EAX,[RCX+0x40]; RET`
 /// in slot 10 exactly as 1.16.2 does.
 pub(crate) mod chr_res {
-    /// `FD4StepTemplateBase<ChrRes,...>::currentState`, `i32`. RE-ONLY.
+    /// `FD4StepTemplateBase<ChrRes,...>::currentState`, `i32`. RE-only.
     ///
-    /// NOT `+0x48`: Ghidra's generic `FD4StepTemplateBase` is `0xb0` bytes and puts `currentState`
+    /// Not `+0x48`: Ghidra's generic `FD4StepTemplateBase` is `0xb0` bytes and puts `currentState`
     /// there, but the `ChrRes` instantiation is `0xa8` and the accessor's own disassembly says
     /// `+0x40`. The disassembly wins.
     pub(crate) const STEP: usize = 0x40;
@@ -363,16 +363,16 @@ pub(crate) mod chr_res {
     pub(crate) const STEP_LOADED_FIRST: i32 = 3;
     /// One past the highest.
     pub(crate) const STEP_LOADED_END: i32 = 6;
-    /// `ChrRes.eneDat`, an `EneDat*`. RE-ONLY.
+    /// `ChrRes.eneDat`, an `EneDat*`. RE-only.
     pub(crate) const ENE_DAT: usize = 0x130;
 }
 
 /// `EneDat` and the `FD4FileCap` it hangs the chrbnd off.
 ///
-/// # The second offset in this crate that MOVED between the two builds
+/// # The second offset in this crate that moved between the two builds
 ///
 /// `FUN_1404ca4a0` -- "give me this character's `FlverResCap`, or null" -- is the asset-residency
-/// predicate. It is NOT byte-identical across the builds: its 1.17 counterpart is `0x1404caf70`
+/// predicate. It is not byte-identical across the builds: its 1.17 counterpart is `0x1404caf70`
 /// (uniquely shape-matched in both images, and independently confirmed by decoding the `rel32` at
 /// its caller `EnemyIns::InitializeCharacterRendering`), and both `EneDat` offsets it loads moved:
 ///
@@ -381,13 +381,13 @@ pub(crate) mod chr_res {
 /// | primary cap | `+0xa0` | `+0xb0` | `+0x10` |
 /// | fallback cap | `+0x88` | `+0x90` | `+0x8` |
 ///
-/// **THE TWO DELTAS ARE NOT THE SAME**, which is the part worth reading twice: an eight-byte field
+/// **the two DELTAS are not the same**, which is the part worth reading twice: an eight-byte field
 /// was inserted somewhere below `+0x88` and another between `+0x88` and `+0xa0`. So the pair cannot
 /// be carried forward by adding one number to both, and a reader who checked only the primary would
 /// get the fallback wrong by eight bytes -- landing on a live pointer rather than on nothing.
 ///
 /// The `FD4FileCap` offsets it then reads -- [`file_cap::LOAD_STATE`] and
-/// [`file_cap::FLVER_RES_CAP`] -- ARE unchanged. `EneDat` is a large heap struct, so a stale
+/// [`file_cap::FLVER_RES_CAP`] -- Are unchanged. `EneDat` is a large heap struct, so a stale
 /// `+0xa0` on 1.17 reads a live neighbouring field rather than faulting, which is why
 /// [`ene_dat_cap_offsets`] answers `None` on a build nobody has measured instead of guessing.
 pub(crate) mod ene_dat {
@@ -395,7 +395,7 @@ pub(crate) mod ene_dat {
     pub(crate) const CAP_PRIMARY_1162: usize = 0xa0;
     /// ...and the one it falls back to when that is null.
     pub(crate) const CAP_FALLBACK_1162: usize = 0x88;
-    /// `EneDat`'s primary `ChrbndFileCap*` on 1.17. IT MOVED; see the module docs.
+    /// `EneDat`'s primary `ChrbndFileCap*` on 1.17. It moved; see the module docs.
     pub(crate) const CAP_PRIMARY_1170: usize = 0xb0;
     /// ...and the 1.17 fallback.
     pub(crate) const CAP_FALLBACK_1170: usize = 0x90;
@@ -417,7 +417,7 @@ pub(crate) mod file_cap {
 pub(crate) mod chr_ctrl {
     /// `ChrCtrl.owner` -- back to the `ChrIns`. Cross-checked.
     pub(crate) const OWNER: usize = 0x10;
-    /// `ChrCtrl.manipulator` -- the REAL manipulator. Never written by this engine: the AI-side
+    /// `ChrCtrl.manipulator` -- the real manipulator. Never written by this engine: the AI-side
     /// lookups (`ChrIns::GetAiInsFromManipulator`, `EnemyIns::GetChrManipulator`) read this and
     /// must keep seeing the creature's own `ComManipulator`, which is what lets us write AI intent
     /// while the tick path sees our thunk. Cross-checked.
@@ -429,7 +429,7 @@ pub(crate) mod chr_ctrl {
     /// local-space vector it stages at [`super::manipulator::PENDING_MOVE_VECTOR`], so reproducing
     /// that transform is what lets this crate stage a vector the engine cannot tell from its own.
     ///
-    /// Byte-proven on BOTH builds, and the pattern matches UNIQUELY in each image -- 1.16.2
+    /// Byte-proven on both builds, and the pattern matches uniquely in each image -- 1.16.2
     /// `0x1403d03e1`, 1.17 `0x1403d03f1`:
     ///
     /// ```text
@@ -444,7 +444,7 @@ pub(crate) mod chr_ctrl {
     /// This crate no longer reads the matrix itself: reproducing `[vt+0x50]`'s world-to-local
     /// transform was part of the manual move stage, and the stage is gone. The offset stays
     /// because it is where the engine reads the body's basis, and every claim in this module about
-    /// what local space MEANS is anchored to it.
+    /// what local space means is anchored to it.
     const _: () = assert!(MODEL_MATRIX.is_multiple_of(16));
     /// `ChrCtrl.modifier` -- `ChrCtrlModifier`. Cross-checked.
     pub(crate) const MODIFIER: usize = 0xc8;
@@ -454,27 +454,27 @@ pub(crate) mod chr_ctrl {
     pub(crate) const CHR_PROXY_FLAG_POSITION: u32 = 1;
     /// `chrProxyFlags` bit 1: drain `ragdollRotation` through `SetOrientation`.
     pub(crate) const CHR_PROXY_FLAG_ROTATION: u32 = 2;
-    /// `ChrCtrl.ragdollPosition`, a `FloatVector4`. RE-ONLY (`unk100` in the crate).
+    /// `ChrCtrl.ragdollPosition`, a `FloatVector4`. RE-only (`unk100` in the crate).
     pub(crate) const RAGDOLL_POSITION: usize = 0x100;
-    /// `ChrCtrl.ragdollRotation` -- **EULER RADIANS `{0, yaw, 0, 0}`, NOT a quaternion**. The
+    /// `ChrCtrl.ragdollRotation` -- **EULER RADIANS `{0, yaw, 0, 0}`, not a quaternion**. The
     /// drain feeds it to `CSChrPhysicsModule::SetOrientation`, which feeds `EulerToQuat`.
-    /// RE-ONLY (`unk110` in the crate).
+    /// RE-only (`unk110` in the crate).
     pub(crate) const RAGDOLL_ROTATION: usize = 0x110;
     /// `ChrCtrl.scaleSizeX`, three consecutive `f32` (`X`, `Y`, `Z` at `+0x2d4/+0x2d8/+0x2dc`).
     ///
-    /// **THE LOCK-ON ANCHOR, reached the only way it can be reached.** A character's lock-on
+    /// **the lock-on anchor, reached the only way it can be reached.** A character's lock-on
     /// point is a dummy polygon on its model (ids 220..228, chosen by `NpcParam.lockGazePoint0..7`)
     /// and there is no per-character offset field anywhere in that chain -- so the anchor moves
     /// only when the model does. `ChrCtrl::RecalculateChrMatrix` multiplies these three into
     /// `ChrCtrl.modelMatrix` and copies that matrix into `locationMtx44ChrEntity->mtx`, the root
     /// the dummy lookup resolves against. See [`crate::possess::body_size`] for the whole trace.
     ///
-    /// This is the RENDER transform and only the render transform: `ChrCtrl::SetScaleSize` never
+    /// This is the render transform and only the render transform: `ChrCtrl::SetScaleSize` never
     /// touches `CSChrPhysicsModule`, so the body's hknp capsule, its hurtbox and its own
     /// `hitHeight` are all unaffected by writing it.
     ///
-    /// **BOTH BUILDS, byte-proven, and the pattern matches UNIQUELY in each image.** The whole of
-    /// `ChrCtrl::SetScaleSize` is fifty-three bytes, and they are the SAME fifty-three bytes in
+    /// **both builds, byte-proven, and the pattern matches uniquely in each image.** The whole of
+    /// `ChrCtrl::SetScaleSize` is fifty-three bytes, and they are the same fifty-three bytes in
     /// both -- 1.16.2 `0x1403c8350`, 1.17 `0x1403c8360`, the `+0x10` shift the rest of the
     /// `ChrCtrl` module has. Every offset this table needs is one of its displacements:
     ///
@@ -493,11 +493,11 @@ pub(crate) mod chr_ctrl {
     /// c3                       RET
     /// ```
     pub(crate) const SCALE_SIZE: usize = 0x2d4;
-    /// `ChrCtrl+0x3b0` -- THE MANIPULATOR OVERRIDE SLOT, and the whole reason this mod is
-    /// possible. RE-ONLY (`unk3b0` in the crate).
+    /// `ChrCtrl+0x3b0` -- The MANIPULATOR override slot, and the whole reason this mod is
+    /// possible. RE-only (`unk3b0` in the crate).
     ///
     /// Nothing in retail ever writes or frees it: a byte scan of every `mov [r+0x3b0],r64` form
-    /// finds exactly ONE site image-wide, the `ChrCtrl` constructor's zero-init, and no reader
+    /// finds exactly one site image-wide, the `ChrCtrl` constructor's zero-init, and no reader
     /// anywhere calls `[manip+8]` (the destructor) on it. So we own the object outright.
     ///
     /// TEARDOWN HAZARD: `ChrCtrl::Unref` compares this against zero and **DLPanics** when it is
@@ -531,7 +531,7 @@ pub(crate) mod modules {
     /// `CSChrBehaviorModule` -- carries `rootMotion`, which is how the watchdog tells a slow
     /// wind-up from a creature that has genuinely stopped. Cross-checked.
     pub(crate) const BEHAVIOR: usize = 0x28;
-    /// `CSChrEventModule` -- the animation REQUEST slot. Cross-checked.
+    /// `CSChrEventModule` -- the animation request slot. Cross-checked.
     pub(crate) const EVENT: usize = 0x58;
     /// `CSChrPhysicsModule`. Cross-checked.
     pub(crate) const PHYSICS: usize = 0x68;
@@ -575,7 +575,7 @@ pub(crate) mod modules {
 /// window the animation's own TimeAct declares. 91.1% of the corpus's non-player attack
 /// animations author one.
 ///
-/// Bit 11 is `cancel_disable`, a PERSISTENT global veto, and the engine's own predicate requires
+/// Bit 11 is `cancel_disable`, a persistent global veto, and the engine's own predicate requires
 /// it clear -- so this crate does too rather than reading bit 5 on its own.
 pub(crate) mod chr_action_request_module {
     /// `taeCancels`, `u32`. Cross-checked.
@@ -590,9 +590,9 @@ pub(crate) mod chr_action_request_module {
 ///
 /// `CS::CSChrEventModule::RequestAnimation` (1.16.2 `0x14043aa30`) has a two-line body: it calls
 /// `SetRendererVisibility(chr, 5)` and then writes `requestAnimationId`. The visibility call is a
-/// min-latch into `ChrIns+0xBC` that the `ChrIns` update RESETS TO -2 every frame, so it has no
+/// min-latch into `ChrIns+0xBC` that the `ChrIns` update RESETS to -2 every frame, so it has no
 /// lasting effect and nothing to undo. Which leaves a single `int` store -- so **writing this
-/// field IS calling the function**, and the moveset layer keeps the crate's no-game-addresses
+/// field is calling the function**, and the moveset layer keeps the crate's no-game-addresses
 /// property intact.
 ///
 /// `CSChrEventModule::Update` (1.16.2 `0x14043a580`) consumes it once per frame and resets it to
@@ -601,12 +601,12 @@ pub(crate) mod chr_action_request_module {
 /// So the clip carries its TimeAct binding and the hitbox, VFX, sound and root motion all come
 /// along -- none of which this crate has to reimplement.
 ///
-/// FOUR GATES sit in front of it, all of which a possessed creature ordinarily passes:
+/// Four gates sit in front of it, all of which a possessed creature ordinarily passes:
 /// `!ChrIns::IsDead`, `actionFlag->actionAnimationFlags` bit 12 clear, `!CSChrThrowModule::IsInTrow`,
 /// and `field_0x70 == 0`. A request that fails them is dropped silently; nothing here can observe
 /// that, which is part of why the watchdog exists.
 pub(crate) mod chr_event_module {
-    /// `field5_0x24` -- the flags word `Update` reports itself through. RE-ONLY.
+    /// `field5_0x24` -- the flags word `Update` reports itself through. RE-only.
     pub(crate) const DISPATCH_FLAGS: usize = 0x24;
     /// Bit 0 of [`DISPATCH_FLAGS`]: the request reached the behaviour world this frame.
     /// Cleared at the top of `Update` and set only on the branch that dispatches.
@@ -636,7 +636,7 @@ pub(crate) mod chr_time_act_module {
     /// The bound on how long "committed" can possibly last. Without it, an oracle that cannot
     /// answer leaves a press waiting forever; with it, it waits at most one clip.
     pub(crate) const ANIM_LENGTH: usize = 0x0c;
-    /// `localTime` within a queue entry, `f32` -- seconds into the clip THIS frame.
+    /// `localTime` within a queue entry, `f32` -- seconds into the clip this frame.
     ///
     /// `prevLocalTime` at +0x4 is the same measurement one frame earlier, which is what the pair
     /// is for: an event whose time falls between the two fired during this frame. Reading the
@@ -645,12 +645,12 @@ pub(crate) mod chr_time_act_module {
     pub(crate) const ANIM_LOCAL_TIME: usize = 0x08;
     /// Entries in the ring.
     pub(crate) const ANIM_QUEUE_LEN: u32 = 10;
-    /// `writeIdx`, `u32` -- where the NEXT push lands. Cross-checked.
+    /// `writeIdx`, `u32` -- where the next push lands. Cross-checked.
     ///
     /// It is here for one reason: `readIdx == writeIdx` is the only way to tell that the entry
-    /// `readIdx` points at is STALE. See [`READ_IDX`].
+    /// `readIdx` points at is stale. See [`READ_IDX`].
     pub(crate) const WRITE_IDX: usize = 0xc0;
-    /// `readIdx`, `u32` -- where the animations driven THIS FRAME begin.
+    /// `readIdx`, `u32` -- where the animations driven this frame begin.
     ///
     /// Not "the current animation", which is what this constant's old comment claimed and what
     /// cost the moveset five minutes of dead buttons in the 2026-09-02 run.
@@ -676,9 +676,9 @@ pub(crate) mod chr_time_act_module {
 /// the two loads and skips both calls, and the only address the moveset layer resolves is the one
 /// it genuinely cannot avoid.
 pub(crate) mod chr_behavior_module {
-    /// The `hkbCharacter` owner this module hangs off. RE-ONLY (`unk10` in the crate).
+    /// The `hkbCharacter` owner this module hangs off. RE-only (`unk10` in the crate).
     pub(crate) const HKB_OWNER: usize = 0x10;
-    /// ...and the `hkbCharacter` itself, inside that. RE-ONLY.
+    /// ...and the `hkbCharacter` itself, inside that. RE-only.
     pub(crate) const HKB_CHARACTER: usize = 0x30;
     /// `rootMotion`, a `FloatVector4`. The engine's own per-frame displacement for this
     /// character, which is exactly the "is it actually going anywhere" question the watchdog
@@ -688,7 +688,7 @@ pub(crate) mod chr_behavior_module {
     /// **Byte-verified on 1.17**, because the watchdog decides on this number whether a move is
     /// marked permanently unusable, and a wrong offset would mark good moves bad. The
     /// `CSChrBehaviorModule` constructor zero-inits it, and its zero-init window is unique
-    /// (`hits=1`) in both images and byte-for-byte IDENTICAL between them:
+    /// (`hits=1`) in both images and byte-for-byte identical between them:
     ///
     /// ```text
     /// 48890333ed 48896b?? 48896b?? 48896b?? 48896b?? 0f57c0 0f2943?? 0f2943?? 0f2943?? 488d4b?? e8
@@ -703,7 +703,7 @@ pub(crate) mod chr_data_module {
     /// `hp`, `i32`. Proven by `CSChrDataModule::GetHpRate` being `[+0x138] / [+0x13c]`.
     /// Cross-checked.
     pub(crate) const HP: usize = 0x138;
-    /// THE MIRROR of [`super::chr_ctrl::SCALE_SIZE`] -- three `f32` at `+0x54/+0x58/+0x5c`.
+    /// The mirror of [`super::chr_ctrl::SCALE_SIZE`] -- three `f32` at `+0x54/+0x58/+0x5c`.
     ///
     /// Written by `ChrCtrl::SetScaleSize` in the same breath as the `ChrCtrl` copy (the byte proof
     /// is on that constant), and this crate writes both for the same reason the game does: a
@@ -717,14 +717,14 @@ pub(crate) mod chr_data_module {
 pub(crate) mod chr_physics_module {
     /// The live physics-space position, a `FloatVector4`. This is the field
     /// `ChrIns::GetPhysicsPosition` returns and the one `ForceSetPosition` writes -- read the
-    /// creature's, write the player's, ZERO conversion, same space. Cross-checked.
+    /// creature's, write the player's, zero conversion, same space. Cross-checked.
     pub(crate) const POSITION: usize = 0x70;
     /// `standingOnSolidGround`, a `bool`. This is what `ChrIns::IsStandingOnSolidGround` reads,
     /// so the question "does the release point already qualify as ground" is a field read rather
     /// than a sphere cast. Cross-checked.
     pub(crate) const STANDING_ON_SOLID_GROUND: usize = 0x92;
-    /// `lastGroundedPosition`. RE-ONLY (`unk150` in the crate), and the one field in this table
-    /// that is both READ and WRITTEN.
+    /// `lastGroundedPosition`. RE-only (`unk150` in the crate), and the one field in this table
+    /// that is both read and written.
     ///
     /// Read, it is a point the character demonstrably stood on -- the free fallback for the release
     /// point when the creature dies airborne.
@@ -737,19 +737,19 @@ pub(crate) mod chr_physics_module {
     /// `position` and `prevUpdatePosition` and leaves this one alone, so a body carried through a
     /// leaping creature's arc lands reading a fall it never took.
     ///
-    /// **CORRECTED 2026-09-02: that path DOES call `ChrIns::IsImmuneToAttack`, and this doc used
+    /// **corrected 2026-09-02: that path does call `ChrIns::IsImmuneToAttack`, and this doc used
     /// to say the opposite.** The damage block is gated on `FUN_14044e730`, whose tail reads
     /// `MOV RCX,RAX ; MOV R9,[RAX] ; CALL [R9+0x1d8] ; TEST AL,AL ; JNZ 0x14044e79a` at
     /// `0x14044e866`, and `0x14044e79a` is `XOR EAX,EAX; RET`. So `super::chr_ins::INVINCIBLE`
     /// alone already stops a possessed body being charged for a fall, and this write is not what
-    /// keeps the body alive DURING a possession.
+    /// keeps the body alive during a possession.
     ///
-    /// What it is for is the frames on either SIDE of one -- release takes the bit off, and the
+    /// What it is for is the frames on either side of one -- release takes the bit off, and the
     /// field then still names whatever height the possession left it at. See
     /// [`super::fall`] for the clamp that makes the subtraction safe there, and for the byte proof
     /// of the whole gate.
     ///
-    /// BOTH BUILDS, byte-proven, and the pattern matches UNIQUELY in each image -- 1.16.2
+    /// Both builds, byte-proven, and the pattern matches uniquely in each image -- 1.16.2
     /// `0x14044dd1f`, 1.17 `0x14044e27f`. `48 8b 88 90 01 00 00` is [`super::chr_ins::MODULES`],
     /// `48 8b 59 68` is [`super::modules::PHYSICS`], and `0f 10 b3 50 01 00 00` is this offset:
     ///
@@ -758,7 +758,7 @@ pub(crate) mod chr_physics_module {
     /// MOVUPS XMM6,[RBX+0x150] ; SHUFPS XMM6,XMM6,0x55 ; SUBSS XMM6,[RAX+0x4]
     /// ```
     pub(crate) const LAST_GROUNDED_POSITION: usize = 0x150;
-    /// `maxStepHeight`, an `f32` in metres -- how far this character can step UP without the
+    /// `maxStepHeight`, an `f32` in metres -- how far this character can step up without the
     /// engine treating it as anything.
     ///
     /// Read only, and only to size the co-location telemetry's alarm: a body that is below the
@@ -770,7 +770,7 @@ pub(crate) mod chr_physics_module {
     pub(crate) const MAX_STEP_HEIGHT: usize = 0x104;
     /// `capsuleHalfHeight`, an `f32` in metres.
     ///
-    /// THE NUMBER THE RENDER SCALE DOES NOT TOUCH, which is why it is worth logging next to the
+    /// The number the render scale does not touch, which is why it is worth logging next to the
     /// body scale the lock-on anchor applies. `ChrCtrl::SetScaleSize` (`0x1403c8350`) is
     /// `MOVSD [RCX+0x2d4] ; MOV [RCX+0x2dc] ; ... ; MOVSD [R8+0x54] ; MOV [R8+0x5c] ; RET` -- six
     /// stores and a return, none of them into `CSChrPhysicsModule`. So the body wearing a 0.47x
@@ -781,7 +781,7 @@ pub(crate) mod chr_physics_module {
     pub(crate) const FALLING: usize = 0x1d0;
     /// `isTouchingGround`, a `bool`. The looser sibling of [`STANDING_ON_SOLID_GROUND`].
     pub(crate) const IS_TOUCHING_GROUND: usize = 0x1d1;
-    /// `skipPhysicsThisFrame`, a `bool`. **NOT WRITTEN BY THIS CRATE**, and documented here so the
+    /// `skipPhysicsThisFrame`, a `bool`. **not written by this crate**, and documented here so the
     /// next reader does not have to find it twice.
     ///
     /// This is the engine's own switch for "this character's position is being driven from
@@ -794,18 +794,18 @@ pub(crate) mod chr_physics_module {
     /// is modelled on.
     ///
     /// It is the obvious lever for stopping the possessed body's own proxy from resolving against
-    /// geometry it does not fit in, and it is deliberately NOT used yet: `FUN_1404610c0` clears it
+    /// geometry it does not fit in, and it is deliberately not used yet: `FUN_1404610c0` clears it
     /// every frame before `doUpdates` runs, so whether a write from this crate's `FrameBegin` task
     /// survives to be read depends on task ordering that has not been measured. Measure it before
     /// writing it.
     ///
-    /// Unused ON PURPOSE, and kept rather than deleted: the offset, the reader, the writer and the
+    /// Unused on purpose, and kept rather than deleted: the offset, the reader, the writer and the
     /// per-frame clear each cost a separate Ghidra session to find, and the next agent who reaches
     /// this hazard should not have to pay for them again. The `expect` turns into a warning the
     /// moment somebody does wire it up, which is the right time for this note to be re-read.
     #[expect(dead_code)]
     pub(crate) const SKIP_PHYSICS_THIS_FRAME: usize = 0x1e2;
-    /// `qInterpolatedOrientation`, the character's LIVE orientation QUATERNION.
+    /// `qInterpolatedOrientation`, the character's live orientation QUATERNION.
     ///
     /// # The field this replaced, and why a passing cross-check did not save it
     ///
@@ -813,22 +813,22 @@ pub(crate) mod chr_physics_module {
     /// `orientationEuler.y`. It is not an orientation at all: the 1.16.2 named dump types
     /// `CSChrPhysicsModule+0x2c0` as `ChrPhysicsModuleInitData initData`, whose second field is
     /// `initialOrientation` at `+0x10` -- i.e. `+0x2d0` is the orientation the character was
-    /// CONSTRUCTED with, a spawn-time constant. The rest of that block reads the same way and
+    /// constructed with, a spawn-time constant. The rest of that block reads the same way and
     /// confirms it: `chrHitHeight`/`chrHitRadius` at `+0x2e0`/`+0x2e4`, `collisionGroup`,
     /// `weight`, `proxyGravityScale`, `moveTypeFlags` -- an `NpcParam`-shaped init record, with
-    /// the LIVE `hitHeight`/`hitRadius` pair living separately at `+0x340`/`+0x344` (which is
+    /// the live `hitHeight`/`hitRadius` pair living separately at `+0x340`/`+0x344` (which is
     /// where [`crate::camera::layout::chr_physics_module`] already reads them).
     ///
     /// Read live out of a running 1.17 game (pid 650512, the player's own physics module reached
     /// through `ChrIns+0x190 -> +0x68`, whose `CSChrModuleBase.owner` read back as the player
     /// `ChrIns`), `+0x2d0` was `(0, 0, 0, 0)` in every sample while `position` at `+0x70` changed
-    /// between them. So `yaw()` returned a CONSTANT `0.0` for every character, always: the spawn
+    /// between them. So `yaw()` returned a constant `0.0` for every character, always: the spawn
     /// point was placed at a fixed world offset instead of in front of the player, and the
     /// movement basis never rotated with the body.
     ///
     /// The `offset_of!` cross-check passed the whole time because `fromsoftware-rs` names the same
     /// eight bytes `orientation_euler` -- one guessed name checked against another. The assertion
-    /// in [`super::super::game`] now pins THIS field instead, whose name upstream and the named
+    /// in [`super::super::game`] now pins this field instead, whose name upstream and the named
     /// dump agree on and whose meaning is byte-proven below.
     ///
     /// # Byte proof, both builds
@@ -846,7 +846,7 @@ pub(crate) mod chr_physics_module {
     ///   CALL <accessor>
     /// ```
     ///
-    /// matches 6 times in each image, at the SAME six functions in the SAME order (1.16.2
+    /// matches 6 times in each image, at the same six functions in the same order (1.16.2
     /// `0x1403c6d4f`, 1.17 `0x1403c6d5f`, and five more), and every callee is byte-identical:
     ///
     /// ```text
@@ -860,7 +860,7 @@ pub(crate) mod chr_physics_module {
     ///
     /// # Interpolated, not `qOrientation`
     ///
-    /// `+0x50` is the TURN TARGET (upstream: "interpolated towards the target rotation"), and is
+    /// `+0x50` is the turn target (upstream: "interpolated towards the target rotation"), and is
     /// what `ChrIns::GetOrientation` decomposes for the AI's turn delta. `+0x60` is where the body
     /// actually is, which is what `GetForward` reads and what the player is looking at when they
     /// push the stick. The two differ only by a frame of turn interpolation.
@@ -877,7 +877,7 @@ pub(crate) mod manipulator {
     /// fourteen consumers read the mirror's zeroes while the engine wrote the real object -- and
     /// the vtable swizzle that replaced it allocates no object at all.
     ///
-    /// The constant stays as the BOUND on every field offset in this module: an offset at or past
+    /// The constant stays as the bound on every field offset in this module: an offset at or past
     /// it is not a field of this struct, and the assertion below is the only thing standing
     /// between a typo'd offset and a write into the allocator's next block.
     pub(crate) const COM_SIZE: usize = 0x170;
@@ -890,7 +890,7 @@ pub(crate) mod manipulator {
     /// [`crate::possess::game::Chr::validated_ai_ins`]: a manipulator reached from a `ChrIns` must
     /// name that same `ChrIns` back.
     pub(crate) const OWNING_CHR: usize = 0xa8;
-    /// `ChrManipulator`'s PENDING move vector -- the slot the engine publishes from, and the one
+    /// `ChrManipulator`'s pending move vector -- the slot the engine publishes from, and the one
     /// field in this whole problem that nothing fights us for.
     ///
     /// # Why this exists and `walkType` no longer decides anything
@@ -902,8 +902,8 @@ pub(crate) mod manipulator {
     /// manip->field99_0x140 = <this frame's vector>;                        // STAGE this frame
     /// ```
     ///
-    /// `FUN_1403cdc20` copies its argument into `ChrManipulator+0x10` AND `+0x70`, which is where
-    /// locomotion is actually read from -- and all SIX manipulator `[vt+0x50]` implementations in
+    /// `FUN_1403cdc20` copies its argument into `ChrManipulator+0x10` and `+0x70`, which is where
+    /// locomotion is actually read from -- and all six manipulator `[vt+0x50]` implementations in
     /// the game publish there, the player's included. So `+0x140` is the staging slot for the next
     /// publish, and writing it is the same act the engine performs, one step earlier.
     ///
@@ -914,21 +914,21 @@ pub(crate) mod manipulator {
     /// to `0x1403cd000-0x1403e0000`, the only store to this displacement inside `FUN_1403d0250`
     /// is `0x1403d05a6`, the staging write above.
     ///
-    /// That matters because `walkType` is NOT ours and cannot be made ours: six distinct sites
+    /// That matters because `walkType` is not ours and cannot be made ours: six distinct sites
     /// write it to literal zero, and every one of them is goal lifecycle --
     /// `AiIns::ClearMoveRequest` (`0x1402bf9b5`), `FUN_1402bfaa0` under `TerminateGoal`
     /// (`0x1402bfb23`), `ClearAiGoalRelatedInfo` (`0x1402d654c`), `FUN_1402e7350` (`0x1402e7464`),
     /// a goal `Activate` (`0x1403208f7`) and a goal `Interrupt` (`0x1403248ab`). Possession
-    /// no-ops goal SELECTION at `[vt+0x48]`, so the goal machine churns and something zeroes the
+    /// no-ops goal selection at `[vt+0x48]`, so the goal machine churns and something zeroes the
     /// gate at roughly frame cadence. Measured: a per-frame read-back immediately after our own
     /// write returned `walk_type=0` with `wantToMoveTo` equal to the body's own position -- which
     /// is `ClearMoveRequest`'s exact signature -- on half the sampled frames.
     ///
-    /// The vector is in the BODY'S LOCAL FRAME and unit length, scaled by
+    /// The vector is in the body'S local frame and unit length, scaled by
     /// [`super::super::intent::WALK_SPEED_SCALE`] for the walk gait. See
     /// [`super::super::game::Chr::write_manipulator_move`].
     pub(crate) const PENDING_MOVE_VECTOR: usize = 0x140;
-    /// `ChrManipulator`'s PUBLISHED move vector -- where `FUN_1403cdc20` copies
+    /// `ChrManipulator`'s published move vector -- where `FUN_1403cdc20` copies
     /// [`PENDING_MOVE_VECTOR`] on the next `[vt+0x50]`, and the field a reader would consume.
     ///
     /// `FUN_1403cdc20` writes the same value to `+0x10` and `+0x70`; this is the first of the
@@ -937,7 +937,7 @@ pub(crate) mod manipulator {
     /// named rather than left inside the note above.
     pub(crate) const PUBLISHED_MOVE_VECTOR: usize = 0x10;
 
-    /// Every offset above names a field INSIDE the object the engine allocates. A build error is
+    /// Every offset above names a field inside the object the engine allocates. A build error is
     /// the right answer for one that does not, because the writes in
     /// [`crate::possess::game`] would land in whatever the allocator put next.
     const _: () = assert!(PENDING_MOVE_VECTOR + 16 <= COM_SIZE);
@@ -945,10 +945,10 @@ pub(crate) mod manipulator {
     const _: () = assert!(COM_THINK_OWNER < COM_SIZE);
     const _: () = assert!(AI_INS < COM_SIZE);
     const _: () = assert!(OWNING_CHR < COM_SIZE);
-    /// `ComManipulator.comThinkOwner` -- an **INLINE `CSComThinkOwner` member, not a pointer**.
+    /// `ComManipulator.comThinkOwner` -- an **inline `CSComThinkOwner` member, not a pointer**.
     ///
     /// This is the fact that makes the canary exact rather than a plausibility screen.
-    /// `CSComThinkOwner` is `0x18` bytes and lives at `+0xc8` INSIDE the manipulator, so the
+    /// `CSComThinkOwner` is `0x18` bytes and lives at `+0xc8` inside the manipulator, so the
     /// pointer `AiIns.comThinkOwner` holds is not merely "some live object": it must equal
     /// `manipulator + 0xc8` on the nose. A stale `AiIns`, a freed manipulator, or a build whose
     /// `AI_INS` offset has moved cannot satisfy an exact address equality by accident.
@@ -967,7 +967,7 @@ pub(crate) mod com_think_owner {
     pub(crate) const CHR_CTRL: usize = 0x10;
 }
 
-/// `AiIns`, and the `AiPathData` it points at -- THE FOUR FIELDS `CSAiFunc::MoveTo` WRITES.
+/// `AiIns`, and the `AiPathData` it points at -- The four fields `CSAiFunc::MoveTo` writes.
 ///
 /// # The move request is three fields, and this crate used to write one
 ///
@@ -991,7 +991,7 @@ pub(crate) mod com_think_owner {
 /// Nothing on the per-frame path writes `walkType`: `CS::AiIns::UpdateMovement` runs first and
 /// never touches it, and every writer in the AI region (`MoveTo`, `MoveToEventPoint`,
 /// `FollowPath`, `ClearMoveRequest`, and the goal `Activate`/`Interrupt`/`Update` bodies) is
-/// reached from GOAL SELECTION -- which possession deliberately no-ops at `[vt+0x48]`. That is
+/// reached from goal selection -- which possession deliberately no-ops at `[vt+0x48]`. That is
 /// what makes writing these fields the product mechanism rather than a diagnostic: the native
 /// owner is not merely idle, it is the thing this mod switched off on purpose.
 ///
@@ -999,7 +999,7 @@ pub(crate) mod com_think_owner {
 ///
 /// A previous note here said writing `turnTarget` steers nothing because the named points it
 /// selects are not refreshed once goal selection is dead. That is true of every value except
-/// `TARGET_SELF`, which refreshes from a field we DO write. `UpdateMovement` ends with
+/// `TARGET_SELF`, which refreshes from a field we do write. `UpdateMovement` ends with
 /// `FUN_1402c9410(aiIns, aiIns->turnTarget)`, and that function's `TARGET_SELF` branch
 /// (`0x1402ca0c4`) reads `walkType`, returns early if it is zero, and otherwise takes
 /// `wantToMoveTo - GetPhysicsPosition()` as the direction to face, converts it to angles and
@@ -1009,14 +1009,14 @@ pub(crate) mod com_think_owner {
 /// it costs one `int`.
 ///
 /// With `walkType == 0` that same branch falls to `FUN_1402c68f0`, which writes the body's
-/// CURRENT orientation into `+0xc3f0` -- i.e. releasing the stick stops the turn too, with no
+/// current orientation into `+0xc3f0` -- i.e. releasing the stick stops the turn too, with no
 /// extra write.
 ///
 /// # 1.17
 ///
 /// Every offset below was read out of the 1.16.2 named dump's own curated `AiIns` structure and
 /// then **byte-verified on 1.17**, because `AiIns` is `0xf0d0` bytes and one inserted field would
-/// move all of them silently. Two windows carry all four, and each is unique (`hits=1`) in BOTH
+/// move all of them silently. Two windows carry all four, and each is unique (`hits=1`) in both
 /// `eldenring-deobf.bin` and `eldenring-deobf-1.17.bin`:
 ///
 /// ```text
@@ -1033,10 +1033,10 @@ pub(crate) mod com_think_owner {
 ///
 /// The canary in `crate::possess::game::Chr::validated_ai_ins` stays, and stays load-bearing:
 /// these offsets are proven for the two builds that were measured, and a third build gets no
-/// writes. It is an EXACT identity round trip now rather than the plausibility screen it was --
+/// writes. It is an exact identity round trip now rather than the plausibility screen it was --
 /// which passed happily through the whole period the creature refused to move.
 pub(crate) mod ai_ins {
-    /// `AiIns.comThinkOwner`, the struct's FIRST field -- a `CSComThinkOwner*`.
+    /// `AiIns.comThinkOwner`, the struct's first field -- a `CSComThinkOwner*`.
     ///
     /// `FUN_1402c9410` opens `pCVar1 = param_1->comThinkOwner; if (pCVar1 == 0) return;`, and the
     /// named 1.16.2 dump types `AiIns+0x0` as `CSComThinkOwner *`. It is the canary's anchor: see
@@ -1044,17 +1044,17 @@ pub(crate) mod ai_ins {
     pub(crate) const COM_THINK_OWNER: usize = 0x0;
     /// `wantToMoveTo`, a `FloatVector4` in physics space. Byte-verified on 1.16.2 and 1.17.
     pub(crate) const WANT_TO_MOVE_TO: usize = 0xc3e0;
-    /// `walkType`, an `int`. **THE GATE** -- see the module note. Byte-verified on both builds.
+    /// `walkType`, an `int`. **the gate** -- see the module note. Byte-verified on both builds.
     pub(crate) const WALK_TYPE: usize = 0xc424;
     /// `pathData`, an `AiPathData*`. Doubles as the layout canary; see the module note above.
     pub(crate) const PATH_DATA: usize = 0xd9c8;
-    /// `turnTarget`, an `AiTargetPointType` -- a 4-byte SIGNED enum. Byte-verified on both builds.
+    /// `turnTarget`, an `AiTargetPointType` -- a 4-byte signed enum. Byte-verified on both builds.
     pub(crate) const TURN_TARGET: usize = 0xdab0;
 
     /// `walkType = 0`, exactly as `CS::AiIns::ClearMoveRequest` writes it. No move vector.
     pub(crate) const WALK_TYPE_STOP: i32 = 0;
     /// `walkType = 1`. `[vt+0x50]` scales the move vector down by `DAT_14329e980` for this value
-    /// and this value only, which is what makes it the WALK of the pair.
+    /// and this value only, which is what makes it the walk of the pair.
     pub(crate) const WALK_TYPE_WALK: i32 = 1;
     /// `walkType = 2`, the unscaled gait. `MoveTo` writes `2 - walk`, so these two are the only
     /// values the engine's own front door produces.
@@ -1079,12 +1079,12 @@ pub(crate) mod world_chr_man_dbg {
     /// Only five sites read it, and the one that matters is `WorldChrManImp::GetMainPlayerIns`,
     /// which prefers it over the raw `mainPlayerIns` field. That moves the ~40 `GetMainPlayerIns`
     /// consumers -- camera and lock-on -- and leaves the ~670 identity/damage/save consumers
-    /// (which go through `IsMainPlayerIns`, comparing against the RAW field) pointing at the real
-    /// `PlayerIns`. That split IS the safety property.
+    /// (which go through `IsMainPlayerIns`, comparing against the raw field) pointing at the real
+    /// `PlayerIns`. That split is the safety property.
     pub(crate) const CAM_OVERRIDE_CHR_INS: usize = 0xb8;
 }
 
-/// The `ChrIns.debugFlags` offset FOR THE RUNNING BUILD, or `None` when the build is one nobody
+/// The `ChrIns.debugFlags` offset for the running build, or `None` when the build is one nobody
 /// has measured.
 ///
 /// # Why this refuses rather than guessing
@@ -1103,7 +1103,7 @@ pub(crate) fn debug_flags_offset(version: Option<FileVersion>) -> Option<usize> 
     }
 }
 
-/// The `(primary, fallback)` `EneDat` cap offsets FOR THE RUNNING BUILD, or `None` when the build
+/// The `(primary, fallback)` `EneDat` cap offsets for the running build, or `None` when the build
 /// is one nobody has measured.
 ///
 /// # Why this refuses rather than guessing, and what refusing costs
@@ -1114,7 +1114,7 @@ pub(crate) fn debug_flags_offset(version: Option<FileVersion>) -> Option<usize> 
 ///
 /// Refusing is cheap here in a way it is not for `debugFlags`: the asset-residency gate is one
 /// conjunct of a readiness predicate whose other three are byte-proven identical on both builds, so
-/// `None` SKIPS that conjunct and readiness still rests on the registration, the `ChrRes` step and
+/// `None` skips that conjunct and readiness still rests on the registration, the `ChrRes` step and
 /// the `ChrCtrl` chain. What is lost is the early detection of a chr whose caps loaded but yielded
 /// no FLVER -- and the game self-despawns that case anyway, which the registration gate sees.
 #[must_use]
@@ -1130,13 +1130,13 @@ pub(crate) fn ene_dat_cap_offsets(version: Option<FileVersion>) -> Option<(usize
     }
 }
 
-/// THE GAME'S OWN RECEIVE BUFFER FOR PLAYER-VERSUS-PLAYER DAMAGE.
+/// The game'S own receive buffer for player-versus-player damage.
 ///
 /// `WorldChrManImp`'s packet pump (1.16.2 `FUN_14050e4a0`, 1.17 `FUN_14050f2a0`) dequeues each
-/// arriving `Packet15` into ONE function-static buffer and then applies it. The buffer is not
+/// arriving `Packet15` into one function-static buffer and then applies it. The buffer is not
 /// cleared afterwards, so it always holds the last PvP damage packet this process received --
 /// which makes it a read-only oracle for the one question this crate could not otherwise answer:
-/// when nobody's HP moves, did their damage ARRIVE and get ignored, or did it never arrive?
+/// when nobody's HP moves, did their damage arrive and get ignored, or did it never arrive?
 ///
 /// The pump's own sequence, in its own order, is what these offsets are transcribed from:
 ///
@@ -1163,7 +1163,7 @@ pub(crate) mod packet15_receive {
     pub(crate) const BUFFER_RVA_1170: u32 = 0x03d6_a040;
     /// The attacker's `P2PEntityHandle` (`blockId`, `chrSelector`), 8 bytes.
     pub(crate) const DEALER_HANDLE: usize = 0x120;
-    /// The victim's `P2PEntityHandle`, 8 bytes. On a packet aimed at us this is OUR handle.
+    /// The victim's `P2PEntityHandle`, 8 bytes. On a packet aimed at us this is our handle.
     pub(crate) const VICTIM_HANDLE: usize = 0x128;
     /// The HP the pump subtracts, an `i16`.
     pub(crate) const DAMAGE: usize = 0x130;
@@ -1171,7 +1171,7 @@ pub(crate) mod packet15_receive {
     pub(crate) const STAMINA: usize = 0x132;
 }
 
-/// The `Packet15` receive-buffer RVA FOR THE RUNNING BUILD, or `None` on a build nobody measured.
+/// The `Packet15` receive-buffer RVA for the running build, or `None` on a build nobody measured.
 ///
 /// Refuses rather than guessing for the same reason [`debug_flags_offset`] does, and the stakes
 /// are lower but the failure is worse to read: a wrong base here does not crash, it prints a
@@ -1211,7 +1211,7 @@ mod tests {
     /// The value is the whole of the lock-on fix, so it is pinned rather than left as a literal
     /// somebody could "tidy" into the player's team id -- which would work for lock-on and would
     /// also tell every PvP and invasion path that an `EnemyIns` is a player.
-    /// THE RECEIVE BUFFER IS A DIFFERENT ADDRESS ON EACH BUILD, and refusing beats guessing.
+    /// The receive buffer is a different address on each build, and refusing beats guessing.
     ///
     /// The two bases are `0x4070` apart, which is nothing recognisable in either image, so a wrong
     /// choice reads live-but-unrelated memory and prints a plausible packet that never arrived --
@@ -1281,12 +1281,12 @@ mod tests {
         assert_eq!(ene_dat_cap_offsets(None), None, "the host, with no game");
     }
 
-    /// THE TWO FIELDS DID NOT MOVE BY THE SAME AMOUNT, and this is what stops anyone "simplifying"
+    /// The two fields did not move by the same amount, and this is what stops anyone "simplifying"
     /// the table into one delta. The primary went `+0x10` and the fallback `+0x8`; deriving the
     /// fallback from the primary's delta lands eight bytes off, on a live pointer rather than on
     /// nothing, and the residency gate would then be following it.
     ///
-    /// The primary must also stay ABOVE the fallback in both builds -- reading them in the wrong
+    /// The primary must also stay above the fallback in both builds -- reading them in the wrong
     /// order would prefer a cap the game only consults second.
     #[test]
     fn the_two_ene_dat_offsets_moved_by_different_amounts_and_keep_their_order() {
@@ -1298,7 +1298,7 @@ mod tests {
             "one delta cannot carry both fields forward"
         );
         // `const` blocks rather than plain asserts: both sides are constants, so this is decidable
-        // at compile time and a violation should be a BUILD error rather than a test that has to be
+        // at compile time and a violation should be a build error rather than a test that has to be
         // run to notice. (clippy::assertions_on_constants says the same thing.)
         const { assert!(ene_dat::CAP_PRIMARY_1162 > ene_dat::CAP_FALLBACK_1162) };
         const { assert!(ene_dat::CAP_PRIMARY_1170 > ene_dat::CAP_FALLBACK_1170) };
@@ -1438,7 +1438,7 @@ mod tests {
         );
     }
 
-    /// The four `AiIns` fields one frame of movement writes must be four DIFFERENT fields, and
+    /// The four `AiIns` fields one frame of movement writes must be four different fields, and
     /// the 16-byte `wantToMoveTo` must not run over the `int` that follows it in the struct.
     ///
     /// `wantToMoveTo` is at `+0xc3e0` and the desired-orientation vector the engine derives from
@@ -1481,7 +1481,7 @@ mod tests {
         assert_ne!(ai_ins::WALK_TYPE_RUN, ai_ins::WALK_TYPE_STOP);
     }
 
-    /// `TARGET_SELF` is NEGATIVE, and that is the whole reason the field is written through an
+    /// `TARGET_SELF` is negative, and that is the whole reason the field is written through an
     /// `i32` rather than the `u32` every other write in this crate uses. A `usize`/`u32` spelling
     /// of `-1` that lost its sign would write `TARGET_NONE`'s neighbour, not `TARGET_SELF`.
     #[test]

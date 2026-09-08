@@ -3,7 +3,7 @@
 //!
 //! The DLL performs this same transform in memory against the game's own Scaleform MemoryFile;
 //! this example exists so the derived bytes can be inspected offline and so
-//! `QUIT6_WIN_LEN`/`QUIT6_WIN_FNV1A64` can be RE-DERIVED rather than hand-copied when the edit
+//! `QUIT6_WIN_LEN`/`QUIT6_WIN_FNV1A64` can be RE-derived rather than hand-copied when the edit
 //! set changes. It deliberately calls `apply_edits` directly instead of
 //! [`er_gfx::options_02_040::quit6`], because that wrapper refuses to return bytes whose
 //! fingerprint disagrees with the pinned constants -- which is exactly the situation you are in

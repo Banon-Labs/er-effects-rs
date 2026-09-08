@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
 """Name the code a WEDGED ELDEN RING is parked in, without attaching a debugger.
 
-WHY THIS EXISTS
+Why this exists
 ---------------
 On 2026-08-29 the game stopped rendering ~12 s into boot with every thread asleep and zero CPU,
 and four consecutive hypotheses about the cause were tested by rebuilding, relaunching, and
 watching the same number come back. Each cost minutes and falsified exactly one guess. The
 process was sitting right there the whole time with the answer in its stacks.
 
-This reads them. No `frida.attach` -- that KILLS this target (bd
+This reads them. No `frida.attach` -- that kills this target (bd
 `frida-attach-kills-wine-eldenring-use-proc-mem-2026-08-12`) -- and no ptrace stop: it opens
 `/proc/<pid>/mem` and scans each thread's stack for values that land inside the game image, the
 same poor-man's unwind `er-crash-logging` uses for its `callers=` line. A scanned stack contains
-dead frames as well as live ones, so a hit is a CANDIDATE, not a call stack; what makes it useful
+dead frames as well as live ones, so a hit is a candidate, not a call stack; what makes it useful
 is that the candidates cluster, and an address on many threads at once is where they are waiting.
 
-WHAT IT WAITS FOR
+What it waits for
 -----------------
 `--until-wedged` polls total process CPU and only dumps once it flatlines, because a dump taken
 while the game is still working describes a game that is working. The flatline threshold is
 deliberately strict: a boot that is merely slow still burns hundreds of ticks a second.
 
-USAGE
+Usage
     python3 scripts/er-wedge-stacks.py --pid 12345
     python3 scripts/er-wedge-stacks.py --until-wedged --max-seconds 25
     python3 scripts/er-wedge-stacks.py --selftest
@@ -113,9 +113,9 @@ def live_threads(pid: int) -> list[str]:
 
 
 def open_process_memory(pid: int):
-    """A readable `mem` handle for the process, opened through a LIVE thread.
+    """A readable `mem` handle for the process, opened through a live thread.
 
-    `/proc/<pid>/mem` is `/proc/<pid>/task/<leader>/mem`, and when the thread-group LEADER is a
+    `/proc/<pid>/mem` is `/proc/<pid>/task/<leader>/mem`, and when the thread-group leader is a
     zombie that open fails with ESRCH -- while the process is very much alive and its other
     threads are readable. That is not a corner case here: it is the exact state this tool exists
     to inspect. Measured 2026-08-29: the game's main thread exits ~12 s into boot with quickload
@@ -158,8 +158,8 @@ def scan_stacks(pid: int) -> dict[int, list[str]]:
 def wait_for_wedge(pid: int, max_seconds: float) -> tuple[bool, dict[int, list[str]]]:
     """Poll until the process stops burning CPU. Returns (wedged, the most recent stack scan).
 
-    SNAPSHOT EVERY SAMPLE, and keep the last one that worked. Detect-then-scan is always too late
-    here: measured 2026-08-29, the game flatlines and then EXITS within seconds, and three
+    Snapshot every sample, and keep the last one that worked. Detect-then-scan is always too late
+    here: measured 2026-08-29, the game flatlines and then exits within seconds, and three
     consecutive attempts to scan after the flatline found `/proc/<pid>/mem` already gone. A scan
     from the sample before it died is worth infinitely more than a perfect scan of nothing.
     """
@@ -167,7 +167,7 @@ def wait_for_wedge(pid: int, max_seconds: float) -> tuple[bool, dict[int, list[s
     last: dict[int, list[str]] = {}
     while time.monotonic() < deadline:
         before = cpu_ticks(pid)
-        time.sleep(SAMPLE_SECONDS)  # the SAMPLE PERIOD of a measurement, not a synchronisation
+        time.sleep(SAMPLE_SECONDS)  # the sample period of a measurement, not a synchronisation
         after = cpu_ticks(pid)
         if before is None or after is None:
             print("process exited -- reporting the last snapshot taken before it did")

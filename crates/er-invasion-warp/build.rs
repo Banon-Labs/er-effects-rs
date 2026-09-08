@@ -19,7 +19,7 @@ const SUPPORT: &str = "../../build-support/prologue_build.rs";
 
 /// `CS::FeSystemAnnounceView::Update`.
 const ANNOUNCE_UPDATE_VA: u64 = 0x1408c47c0;
-/// How much of `Update`'s opening the check reads. It deliberately stops PART WAY through the
+/// How much of `Update`'s opening the check reads. It deliberately stops part way through the
 /// `movaps` that spills `xmm6`, which is why the assembled sequence is longer than the constant.
 const ANNOUNCE_UPDATE_CHECKED_BYTES: usize = 8;
 /// `FUN_140d10b60(MsgRepositoryImp*, id) -> wchar_t*`, the `PlaceName` getter.
@@ -28,22 +28,22 @@ const PLACE_NAME_LOOKUP_VA: u64 = 0x140d10b60;
 // ---------------------------------------------------------------------------------------------
 // Seamless Co-op's `ersc.dll`, at its preferred base `0x180000000`
 //
-// ONE build is described here -- the one `ERSC_SUPPORTED_VERSION` names -- because every address,
+// One build is described here -- the one `ERSC_SUPPORTED_VERSION` names -- because every address,
 // field offset and state code below was measured against that build and none of them survives a
 // Seamless update. `ersc.dll` is third-party: the user installs and updates it on their own
 // schedule and may downgrade, and the launcher leaves the build it replaced in `_SeamlessCoop/`,
-// so a file is identified by its CONTENT before any pin is compared against it.
-// `local_invasion_filter.rs` refuses AT RUNTIME on a module whose invade action does not
+// so a file is identified by its content before any pin is compared against it.
+// `local_invasion_filter.rs` refuses at runtime on a module whose invade action does not
 // byte-match -- see `ersc::Abi` there.
 //
 // # These pins are longer than a prologue, on purpose
 //
-// The two option actions open with fourteen IDENTICAL bytes, and five different actions share
+// The two option actions open with fourteen identical bytes, and five different actions share
 // them (`0x24ef0`, `0x257d0`, `0x25850`, `0x258d0`, `0x259d0`, measured 2026-09-06 over the
 // supported build's plaintext `.text`). A fourteen-byte check therefore proves "an option action
-// lives here", not "THE invade action lives here" -- and this module's failure mode is calling
+// lives here", not "the invade action lives here" -- and this module's failure mode is calling
 // the wrong one and cancelling other players' invasions. So each option-action pin runs through
-// the state WRITE, which is the instruction that makes an action what it is. What that covers,
+// the state write, which is the instruction that makes an action what it is. What that covers,
 // all in one check:
 //
 //   the session load offset        `mov rdi,[rcx+0x58]`
@@ -53,9 +53,9 @@ const PLACE_NAME_LOOKUP_VA: u64 = 0x140d10b60;
 //   the guard field and its poison `cmp dword [rdi+GUARD], 0x7fffffff`
 //   the action code                `mov dword [rdi+STATE], CODE`
 //
-// Every pin below occurs EXACTLY ONCE in the supported build, which is what makes the runtime
+// Every pin below occurs exactly once in the supported build, which is what makes the runtime
 // gate an identification rather than a guess. `show` is the one exception and is deliberately not
-// used to identify anything: it is also the one function this module HOOKS, so its bytes stop
+// used to identify anything: it is also the one function this module hooks, so its bytes stop
 // being the shipped bytes once the detour is in.
 
 /// Entry points of the supported build. See `local_invasion_filter.rs` for the evidence that
@@ -155,7 +155,7 @@ struct ErscAction {
     mutex: i64,
     guard: i64,
     state: i64,
-    /// The value this action writes to the state field. What the action IS.
+    /// The value this action writes to the state field. What the action is.
     code: i32,
     /// `mov ecx,5; call <fatal>` -- taken when the mutex is already held.
     fatal_5: u64,
@@ -183,8 +183,8 @@ fn ersc_option_action_tail(
     asm.mov(dword_ptr(rdi + action.state), action.code)
 }
 
-/// A CANCEL action: no state precondition at all. It is the only unguarded shape here, which is
-/// what made it the one entry point a masked BODY search could still find across an update.
+/// A cancel action: no state precondition at all. It is the only unguarded shape here, which is
+/// what made it the one entry point a masked body search could still find across an update.
 fn ersc_cancel_action(
     asm: &mut CodeAssembler,
     action: &ErscAction,

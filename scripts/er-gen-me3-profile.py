@@ -6,22 +6,22 @@ and the save selection goes into `<dll-stem>.toml` beside the staged DLL rather 
 game directory's `er-quickload.toml` -- which is hand-edited, shared across every launch, and
 outlives every run.
 
-ersc.dll IS ALWAYS LISTED
+ersc.dll is always listed
 ------------------------
 Seamless Co-op's presence is what selects the DLL's container mode: `save_picker_seamless_mode
-_after_settle` reads the `seamless_coop_loaded()` PEB latch, and Seamless mode accepts BOTH
+_after_settle` reads the `seamless_coop_loaded()` PEB latch, and Seamless mode accepts both
 `ER0000.co2` and `ER0000.sl2` (preferring the co-op one), while vanilla accepts only `.sl2`.
 Listing ersc therefore makes the whole 89-save corpus reachable instead of the 70 `.sl2` ones.
-The entry REFERENCES the game-installed DLL and never copies it: bundling or staging
+The entry references the game-installed DLL and never copies it: bundling or staging
 `SeamlessCoop/ersc.dll` is forbidden in this repo.
 
 `--vanilla` drops the entry for changes that touch the vanilla-only save path, which the
 Seamless branch would otherwise never exercise.
 
-THE HEADER IS EVIDENCE, NOT DECORATION
+The header is evidence, not decoration
 --------------------------------------
 Every generated profile carries what the run was: branch, merge-base, dirty flag, each DLL's
-sha256, the DLLs that were EXCLUDED and why, the decoded character, the RNG seed, and the
+sha256, the DLLs that were excluded and why, the decoded character, the RNG seed, and the
 evidence class. A profile found later on disk should answer "what was this?" without needing
 the session that made it.
 
@@ -49,7 +49,7 @@ PRODUCT_ARTIFACT = "er_quickload.dll"
 
 # The evidence class every random-save run carries. AGENTS.md's 2026-07-08 standing order
 # deprecates the explicit-save-source path for release/autoload validation, and picking a
-# save at all REQUIRES that path -- so a run from this tool is a feature exercise, never
+# save at all requires that path -- so a run from this tool is a feature exercise, never
 # product proof. Saying so in the artifact is the difference between a known limitation and
 # a run that gets miscited three weeks later.
 EVIDENCE_EXPLICIT = (
@@ -72,7 +72,7 @@ def sidecar_for(dll: Path) -> Path:
     return dll.with_suffix(".toml")
 
 
-# The OTHER slot channel. `er-quickload-autoload.txt` sits in the game directory, no launcher owns
+# The other slot channel. `er-quickload-autoload.txt` sits in the game directory, no launcher owns
 # it, and several probe scripts here write it and do not always clean it up -- so it outlives the
 # run that made it and keeps steering later launches from a file nobody remembers.
 AUTOLOAD_REQUEST_FILE = "er-quickload-autoload.txt"
@@ -244,7 +244,7 @@ def render_sidecar(save: dict, run_id: str) -> str:
         "",
     ]
     if save:
-        # State the ACTUAL protection, not the intended one. The DLL stages a private copy and
+        # State the actual protection, not the intended one. The DLL stages a private copy and
         # should never write the source -- but 45 of the 89 corpus saves are writable on disk,
         # so a file claiming "read-only" over a writable source would be a comforting lie in
         # the one artifact someone reads while diagnosing a corrupted save.
@@ -389,7 +389,7 @@ def selftest() -> int:
         check(vanilla.count("[[natives]]") == 1, "--vanilla drops the ersc entry")
 
         def assigned_keys(text: str) -> set[str]:
-            """Keys the file actually SETS -- comments explaining other keys do not count."""
+            """Keys the file actually sets -- comments explaining other keys do not count."""
             keys = set()
             for line in text.splitlines():
                 stripped = line.strip()
@@ -406,7 +406,7 @@ def selftest() -> int:
             f"(got {sorted(assigned_keys(overlay))})",
         )
 
-        # THE SECOND SLOT CHANNEL, still live and now the ONLY reason this guard exists. It was
+        # The second slot channel, still live and now the only reason this guard exists. It was
         # written for `--save-default`, which is gone (2026-09-04, user directive: "--save default
         # should be removed as a feature ... I don't care what save slot you load"). The hazard it
         # names outlived the mode: the game-directory autoload request file is a slot channel the

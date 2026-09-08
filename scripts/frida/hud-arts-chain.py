@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Diagnose why the HUD Ash-of-War lookup returns nothing, by watching the GAME do it.
+"""Diagnose why the HUD Ash-of-War lookup returns nothing, by watching the game do it.
 
 The HUD badge binds correctly (7 ctors / 6 bound / correct scene offsets) but every frame
 takes the "no ash" branch. Somewhere in
@@ -11,7 +11,7 @@ takes the "no ash" branch. Somewhere in
 
 a step yields nothing, and the DLL cannot tell which one without a rebuild per guess.
 
-So this does NOT call anything. `UpdatePlayerComponents` invokes
+So this does not call anything. `UpdatePlayerComponents` invokes
 `GetWeaponGaitemHandleBySlot` every frame for the player's own weapons, so hooking it and
 recording `(rcx, slot) -> handle` observes the game performing the exact lookup the DLL is
 failing at -- zero calls issued from a frida thread, zero risk of racing the game thread.

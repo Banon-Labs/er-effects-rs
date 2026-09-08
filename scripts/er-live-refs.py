@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Find every live address that still HOLDS a given pointer value, read-only.
+"""Find every live address that still holds a given pointer value, read-only.
 
-WHY THIS EXISTS (2026-08-12). `scripts/er-live-fields.py` answers "what is at this
+Why this exists (2026-08-12). `scripts/er-live-fields.py` answers "what is at this
 address". It cannot answer the question that actually pins a lifetime bug: "this object
-was destructed, so WHO is still pointing at it?" Enumerating candidate owners by hand is
+was destructed, so who is still pointing at it?" Enumerating candidate owners by hand is
 guesswork, and this session burned four wrong mechanisms doing exactly that while a live
 bugged process sat there with the answer in it.
 
@@ -12,10 +12,10 @@ Concretely it was written to chase a Load-Game path-editor input softlock where 
 at 0x1b3354a08 was still alive with in-image vtables. Whoever still references that proxy
 is the thing keeping a dead menu in the graph.
 
-HOW IT READS, AND WHY NOT FRIDA. Same contract as `er-live-fields.py`: it opens
+How it reads, and why not FRIDA. Same contract as `er-live-fields.py`: it opens
 `/proc/<pid>/mem` and reads. Nothing is injected, no thread is suspended, no code runs in
-the target. Do NOT reach for frida on this Wine/Proton target -- `frida.attach()` injects a
-bootstrapper that segfaults INSIDE eldenring.exe and kills the session (measured
+the target. Do not reach for frida on this Wine/Proton target -- `frida.attach()` injects a
+bootstrapper that segfaults inside eldenring.exe and kills the session (measured
 2026-08-12, bd `frida-attach-kills-wine-eldenring-use-proc-mem-2026-08-12`). A read must
 never be able to destroy the state it is reading.
 

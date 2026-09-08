@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Carry every slot of a name/function STEP table from 1.16.2 onto 1.17, by its initialiser.
+"""Carry every slot of a name/function step table from 1.16.2 onto 1.17, by its initialiser.
 
-WHY THIS EXISTS SEPARATELY FROM `map-data-rvas-1162-to-1170.py`
+Why this exists separately from `map-data-rvas-1162-to-1170.py`
 ---------------------------------------------------------------
 The general data carrier votes with every rip-relative reference it can find, and for a slot
-INSIDE a table there is usually exactly one -- the store that fills it at startup. One unopposed
+inside a table there is usually exactly one -- the store that fills it at startup. One unopposed
 vote is what that file (correctly) declines to promote, so `TITLE_STEP_IDX6_SLOT_RVA` and
 `TITLE_STEP_IDX10_SLOT_RVA` came out `WEAK (one reference of 1)` and sat unmapped while
 `own_stepper_patch_once` refused to install.
@@ -13,16 +13,16 @@ A step table is not an ordinary global, though, and the missing corroboration is
 next to the address. Its initialiser is a single straight-line run of stores:
 
     lea rax, [<step function>]      ; mov [rip + table + i*0x10 + 0], rax
-    lea rax, [<step NAME string>]   ; mov [rip + table + i*0x10 + 8], rax
+    lea rax, [<step name string>]   ; mov [rip + table + i*0x10 + 8], rax
 
-so each slot has THREE independent things to check that do not come from its own displacement:
+so each slot has three independent things to check that do not come from its own displacement:
 
   1. the sibling stores. All 2N of them live in one function at fixed byte offsets, and they
      either all agree on a delta or the function was restructured and none of them are usable.
   2. the stored function pointer. `lea rax, [<step function>]` names a real function, and the
      128k-row function map either carries it to the 1.17 value the 1.17 initialiser stores, or
      it does not.
-  3. THE NAME. `lea rax, [<name string>]` names the slot in UTF-16 -- "TitleStep::STEP_MenuJobWait"
+  3. The name. `lea rax, [<name string>]` names the slot in UTF-16 -- "TitleStep::STEP_MenuJobWait"
      -- and that string occurs exactly once per image. A slot whose neighbour holds a string that
      appears once in each image, at the source in 1.16.2 and at the candidate in 1.17, has
      identified itself; no delta is being trusted at all.
@@ -31,12 +31,12 @@ Check 3 is why this is worth a file. A wrong answer here writes our handler into
 function-pointer table and stays silent until something calls it, and "the majority of this
 region moved +0x4070" is a statistic about the region, not evidence about this slot.
 
-ALIGNMENT IS BY BYTE OFFSET, NOT INSTRUCTION INDEX. One inserted instruction ahead of the store
+Alignment is by byte offset, not instruction index. One inserted instruction ahead of the store
 shifts every later index by one, and an index-aligned read then either finds nothing (reported as
 "no evidence", which is indistinguishable from a genuinely unreferenced address) or, worse, reads
 whatever instruction now sits at that index.
 
-USAGE
+Usage
     python3 scripts/carry-step-table-slots.py                      # the TitleStep table
     python3 scripts/carry-step-table-slots.py --init 0xa4f50 --slots 16
 """
@@ -100,7 +100,7 @@ def stores(md, image: bytes, init: int, span: int) -> dict[int, tuple[int, int]]
     The value is whatever the immediately preceding `lea rax, [rip+d]` loaded, which is how the
     slot's contents are recovered from an image where the table itself is still all zeroes.
 
-    THE INITIALISER'S OWN EXTENT BOUNDS THIS, `span` IS ONLY A CAP. Until 2026-08-31 `span` WAS
+    The INITIALISER'S own extent bounds this, `span` is only a cap. Until 2026-08-31 `span` was
     the window: `0x40 + slots * 0x40`, which for the default 16 slots is 0x440 read from a
     function entry with no terminator stop of any kind. The TitleStep initialiser at 0xa4f50 is
     0x16d bytes long in both images, so the decode ran 0x2d3 bytes past its `ret`, through the
@@ -121,7 +121,7 @@ def stores(md, image: bytes, init: int, span: int) -> dict[int, tuple[int, int]]
     pending: int | None = None
     stop = function_extent.body_slice_end(image, BASE + init, cap=span)
     if stop is None:
-        # No declarable extent and no decodable leaf end. Fall back to the cap and SAY SO, rather
+        # No declarable extent and no decodable leaf end. Fall back to the cap and say so, rather
         # than reporting an unbounded read as if it were a bounded one.
         print(f"  WARNING: no extent for the initialiser at 0x{BASE + init:x}; "
               f"reading the 0x{span:x}-byte cap, which may cross into the next function")
@@ -195,7 +195,7 @@ def main() -> int:
         # 2. the stored function pointer, through the function map.
         mapped = fmap.get(val_old)
         fn_verdict = "-" if mapped is None else ("OK" if mapped == val_new else f"WRONG 0x{mapped:x}")
-        # 3. THE NAME in the neighbouring slot, which must occur exactly once in each image.
+        # 3. The name in the neighbouring slot, which must occur exactly once in each image.
         name_verdict, step = "-", ""
         if name_off is not None:
             step = utf16_at(old, a[name_off][1]) or ""

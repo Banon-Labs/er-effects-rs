@@ -1,50 +1,50 @@
 #!/usr/bin/env python3
 """Watch a live ELDEN RING for a measured window and report whether it survived.
 
-WHAT THIS PROVES, AND WHY F9 IS NOT IN THE NAME
+What this proves, and why F9 is not in the name
 ------------------------------------------------
 This tool was called `er-f9-loop-proof` because the claim it was built for was "repeatedly F9-load
 for N minutes without crashing". The measurement killed that framing: the 0x140010043 fault is
-TIME-triggered, not action-triggered. Five recorded faults land at 43.8-56.1s regardless of what
+time-triggered, not action-triggered. Five recorded faults land at 43.8-56.1s regardless of what
 was happening, and one of them arrived with nothing pressed at all. So the press count is not the
 independent variable and never was -- the DLL combination and the wall-clock are. A name that puts
 F9 at the centre advertises a causal role the evidence does not support, and would have the next
 reader tuning a cadence that changes nothing.
 
-So the default is to press NOTHING and watch. `--warp` remains, because the OTHER failure this
+So the default is to press nothing and watch. `--warp` remains, because the other failure this
 build has to survive -- a main-thread hard lock inside me3's own infinite mutex -- has only ever
-been seen AFTER a completed map jump. The independent variable there is the WARP, not the key: F9
+been seen after a completed map jump. The independent variable there is the warp, not the key: F9
 is merely what `er-hotkey-config` happens to bind it to, and a run's metric is therefore warps
-COMPLETED, read from the DLL's own `ARRIVED` line. A press count says how hard the driver leaned on
+completed, read from the DLL's own `ARRIVED` line. A press count says how hard the driver leaned on
 a key; only the arrival count says the feature ran.
 
-THE VERDICT IS THE PROCESS AND THE RECORDS, NEVER THE SCREEN
+The verdict is the process and the records, never the screen
 ------------------------------------------------------------
 Stop/continue comes from RAM/process telemetry: the game's own liveness, the crash logger's record
-count, a `PANIC in` line, and the watchdog's main-thread-stall HANG report -- a lockup writes no
+count, a `PANIC in` line, and the watchdog's main-thread-stall hang report -- a lockup writes no
 exception record at all, so the record count alone is blind to it. No screenshot is taken and none
 would be trusted; AGENTS.md forbids a visual oracle as the run-stopping signal.
 
-EVERY WAIT BLOCKS ON AN EVENT. Readiness is the game's own `player_present` telemetry, the warp
+Every wait blocks on an event. Readiness is the game's own `player_present` telemetry, the warp
 cadence is the DLL's own `ARRIVED` line, focus is Hyprland's `.socket2.sock`, and the file waits
 are inotify. Nothing here sleeps, and the only durations are backstops: the watch window (derived
 from the worst recorded time-to-first-fault) and the repo's canonical runtime cap.
 
-F9 IS REACHABLE FROM OS-LEVEL INJECTION when it is used, and that is a fact about this specific key
-rather than a general licence. AGENTS.md is explicit that synthesized OS input does NOT reach
+F9 is REACHABLE from OS-level injection when it is used, and that is a fact about this specific key
+rather than a general licence. AGENTS.md is explicit that synthesized OS input does not reach
 native ELDEN RING bindings, which the game reads through DirectInput/XInput. `er_invasion_warp`'s
 warp hotkeys are not native bindings: `er-hotkey-config` polls them with `GetAsyncKeyState` (see
 `keys.rs`, `VK_F9 == 0x78`). A uinput key event is a real kernel input event, so it reaches the
 compositor, then Wine, then exactly the state `GetAsyncKeyState` reads. This driver is therefore
-correct for the warp keys and would be WRONG for anything the game itself binds.
+correct for the warp keys and would be wrong for anything the game itself binds.
 
-WINDOW TARGETING IS FAIL-CLOSED AND NARROW when pressing, and here that is a safety property: a
+Window targeting is fail-closed and narrow when pressing, and here that is a safety property: a
 uinput press is system-wide, so an unfocused game means every press lands in whatever the user
-actually has in front of them. Focus is asserted by CLASS and confirmed before each press; nothing
+actually has in front of them. Focus is asserted by class and confirmed before each press; nothing
 else about the desktop is enumerated or printed -- the privacy rule in AGENTS.md exists because a
 window list exposes every unrelated app the user is running.
 
-USAGE
+Usage
     python3 scripts/er-survival-proof.py --crash-log-dir <dir> --await-player --seconds 600
     python3 scripts/er-survival-proof.py --crash-log-dir <dir> --warp
     python3 scripts/er-survival-proof.py --selftest
@@ -74,27 +74,27 @@ CRASH_LOG_NAME = "er-crash-log.txt"
 # uinput -> the compositor -> Wine -> `GetAsyncKeyState`, where `er-hotkey-config` reads it as
 # `VK_F9 == 0x78`.
 #
-# WHY NOT `xdotool`. This session is Wayland (`XDG_SESSION_TYPE=wayland`) and the game presents no
+# Why not `xdotool`. This session is Wayland (`XDG_SESSION_TYPE=wayland`) and the game presents no
 # X11 window: searching `--class steam_app_1245620`, `eldenring` and `ELDEN` all returned nothing
 # while the game was running. `xdotool` had nothing to target, so the first attempt at this proof
 # refused rather than pressing keys into whatever else was focused. `ydotool` injects at
 # `/dev/uinput`, below the display server, so it is indifferent to X11 vs Wayland.
 KEY_F9 = 67
 
-# Injection at uinput is SYSTEM-WIDE: it goes to whatever holds focus, not to a window handle. That
+# Injection at uinput is system-WIDE: it goes to whatever holds focus, not to a window handle. That
 # makes focusing the game a correctness precondition, not a convenience -- an unfocused game means
-# every press lands in somebody else's application. Focus is asserted by CLASS through the
-# compositor, and the check reads only whether the active window IS that class; no other window is
+# every press lands in somebody else's application. Focus is asserted by class through the
+# compositor, and the check reads only whether the active window is that class; no other window is
 # ever named, printed or enumerated (AGENTS.md's privacy rule on window lists).
 GAME_HYPR_CLASS = "steam_app_1245620"
 
-# Bounded like every other agent-shell op. The GAME window is bounded separately by `--seconds`,
+# Bounded like every other agent-shell op. The game window is bounded separately by `--seconds`,
 # which is the thing being measured; these are the little subprocesses around it.
 # The share of attempted presses that must actually reach the game for the run to mean anything.
-# ONE PRESS PER COMPLETED LOAD, not one press per tick.
+# One press per completed load, not one press per tick.
 #
 # A cross-area warp is a full map load and takes roughly 20-30 seconds to land. Pressing on a fixed
-# 6-second interval therefore fires four or five times INTO a load that is already running: the
+# 6-second interval therefore fires four or five times into a load that is already running: the
 # first 90 seconds of one run produced 8 warps, which is hammering the key rather than exercising
 # "repeatedly F9-LOAD". Each press now waits for its own `ARRIVED` line before the next one is
 # sent, so the press count and the completed-load count are the same number and the cadence is the
@@ -105,7 +105,7 @@ ARRIVE_MARKER = "invasion-warp: ARRIVED"
 ARRIVE_TIMEOUT_SECONDS = 60.0
 ARRIVE_POLL_SECONDS = 1.0
 
-# The share of warps that must actually COMPLETE for a warp run to mean anything. Applied to
+# The share of warps that must actually complete for a warp run to mean anything. Applied to
 # arrivals, not to keystrokes: a run whose presses all landed but whose warps never did has
 # exercised a hotkey, not a map jump, and the failure under test lives in the map jump.
 MIN_DELIVERED_FRACTION = 0.8
@@ -117,7 +117,7 @@ SUBPROCESS_TIMEOUT = 10
 # an empty file and cannot tell a driving run from a hung one.
 print = functools.partial(print, flush=True)  # noqa: A001 - deliberate module-local shadow
 
-# When THIS driver started, in wall-clock. Anything on disk older than this belongs to a previous
+# When this driver started, in wall-clock. Anything on disk older than this belongs to a previous
 # run: the telemetry file, the crash log and the hang report all persist between launches.
 PROCESS_STARTED = time.time()
 
@@ -133,7 +133,7 @@ MIN_SAMPLES_FOR_DERIVED_WINDOW = 3
 def measured_fault_window() -> tuple[float | None, int]:
     """(worst recorded time-to-first-fault in seconds, sample count), read off disk.
 
-    WHY THIS IS COMPUTED AND NOT TYPED. Every duration in this tool used to be a number inherited
+    Why this is computed and not typed. Every duration in this tool used to be a number inherited
     from prose -- "3 minutes" came from a goal statement written before anyone knew the fault was
     time-boxed, and a 62-second boot time was asserted from two 25-second timeouts that could only
     ever bound it from below. Both were wrong by more than an order of magnitude in the direction
@@ -143,7 +143,7 @@ def measured_fault_window() -> tuple[float | None, int]:
     the worst, and add a margin. If the fault window moves, this moves with it, and if there is no
     history it refuses instead of inventing a number.
     """
-    # PER FAULT ADDRESS, because a window derived across different bugs is not a window for any of
+    # Per fault address, because a window derived across different bugs is not a window for any of
     # them. The first cut of this pooled every record and returned 721s -- inflated 14x by a single
     # unrelated fault at 0x141ebb799 that landed 450s in, which would have made every arm of the
     # bisect twelve minutes long for no reason. Records are grouped by `exception_address` and the
@@ -168,8 +168,8 @@ def measured_fault_window() -> tuple[float | None, int]:
     return max(values), len(values)
 
 
-# WHAT COUNTS AS A FAILURE, AND WHAT IS JUST WINE BEING WINE. The crash logger writes a record for
-# every FIRST-CHANCE exception it sees, and a live ELDEN RING under Proton raises those constantly
+# What counts as a failure, and what is just Wine being Wine. The crash logger writes a record for
+# every first-chance exception it sees, and a live ELDEN RING under Proton raises those constantly
 # while surviving them: one measured 10-minute run with the full mod set logged 23 x 0xc0000026
 # (STATUS_INVALID_UNWIND_TARGET) and one 0xc0000005 at `ersc.dll+0x258da` with `rcx=0`, all
 # `reason=veh-first-chance-exception`, and the process was still running with 127 threads
@@ -177,7 +177,7 @@ def measured_fault_window() -> tuple[float | None, int]:
 #
 # The distinction the logger already draws is the reason line: `unhandled-exception-fatal` is
 # written by the top-level filter and means the process died on it. That is the failure. The
-# first-chance count is kept and reported, because a RISE in it is diagnostic even though its
+# first-chance count is kept and reported, because a rise in it is diagnostic even though its
 # presence is not a verdict.
 FATAL_RECORD = re.compile(r"(?m)^reason=unhandled-exception-fatal$")
 RECORD_INDEX = re.compile(r"(?m)^record_index=")
@@ -209,13 +209,13 @@ def run_status(args: list[str]) -> subprocess.CompletedProcess:
 # presses: only 3 landed and only 2 warps happened, so it proved nothing about repeated F9 loading
 # even though the game survived.
 #
-# The settle is spent BLOCKED ON HYPRLAND'S OWN EVENT STREAM, not on a poll: `.socket2.sock`
+# The settle is spent blocked on HYPRLAND'S own event stream, not on a poll: `.socket2.sock`
 # emits `activewindow>>class,title` the instant focus changes, so this wakes on the compositor's
 # own statement rather than re-asking it four times a second. The seconds below are a backstop for
 # the case where the window never takes focus at all, not the synchronisation.
 FOCUS_SETTLE_SECONDS = 2.0
 
-# A wait that has no file or socket event to key on still has to notice a process that DIED, and a
+# A wait that has no file or socket event to key on still has to notice a process that died, and a
 # death emits nothing. This is the re-check backstop for those waits -- an upper bound on how long
 # a dead game goes unnoticed, never the thing being waited for.
 LIVENESS_RECHECK_SECONDS = 2.0
@@ -241,13 +241,13 @@ def active_is_game() -> bool:
     except json.JSONDecodeError:
         return False
     # Only the class is compared, and only to our own constant. Nothing about the active window is
-    # returned or printed when it is NOT the game -- that window belongs to the user, not to this
+    # returned or printed when it is not the game -- that window belongs to the user, not to this
     # proof.
     return active.get("class") == GAME_HYPR_CLASS
 
 
 def focus_game() -> bool:
-    """Focus the ELDEN RING window by class and WAIT for the compositor to agree.
+    """Focus the ELDEN RING window by class and wait for the compositor to agree.
 
     Also switches to the window's workspace: `focuswindow` alone does not follow a window that
     lives on another workspace, and a window the user has left on a different workspace is the
@@ -255,14 +255,14 @@ def focus_game() -> bool:
     """
     if active_is_game():
         return True
-    # THE NEW LUA DISPATCHER API, not the classic string form. This Hyprland parses the argument
+    # The new LUA dispatcher API, not the classic string form. This Hyprland parses the argument
     # as Lua, so `hyprctl dispatch focuswindow class:...` fails with a Lua syntax error rather than
     # a dispatcher error -- which reads like "the window is missing" and is not. That error was
     # swallowed for a whole 180s run: focus never took, 17 of 20 presses were refused, and the run
-    # returned a PASS it had not earned. There is no `focus` under `hl.dsp.window`; the focus
+    # returned a pass it had not earned. There is no `focus` under `hl.dsp.window`; the focus
     # dispatcher is top-level and takes a table (`hl.dsp.focus{...}` with one of direction,
     # monitor, window, urgent_or_last, last).
-    # Subscribe BEFORE dispatching. Connecting afterwards races the very event being waited for:
+    # Subscribe before dispatching. Connecting afterwards races the very event being waited for:
     # a window that takes focus in under a millisecond would emit `activewindow` before the socket
     # existed, and the wait would then sit out its whole backstop having already succeeded.
     stream = hypr_event_socket()
@@ -327,7 +327,7 @@ def load_teardown_module():
 
 
 def game_pid() -> int | None:
-    """The running game's pid, by the repo's own definition of running -- threads AND CPU."""
+    """The running game's pid, by the repo's own definition of running -- threads and CPU."""
     try:
         rows = load_teardown_module().game_status()
     except Exception:
@@ -358,7 +358,7 @@ def first_chance_records(run_dir: Path) -> int:
 
 
 def crash_evidence(run_dir: Path) -> tuple[int, list[str]]:
-    """(FATAL fault records, panic lines seen) for this run -- the run-stopping oracle."""
+    """(fatal fault records, panic lines seen) for this run -- the run-stopping oracle."""
     records = 0
     log = run_dir / CRASH_LOG_NAME
     if log.is_file():
@@ -370,7 +370,7 @@ def crash_evidence(run_dir: Path) -> tuple[int, list[str]]:
     return records, panics
 
 
-# A LOCKUP WRITES NO EXCEPTION RECORD. The crash logger's watchdog reports it separately, into
+# A LOCKUP writes no exception record. The crash logger's watchdog reports it separately, into
 # this file beside the executable -- so a run that hangs rather than faults is invisible to the
 # record count alone, which is exactly the failure this driver was blind to until a hard lock
 # produced a 56 KB hang report the driver never looked at.
@@ -378,7 +378,7 @@ HANG_REPORT_NAME = "er-crash-hang-latest.txt"
 
 
 def hang_report_state() -> tuple[bool, int, float]:
-    """(exists, size, mtime) for the hang report -- baselined, because a STALE one is not this run's."""
+    """(exists, size, mtime) for the hang report -- baselined, because a stale one is not this run's."""
     report = er_run_lib.game_dir() / HANG_REPORT_NAME
     try:
         stat = report.stat()
@@ -387,12 +387,12 @@ def hang_report_state() -> tuple[bool, int, float]:
     return True, stat.st_size, stat.st_mtime
 
 
-# THE READINESS SIGNAL FOR "THE CHARACTER IS IN THE WORLD". Watching from the title screen would
+# The readiness signal for "THE CHARACTER IS IN THE WORLD". Watching from the title screen would
 # score the boot, not the build: the fault window is measured from DLL install, and a run that
 # spends four of its ten minutes on a loading screen is watching a different program.
 #
 # The field is `player_available`, which `er_quickload` writes from a RAM read each frame and which
-# means the player object EXISTS RIGHT NOW. Not `player_seen`, which is sticky once the world has
+# means the player object exists right now. Not `player_seen`, which is sticky once the world has
 # ever been reached, and not `player_present`, which does not exist -- a first cut of this waiter
 # keyed on that invented name, found it missing from every snapshot, and sat out its entire backstop
 # beside a game that had been in the world for minutes.
@@ -400,7 +400,7 @@ PLAYER_TELEMETRY_NAME = "er-quickload-telemetry.json"
 
 
 def player_present(newer_than: float) -> tuple[bool, str | None]:
-    """(is the player in the world, which character) from THIS run's telemetry, or (False, None)."""
+    """(is the player in the world, which character) from this run's telemetry, or (False, None)."""
     telemetry = er_run_lib.game_dir() / PLAYER_TELEMETRY_NAME
     try:
         if telemetry.stat().st_mtime < newer_than:
@@ -481,7 +481,7 @@ def drive(
             f"{time.monotonic() - started_waiting:.1f}s -- starting the drive now"
         )
 
-    # FOCUS AFTER THE CHARACTER LOADS, NEVER BEFORE. The window does not exist yet at launch, so
+    # Focus after the character loads, never before. The window does not exist yet at launch, so
     # asking for it first refuses a run that was only a few seconds early -- measured 2026-09-04,
     # a relaunch was aborted at t+0 with "could not focus an ELDEN RING window" while the game was
     # still booting perfectly well.
@@ -499,7 +499,7 @@ def drive(
         print("er-survival-proof: the game is not running; nothing to drive")
         return 2
 
-    # EVERY WAIT IN THIS LOOP BLOCKS ON AN EVENT. The two things worth waking for both arrive as
+    # Every wait in this loop blocks on an event. The two things worth waking for both arrive as
     # writes to a file -- the DLL's `ARRIVED` line, and the crash logger's record -- and they land
     # in two different trees, so both are watched at once. If inotify is unavailable this refuses
     # rather than degrading to a poll: a poll is a sleep with extra steps, `scripts/check-no-
@@ -512,7 +512,7 @@ def drive(
         )
         return 2
 
-    # A hang report from an EARLIER run is not this run's evidence. Baseline it, and treat any
+    # A hang report from an earlier run is not this run's evidence. Baseline it, and treat any
     # change -- appearing, growing, being rewritten -- as this run's failure.
     hang_before = hang_report_state()
 
@@ -549,7 +549,7 @@ def drive(
         """Block on the watched directories until `predicate` holds or `until` passes.
 
         `WatchSet.wait` is a `select` over inotify fds, so this consumes no CPU while it waits and
-        wakes on the write itself. The per-iteration bound exists only so a process that DIED --
+        wakes on the write itself. The per-iteration bound exists only so a process that died --
         which emits no file event at all -- is still noticed.
         """
         while True:
@@ -575,7 +575,7 @@ def drive(
     try:
         while time.monotonic() < deadline:
             if no_input:
-                # Watch-only: the fault under investigation is TIME-triggered, so surviving the
+                # Watch-only: the fault under investigation is time-triggered, so surviving the
                 # window with nothing pressed is the whole claim and a press would only add noise.
                 if wait_until(lambda: verdict_now()[0] is not None, deadline):
                     break
@@ -588,7 +588,7 @@ def drive(
                 failed_presses += 1
             if verdict_now()[0] is not None:
                 break
-            # ONE PRESS PER COMPLETED LOAD. A cross-area warp is a full map load; pressing again
+            # One press per completed load. A cross-area warp is a full map load; pressing again
             # before it lands is hammering the key, not "repeatedly F9-LOAD". The cadence is the
             # game's own `ARRIVED` line, and `interval` is only a floor under it.
             settle = min(time.monotonic() + ARRIVE_TIMEOUT_SECONDS, deadline)
@@ -620,11 +620,11 @@ def drive(
         return 1
 
     alive = er_run_lib.process_alive(pid)
-    # SURVIVING IS NOT PASSING. The claim is "repeatedly F9-load for N minutes", so a run whose
+    # Surviving is not passing. The claim is "repeatedly F9-load for N minutes", so a run whose
     # presses never landed proves only that an idle game does not crash. The first 180s run
-    # returned PASS on 3 delivered presses out of 20 -- 2 warps in three minutes -- which is not
+    # returned pass on 3 delivered presses out of 20 -- 2 warps in three minutes -- which is not
     # the thing being claimed. A run must deliver most of its presses to say anything at all.
-    # SURVIVING A WARP RUN IS NOT PASSING IT. The claim a warp run makes is "N completed map jumps
+    # Surviving a warp run is not passing it. The claim a warp run makes is "N completed map jumps
     # and no lock", so the gate is arrivals -- warps the DLL itself said it finished. Scoring on
     # presses instead would pass a run whose every keystroke landed and whose every warp stalled,
     # which is the exact run that proves nothing about the failure being chased.

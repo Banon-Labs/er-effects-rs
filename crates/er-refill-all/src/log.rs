@@ -1,6 +1,6 @@
 //! One log file beside the game executable, sequence-numbered.
 //!
-//! Sequence numbers rather than timestamps: what these lines are read for is ORDER -- did the
+//! Sequence numbers rather than timestamps: what these lines are read for is order -- did the
 //! config reload land before or after the press that behaved oddly -- and a wall clock does not
 //! answer that when several lines share a frame.
 

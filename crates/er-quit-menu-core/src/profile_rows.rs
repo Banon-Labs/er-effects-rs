@@ -1,6 +1,6 @@
-//! THE PROFILESELECT LIST CURSOR IS A ROW INDEX, NOT A PROFILESUMMARY SLOT.
+//! The PROFILESELECT list cursor is a row index, not a PROFILESUMMARY slot.
 //!
-//! `05_010_ProfileSelect` lists only the character slots that EXIST. The game builds its row list
+//! `05_010_ProfileSelect` lists only the character slots that exist. The game builds its row list
 //! in `FUN_140875590` (1.16.2, byte-identical in `eldenring-deobf.bin` at the same VA) by walking
 //! slots `0..10` and pushing a `CS::MenuSaveDataSummary` **only** where
 //! `ProfileSummary->saveSlotsStates[slot]` is set:
@@ -16,7 +16,7 @@
 //!
 //! So the row at list index `i` describes slot `rows[i]`, and `i == rows[i]` only when the
 //! container's characters happen to run densely from slot 0. `CS::ProfileLoadDialog::load_activate`
-//! (`0x1409a4670`) never confuses the two -- it reads the cursor, clamps it, fetches the ROW and
+//! (`0x1409a4670`) never confuses the two -- it reads the cursor, clamps it, fetches the row and
 //! takes the slot from the row:
 //!
 //! ```text
@@ -33,7 +33,7 @@
 //!
 //! * [`profile_select_row_for_cursor`] -- the exact clamp above, so a caller asks the native row
 //!   accessor for the same row the native activation would have used;
-//! * [`preview_cursor_slot`] -- after a foreign save is previewed, WHICH slot the cursor should be
+//! * [`preview_cursor_slot`] -- after a foreign save is previewed, which slot the cursor should be
 //!   parked on.
 //!
 //! # The bug this closes
@@ -53,7 +53,7 @@ pub const PROFILE_SLOT_COUNT: usize = 10;
 /// row count `bound` (`[dialog+0xb08]`).
 ///
 /// Mirrors the native clamp exactly: a negative cursor or one at/past `bound` falls back to row 0.
-/// `None` only for an EMPTY list, where there is no row to activate at all.
+/// `None` only for an empty list, where there is no row to activate at all.
 #[must_use]
 pub fn profile_select_row_for_cursor(cursor: i32, bound: i32) -> Option<i32> {
     if bound <= 0 {
@@ -65,7 +65,7 @@ pub fn profile_select_row_for_cursor(cursor: i32, bound: i32) -> Option<i32> {
     Some(cursor)
 }
 
-/// The slot a freshly previewed foreign save should park the ProfileSelect cursor on: the LOWEST
+/// The slot a freshly previewed foreign save should park the ProfileSelect cursor on: the lowest
 /// occupant of `slot_mask`.
 ///
 /// `slot_mask` is the preview's own bitmap of the slots it wrote into `CS::ProfileSummary` (bit N =

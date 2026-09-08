@@ -2,10 +2,10 @@
 //!
 //! # What this is
 //!
-//! The game deserializes this table ONCE per boot -- `CS::ProfileSummary::Deserialize`
+//! The game deserializes this table once per boot -- `CS::ProfileSummary::Deserialize`
 //! (`0x140261f00` -> `0x140261f10`: ten occupancy bytes into `summary+0x8`, then ten records of
 //! `0x2a0` from `summary+0x18` via `0x140261cf0`), reached from the boot common-data load
-//! (`0x1402570c0`). Everything the player then sees about WHICH characters exist reads that
+//! (`0x1402570c0`). Everything the player then sees about which characters exist reads that
 //! table: the title's native Continue row, the System>Quit "Load Character" /
 //! "Load Character from File" rows, the `05_010_ProfileSelect` list, and the loading-screen
 //! portrait.
@@ -17,12 +17,12 @@
 //!
 //! | was in | held |
 //! |---|---|
-//! | `continue_load/slot_resolution.rs` | `profile_slot_fingerprint` -- what a record SAYS |
-//! | `loading_cover/loading_cover_save_slot.rs` | the summary POINTER, and the serialized-save reader that fills a record |
+//! | `continue_load/slot_resolution.rs` | `profile_slot_fingerprint` -- what a record says |
+//! | `loading_cover/loading_cover_save_slot.rs` | the summary pointer, and the serialized-save reader that fills a record |
 //! | `quit_menu/save_swap_profile_table.rs` | `write_profile_summary_records_from_save_bytes` -- rebuilding the whole table |
-//! | `continue_load/picked_summary_refresh.rs` | the boot re-read that USES all three |
+//! | `continue_load/picked_summary_refresh.rs` | the boot re-read that uses all three |
 //!
-//! The record LAYOUT itself is not here: it is `er_game_base::profile_summary`, whose typed
+//! The record layout itself is not here: it is `er_game_base::profile_summary`, whose typed
 //! `ProfileSummaryRecord` / `ProfileSummaryLayout` carry the compile-time asserts that pin the
 //! reverse-engineered 1.16.2 ABI. This crate is the behaviour above that layout.
 //!
@@ -32,7 +32,7 @@
 //! must not depend on the root crate, and must not depend on `er-title-flow` (which is its
 //! natural consumer -- an edge that way would close a cycle).
 
-// NOT re-exported flat: `install_host` / the host struct are named the same in every feature
+// Not re-exported flat: `install_host` / the host struct are named the same in every feature
 // crate, and the product glob-imports this crate's root next to `er_loading_portrait_core`'s.
 // Install through `er_profile_summary_core::host::install_host`.
 pub mod host;

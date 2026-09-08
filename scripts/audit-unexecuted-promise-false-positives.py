@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""Replay REAL past turns through the unexecuted-promise guard and count how many it would halt.
+"""Replay real past turns through the unexecuted-promise guard and count how many it would halt.
 
 The `no_unexecuted_promise` Stop guard is only worth having if it stays quiet on ordinary turns: a
 guard that cries wolf gets ignored, which is worse than no guard. Unit tests prove the shapes the
-author thought of; this proves the shapes the author did NOT think of, by running the real signal
+author thought of; this proves the shapes the author did not think of, by running the real signal
 over the session transcripts the agent has actually written.
 
 For every turn boundary in a transcript it builds a fixture from the preceding window of events and
-runs `.cupcake/signals/last_assistant_unexecuted_promise.sh` against it under a temporary HOME, then
+runs `.cupcake/signals/last_assistant_unexecuted_promise.sh` against it under a temporary home, then
 reports every turn that would have been halted and the clause it would have quoted back. Read the
 hits: each one is either a real instance of the defect (good) or a false positive to narrow away.
 
 Usage:
     python3 scripts/audit-unexecuted-promise-false-positives.py [--window=N] [transcript.jsonl ...]
 
-With no arguments it audits the newest transcripts for THIS repo under ~/.claude/projects/.
+With no arguments it audits the newest transcripts for this repo under ~/.claude/projects/.
 Read-only: it never writes to the transcripts, and its fixtures live in a temp dir that is removed.
 """
 from __future__ import annotations
@@ -30,9 +30,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SIGNAL = REPO_ROOT / ".cupcake" / "signals" / "last_assistant_unexecuted_promise.sh"
 
-# The fixture handed to the signal is the last WINDOW events before a boundary. Enough for the turn
+# The fixture handed to the signal is the last window events before a boundary. Enough for the turn
 # and its immediate history; older background launches fall outside it, which can only make the guard
-# fire MORE than in production -- the safe direction for a false-positive audit.
+# fire more than in production -- the safe direction for a false-positive audit.
 WINDOW = 400
 
 FAKE_PROJECT = "/fake/project/er-quickload"

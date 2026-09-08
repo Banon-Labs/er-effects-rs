@@ -6,9 +6,9 @@
 //! to `stderr`, which under me3 + Proton is nobody's file; the unwind then crosses an
 //! `extern "system"` boundary -- a render-loop callback, a detour handler -- and the process
 //! aborts. What reaches an investigator is a `0xe06d7363` record with `cpp_throw_type=rust_panic`
-//! and a stack scan, which names the MODULE and nothing else.
+//! and a stack scan, which names the module and nothing else.
 //!
-//! MEASURED, 2026-08-29. `er_build_watermark.dll` panicked 229 ms after the first backbuffer draw
+//! Measured, 2026-08-29. `er_build_watermark.dll` panicked 229 ms after the first backbuffer draw
 //! and took the boot with it. `er-crash-latest.txt` identified the module and the throw type; the
 //! backtrace symbolised to `core::result::unwrap_failed` and then to `??`, because the frames
 //! below it were a raw stack scan rather than an unwind. Three `.expect()` calls in the
@@ -23,7 +23,7 @@
 //! `.expect("D3D12SerializeRootSignature")` are one line apart in the same file and produce
 //! identical stack scans, and only the payload tells them apart.
 //!
-//! It does NOT stop the process dying. A panic unwinding out of an `extern "system"` callback is
+//! It does not stop the process dying. A panic unwinding out of an `extern "system"` callback is
 //! already an abort by the time any hook runs, and pretending otherwise would be worse than the
 //! silence -- see [`report_panics_to`]'s own note.
 

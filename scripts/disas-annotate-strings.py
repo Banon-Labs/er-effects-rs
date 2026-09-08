@@ -4,16 +4,16 @@ ASCII/UTF-16 string (or pointer) they point at.
 
 Why this exists
 ---------------
-Scaleform/UI reversing in this game is almost entirely "which child NAME does this binder
+Scaleform/UI reversing in this game is almost entirely "which child name does this binder
 resolve?", and that name is always a RIP-relative `LEA reg,[rip+disp]` into `.rdata`. Reading
 the disassembly alone shows `LEA R8,[0x142ad25c8]` and nothing else; the Ghidra MCP daemon
 exposes no memory-read method (`readMemory`/`getBytes`/... are all "Unknown method"), so the
 string had to be chased by hand every time. This resolves them inline.
 
-Both ER images in the repo root are FLAT memory images based at 0x140000000 -- `offset = va -
+Both ER images in the repo root are flat memory images based at 0x140000000 -- `offset = va -
 base` with no section walk needed (same convention as `scripts/dantelion-static-scraper.py`).
 
-  eldenring-deobf.bin  1.16.2, AUTHORITATIVE FOR ADDRESSES (what the DLL hooks/patches)
+  eldenring-deobf.bin  1.16.2, authoritative for addresses (what the DLL hooks/patches)
   dump-exec.bin        1.16.1, matches the older Ghidra dump -- semantics only
 
 Usage
@@ -27,7 +27,7 @@ capstone`, the same self-bootstrap the other capstone-using tools here use.
 
 `--image dump` reads `dump-exec.bin`, whose only other consumer -- `scripts/dump-deobf-shift.py`
 -- was deleted on 2026-08-31 as unrepairably cross-version. That image is 1.16.1 and stays
-SEMANTICS-ONLY: never take an address from it. If the file is absent this exits cleanly and
+semantics-ONLY: never take an address from it. If the file is absent this exits cleanly and
 `--image deobf`, the default, is unaffected.
 """
 

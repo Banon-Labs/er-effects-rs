@@ -3,10 +3,10 @@
 //!
 //! [`super::host::PortraitHost`] carries the portrait/stats pipeline's product callbacks and is
 //! installed from the root DLL's `DllMain`. The loading-cover modules moved here later need a
-//! DIFFERENT and larger set of product functions (Win32 hook plumbing, crash-log call
+//! different and larger set of product functions (Win32 hook plumbing, crash-log call
 //! attribution, product gates, save-source state), and the `PortraitHost` literal in
 //! `lib_parts/dll_entry_parts/bootstrap.rs` is the spine several parallel extractions hang off:
-//! adding fields to it would edit that file. So this seam is separate, and the ROOT installs it
+//! adding fields to it would edit that file. So this seam is separate, and the root installs it
 //! from `experiments/startup_hooks/loading_cover/mod.rs`'s `ensure_loading_cover_host()`, which
 //! every facade entry point into the moved code calls first. Installation is therefore
 //! guaranteed-before-first-use without touching `DllMain`.
@@ -14,8 +14,8 @@
 //! Until a host installs, every seam answers a neutral default (logging is a no-op, gates are
 //! off, lookups report "nothing"), so the crate is inert rather than wrong.
 // The `pub(crate)` seam wrappers exist for the feature modules, every one of which is
-// `#[cfg(windows)]`. On a host build those modules are compiled out, so the wrappers are unused BY
-// CONSTRUCTION rather than by neglect. Scoped to `not(windows)` deliberately: the shipping target
+// `#[cfg(windows)]`. On a host build those modules are compiled out, so the wrappers are unused by
+// construction rather than by neglect. Scoped to `not(windows)` deliberately: the shipping target
 // keeps full dead-code enforcement over this file.
 #![cfg_attr(not(windows), allow(dead_code))]
 
@@ -47,13 +47,13 @@ pub struct LoadingCoverHost {
     /// Append one `"name": value,` line to the telemetry JSON body being built.
     pub push_json_usize: fn(&mut String, &str, usize),
     /// Milliseconds since the DLL debug log's own epoch (its first line, near DLL_PROCESS_ATTACH).
-    /// This is a DIFFERENT epoch from `boot_view_epoch_ms`; the clock map states the offset.
+    /// This is a different epoch from `boot_view_epoch_ms`; the clock map states the offset.
     pub process_log_elapsed_ms: fn() -> u128,
-    /// Milliseconds since the boot-view epoch, but ONLY if that clock has already been anchored --
+    /// Milliseconds since the boot-view epoch, but only if that clock has already been anchored --
     /// `None` rather than starting it, so a caller that merely wants to stamp an event cannot move
     /// the origin of the whole run's timeline.
     pub boot_view_epoch_ms_if_anchored: fn() -> Option<u64>,
-    /// The GAME's own `CSFakeLoadingScreenImp` cover plate, read out of the live singleton.
+    /// The game's own `CSFakeLoadingScreenImp` cover plate, read out of the live singleton.
     pub fake_loading_screen_visible: unsafe fn(usize) -> bool,
 }
 
@@ -125,7 +125,7 @@ fn host() -> &'static LoadingCoverHost {
     HOST.get().unwrap_or(&DEFAULT_HOST)
 }
 
-// --- crate-internal wrappers bearing the EXACT original product names/signatures ------
+// --- crate-internal wrappers bearing the exact original product names/signatures ------
 
 pub(crate) fn trace_first_game_caller_rva() -> usize {
     (host().trace_first_game_caller_rva)()

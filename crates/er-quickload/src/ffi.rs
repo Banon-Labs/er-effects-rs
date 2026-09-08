@@ -54,7 +54,7 @@ unsafe extern "system" {
     /// Flush the CPU instruction cache after patching executable code so threads see the
     /// new bytes (current-process pseudo-handle -1; null base + 0 size = whole process).
     pub(crate) fn FlushInstructionCache(process: isize, base: *const c_void, size: usize) -> i32;
-    /// Fault-tolerant read: returns FALSE on unmapped/freed memory instead of
+    /// Fault-tolerant read: returns false on unmapped/freed memory instead of
     /// raising an access violation -- used by the title-owner scan so the TOCTOU
     /// race against the booting game (a region freed between VirtualQuery and the
     /// deref) cannot crash the process.
@@ -84,8 +84,8 @@ pub(crate) struct ExceptionRecordMin {
     pub(crate) exception_information: [usize; 15],
 }
 
-/// Minimal EXCEPTION_POINTERS: the record pointer + the CONTEXT pointer (the
-/// CONTEXT is read/modified by the hardware-watchpoint single-step handler to
+/// Minimal EXCEPTION_POINTERS: the record pointer + the context pointer (the
+/// context is read/modified by the hardware-watchpoint single-step handler to
 /// read Dr6/Rip and one-shot-disarm Dr7).
 #[repr(C)]
 pub(crate) struct ExceptionPointersMin {

@@ -7,12 +7,12 @@ The ProfileSelect / Load Character row attribute line comes from
 
     RuneLevel == sum(eight attributes at PGD+0x3c) - 79
 
-A character whose stored `level` word does NOT satisfy that identity (a
+A character whose stored `level` word does not satisfy that identity (a
 respec/level edit that moved one side and not the other, a build importer that
-wrote attributes without recomputing the level, ...) is located NOWHERE in the
+wrote attributes without recomputing the level, ...) is located nowhere in the
 body, so its whole row decodes as `None`: no attributes, no vitals, no WL.
 
-This replicates that acceptance test byte-for-byte, plus a FACE-anchored read of
+This replicates that acceptance test byte-for-byte, plus a face-anchored read of
 the true `PlayerGameData` so a rejected slot can be told apart from an empty one
 and the size of the disagreement is printed.
 
@@ -52,7 +52,7 @@ MAX_RUNE_LEVEL = 713
 STAT_COUNT = 8
 
 # The serialized `PlayerGameData` precedes the slot body's `FACE` magic; the
-# PGD->FACE delta is NOT fixed (0x959c..0xa600 measured across real containers --
+# PGD->face delta is not fixed (0x959c..0xa600 measured across real containers --
 # see `bnd4::slot_player_game_data_offset`), so the window is deliberately wide
 # and every candidate is checked against the same plausibility test the Rust
 # locator uses, rather than assumed.
@@ -119,10 +119,10 @@ def first_accepted_stat_block(body: bytes):
 
 
 def true_pgd(body: bytes):
-    """FACE-anchored `PlayerGameData`: (pgd_offset, name, level, attrs) or None.
+    """Face-anchored `PlayerGameData`: (pgd_offset, name, level, attrs) or None.
 
     Independent of the rune-level identity on purpose -- this is what tells a
-    REJECTED slot (a real character the identity refuses) apart from an EMPTY one.
+    rejected slot (a real character the identity refuses) apart from an empty one.
     """
     raw = np.frombuffer(body, dtype=np.uint8)
     magic = np.frombuffer(FACE_MAGIC, dtype=np.uint8)

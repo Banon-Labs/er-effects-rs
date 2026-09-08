@@ -49,7 +49,7 @@ pub const RE_IMAGE_BASE: usize = 0x1_4000_0000;
 pub const SET_DISABLE_MAP_ENTER_ANIM_RVA: usize = 0x67_a850;
 /// `CS::GameMan::SetMoveMapStepBlockId(BlockId *out, BlockId *in)` -- `0x14067abd0`.
 ///
-/// The literal is declared exactly ONCE, in `er_game_base::rva`, because the product crate
+/// The literal is declared exactly once, in `er_game_base::rva`, because the product crate
 /// needs the same address and two independent literals would be free to drift apart. There is
 /// deliberately no host-side mirror here: a `cfg(not(windows))` copy would be exactly the
 /// second literal the alias-drift gate exists to prevent.
@@ -82,7 +82,7 @@ pub const SETUP_MAP_REENTRY_RVA: usize = 0xca_fc30;
 /// `GLOBAL_CSSessionManager` -- `0x143d7a4d0`, read from
 /// `1405f2935: mov 0x3787b94(%rip),%rcx  # 0x143d7a4d0`.
 ///
-/// DERIVED, not re-declared: the product reads the same global from `MoveMapStep`'s
+/// Derived, not re-declared: the product reads the same global from `MoveMapStep`'s
 /// ending-request evaluator, so the literal lives once in `er_game_base::rva`.
 pub const SESSION_MANAGER_GLOBAL_RVA: usize = er_game_base::rva::CS_SESSION_MANAGER_GLOBAL_RVA;
 /// `GetCurrentMapId(BlockId *out)` -- `0x1405eefb0`. Used to report where the warp started.
@@ -103,9 +103,9 @@ pub const SESSION_PROTOCOL_STATE_IN_GAME: i32 = 6;
 /// The `WaitReentryToMap` protocol state -- the literal `7` that `SetupMapReentry` **writes as
 /// its very first statement** (`140cafc47: movl $0x7,0x10(%rcx)`).
 ///
-/// This is why the re-entry is self-latching: entering it moves the session OUT of `InGame`, so a
+/// This is why the re-entry is self-latching: entering it moves the session out of `InGame`, so a
 /// second warp issued before the engine has driven the session back sees `7` and skips the
-/// re-entry. Seeing `7` here is therefore the EXPECTED reading straight after one of our own
+/// re-entry. Seeing `7` here is therefore the expected reading straight after one of our own
 /// warps; seeing it persist across many warps means the map re-entry never completed.
 pub const SESSION_PROTOCOL_STATE_WAIT_REENTRY_TO_MAP: i32 = 7;
 /// Offset of `lobbyState`, from `140cafc54: cmpl $0x3,0xc(%rcx)`. Reported alongside the protocol
@@ -242,20 +242,20 @@ pub const fn spawn_position(position: [f32; 3]) -> FloatVector4 {
 /// where `spawnAngle` occupies the same wire slot as the `.aip` fourth float.
 ///
 /// So: **no negation, no degree conversion, and no wrapping.** The raw authored value goes in.
-/// [`InvasionWarpTarget::heading_radians`] exists for compass/pin display, NOT for this -- using
+/// [`InvasionWarpTarget::heading_radians`] exists for compass/pin display, not for this -- using
 /// the wrapped value here would silently rotate half the table by a full turn.
 #[must_use]
 pub const fn spawn_orientation(yaw: f32) -> FloatVector4 {
     FloatVector4::new(0.0, yaw, 0.0, 0.0)
 }
 
-/// Whether an invasion location may be used as a warp destination RIGHT NOW.
+/// Whether an invasion location may be used as a warp destination right now.
 ///
 /// # Why this is a type and not two edits at the call sites
 ///
 /// There are two ways to ask for one of these warps -- confirming a pin on the world map, and the
 /// F7/F8/F9 hotkeys -- and a gate placed at each is a gate a third caller silently skips. The rule
-/// is a statement about the PRIMITIVE, so the check lives inside [`native::request_invasion_warp`]
+/// is a statement about the primitive, so the check lives inside [`native::request_invasion_warp`]
 /// where nothing can route around it. The two callers were left alone deliberately: both already
 /// handle [`WarpError`] and neither treats a refusal as a reason to fall through to anything else.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -271,11 +271,11 @@ pub enum WarpPolicy {
 ///
 /// Published every frame by the DLL's session tracer, which is the only thing that can see the
 /// ersc session; this crate holds the latch so the policy gate below -- and the map's icon choice
-/// -- read ONE value and cannot disagree about what the session is doing.
+/// -- read one value and cannot disagree about what the session is doing.
 ///
 /// Defaults to `false`, which is the honest answer before anything has looked: with no session
 /// resolvable there is no attempt, so nothing should be blocked. That also means a publisher that
-/// never runs leaves warps ENABLED rather than silently disabling them, which is the failure a
+/// never runs leaves warps enabled rather than silently disabling them, which is the failure a
 /// player can diagnose ("it never blocks") instead of the one they cannot ("it blocks forever and
 /// I do not know why").
 static INVASION_ATTEMPT_IN_FLIGHT: core::sync::atomic::AtomicBool =
@@ -296,7 +296,7 @@ pub fn invasion_attempt_in_flight() -> bool {
 ///
 /// Scoped to an active attempt by user requirement (2026-08-12). The point of blocking the warp is
 /// that moving mid-attempt is incoherent -- the destination Seamless is negotiating is where you
-/// are supposed to end up -- and the point of the dim is to SAY SO on the pin. Neither works
+/// are supposed to end up -- and the point of the dim is to say so on the pin. Neither works
 /// unconditionally: a pin that is always dim cannot communicate "not clickable right now", because
 /// there is no brighter state to read it against.
 #[must_use]
@@ -322,7 +322,7 @@ pub enum WarpError {
     /// coordinates and drop the player at the block's default spawn instead. Fail before the
     /// stage kick rather than warp somewhere unintended.
     SpawnSlotDidNotLatch { flag: u8 },
-    /// A coordinate-free warp found the explicit-spawn slot still ARMED from an earlier warp.
+    /// A coordinate-free warp found the explicit-spawn slot still armed from an earlier warp.
     /// `MoveMapStep` would use that stale coordinate instead of the destination block's own
     /// spawn, dropping the player at another map's position inside this one.
     StaleSpawnSlotArmed { flag: u8 },
@@ -396,7 +396,7 @@ pub struct WarpOutcome {
     /// produces, but it must never be the only thing reported -- on its own it cannot say which
     /// of four situations a `0` was.
     pub session_touches: u32,
-    /// WHY the re-entry did or did not run. This is the diagnostic field; `session_touches` is
+    /// Why the re-entry did or did not run. This is the diagnostic field; `session_touches` is
     /// the summary of it.
     pub session_gate: SessionGate,
 }
@@ -455,7 +455,7 @@ mod native {
     pub unsafe fn request_invasion_warp(
         target: &InvasionWarpTarget,
     ) -> Result<WarpOutcome, WarpError> {
-        // FIRST, before the block check and before the module base is even resolved: a refusal
+        // First, before the block check and before the module base is even resolved: a refusal
         // must be indistinguishable from never having been called. Every later `return Err` in
         // this function is careful to leave engine state alone; this one does not have to be,
         // because it runs before any of it.
@@ -481,7 +481,7 @@ mod native {
         unsafe { get_current_map_id(&raw mut origin_block) };
 
         // Vanilla step 1: the session-manager re-entry, gated exactly as TriggerAreaReload
-        // gates it. The REASON is recorded, not just a count -- entering it sets
+        // gates it. The reason is recorded, not just a count -- entering it sets
         // `protocolState = WaitReentryToMap`, so this gate is self-latching and a `0` here on a
         // later warp is a fact about the previous one.
         let session_gate = unsafe { setup_map_reentry_if_in_game(base) };
@@ -496,7 +496,7 @@ mod native {
         };
         unsafe { set_disable_map_enter_anim(DISABLE_MAP_ENTER_ANIM) };
 
-        // Vanilla step 3: choose the destination block. `effective_block` is the OUT slot and
+        // Vanilla step 3: choose the destination block. `effective_block` is the out slot and
         // may differ from what we asked for (disaster remap over areas 50..=88).
         let mut effective_block: u32 = requested_block;
         let set_move_map_step_block_id: SetMoveMapStepBlockIdFn = unsafe {
@@ -518,8 +518,8 @@ mod native {
 
         // Vanilla step 4: arm the explicit spawn with the .aip record, untouched.
         //
-        // SKIPPED ENTIRELY for a provisional target. `FUN_140afcf60` reads the explicit-spawn
-        // flag and, when it is CLEAR, resolves the destination block's own authored player start
+        // Skipped entirely for a provisional target. `FUN_140afcf60` reads the explicit-spawn
+        // flag and, when it is clear, resolves the destination block's own authored player start
         // out of that map's MSB instead (`FUN_14061fc80`, on the destination side, after the
         // load). That is the same coordinate-free path the shipped `WarpPlayer` EMEVD
         // instruction and grace fast-travel take -- neither of them ever calls
@@ -528,7 +528,7 @@ mod native {
         let (spawn_flag, position_readback, orientation_readback) = if target.is_provisional() {
             // The flag is consumed and cleared by `UpdatePlayerInfo` on every map load, so it is
             // normally already 0 here. If it is not, a previous warp's coordinate is still armed
-            // and the engine would use THAT instead of this block's default -- landing the player
+            // and the engine would use that instead of this block's default -- landing the player
             // at another map's coordinates inside this one. Refuse; do not write GameMan to force
             // it, because the only native clearer also zeroes live warp state at +0xac4/+0xb28/
             // +0xb58/+0xb5c/+0xb5e/+0xb68/+0xc35.
@@ -560,7 +560,7 @@ mod native {
             };
             unsafe { set_explicit_spawn(&raw const position, &raw const orientation) };
 
-            // Read the slot back BEFORE kicking. If the flag did not latch, MoveMapStep ignores
+            // Read the slot back before kicking. If the flag did not latch, MoveMapStep ignores
             // our coordinates and spawns the player at the block default -- a silently wrong warp
             // is worse than a refused one.
             let flag = unsafe { get_explicit_spawn_flag() };
@@ -660,7 +660,7 @@ mod native {
         use fromsoftware_shared::FromStatic;
         let world_chr_man = unsafe { eldenring::cs::WorldChrMan::instance() }.ok()?;
         let player = world_chr_man.main_player.as_ref()?;
-        // `PlayerIns.chr_ins` is the struct's first field, so the PlayerIns pointer IS the
+        // `PlayerIns.chr_ins` is the struct's first field, so the PlayerIns pointer is the
         // ChrIns pointer the engine expects here (RespawnPlayer relies on the same identity).
         let chr_ins = core::ptr::from_ref(&player.chr_ins) as usize;
         let mut out = FloatVector4::default();
@@ -705,7 +705,7 @@ mod native {
 
     /// `if (GLOBAL_CSSessionManager->protocolState == InGame) SetupMapReentry(mgr, true);`
     ///
-    /// Returns WHY the re-entry did or did not run, so a caller can report a measured reason
+    /// Returns why the re-entry did or did not run, so a caller can report a measured reason
     /// instead of a bare count that four different situations share.
     ///
     /// Note that entering the re-entry is self-latching: `SetupMapReentry`'s first statement is
@@ -719,7 +719,7 @@ mod native {
         // Fault-tolerant: during teardown the global can be null or stale, and a warp that
         // cannot read it must degrade to "did not touch the session", never to a crash.
         //
-        // Each bail returns a DISTINCT reason. They used to collapse to a bare `0`, which made a
+        // Each bail returns a distinct reason. They used to collapse to a bare `0`, which made a
         // live failure unattributable without another launch.
         let Some(manager) = (unsafe {
             er_game_base::mem::safe_read_usize(er_game_base::mem::game_data_addr(
@@ -760,7 +760,7 @@ pub use native::{
 
 /// Where a requested warp has got to.
 ///
-/// A warp is NOT proven by the request succeeding -- that only shows the explicit-spawn slot
+/// A warp is not proven by the request succeeding -- that only shows the explicit-spawn slot
 /// latched. It is proven by the player being read back at the destination, which is what
 /// [`Self::Arrived`] means and what [`ORACLE_INVASION_WARP_FINAL_BLOCK`] /
 /// [`ORACLE_INVASION_WARP_FINAL_POSITION`] report.
@@ -777,7 +777,7 @@ pub enum WarpArrival {
         final_position: [f32; 3],
         ticks_waited: u32,
     },
-    /// The player settled somewhere the request did not ask for. A wrong landing is a FAILED
+    /// The player settled somewhere the request did not ask for. A wrong landing is a failed
     /// warp and must be reported as one, never rounded up to success.
     Mislanded {
         final_block: u32,
@@ -797,7 +797,7 @@ pub const WARP_ARRIVAL_TICK_BUDGET: u32 = 3600;
 
 /// Classify a settled read-back against what the warp asked for.
 ///
-/// `expected_position` is the destination in PHYSICS space (the block-local `.aip` point run
+/// `expected_position` is the destination in physics space (the block-local `.aip` point run
 /// back through the engine's conversion once the destination block is resident).
 #[must_use]
 pub fn classify_arrival(
@@ -879,7 +879,7 @@ mod tests {
 
     #[test]
     fn the_spawn_position_carries_the_engines_w_and_the_raw_block_local_xyz() {
-        // Block-local, NOT world-space: MoveMapStep converts it. Converting here double-adds.
+        // Block-local, not world-space: MoveMapStep converts it. Converting here double-adds.
         let position = spawn_position([12.5, -3.25, 400.0]);
         assert_eq!(position, FloatVector4::new(12.5, -3.25, 400.0, 1.0));
     }
@@ -1077,7 +1077,7 @@ mod tests {
     #[test]
     fn landing_far_from_the_requested_point_is_a_mislanding_not_a_success() {
         // The failure this exists to catch: the explicit-spawn flag did not take and the engine
-        // used the block's DEFAULT spawn. Right block, wrong place -- that is a failed warp.
+        // used the block's default spawn. Right block, wrong place -- that is a failed warp.
         let arrival = classify_arrival(
             &outcome(0x3C22_3300),
             WARP_ARRIVAL_TICK_BUDGET,
@@ -1135,7 +1135,7 @@ mod tests {
 
     #[test]
     fn nothing_published_means_no_attempt_which_means_warps_are_allowed() {
-        // The fail-safe DIRECTION, which is the part worth pinning. If the publisher never runs --
+        // The fail-safe direction, which is the part worth pinning. If the publisher never runs --
         // Seamless absent, session unresolvable, tracer not reached -- the latch stays at its
         // initial value, and that value decides which failure a player gets. Defaulting to
         // "in flight" would refuse every warp forever with no invasion to explain it, and nothing

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# VANILLA-CONTINUE oracle-reference capture (user 2026-07-20): the correct baseline to diff load2
-# against is the NATIVE menu-driven Continue, NOT our custom autoload (load1). This run:
-#   - loads the PRODUCT + trace DLLs (so the rich oracle_* telemetry is emitted), but
+# Vanilla-continue oracle-reference capture (user 2026-07-20): the correct baseline to diff load2
+# against is the native menu-driven Continue, not our custom autoload (load1). This run:
+#   - loads the product + trace DLLs (so the rich oracle_* telemetry is emitted), but
 #   - sets ER_QUICKLOAD_TELEMETRY_ONLY=1, which DISARMS the custom autoload
 #     (product_autoload_gates.rs:62 arms only if !save_override_telemetry_only()), so the game boots
-#     to the TITLE normally with NO autoload/redirect, and
-#   - records the full telemetry timeseries in OBSERVE-ONLY mode (no probe/verdict/stall teardowns).
-# The USER drives: boot -> title -> CONTINUE (or Load Game -> angrE). Input is LIVE (menu nav is
+#     to the title normally with no autoload/redirect, and
+#   - records the full telemetry timeseries in observe-only mode (no probe/verdict/stall teardowns).
+# The user drives: boot -> title -> continue (or Load Game -> angrE). Input is live (menu nav is
 # RawInput, unaffected by the DInput/XInput block). The captured timeseries is the vanilla-continue
 # reference imprint. bd vanilla-continue-telemetry-capture-via-telemetry-only-disarms-autoload-2026-07-20.
 set -uo pipefail
@@ -67,7 +67,7 @@ PROFILE="$ARTIFACT_DIR/vanilla-continue.me3"
 	echo "path = '$(win_path "$TRACE_GAMEDIR")'"
 } >"$PROFILE"
 
-# TELEMETRY-ONLY: disarms the custom autoload; product still emits oracle_* telemetry. NO save redirect
+# Telemetry-ONLY: disarms the custom autoload; product still emits oracle_* telemetry. No save redirect
 # (pure vanilla APPDATA save -- the user's real save; they Continue/Load-Game into angrE).
 printf '1\n' >"$GAME_DIR/er-quickload-telemetry-only.txt"
 rm -f "$GAME_DIR/er-quickload.toml" 2>/dev/null
@@ -77,10 +77,10 @@ rm -f "$GAME_DIR"/er-quickload-system-quit-repro.txt "$GAME_DIR"/er-quickload-sy
 	"$GAME_DIR"/er-quickload-prove-movement.txt "$GAME_DIR"/er-quickload-stay-active.txt \
 	"$GAME_DIR"/er-quickload-probe-foreground.txt 2>/dev/null
 # Clean slate for logs/telemetry so this run is not polluted by a prior one.
-# THE GAME_DIR LOG SWEEP IS GONE ON PURPOSE. It used to read
+# The GAME_DIR log sweep is gone on purpose. It used to read
 #   rm -f "$GAME_DIR"/er-quickload-*.log "$GAME_DIR"/er-reload-trace.log \
 #         "$GAME_DIR"/er-quickload-telemetry.json
-# and it destroyed TWO generations of somebody ELSE's run: `begin_fresh_run` removes `<name>.prev`
+# and it destroyed two generations of somebody else's run: `begin_fresh_run` removes `<name>.prev`
 # unconditionally when the live file is absent. Every log this run writes now lands in a fresh
 # per-run ARTIFACT_DIR, so the clean slate is free and takes nobody else's evidence with it.
 
@@ -101,10 +101,10 @@ echo "==   Game -> angrE). The oracle_* timeseries records the NATIVE load =="
 echo "==   observe window ${OBSERVE_SECONDS}s  cap=${CAP_SECONDS}s  artifacts -> $ARTIFACT_DIR"
 echo "======================================================================"
 
-# EVERY per-run artifact goes into THIS run's directory. A GAME_DIR artifact is SINGLE-SLOT: the DLL
+# Every per-run artifact goes into this run's directory. A GAME_DIR artifact is single-SLOT: the DLL
 # rotates `<name>` to `<name>.prev` on its first write, so two launches lose the run before last --
 # and several sessions launch concurrently here, which makes that normal rather than a race. A copy
-# after the run cannot fix it (this run clobbered the previous one's file at LAUNCH) and never runs
+# after the run cannot fix it (this run clobbered the previous one's file at launch) and never runs
 # at all when the game crashes, which is exactly the run whose evidence matters.
 env \
 	ER_QUICKLOAD_TELEMETRY_PATH="$ARTIFACT_DIR/er-quickload-telemetry.json" \
@@ -140,7 +140,7 @@ python3 "$REPO_ROOT/scripts/capture-samechar-3x.py" \
 	--observe-only --observe-seconds "$OBSERVE_SECONDS"
 RC=$?
 
-# FALLBACK ONLY -- the trace is redirected into ARTIFACT_DIR at launch. This copy covers the case
+# FALLBACK only -- the trace is redirected into ARTIFACT_DIR at launch. This copy covers the case
 # where the env did not survive me3 -> Proton and the DLL fell back to the game directory.
 [[ -f "$ARTIFACT_DIR/er-reload-trace.log" ]] ||
 	{ [[ -f "$GAME_DIR/er-reload-trace.log" ]] && cp -f "$GAME_DIR/er-reload-trace.log" "$ARTIFACT_DIR/er-reload-trace.log"; }

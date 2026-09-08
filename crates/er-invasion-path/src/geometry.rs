@@ -6,9 +6,9 @@
 //! screenshot costs a launch. Here it costs a test.
 
 // Every non-test consumer of this module is `cfg(windows)`, so on the host it is structurally
-// dead and the allow is unavoidable. What keeps that from HIDING a genuinely unused item -- the
+// dead and the allow is unavoidable. What keeps that from hiding a genuinely unused item -- the
 // failure bd `host-build-cfg-gate-allow-pattern-hides-real-lints-2026-08-23` records against
-// er-title-flow -- is that dead_code is still DENIED on the shipping target, where the windows
+// er-title-flow -- is that dead_code is still denied on the shipping target, where the windows
 // modules are compiled and every one of these has a caller. A tighter `not(test)` variant was
 // tried first and is wrong: it makes `cargo test` on the host fail for items whose only callers
 // are cross-compiled, which is not a defect.
@@ -31,7 +31,7 @@ pub const NEAR_EPSILON: f32 = 0.05;
 /// path, `CSFeManImp::UpdateChrEnemyTagEntries` -> `FUN_1407763d0` -> `FloatMatrix4x4::TransformCopy`
 /// (`0x140680910`) -- takes the matrix `GetViewMatrix` hands back and **`Invert`s** it before
 /// multiplying a world position through. Inverting a matrix to reach camera space is only
-/// necessary if it maps camera space OUT to the world. Had it been a true view matrix the game
+/// necessary if it maps camera space out to the world. Had it been a true view matrix the game
 /// would use it directly, and reading it as camera-to-world would put every path somewhere it
 /// is not.
 ///
@@ -40,7 +40,7 @@ pub const NEAR_EPSILON: f32 = 0.05;
 /// wrong for a scaled one. The engine's `Invert` handles the general case; normalising costs
 /// three square roots a frame and removes the difference.
 ///
-/// `fov_y` is the VERTICAL field of view in RADIANS -- read out of `CS::CSPersCam::ToPerspective`
+/// `fov_y` is the vertical field of view in RADIANS -- read out of `CS::CSPersCam::ToPerspective`
 /// (`0x1403e9ac0`), which builds `cot(fov*0.5)` and divides only the X term by `aspect`. Getting
 /// that backwards stretches the overlay horizontally by about 1.78 at 16:9, which is why the
 /// convention is written down here rather than assumed.
@@ -131,7 +131,7 @@ pub fn resample(points: &[[f32; 3]], spacing: f32, max: usize) -> Vec<[f32; 3]> 
         carried = span - (travelled - spacing);
     }
     let last = points[points.len() - 1];
-    // Skipped only when a marker is ALREADY on the destination, which happens when the route
+    // Skipped only when a marker is already on the destination, which happens when the route
     // length is a whole multiple of the spacing. The threshold is a few centimetres rather than
     // a fraction of the spacing: half a spacing looks like a sensible "close enough" and quietly
     // deletes a real destination marker that merely fell one metre short of the grid.
@@ -187,7 +187,7 @@ impl Camera {
         if !tan_half.is_finite() || tan_half <= f32::EPSILON {
             return None;
         }
-        // `ToPerspective` divides ONLY the X term by the aspect ratio; an aspect of zero would be
+        // `ToPerspective` divides only the X term by the aspect ratio; an aspect of zero would be
         // a division by zero rather than a merely wrong picture, so it is screened here.
         if !self.aspect.is_finite() || self.aspect <= f32::EPSILON {
             return None;
@@ -211,7 +211,7 @@ impl Camera {
         self.view_to_screen(self.to_view(world), screen)
     }
 
-    /// Project a world-space SEGMENT, trimming it at the near plane.
+    /// Project a world-space segment, trimming it at the near plane.
     ///
     /// A polyline drawn by projecting endpoints independently and skipping the ones that fail is
     /// not merely incomplete -- when one end is behind the camera the surviving end connects to
@@ -339,7 +339,7 @@ pub struct Arrow {
 
 /// Build the arrow that leaves the player's body pointing at `target`.
 ///
-/// The direction is the FULL 3D direction, not its horizontal projection: a host directly above
+/// The direction is the full 3D direction, not its horizontal projection: a host directly above
 /// you in a tower and a host directly ahead of you are the difference between climbing and
 /// running, and flattening the arrow would tell you they are the same. Returns `None` when the
 /// two positions coincide and there is no direction to point.
@@ -410,7 +410,7 @@ mod tests {
             .project([0.0, 10.0, 10.0], SCREEN)
             .expect("in front");
         assert!(top[1].abs() < 0.01, "top edge y was {}", top[1]);
-        // The same offset horizontally must NOT reach the edge, because X is divided by aspect.
+        // The same offset horizontally must not reach the edge, because X is divided by aspect.
         let side = camera()
             .project([10.0, 0.0, 10.0], SCREEN)
             .expect("in front");
@@ -493,7 +493,7 @@ mod tests {
         }
     }
 
-    /// Markers must be EVENLY spaced, not one per navmesh waypoint: the engine emits waypoints
+    /// Markers must be evenly spaced, not one per navmesh waypoint: the engine emits waypoints
     /// where the mesh turns, so a doorway gets six inside two metres and open ground gets none
     /// for forty.
     #[test]
@@ -506,7 +506,7 @@ mod tests {
         }
     }
 
-    /// Spacing is measured along the ROUTE, so a corner does not swallow a marker.
+    /// Spacing is measured along the route, so a corner does not swallow a marker.
     #[test]
     fn spacing_carries_across_a_corner_rather_than_restarting() {
         let route = [[0.0, 0.0, 0.0], [3.0, 0.0, 0.0], [3.0, 0.0, 3.0]];

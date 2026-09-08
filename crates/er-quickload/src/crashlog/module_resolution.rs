@@ -87,7 +87,7 @@ fn read_module_base_name(entry: usize) -> String {
 /// PEB->Ldr->InMemoryOrderModuleList. Rebuilt per access violation (AVs are rate-limited) rather
 /// than cached, since modules load over the process lifetime and the fault-time snapshot must
 /// reflect what is mapped now. Returns an empty Vec if the loader chain cannot be read. Enables the
-/// AV path to name return addresses in ANY module (me3_mod_host.dll, ntdll.dll, our own er_*.dll),
+/// AV path to name return addresses in any module (me3_mod_host.dll, ntdll.dll, our own er_*.dll),
 /// matching the `module+0xoffset` shape `scripts/parse-crash-dump.py` prints from a minidump.
 #[cfg(all(windows, target_arch = "x86_64"))]
 pub(crate) fn loaded_modules() -> Vec<(usize, usize, String)> {
@@ -149,7 +149,7 @@ pub(crate) fn module_for_addr(
     None
 }
 
-/// Port of ProDebug's patchDbgChecks, corrected for ER 1.16.1: scan THIS module's .text (resolved
+/// Port of ProDebug's patchDbgChecks, corrected for ER 1.16.1: scan this module's .text (resolved
 /// from the real game_module_base, not GetModuleHandle(NULL) which ProDebug got wrong under the
 /// LazyLoader) for the timed anti-debug patterns and neutralize them, so debug exceptions reach
 /// our VEH. Patches are tiny (branch-offset edits) per ANTI_ANTIDEBUG_CHECKS. Runs once.
@@ -225,7 +225,7 @@ type CrashExitTarget = (
 );
 
 /// Install the crash/exit logger: a vectored handler for access violations plus
-/// MinHooks on the process-exit paths. The exit hooks catch a CLEAN watchdog
+/// MinHooks on the process-exit paths. The exit hooks catch a clean watchdog
 /// termination (ExitProcess) that no exception debugger can observe, and record
 /// which game code requested the exit.
 pub(crate) fn install_crash_logger() {
@@ -375,10 +375,10 @@ pub(crate) fn callstack_contains_game_rva(start_rva: usize, end_rva: usize) -> b
 
 /// GX command-queue producer attribution (`gx_reserve_cmd_queue_slot_hook`): walk the captured
 /// stack and return `(producer_rva, self_in_stack)` -- the first game-.text return address (as an
-/// RVA) that falls OUTSIDE `wrapper_rvas` (the reserve/enqueue transport band), plus whether any
-/// frame BELOW the game code lies inside our own DLL image (submissions our pipeline caused vs
+/// RVA) that falls outside `wrapper_rvas` (the reserve/enqueue transport band), plus whether any
+/// frame below the game code lies inside our own DLL image (submissions our pipeline caused vs
 /// pure-native ones). The stack's leading frames are our own instrumentation (this helper + the
-/// MinHook detour), so self frames only count AFTER a non-self frame has appeared -- counting the
+/// MinHook detour), so self frames only count after a non-self frame has appeared -- counting the
 /// prefix tagged every reserve as +self (observed run autostep10d: 8/8 producers false-tagged).
 /// `producer_rva` is 0 when no qualifying game frame was captured.
 #[cfg(windows)]

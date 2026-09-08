@@ -3,7 +3,7 @@
 
 The exporter (`crates/er-build-export`) writes `LZUTF8(base64(JSON))` and then base64url's
 the result into the URL. This is the inverse, offline, so a link the DLL just emitted can be
-inspected without a browser or the planner's own bundle -- which is what makes an EXPORTED
+inspected without a browser or the planner's own bundle -- which is what makes an exported
 link usable as a read-back oracle for what the character actually holds.
 
 Usage:
@@ -32,7 +32,7 @@ def base64url_decode(text: str) -> bytes:
 def lzutf8_decompress(data: bytes) -> bytes:
     """Expand a single LZ-UTF8 block.
 
-    A byte >= 0xC0 is a match header only when the NEXT byte has its top bit clear; that is
+    A byte >= 0xC0 is a match header only when the next byte has its top bit clear; that is
     the same disambiguation rule the encoder relies on, and it is why the encoder only ever
     takes valid UTF-8 as input.
     """

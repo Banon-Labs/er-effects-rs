@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """Regression for the one-paragraph rule: the classifier the signal actually runs, both directions.
 
-This file used to carry its OWN copy of the classifier, which meant it could pass while production
+This file used to carry its own copy of the classifier, which meant it could pass while production
 counted differently -- the failure mode the shared module exists to end. It now imports
 `scripts/cupcake_turn_scan.prose_paragraphs`, the single definition that
 `.cupcake/signals/last_assistant_wall_of_text.sh` and
 `scripts/audit-wall-of-text-false-positives.py` also use.
 
 Two things are pinned here:
-  * prose_paragraphs -- what counts as a paragraph, and what is exempt STRUCTURE (scanned, not read);
+  * prose_paragraphs -- what counts as a paragraph, and what is exempt structure (scanned, not read);
   * Turn.text_runs   -- the unit the rule measures. A tool-heavy turn's one-line preambles are
-                        separate runs of one paragraph each, NOT an N-paragraph wall; scoring them
+                        separate runs of one paragraph each, not an N-paragraph wall; scoring them
                         as one lump is what made the old guard fire on ordinary work.
 """
 from __future__ import annotations
@@ -36,7 +36,7 @@ CASES = [
     ("prose after a list still halts", "Prose.\n\n- one\n\nMore prose.", 2),
     ("code containing blank lines does not split", "Prose.\n\n```\na\n\nb\n```", 1),
     ("numbered list is structure", "Prose.\n\n1. one\n2. two", 1),
-    # --- shapes the per-BLOCK rule got wrong, which is most of what an answer actually looks like ---
+    # --- shapes the per-block rule got wrong, which is most of what an answer actually looks like ---
     (
         "caption plus its table is one scannable unit, not prose",
         "Findings:\n| a | b |\n|---|---|\n| 1 | 2 |",

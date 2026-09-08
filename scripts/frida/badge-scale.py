@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Live scaler for the armament Ash-of-War badge (bd er-effects-rs-pe98).
 
-`SetIcon` scales its drawn quad by the target clip's LOCAL rect, so inflating that rect
-inflates the rendered badge. This hooks the local-rect getter and grows ONLY the badge's
+`SetIcon` scales its drawn quad by the target clip's local rect, so inflating that rect
+inflates the rendered badge. This hooks the local-rect getter and grows only the badge's
 rect, identified by its exact signature -- the tile-local origin of the bottom-left
 `ArtsIcon` slot. Every other caller (ItemIcon at 160px, AttributeIcon at 37px) is
 untouched, so the rest of the menu renders normally.
@@ -28,7 +28,7 @@ import threading
 
 import frida
 
-#: `FUN_140d82060(CSScaleformValue*, float* out4)` -- LOCAL bounds {xmin,ymin,xmax,ymax}
+#: `FUN_140d82060(CSScaleformValue*, float* out4)` -- Local bounds {xmin,ymin,xmax,ymax}
 #: in px. deobf 0x140d81fb0. This is the rect the icon setter divides the texture by.
 PROXY_LOCAL_RECT_RVA = 0xD81FB0
 #: Tile-local origin of the `ArtsIcon` slot (decoded from its PlaceObject2 matrix in
@@ -88,7 +88,7 @@ def main() -> int:
         "game to detach",
         flush=True,
     )
-    # Stay resident on OBSERVABLE events only: the gadget script being destroyed (game gone)
+    # Stay resident on observable events only: the gadget script being destroyed (game gone)
     # or stdin reaching EOF (the operator detaching). A polling sleep loop here was both a
     # banned pattern and strictly worse -- it woke up to do nothing and detached up to five
     # seconds after the game had already died.

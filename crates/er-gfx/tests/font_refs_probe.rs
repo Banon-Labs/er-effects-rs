@@ -1,10 +1,10 @@
-//! Diagnostic: which movies carry text, and where do their FONTS come from?
+//! Diagnostic: which movies carry text, and where do their fonts come from?
 //!
 //! Symptom (2026-07-28, Minimal HUD side-by-side run): an in-game caption/message strip
 //! rendered every character as a `.notdef` box. Tofu means the text field resolved to a font
-//! with no glyph for those codepoints -- a FONT binding problem, not a text problem.
+//! with no glyph for those codepoints -- a font binding problem, not a text problem.
 //!
-//! ER menu movies do not each embed the UI font; they IMPORT it from the shared font movie
+//! ER menu movies do not each embed the UI font; they import it from the shared font movie
 //! (`data0:/font/eu_std/font.gfx`) via `ImportAssets2`, and `DefineEditText` then references
 //! the imported character id. A movie authored against a different game version can import
 //! under a name/id the current font movie no longer provides, and every glyph falls back to

@@ -1,4 +1,4 @@
-// Shared build-script support for GENERATING detour-prologue byte constants with `iced-x86`.
+// Shared build-script support for generating detour-prologue byte constants with `iced-x86`.
 //
 // This file is `include!`d by the build script of every crate that byte-checks a game function's
 // prologue before detouring or calling it. It exists so that no crate has to hand-type machine
@@ -22,16 +22,16 @@
 //    everywhere -- including a machine with no copy of the game.
 // 2. **Ground truth.** When a readable copy of the image is found, the assembled bytes are
 //    compared against the bytes actually living at that VA in the real binary. This is the
-//    stronger check, but it can only run where the image exists, so it SKIPS (with a
+//    stronger check, but it can only run where the image exists, so it skips (with a
 //    `cargo:warning` naming what went unverified) rather than failing when it is absent -- the
 //    same shape as the corpus-gated tests in `crates/er-gfx/tests/common/mod.rs`.
 //
 // The pin is therefore not redundant with ground truth: it is the half that survives on a
 // machine, or in CI, that has no game files.
 //
-// # ONE supported version per module, recorded here, checked before anything else
+// # one supported version per module, recorded here, checked before anything else
 //
-// Every image named below is pinned to exactly ONE build, and this workspace supports that build
+// Every image named below is pinned to exactly one build, and this workspace supports that build
 // and no other. There is no candidate list, no "try these addresses and see which one takes", and
 // no best-effort adaptation to whatever the machine happens to hold. The only question asked of an
 // installed module is the boolean one: *is this the build we recorded, yes or no*.
@@ -46,11 +46,11 @@
 //   [`ERSC_SUPPORTED_VERSION`] is the recorded answer, and it is the single value to change when
 //   this workspace moves to a new Seamless build.
 // * **Are our bytes right for it?** That is ground truth, and it may only be asked once the first
-//   question has been answered YES. Comparing a pin against a DIFFERENT build's file is not ground
+//   question has been answered yes. Comparing a pin against a different build's file is not ground
 //   truth failing, it is ground truth being impossible: the diff it prints is a fact about a
 //   module nobody claimed those addresses described.
 //
-// So [`generate`] identifies before it compares, and BOTH answers are fatal when they are wrong:
+// So [`generate`] identifies before it compares, and both answers are fatal when they are wrong:
 //
 // * **Wrong version installed.** The machine has Seamless, and it is not the build this tree was
 //   measured against. A DLL built here would be inert on that machine at best -- the runtime gates
@@ -58,12 +58,12 @@
 //   The build says so, in full, naming both versions and the ways out. It does not warn and carry
 //   on: a `cargo:warning` scrolls past inside a green build, and the person who then pays for it
 //   is a player wondering why a feature does nothing.
-// * **Right version, wrong bytes.** The file IS the recorded build and our constants disagree with
+// * **Right version, wrong bytes.** The file is the recorded build and our constants disagree with
 //   it. That is a defect in this repo -- the pins are wrong for the version they claim -- and it
 //   panics for every image alike, `ersc.dll` included.
 //
 // **A module that is absent is not a mismatch.** No `ersc.dll`, no game image, no `ER_ERSC_DLL`:
-// nothing to disagree with, so ground truth SKIPS with a `cargo:warning` and the pin carries the
+// nothing to disagree with, so ground truth skips with a `cargo:warning` and the pin carries the
 // verification alone. That is what keeps this buildable in CI and on a machine that has never
 // installed Seamless, and it is the same line `scripts/check-game-version-supported.py` draws --
 // "a missing game is not a failed gate, it is a machine without the game."
@@ -72,14 +72,14 @@
 //
 // `ER_ERSC_DLL` names the file to ground-truth against, so a developer whose install has moved on
 // can still build by pointing it at a copy of the supported build. It is deliberately narrow: it
-// changes which file the CONSTANTS are checked against, and it is itself version-checked, so it
+// changes which file the constants are checked against, and it is itself version-checked, so it
 // cannot be used to wave a mismatch through. It also says nothing about what the machine will
 // actually load -- that question belongs to `scripts/check-ersc-version-supported.py`, which reads
-// the INSTALLED module and is not overridable by this variable.
+// the installed module and is not overridable by this variable.
 //
 // When the pinned VA does not hold, [`generate`] searches the module's real code sections for the
 // assembled bytes under the generated mask, so the diagnostic carries the address the function
-// moved TO rather than only the fact that it moved. That search is deliberately NOT wired back
+// moved to rather than only the fact that it moved. That search is deliberately not wired back
 // into the constants: a build-machine-discovered RVA would bake one particular installed DLL into
 // a DLL shipped to other machines. Locating at runtime is the consumer's job, and where it cannot
 // be done safely the consumer fails closed -- see the module docs of
@@ -99,8 +99,8 @@ use iced_x86::{Code, Encoder, IcedError, Instruction, MemoryOperand, Register};
 pub const PROLOGUE_BYTE_COMPARED: u8 = 0xff;
 /// Mask byte meaning "ignore this position".
 ///
-/// The ONLY positions that ever get this value are the displacement bytes of a RIP-relative
-/// memory operand. See [`rip_relative_mask`] for why, and for what is deliberately NOT masked.
+/// The only positions that ever get this value are the displacement bytes of a RIP-relative
+/// memory operand. See [`rip_relative_mask`] for why, and for what is deliberately not masked.
 pub const PROLOGUE_BYTE_IGNORED: u8 = 0x00;
 
 /// MSVC emits a REX prefix with every bit clear ahead of some single-byte pushes (`40 55` for
@@ -109,7 +109,7 @@ pub const PROLOGUE_BYTE_IGNORED: u8 = 0x00;
 /// emitted with `db`. [`rex_push`] is the only user.
 pub const REDUNDANT_REX_PREFIX: u8 = 0x40;
 
-/// The ONE Seamless Co-op build this workspace supports, and the only place that number is
+/// The one Seamless Co-op build this workspace supports, and the only place that number is
 /// written down.
 ///
 /// # Why a single value and not a list
@@ -126,9 +126,9 @@ pub const REDUNDANT_REX_PREFIX: u8 = 0x40;
 /// # What changing it means
 ///
 /// Moving to a new Seamless build is a re-measurement, not an edit to this line. Re-derive the
-/// entry points (`uv run --with capstone python3 scripts/locate-ersc-entry-points.py`), READ each
+/// entry points (`uv run --with capstone python3 scripts/locate-ersc-entry-points.py`), read each
 /// candidate rather than trusting a signature match -- v2.0.0's 19-byte `BUILD_LOBBY_KEY` pin
-/// matches exactly one v2.0.0 address and it is the WRONG function -- re-pin the constants and the
+/// matches exactly one v2.0.0 address and it is the wrong function -- re-pin the constants and the
 /// field offsets, and then set this. The value is checked against the file before any pin is
 /// compared, so a repin that forgets this line fails the build rather than verifying against the
 /// wrong module.
@@ -138,7 +138,7 @@ pub const ERSC_SUPPORTED_VERSION: &str = "2.0.1";
 ///
 /// Read rather than inferred from a path, a file size or a timestamp, all of which a user can
 /// change without changing the build. Measured 2026-09-06: the banner is UTF-16LE, NUL-terminated,
-/// and occurs EXACTLY ONCE in the file (at `0x1e19fc` in the supported build), with no ASCII copy
+/// and occurs exactly once in the file (at `0x1e19fc` in the supported build), with no ASCII copy
 /// of it anywhere in the file.
 const ERSC_VERSION_BANNER: &str = "Seamless Co-op v";
 
@@ -154,7 +154,7 @@ const ERSC_VERSION_BANNER_LIMIT: usize = 128;
 /// file can ground-truth it.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Image {
-    /// `eldenring.exe` 1.16.2. Ground truth is `eldenring-deobf.bin`, a FLAT image at base
+    /// `eldenring.exe` 1.16.2. Ground truth is `eldenring-deobf.bin`, a flat image at base
     /// `0x140000000` in which file offset == RVA for every section.
     EldenRing,
     /// `eldenring.exe` 1.17 -- the build the game has actually been since 2026-08-27. Ground
@@ -162,7 +162,7 @@ pub enum Image {
     ///
     /// # Why the version has to be part of the spec
     ///
-    /// A prologue constant is compared against the bytes of the RUNNING game, and 1.17 moved
+    /// A prologue constant is compared against the bytes of the running game, and 1.17 moved
     /// things these bytes encode. The two save-request retractions are the clearest case: their
     /// whole body is `mov rax,[rip+disp]; mov byte [rax+0xb72],0; ret`, and `disp` reaches the
     /// GameMan singleton, which 1.17 moved by `+0x4070`. The instructions did not change and the
@@ -177,7 +177,7 @@ pub enum Image {
     EldenRing1170,
     /// `ersc.dll` **v2.0.1**, the one build this workspace supports. The version is named
     /// rather than assumed: `ersc.dll` is third-party, always has the same file name, and the
-    /// user replaces it on their own schedule, so [`Image::locate`] READS each candidate and
+    /// user replaces it on their own schedule, so [`Image::locate`] reads each candidate and
     /// matches [`Image::version_marker`] against the product string Seamless ships in its own
     /// resources. A file that does not carry that marker is not this image, whatever it is
     /// called and wherever it sits.
@@ -199,7 +199,7 @@ impl Image {
 
     /// The product string Seamless ships in its own version resource, as ASCII. It is compared
     /// UTF-16-encoded, which is how it appears in the file. This is what makes a candidate
-    /// identifiable as a PARTICULAR Seamless build rather than merely as "some ersc.dll".
+    /// identifiable as a particular Seamless build rather than merely as "some ersc.dll".
     fn version_marker(self) -> Option<&'static str> {
         match self {
             Self::Ersc201 => Some("Seamless Co-op v2.0.1 by Yui"),
@@ -219,7 +219,7 @@ impl Image {
         match self {
             Self::EldenRing => "ER_DEOBF_BIN",
             Self::EldenRing1170 => "ER_DEOBF_BIN_1170",
-            // Two variables, because they list FILES to consider and the version marker
+            // Two variables, because they list files to consider and the version marker
             // decides whether a file answers for this spec at all. Naming the version in the
             // variable instead would make the caller assert the very thing this code is able
             // to measure.
@@ -228,9 +228,9 @@ impl Image {
     }
 
     /// The one build of this module the workspace supports, for an image that has to prove which
-    /// build it is from its own CONTENT.
+    /// build it is from its own content.
     ///
-    /// `None` for the game images, and that is not a gap: they are version-NAMED, so the file the
+    /// `None` for the game images, and that is not a gap: they are version-named, so the file the
     /// build script opened has already answered the question by being called
     /// `eldenring-deobf.bin` rather than `eldenring-deobf-1.17.bin`. A flat dump carries no
     /// version resource to read anyway.
@@ -309,15 +309,15 @@ impl Image {
             .map(<[u8]>::to_vec)
     }
 
-    /// Every VA in this module's REAL CODE where `bytes` occurs under `mask` -- i.e. where the
+    /// Every VA in this module's real code where `bytes` occurs under `mask` -- i.e. where the
     /// function went when it stopped being at the address someone pinned.
     ///
     /// # Content, not position
     ///
     /// This is the half of the check that survives a third-party update. The pinned VA answers
-    /// "is it still there"; this answers "where is it now", using only what the function IS. The
+    /// "is it still there"; this answers "where is it now", using only what the function is. The
     /// mask is the one [`rip_relative_mask`] derived, so a RIP-relative displacement -- which is
-    /// GUARANTEED to re-encode when code moves -- does not defeat the search while opcodes,
+    /// guaranteed to re-encode when code moves -- does not defeat the search while opcodes,
     /// ModRM, field offsets, immediates and relative branches still have to match.
     ///
     /// # Why only executable, non-writable sections
@@ -326,7 +326,7 @@ impl Image {
     /// that is 11 MB of encrypted bytes. Scanning it would
     /// manufacture coincidental hits in ciphertext and report them as function addresses. That
     /// section is `CODE|EXECUTE|READ|WRITE`; a compiler-emitted `.text` is `CODE|EXECUTE|READ`
-    /// with no WRITE. Requiring executable-and-not-writable therefore selects exactly the
+    /// with no write. Requiring executable-and-not-writable therefore selects exactly the
     /// plaintext code, and does it by section characteristics rather than by
     /// hard-coding a section name -- which would be another position assumption of the kind this
     /// whole function exists to remove.
@@ -395,7 +395,7 @@ const IMAGE_SCN_MEM_WRITE: u32 = 0x8000_0000;
 
 /// Hits reported by [`Image::find_by_content`] before it gives up and says "ambiguous". Small on
 /// purpose: the answer a caller can act on is one address, and anything past a handful is a
-/// signature that identifies a code SHAPE rather than a function.
+/// signature that identifies a code shape rather than a function.
 const MAX_CONTENT_MATCHES: usize = 8;
 
 /// One PE section, in the terms the two callers here need.
@@ -440,7 +440,7 @@ fn pe_sections(image: &[u8]) -> Vec<Section> {
 
 /// Every file that might be a build of `ersc.dll`, in the order they are tried.
 ///
-/// Both env overrides and BOTH install directories, because a version-named spec has to be able
+/// Both env overrides and both install directories, because a version-named spec has to be able
 /// to find its own build wherever it currently sits -- the Seamless launcher shuffles them
 /// (`SeamlessCoop/` is the live one, `_SeamlessCoop/` is where the previous build is left), and
 /// the user may downgrade. Which candidate answers for which spec is decided by
@@ -483,7 +483,7 @@ fn steam_roots() -> Vec<PathBuf> {
 /// right answers. A whole-file search cannot be defeated that way and costs one pass.
 ///
 /// The trailing ` by Yui` is dropped because it is an author credit, not part of the version, and
-/// pinning it would make a future rename read as a version mismatch. What is NOT dropped is the
+/// pinning it would make a future rename read as a version mismatch. What is not dropped is the
 /// shape check: the token has to look like a dotted number, so a hit in compressed or encrypted
 /// bytes cannot be reported as a version.
 fn ersc_declared_version(image: &[u8]) -> Option<String> {
@@ -625,7 +625,7 @@ pub fn mov_r64_mem(
     )?)
 }
 
-/// `mov <r64>, [<base>]` with NO displacement byte.
+/// `mov <r64>, [<base>]` with no displacement byte.
 ///
 /// Distinct from `mov_r64_mem(.., 0)` on purpose: iced encodes an explicit zero displacement as
 /// `mod=01, disp8=0` (`49 8b 40 00`), and the game ships the `mod=00` form (`49 8b 00`). The pin
@@ -656,7 +656,7 @@ pub fn mov_r32_mem(
     )?)
 }
 
-/// `mov rax, [rip + ..]` written as the ABSOLUTE address it resolves to. iced turns a `RIP`-based
+/// `mov rax, [rip + ..]` written as the absolute address it resolves to. iced turns a `RIP`-based
 /// memory operand's displacement into the rip-relative delta for the VA being assembled at, so
 /// the singleton's address is named rather than the encoded offset.
 pub fn mov_rax_rip_absolute(asm: &mut CodeAssembler, target: u64) -> Result<(), IcedError> {
@@ -671,15 +671,15 @@ pub fn mov_rax_rip_absolute(asm: &mut CodeAssembler, target: u64) -> Result<(), 
 // Generation
 // ---------------------------------------------------------------------------------------------
 
-/// What [`assemble`] produces: the constant, and the longer sequence used to LOCATE it.
+/// What [`assemble`] produces: the constant, and the longer sequence used to locate it.
 ///
 /// The two differ because `PrologueSpec::take` truncates. `ANNOUNCE_UPDATE_PROLOGUE` keeps 8 of
 /// 11 bytes and stops mid-`movaps`; `SHOW_PROLOGUE` keeps the eight pushes and drops the
-/// `sub rsp,0x188` that follows. Truncation is right for a GATE -- it is the window the runtime
-/// check reads -- and wrong for a SEARCH, because the dropped bytes are the discriminating ones.
+/// `sub rsp,0x188` that follows. Truncation is right for a gate -- it is the window the runtime
+/// check reads -- and wrong for a search, because the dropped bytes are the discriminating ones.
 /// Measured on Seamless v2.0.0: `SHOW_PROLOGUE`'s 12 kept bytes are eight callee-saved pushes
 /// that occur 1248 times in `ersc.dll`, while the same pushes plus the frame size occur exactly
-/// ONCE. Searching with `kept` reports "ambiguous, capped at 8"; searching with `full` reports
+/// once. Searching with `kept` reports "ambiguous, capped at 8"; searching with `full` reports
 /// the one address that is actually the function.
 struct Assembled {
     /// The constant: `take` bytes, and its gate mask.
@@ -700,7 +700,7 @@ fn assemble(spec: &PrologueSpec, body: Assemble) -> Assembled {
             spec.name
         );
     });
-    // Captured BEFORE `assemble` because that call needs `&mut asm`. These are the same named
+    // Captured before `assemble` because that call needs `&mut asm`. These are the same named
     // instructions the pin is generated from, which is what makes the mask derivable rather than
     // hand-marked.
     let instructions: Vec<Instruction> = asm.instructions().to_vec();
@@ -734,30 +734,30 @@ fn assemble(spec: &PrologueSpec, body: Assemble) -> Assembled {
 ///
 /// # What is masked, and why exactly that
 ///
-/// `mov rax, [rip+disp32]` encodes the delta from the END of the instruction to the global it
-/// names. Both ends move when the game is patched, so the four displacement bytes are GUARANTEED
+/// `mov rax, [rip+disp32]` encodes the delta from the end of the instruction to the global it
+/// names. Both ends move when the game is patched, so the four displacement bytes are guaranteed
 /// to re-encode across builds even when the function is byte-for-byte the same code doing the
 /// same job. A pin that includes them is pinning a value that cannot survive, and it disarms its
 /// hook on a target that translated perfectly. Measured on 1.17: three prologues
 /// (`SAVE_REQUEST_RETRACT_B72_SIG`, `..._B73_SIG`, `QUIT_PHASE_SETTLE_SIG`) differ from their
-/// 1.16.2 pin ONLY inside that field.
+/// 1.16.2 pin only inside that field.
 ///
-/// # What is deliberately NOT masked
+/// # What is deliberately not masked
 ///
 /// * **Opcode and ModRM bytes.** They are the instruction's identity; masking them would turn the
 ///   pin into "some instruction is here", which is not a pin at all.
 /// * **Register-base memory displacements** (`[rax+0xb72]`). They are struct field offsets, and
-///   they are the ONLY thing distinguishing `SAVE_REQUEST_RETRACT_B72_SIG` from `..._B73_SIG`:
+///   they are the only thing distinguishing `SAVE_REQUEST_RETRACT_B72_SIG` from `..._B73_SIG`:
 ///   masking them would let each of those two pins accept the other function. `map-rvas`'s
 ///   search matcher masks them because a search wants candidates; a gate wants identity.
 /// * **Immediates** (`cmp [rax+0xbc4], 2`) and **relative branch targets** (`jne +0xa`). A branch
-///   inside the checked window is relative to the function's OWN layout, so it does not move when
+///   inside the checked window is relative to the function's own layout, so it does not move when
 ///   the function moves -- it survived 1.17 unchanged, and it is evidence worth keeping.
 ///
 /// # Fail-closed
 ///
 /// Every uncertainty answers "compare this byte". If an instruction will not re-encode, or the
-/// re-encoded stream does not reproduce the assembled bytes exactly, the mask is all-COMPARED and
+/// re-encoded stream does not reproduce the assembled bytes exactly, the mask is all-compared and
 /// the pin behaves exactly as it did before this function existed.
 fn rip_relative_mask(spec: &PrologueSpec, instructions: &[Instruction], bytes: &[u8]) -> Vec<u8> {
     let all_compared = vec![PROLOGUE_BYTE_COMPARED; bytes.len()];
@@ -816,11 +816,11 @@ fn rip_relative_mask(spec: &PrologueSpec, instructions: &[Instruction], bytes: &
 
 /// The message for "the pinned VA does not hold the bytes this spec describes".
 ///
-/// This one is reached only once the file has PROVEN it is the recorded build (see
+/// This one is reached only once the file has proven it is the recorded build (see
 /// [`describe_version_mismatch`], which runs first and stops the build if it has not), so it says
 /// what it means: our constants are wrong for a version we claim to support. Three things every
 /// reader needs are here rather than in someone's memory of a build that broke months ago: what
-/// was expected, what is actually there, and WHERE the expected bytes went.
+/// was expected, what is actually there, and where the expected bytes went.
 fn describe_mismatch(
     spec: &PrologueSpec,
     path: &Path,
@@ -1044,7 +1044,7 @@ fn render(spec: &PrologueSpec, bytes: &[u8], mask: &[u8]) -> String {
 /// `None` means the file is not on this machine, which is not a failure -- see [`generate`].
 type LoadedImage = (Image, Option<(PathBuf, Vec<u8>)>);
 
-/// Locate, read and IDENTIFY every distinct image the specs name, once each.
+/// Locate, read and identify every distinct image the specs name, once each.
 ///
 /// Once each matters twice over. It is where "fail early" comes from -- identification happens
 /// before a single spec is compared, so a machine holding an unsupported Seamless build gets one
@@ -1098,7 +1098,7 @@ fn loaded(images: &[LoadedImage], image: Image) -> Option<(&Path, &[u8])> {
 }
 
 /// The `SUPPORTED_VERSION` constant emitted alongside the prologues, so the version a consuming
-/// crate NAMES in a refusal cannot drift from the one the build script checked.
+/// crate names in a refusal cannot drift from the one the build script checked.
 ///
 /// Emitted only for a file whose specs name an image with a recorded version, and at most one such
 /// image per file: two would make `SUPPORTED_VERSION` ambiguous, and a constant that silently
@@ -1142,13 +1142,13 @@ fn render_supported_version(specs: &[(PrologueSpec, Assemble)]) -> String {
 
 /// Assemble every spec, verify it, and write the constants to `OUT_DIR/<out_file>`.
 ///
-/// Order matters and is the point of the function: every image is IDENTIFIED before any spec is
+/// Order matters and is the point of the function: every image is identified before any spec is
 /// compared against it. A file that is present but is a build this workspace does not support
 /// stops the build there, with a report about versions; only a file that has proven it is the
 /// recorded build gets its bytes read, and then a disagreement is a defect in this repo and
 /// panics for every image alike.
 ///
-/// The one thing that is not a failure is ABSENCE. No image, no `ER_ERSC_DLL`, no game dump:
+/// The one thing that is not a failure is absence. No image, no `ER_ERSC_DLL`, no game dump:
 /// nothing to disagree with, so ground truth skips with a `cargo:warning` and the pin carries the
 /// verification on its own. See the module docs.
 pub fn generate(specs: &[(PrologueSpec, Assemble)], out_file: &str) {
@@ -1188,7 +1188,7 @@ pub fn generate(specs: &[(PrologueSpec, Assemble)], out_file: &str) {
                 }
                 // The pinned VA is not inside this file at all: past the end of a flat dump, or
                 // outside every section of a PE. For a version-checked image that is the loudest
-                // possible disagreement -- the file HAS proven it is the build we support, and
+                // possible disagreement -- the file has proven it is the build we support, and
                 // the address we pinned is not in it -- so it fails rather than skipping.
                 None if spec.image.supported_version().is_some() => panic!(
                     "{}: 0x{:x} is not inside {}, which has already identified itself as the \
@@ -1199,7 +1199,7 @@ pub fn generate(specs: &[(PrologueSpec, Assemble)], out_file: &str) {
                     path.display(),
                     spec.image.remeasure_hint()
                 ),
-                // A version-NAMED image that cannot answer: a truncated or unreadable dump. Same
+                // A version-named image that cannot answer: a truncated or unreadable dump. Same
                 // verdict as not having it.
                 None => unverified.push(spec.name),
             },

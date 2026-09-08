@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Audit the SHIPPED moveset table for creatures no attack button can reach.
+"""Audit the shipped moveset table for creatures no attack button can reach.
 
 The table's job is to say what a possessed creature can do. A row that classifies every
 move into the `movement` bucket says the creature can walk and nothing else, and with the
@@ -74,7 +74,7 @@ def parse_names(path):
 def causes(attackless, root=None, regulation=None):
     """{chrNum: cause} for the creatures that classified no attacks.
 
-    THE ORACLE IS THE TimeAct ITSELF, not the count in the table. A creature with zero attacks is
+    The oracle is the TimeAct itself, not the count in the table. A creature with zero attacks is
     either a Balloon Dummy or a Godrick Knight whose animations were not read, and the table cannot
     tell you which -- both rows look like twelve `W_Step` clips and `denied=0`. So this opens the
     TimeAct that describes the creature (its own, or its family base's; see
@@ -100,7 +100,7 @@ def causes(attackless, root=None, regulation=None):
         print(f'# corpus unavailable, cause column omitted: {error!r}', file=sys.stderr)
         return {}
     if not anibnds:
-        # AN EMPTY CORPUS MUST NOT LOOK LIKE AN ANSWER. `chr_dirs` globs and returns `{}` for a
+        # An empty corpus must not look like an answer. `chr_dirs` globs and returns `{}` for a
         # path that is not there rather than raising, so without this every creature would come
         # back "no TimeAct anywhere" and the gate would report a clean pass on a machine with no
         # game files at all -- the single worst outcome for a check whose whole job is to notice
@@ -150,7 +150,7 @@ def selftest(args):
     """
     import tempfile
     if args.no_corpus or not causes([SELFTEST_CHR], args.root, args.regulation):
-        # SKIPS LOUDLY, like the gate it is testing. Without an extraction there is no TimeAct to
+        # Skips loudly, like the gate it is testing. Without an extraction there is no TimeAct to
         # read, so the corrupted row would be indistinguishable from a genuinely attackless one and
         # a "failure" here would say nothing about the check.
         print('selftest SKIPPED: no corpus, so the cause oracle cannot run -- not a pass',
@@ -245,7 +245,7 @@ def run(args):
             json.dump(report, handle, indent=1)
 
     if args.check:
-        # SKIPPING IS NOT PASSING, and both ways of ending up without causes say so out loud: the
+        # Skipping is not passing, and both ways of ending up without causes say so out loud: the
         # corpus is game-derived and will never be in the repo, so this gate is honest about being
         # unable to run rather than reporting a pass it did not earn. An empty `cause` with an
         # empty `attackless` is the real pass -- nothing to explain.

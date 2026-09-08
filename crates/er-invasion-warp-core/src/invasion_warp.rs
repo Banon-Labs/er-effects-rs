@@ -8,12 +8,12 @@
 //! plain coordinate table. This module reads it, flattens it into [`InvasionWarpTarget`]
 //! records, and provides the block grouping / summary / coordinate math the map UI needs.
 //!
-//! # What this is NOT
+//! # What this is not
 //!
 //! It never fakes an invasion and never enters any session path. The engine's own consumer
 //! of this table is `CS::CSBreakInPointManager::_GetCurBreakInPointVecFromAutoIntrudePoint`
 //! (0x140a0c4f0), which threads through `CSNetMan->quickmatchManager`; that function is
-//! deliberately NOT called. Its block-local -> world-space arithmetic was read out of it
+//! deliberately not called. Its block-local -> world-space arithmetic was read out of it
 //! statically and reimplemented here ([`InvasionWarpTarget::world_position`]), so the
 //! multiplayer code is never entered.
 //!
@@ -25,11 +25,11 @@
 //! | address | symbol | what it proves |
 //! |---|---|---|
 //! | `0x140ae9860` | `CS::InGameStayStep::STEP_InGameStayLoad` | requests both `.aipbnd` files at boot |
-//! | `0x1401f0620` | `CS::CSFileImp::LoadAutoInvadePointBnd` | registers the file cap (does NOT parse) |
+//! | `0x1401f0620` | `CS::CSFileImp::LoadAutoInvadePointBnd` | registers the file cap (does not parse) |
 //! | `0x140201660` | `CS::AutoInvadePointBndFileCap::Process` | walks the BND, one `AddForBlockId` per entry |
 //! | `0x140a69550` | `CS::CSAutoInvadePoint::AddForBlockId` | the on-disk record layout (see [`crate::aip`]) |
 //! | `0x140a68ea0` | `CS::CSAutoInvadePoint::CSAutoInvadePoint` | the singleton layout (`DLMap` at +0x00, size 0x70) |
-//! | `0x140a693e0` | `CSAutoInvadePoint` lookup-by-`BlockId` | returns the `{count, points}` value, NOT the node |
+//! | `0x140a693e0` | `CSAutoInvadePoint` lookup-by-`BlockId` | returns the `{count, points}` value, not the node |
 //! | `0x140660d20` | `BlockId::BlockId` | disk byte order + the BCD index packing |
 //! | `0x140a0c4f0` | `_GetCurBreakInPointVecFromAutoIntrudePoint` | `world = point.xyz + block_origin.xyz` |
 //! | `0x1406338d0` | `WorldGridAreaInfo::GetWorldAreaInfoCoordinates` | the block-origin source |
@@ -52,7 +52,7 @@ pub const BLOCK_KEY_NONE_RAW: u32 = 0xFFFF_FFFF;
 /// `0xAABBCCDD` = `m{AA}_{BB}_{CC}_{DD}` in hex-digit order.
 ///
 /// This type exists separately from `eldenring::cs::BlockId` because that binding is
-/// Windows-only, and because it does NOT decode the BCD index (see [`BlockKey::index`]).
+/// Windows-only, and because it does not decode the BCD index (see [`BlockKey::index`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct BlockKey(u32);
 
@@ -87,7 +87,7 @@ impl BlockKey {
         (self.0 >> 8) as u8
     }
 
-    /// The index byte EXACTLY as it sits in memory, BCD packing included.
+    /// The index byte exactly as it sits in memory, BCD packing included.
     #[must_use]
     pub const fn index_packed(self) -> u8 {
         self.0 as u8
@@ -139,9 +139,9 @@ impl BlockKey {
 
     /// Decode the four `BlockId` bytes as they sit in an on-disk `.aip` header (offset 0x08).
     ///
-    /// PROVEN by `CSAutoInvadePoint::AddForBlockId` (0x140a69550), which passes the four disk
+    /// Proven by `CSAutoInvadePoint::AddForBlockId` (0x140a69550), which passes the four disk
     /// bytes to `BlockId::BlockId` as `(area, block, region, index)` -- i.e. the disk order is
-    /// the REVERSE of the in-memory byte order. Reading the disk bytes as a little-endian u32
+    /// the reverse of the in-memory byte order. Reading the disk bytes as a little-endian u32
     /// and using it as a map key misses every entry.
     #[must_use]
     pub const fn from_disk_bytes(bytes: [u8; 4]) -> Self {
@@ -171,7 +171,7 @@ impl fmt::Display for BlockKey {
 
 /// One fixed invasion-spawn location, as a candidate local warp target.
 ///
-/// `position` is BLOCK-LOCAL, exactly as the engine stores it; call
+/// `position` is block-local, exactly as the engine stores it; call
 /// [`Self::world_position`] with the owning block's origin to get physics-space coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct InvasionWarpTarget {
@@ -188,8 +188,8 @@ pub struct InvasionWarpTarget {
 /// Point index meaning "this block has a marker, but no known point inside it yet".
 ///
 /// A legacy dungeon's invasion points live in its MSB and are only readable while that map is
-/// RESIDENT, so a dungeon the player has never entered has none. It does not follow that it
-/// cannot be offered: `MoveMapStep` resolves a spawn on the DESTINATION side, after the load,
+/// resident, so a dungeon the player has never entered has none. It does not follow that it
+/// cannot be offered: `MoveMapStep` resolves a spawn on the destination side, after the load,
 /// whenever the explicit-spawn slot is not armed -- so a warp to such a block needs no
 /// coordinate at all. The dungeon becomes reachable, and once the player is standing in it the
 /// harvest reads its real points and the marker is replaced by precise ones.
@@ -233,7 +233,7 @@ impl InvasionWarpTarget {
 
     /// Block-local position + the owning block's origin = physics-space position.
     ///
-    /// PROVEN from `_GetCurBreakInPointVecFromAutoIntrudePoint` (0x140a0c4f0), which for each
+    /// Proven from `_GetCurBreakInPointVecFromAutoIntrudePoint` (0x140a0c4f0), which for each
     /// point computes `world.{x,y,z} = point.{x,y,z} + blockOrigin.{x,y,z}` after fetching the
     /// origin from `WorldGridAreaInfo::GetWorldAreaInfoCoordinates` (0x1406338d0). The point's
     /// fourth float takes no part in that sum -- it is carried alongside as the facing.
@@ -271,7 +271,7 @@ impl InvasionWarpTarget {
 /// -- `m60_35_44_00` point 14, `m60_35_45_00` point 1, `m60_35_48_00` point 2 among them -- and
 /// nothing in the table is more negative. The next distinct value up is `-6.27`.
 ///
-/// This is deliberately NOT `-f32::consts::TAU`. `-TAU` as `f32` is `-6.2831855` (bits
+/// This is deliberately not `-f32::consts::TAU`. `-TAU` as `f32` is `-6.2831855` (bits
 /// `C0C90FDB`), a number the game never ships, and [`wrap_radians`] maps it to exactly `0.0`
 /// whereas it maps the real value to `+0.0032`. Swapping in the std constant would keep the
 /// tests passing while silently retiring the shipped extreme they exist to exercise.
@@ -324,7 +324,7 @@ pub enum InvasionWarpCatalogError {
     /// The `CSAutoInvadePoint` singleton was not resolvable (too early in boot, or absent).
     AutoInvadePointUnavailable(String),
     /// The singleton resolved but held no points at all -- the `.aipbnd` files had not been
-    /// processed yet. Distinct from `AutoInvadePointUnavailable` because it is a TIMING
+    /// processed yet. Distinct from `AutoInvadePointUnavailable` because it is a timing
     /// answer ("ask again later"), not a "this build cannot see the singleton" answer.
     CatalogEmpty,
 }
@@ -464,10 +464,10 @@ pub fn describe_catalog(catalog: &InvasionWarpCatalog) -> String {
         .map(|target| target.block.to_string())
         .unwrap_or_else(|| "none".to_owned());
     // Whether this is the shipped table or one a mod rewrote in memory. The counts above cannot
-    // answer it -- a mod that MOVES points without adding or removing any leaves them identical --
+    // answer it -- a mod that moves points without adding or removing any leaves them identical --
     // so fold every position and yaw into the same canonical form the on-disk containers hash to.
     // Reported at catalog-read time (boot) rather than at pin injection, because it describes the
-    // DATA, and waiting for a world load to learn it would be waiting for no reason.
+    // data, and waiting for a world load to learn it would be waiting for no reason.
     let content: Vec<_> = catalog
         .targets()
         .iter()
@@ -499,10 +499,10 @@ pub fn log_catalog_summary(catalog: &InvasionWarpCatalog) {
 
 /// Read the engine's loaded `CSAutoInvadePoint` singleton into a catalog.
 ///
-/// FAIL-CLOSED. This runs inside the user's live game, where a crash or a hung game thread is
-/// a far worse outcome than a missing oracle, so it does NOT dereference the singleton's
+/// Fail-closed. This runs inside the user's live game, where a crash or a hung game thread is
+/// a far worse outcome than a missing oracle, so it does not dereference the singleton's
 /// red-black tree with the typed binding (which would `slice::from_raw_parts` a torn `count`
-/// and walk node pointers on hope). It resolves the singleton ADDRESS and hands it to
+/// and walk node pointers on hope). It resolves the singleton address and hands it to
 /// [`crate::live_read::read_catalog`], which reads every word through a fault-tolerant
 /// primitive, refuses implausible pointers/counts, and cannot loop unboundedly. A singleton
 /// that is not there yet, or a tree caught mid-load, comes back as an `Err` to retry -- never
@@ -526,7 +526,7 @@ pub unsafe fn collect_invasion_warp_catalog()
 
 /// The catalog the world-map UI should offer, or `None` when the host has the feature off.
 ///
-/// The gate is checked BEFORE the singleton is touched, so a profile that does not want the
+/// The gate is checked before the singleton is touched, so a profile that does not want the
 /// surface performs no engine reads at all.
 ///
 /// # Safety

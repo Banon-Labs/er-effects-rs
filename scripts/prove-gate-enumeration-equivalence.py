@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
-"""Did editing a gate's file enumeration change WHICH FILES it reads?
+"""Did editing a gate's file enumeration change which files it reads?
 
 Refactoring how a gate finds its input is the one change that can silently narrow a gate to
 nothing while every selftest still passes. This answers the question directly: run the enumerator
 from `HEAD` and the enumerator from the working tree, and compare byte-identical sorted lists
 plus their sha256.
 
-WHY A/B/A, INTERLEAVED IN ONE PROCESS
+Why a/B/A, INTERLEAVED in one process
 -------------------------------------
-Several agents work in this tree at once. Measured 2026-08-31: a naive OLD-then-NEW comparison
+Several agents work in this tree at once. Measured 2026-08-31: a naive old-then-new comparison
 came back "different" because a sibling agent added a `.rs` file between the two passes -- churn
-in the INPUT reading as a delta in the LOGIC. Running OLD, NEW, OLD in one process makes that
-churn visible as an UNSTABLE OLD (A1 != A2) instead of a false verdict. The same run also
+in the input reading as a delta in the logic. Running old, new, old in one process makes that
+churn visible as an unstable old (A1 != A2) instead of a false verdict. The same run also
 answered a timing question honestly: a separate-process measurement of the same script had been
 contaminated by this tool's own background job and read 5.15s for a 1.6s script.
 
-USAGE
+Usage
     python3 scripts/prove-gate-enumeration-equivalence.py
     python3 scripts/prove-gate-enumeration-equivalence.py --gate check-no-lossy-utf8
-    python3 scripts/prove-gate-enumeration-equivalence.py --base <rev>     # default HEAD
+    python3 scripts/prove-gate-enumeration-equivalence.py --base <rev>     # default head
 
 Exit 0 = every gate's list is unchanged, or its change is exactly the one declared in
 `EXPECTED_DELTAS`. Exit non-zero = a coverage change nobody declared, or an unstable baseline.
@@ -54,7 +54,7 @@ GATES: tuple[tuple[str, str, tuple], ...] = (
     ("verify-prologue-coverage-1170", "repo_spec_files", ()),
 )
 
-# A DECLARED coverage change: `{gate: (top-level segments the base enumerated and the working
+# A declared coverage change: `{gate: (top-level segments the base enumerated and the working
 # tree no longer does, reason)}`. Anything not listed here must come back byte-identical.
 EXPECTED_DELTAS: dict[str, tuple[tuple[str, ...], str]] = {
     "check-no-lossy-utf8": (
@@ -71,7 +71,7 @@ def _load_from_source(source: str, origin: str, module_name: str) -> types.Modul
     # The gates derive their repo root from `__file__`; point it at the real path so a module
     # read out of git still resolves the same root the working-tree copy does.
     module.__file__ = origin
-    # Registered BEFORE exec: `@dataclass` resolves `cls.__module__` through `sys.modules`, and on
+    # Registered before exec: `@dataclass` resolves `cls.__module__` through `sys.modules`, and on
     # 3.14 an unregistered module makes the decorator raise while processing the class.
     sys.modules[module_name] = module
     try:

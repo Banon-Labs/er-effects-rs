@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Propose the OWNING CLASS for each UNKNOWN-STRUCT autoload offset, from the repo's own prose.
+"""Propose the owning class for each unknown-STRUCT autoload offset, from the repo's own prose.
 
 `detect-struct-field-drift.py --report` refuses to judge a constant whose structure it cannot
 name, and it can only name one when the constant is written as `offset_of!(T, f)` or its name
 carries one of ten known prefixes. That leaves 422 autoload offsets untyped -- and untyped means
-untested, because a clearance is only valid per NAMED OBJECT.
+untested, because a clearance is only valid per named object.
 
 The type information is not actually missing: it is in the doc comment above each constant, where
 the RE that produced the number was written down. This reads that prose and matches every token
 in it against the RTTI class names harvested from the images themselves
-(`scripts/rtti-classmap-both.py`), so a suggestion is only ever a class that DEMONSTRABLY EXISTS
+(`scripts/rtti-classmap-both.py`), so a suggestion is only ever a class that DEMONSTRABLY exists
 in both builds -- never a guess at a name.
 
 A suggestion is a lead, not a verdict. `scripts/clear-fields-by-object.py` is what decides.
@@ -28,7 +28,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 # Resolved by scripts/struct_drift_out.py, not spelled here: this used to be a literal
-# containing an agent SESSION UUID, which is correct for exactly one session and wrong for
+# containing an agent session UUID, which is correct for exactly one session and wrong for
 # every other one. `$ER_STRUCT_DRIFT_OUT` still overrides, and so does `--out-dir`.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import struct_drift_out  # noqa: E402 -- the path is set up on the line above
@@ -98,7 +98,7 @@ def selftest(out_dir: Path) -> int:
         print(f"SKIP: {joined} absent; run scripts/rtti-classmap-both.py")
         return 0
     index = simple_index(joined)
-    # POSITIVE CONTROLS: classes this migration definitely touches must be indexed by their leaf.
+    # Positive CONTROLS: classes this migration definitely touches must be indexed by their leaf.
     for leaf, want in (("MoveMapStep", "CS::MoveMapStep"),
                        ("MenuJob", "CS::MenuJob"),
                        ("PlayerGameData", "CS::PlayerGameData")):

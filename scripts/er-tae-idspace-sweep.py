@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""What id does the ENGINE report for a playing animation, per creature?
+"""What id does the engine report for a playing animation, per creature?
 
 `CSChrTimeActModule::animQueue[readIdx].animId` is filled by `TAE_Callback`, whose 1.16.2
 signature names the argument **`taeId`** rather than `animId` -- so what a runtime reader
@@ -111,7 +111,7 @@ def sweep(root, jobs):
         return dict((chr_id, (ids, tae_ids)) for chr_id, ids, tae_ids in pool.imap_unordered(_one, work))
 
 
-#: What the live 2026-09-02 Battlemage run reported for a possessed c3704 -- an idle LOOP and
+#: What the live 2026-09-02 Battlemage run reported for a possessed c3704 -- an idle loop and
 #: the two spawn-in clips. None of the three is in that creature's shipped moveset, whose ids
 #: stop at 6023, so no threshold that still calls 3000 an attack can classify them.
 BATTLEMAGE_OBSERVED = (43000, 3009000, 3009500)

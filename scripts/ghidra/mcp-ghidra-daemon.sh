@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Lifecycle manager for the PRE-WARMED headless Ghidra MCP server (MCPServeHeadless.java).
+# Lifecycle manager for the pre-warmed headless Ghidra MCP server (MCPServeHeadless.java).
 # Keeps one analyzeHeadless process alive with a program loaded so MCP tool calls are instant
-# and Ghidra is NOT restarted per operation. The 13bm Go bridge (.mcp.json) connects to PORT.
+# and Ghidra is not restarted per operation. The 13bm Go bridge (.mcp.json) connects to port.
 #
-#   scripts/ghidra/mcp-ghidra-daemon.sh start   [--proj-dir DIR] [--proj-name NAME] [--port N] [--readonly] [--save-interval N]
+#   scripts/ghidra/mcp-ghidra-daemon.sh start   [--proj-dir DIR] [--proj-name name] [--port N] [--readonly] [--save-interval N]
 #   scripts/ghidra/mcp-ghidra-daemon.sh stop
 #   scripts/ghidra/mcp-ghidra-daemon.sh status
 #   scripts/ghidra/mcp-ghidra-daemon.sh restart [same flags as start]
 #
-# Defaults: the symbolized DUMP project (ermaporch), port 8765, WRITABLE with auto-save.
-# MCP edits (rename/struct/comment/bookmark) PERSIST into the project: the daemon closes
+# Defaults: the symbolized dump project (ermaporch), port 8765, WRITABLE with auto-save.
+# MCP edits (rename/struct/comment/bookmark) persist into the project: the daemon closes
 # GhidraScript's wrapping transaction (see MCPServeHeadless.java) so mutations commit and a
 # periodic save (default every 60s, plus a flush on clean stop) writes them back. A crash loses
 # at most the last <save-interval seconds of edits. Pass --readonly for a query-only server, or
@@ -18,7 +18,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# HEADLESS + maporch dir are current-user-aware (matches scripts/ghidra-query.sh). NEVER hard-code a
+# Headless + maporch dir are current-user-aware (matches scripts/ghidra-query.sh). Never hard-code a
 # user (bd prefer-ghidra-mcp-daemon-over-perquery-headless / Reusable Tooling path-correction rule).
 resolve_headless() {
   if [[ -n "${GHIDRA_HEADLESS:-}" && -x "${GHIDRA_HEADLESS}" ]]; then printf '%s\n' "$GHIDRA_HEADLESS"; return 0; fi
@@ -56,7 +56,7 @@ done
 
 # Per-port run state, so two dumps (1.16.2 on 8765, 1.17 on 8766) can be live at once -- which is
 # the whole point during a version migration: the same question asked of both images in one session.
-# Port 8765 deliberately keeps the ORIGINAL unsuffixed filenames, so a daemon started before this
+# Port 8765 deliberately keeps the original unsuffixed filenames, so a daemon started before this
 # change stays manageable rather than being orphaned by its pidfile moving out from under it.
 SUF=""
 [[ "$PORT" != "8765" ]] && SUF="-$PORT"
@@ -68,15 +68,15 @@ mkdir -p "$RUN_DIR" "$TMP"
 export TMPDIR="$TMP"
 export GHIDRA_JAVA_OPTIONS="-Djava.io.tmpdir=$TMP"
 
-# Liveness for THIS port only. The pidfile is authoritative: `setsid bash -c "exec ..."` execs into
-# the JVM, so $! is the java process itself. A bare `pgrep -f MCPServeHeadless.java` matches EVERY
+# Liveness for this port only. The pidfile is authoritative: `setsid bash -c "exec ..."` execs into
+# the JVM, so $! is the java process itself. A bare `pgrep -f MCPServeHeadless.java` matches every
 # daemon, which previously made do_start refuse to bring up a second dump ("already running") and
 # made do_stop's pkill fallback take down both.
 daemon_pid() {
   local p
   [[ -f "$PIDFILE" ]] && p="$(cat "$PIDFILE" 2>/dev/null)" || p=""
   if [[ -n "$p" ]] && kill -0 "$p" 2>/dev/null; then printf '%s\n' "$p"; return 0; fi
-  # Fallback for a pidfile lost to a reboot/manual start: match the port ARGUMENT, not the class.
+  # Fallback for a pidfile lost to a reboot/manual start: match the port argument, not the class.
   p="$(pgrep -f "MCPServeHeadless.java $PORT " 2>/dev/null | head -1 || true)"
   [[ -n "$p" ]] && { printf '%s\n' "$p"; return 0; }
   return 1
@@ -86,7 +86,7 @@ port_up()    { ss -ltn 2>/dev/null | grep -q ":$PORT "; }
 
 # Self-heal exec bits on the install's native helper binaries (decompile, sleigh, demanglers,
 # lzfse). A Ghidra install copied off a Windows/drvfs mount silently loses +x on these; Ghidra's
-# Java side still works, but DecompInterface cannot spawn `decompile`, so EVERY MCP decompile
+# Java side still works, but DecompInterface cannot spawn `decompile`, so every MCP decompile
 # returns "Decompilation failed" while disasm/xref/symbol queries keep working (root-caused
 # 2026-07-28: ~/tools/ghidra_12.1.2_PUBLIC had decompile/sleigh at 0664). chmod is idempotent
 # and cheap; run it every start so a re-copied install can never regress decompilation.
@@ -99,13 +99,13 @@ fix_native_exec_bits() {
 
 do_start() {
   # Heal exec bits even when the daemon is already live: the decompile process is spawned
-  # per-request, so restoring +x fixes decompilation WITHOUT a restart (verified 2026-07-28).
+  # per-request, so restoring +x fixes decompilation without a restart (verified 2026-07-28).
   fix_native_exec_bits
   if is_running; then echo "already running on :$PORT (pid $(daemon_pid))"; return 0; fi
   rm -f "$STOPFILE"
   echo "starting MCP daemon: $PROJ_NAME on port $PORT ${RO:-(writable)}"
-  # Isolate the postScript in a CLEAN script dir. Ghidra builds ONE OSGi bundle for the ENTIRE
-  # -scriptPath directory, so a compile error in ANY sibling .java (scripts/ghidra holds ~40 RE
+  # Isolate the postScript in a clean script dir. Ghidra builds one OSGi bundle for the entire
+  # -scriptPath directory, so a compile error in any sibling .java (scripts/ghidra holds ~40 RE
   # scripts) fails the whole bundle and MCPServeHeadless never loads ("Failed to get OSGi bundle
   # containing script"). Staging only this script sidesteps sibling-compile coupling.
   local MCP_SCRIPT_DIR="$GH_MAPORCH/mcp-script"
@@ -140,7 +140,7 @@ do_stop() {
   fi
   if ! is_running; then echo "stopped"; rm -f "$STOPFILE"; return 0; fi
   echo "clean stop timed out; killing :$PORT only" >&2
-  # NEVER `pkill -f MCPServeHeadless.java` here -- that matches every daemon and would take down
+  # Never `pkill -f MCPServeHeadless.java` here -- that matches every daemon and would take down
   # the other version's dump alongside this one.
   local kill_pid; kill_pid="$(daemon_pid || true)"
   [[ -n "$kill_pid" ]] && kill -9 "$kill_pid" 2>/dev/null || true

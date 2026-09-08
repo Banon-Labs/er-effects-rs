@@ -129,8 +129,8 @@ def main():
     for r in ratios[:10]:
         print(f"  {r['chrid']}  ratio={r['ratio']:.3f}  bboxHeight={r['bboxHeight']:.3f}  hitHeight={r['hitHeight']:.3f}  name={r['name']}")
 
-    # THE QUESTION THIS WAS RUN TO ANSWER. A spread in the ratio only breaks the camera's
-    # framing law if it TRENDS with size -- a size-independent scatter cancels in a ratio law's
+    # The question this was run to answer. A spread in the ratio only breaks the camera's
+    # framing law if it trends with size -- a size-independent scatter cancels in a ratio law's
     # slope and leaves individual creatures off by a constant, which is what the per-creature
     # `[chr.cNNNN].camera_distance_scale` knob exists to correct. So report the ratio per size
     # bucket, and the rank correlation between the two, rather than only the pooled spread.

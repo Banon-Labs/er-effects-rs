@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
-"""Carry a 1.16.2 table/slot of ABSOLUTE POINTERS onto 1.17 by what it points AT.
+"""Carry a 1.16.2 table/slot of absolute pointers onto 1.17 by what it points at.
 
-WHY THIS EXISTS
+Why this exists
 ---------------
-`map-data-rvas-1162-to-1170.py` carries a global by the CODE that references it, and that
+`map-data-rvas-1162-to-1170.py` carries a global by the code that references it, and that
 fails when the only reference lives in a function 1.17 edited (the instruction is no longer
 at the same index) or when the datum is reached solely through a runtime pointer and has no
 rip-relative reference at all. Two addresses in the 2026-08-30 batch failed exactly that way:
 `MENU_PUMP_KICK_PTR_RVA` (0x3b37c98) and `MenuTraceRva::TaskUpdateTable` (0x2ac72a0).
 
 But a slot full of absolute pointers has content after all -- not its own bytes, which are
-relocated and therefore differ between builds, but its TARGETS. Map each target through the
+relocated and therefore differ between builds, but its targets. Map each target through the
 function map and you have a 1.17 fingerprint that is unique to that table.
 
-HOW
+How
 ---
 Read N qwords at the 1.16.2 RVA. Each one that is `0x140000000 + rva` and pairs in
 `docs/recon/rva-map-1162-to-1170.functions.tsv` becomes a required 1.17 value; anything else
 (a data pointer, an integer, a null) becomes a wildcard. Then scan the 1.17 image for the
 first qword-aligned run that satisfies every required slot. A single hit is the answer; the
-scan reports the count so several hits are visibly NOT an answer.
+scan reports the count so several hits are visibly not an answer.
 
-USAGE
+Usage
     python3 scripts/find-1170-pointer-table.py 0x3b37c98 --slots 2
     python3 scripts/find-1170-pointer-table.py 0x2ac72a0 --slots 8 --before 4
 """

@@ -3,7 +3,7 @@
 //! Modeled on er-reload-trace's shape: a `DllMain` that, on
 //! `DLL_PROCESS_ATTACH`, spawns an install thread which waits for the game's
 //! task manager and registers a game-thread `FrameBegin` recurring tick. The
-//! tick runs ONLY er-telemetry-core's read-side oracles (game-RAM/PE reads that need
+//! tick runs only er-telemetry-core's read-side oracles (game-RAM/PE reads that need
 //! no product hooks) and writes `er-telemetry-standalone.json`.
 //!
 //! Runnable alone (telemetry-only me3 profile) or alongside the product DLL as an
@@ -289,8 +289,8 @@ pub unsafe extern "system" fn DllMain(
     _reserved: *mut core::ffi::c_void,
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
-        // FIRST, before anything that can panic. A panic in a cdylib crosses an
-        // `extern "system"` boundary and becomes an ABORT, which does not dispatch to a
+        // First, before anything that can panic. A panic in a cdylib crosses an
+        // `extern "system"` boundary and becomes an abort, which does not dispatch to a
         // vectored handler -- so no crash record is written at all and the process simply
         // vanishes. Enforced by `scripts/check-panic-reporter-installed.py`.
         er_game_base::panic_report::report_panics_to("er-telemetry", panic_log_sink);
@@ -306,11 +306,11 @@ pub unsafe extern "system" fn DllMain(
                 .spawn(|| {
                     // Wait for the game's task manager, then register a game-thread
                     // per-frame tick (same pattern as the product's wait_for_task_instance).
-                    // BOUNDED (2026-08-29). This loop is the one that hung a boot: on 1.17 the
+                    // Bounded (2026-08-29). This loop is the one that hung a boot: on 1.17 the
                     // singleton did not appear, and this thread plus er-invasion-path's twin
                     // saturated the wineserver -- 19,348 CPU ticks here against the game's 104,
                     // fifty-nine game threads asleep, no window. er_game_base::wait spins in user
-                    // space between attempts and GIVES UP, so a missing singleton leaves this
+                    // space between attempts and gives up, so a missing singleton leaves this
                     // shell inert instead of taking the process with it.
                     let Some(task) =
                         er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# ARMAMENT-ICONS badge oracle smoke (bd er-effects-rs-pe98): three-native me3 run --
+# Armament-icons badge oracle smoke (bd er-effects-rs-pe98): three-native me3 run --
 # input-harness (drive mode `equip`: boot -> Continue -> in-world -> pause menu ->
 # Confirm into Equipment -> dwell), telemetry DLL (timeseries semaphores), and
 # er_armament_icons.dll (TilePopulate post-hook + ArtsIcon badge draw + oracle
-# counters in er-armament-icons.log). NO product DLL: the harness drives standalone.
+# counters in er-armament-icons.log). No product DLL: the harness drives standalone.
 #
-# ORACLE (semaphore-progress teardown, not wall-clock): PASS when the badge log shows
+# Oracle (semaphore-progress teardown, not wall-clock): Pass when the badge log shows
 # "badge sample: DRAWN" lines (tile hook fired, ArtsIcon bound + un-hidden + icon
 # set); teardown a short settle after the harness dwell_equip phase completes or
-# after the first DRAWN evidence, whichever is later; the canonical runtime cap is
+# after the first drawn evidence, whichever is later; the canonical runtime cap is
 # only the idle/stall backstop. REQUIRES: Steam running; correct GAME_DIR.
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -47,10 +47,10 @@ fi
 # shellcheck disable=SC1091
 source "$REPO_ROOT/scripts/steam-running.sh"
 steam_running || fail "Steam is not running. Start Steam (interactive login) first."
-# FRESHNESS, NOT EXISTENCE. This loop asserted only that three files exist, and the profile
+# Freshness, not existence. This loop asserted only that three files exist, and the profile
 # below points me3 straight at target/.../release -- so the badge oracle could be scored against
 # a badge DLL from last week and report "0 DRAWN" for code that has since been fixed. The
-# report.txt footer records mtime + sha AFTER the fact, which is provenance for the archive, not
+# report.txt footer records mtime + sha after the fact, which is provenance for the archive, not
 # a gate: nothing consulted it before launching. This is the gate.
 # shellcheck source=scripts/er-dll-freshness.sh
 # shellcheck disable=SC1091
@@ -62,7 +62,7 @@ if python3 "$REPO_ROOT/scripts/detect-proc.py" 'eldenring\.exe|start_protected_g
 fi
 
 # --- me3 resolution: platform-aware, never a hard-coded Windows-user path.
-#     Native Linux box (Linux Steam/Proton): the `me3` binary on PATH, invoked the same
+#     Native Linux box (Linux Steam/Proton): the `me3` binary on path, invoked the same
 #     way as the known-good ~/Elden/launch.sh (me3 --steam-dir <root> launch -p ... -e ...).
 #     WSL box (Windows Steam): the Windows me3.exe, discovered across /mnt/c/Users/*.
 if [[ -z "${ME3:-}" ]]; then
@@ -116,7 +116,7 @@ PROFILE="$ARTIFACT_DIR/armament-icons-smoke.me3"
 	echo
 	echo '[[natives]]'
 	echo "path = '$(win_path "$TELEM_GAMEDIR")'"
-	# BADGE=0 omits the badge DLL entirely -> VANILLA baseline capture (no glyph) for the
+	# Badge=0 omits the badge DLL entirely -> vanilla baseline capture (no glyph) for the
 	# pixel-diff oracle. Default includes it.
 	if [[ "${BADGE:-1}" != "0" ]]; then
 		echo
@@ -125,25 +125,25 @@ PROFILE="$ARTIFACT_DIR/armament-icons-smoke.me3"
 	fi
 } >"$PROFILE"
 
-# --- wiring markers: harness drive mode (MODE=equip|inv, default inv -- the Inventory tabs
+# --- wiring markers: harness drive mode (mode=equip|inv, default inv -- the Inventory tabs
 #     are the user's primary target and their cells carry the bottom-left ArtsIcon child) ---
 echo -n "${MODE:-inv}" >"$GAME_DIR/er-harness-drive-mode.txt"
 # Snapshot what the marker actually contained at launch time (attribution evidence if the
 # in-game flag read misses, e.g. launcher CWD drift).
 cp -f "$GAME_DIR/er-harness-drive-mode.txt" "$ARTIFACT_DIR/er-harness-drive-mode.txt.staged"
-# Diagnostic overrides reach the Windows game via FILE markers, NOT env: WSL bash env vars do
+# Diagnostic overrides reach the Windows game via file markers, not env: WSL bash env vars do
 # not cross the WSL->Windows boundary unless in WSLENV (bd wslenv-env-not-propagating-to-windows-game).
 # The DLL reads er-armament-icons-force-icon.txt / -target.txt from the game dir (env is fallback).
 #   FORCE_ICON=<u16>|mirror : draw a fixed visible icon into every badge (locator / oracle proof).
-#   TARGET=<childName>      : approach-B draw target clip (e.g. AttributeIcon; default AutoReplenish/IconImage).
+#   Target=<childName>      : approach-B draw target clip (e.g. AttributeIcon; default AutoReplenish/IconImage).
 export ER_ARMAMENT_ICONS_FORCE_ICON="${FORCE_ICON:-}"
 export ER_ARMAMENT_ICONS_TARGET="${TARGET:-}"
-# NO save redirect: pure APPDATA vanilla save (whatever character is last-active).
+# No save redirect: pure APPDATA vanilla save (whatever character is last-active).
 [[ -f "$GAME_DIR/er-quickload.toml" ]] && mv -f "$GAME_DIR/er-quickload.toml" "$ARTIFACT_DIR/er-quickload.toml.bak"
 # Sweep stale logs/markers so a prior run cannot pollute this one.
-# THE THREE REDIRECTED LOGS ARE NO LONGER SWEPT FROM GAME_DIR. er-input-harness.log,
+# The three redirected logs are no longer swept from GAME_DIR. er-input-harness.log,
 # er-input-harness-phases.jsonl and er-telemetry-timeseries.jsonl are written into ARTIFACT_DIR now,
-# so a copy left in the game directory belongs to ANOTHER session -- and deleting the live file takes
+# so a copy left in the game directory belongs to another session -- and deleting the live file takes
 # its `.prev` with it, because `begin_fresh_run` drops a stale `.prev` when the live file is absent.
 # That is two runs' evidence, neither of them this one's. er-armament-icons.log joined them on
 # 2026-08-31 (ER_QUICKLOAD_ARMAMENT_ICONS_PATH), so nothing this run writes is left in GAME_DIR and
@@ -151,11 +151,11 @@ export ER_ARMAMENT_ICONS_TARGET="${TARGET:-}"
 rm -f "$GAME_DIR"/er-harness-probe-hold-id.txt "$GAME_DIR"/er-harness-os-input.txt \
 	"$GAME_DIR"/er-harness-native-quit.txt "$GAME_DIR"/er-harness-force-drive.txt \
 	"$GAME_DIR"/er-armament-icons-force-icon.txt "$GAME_DIR"/er-armament-icons-target.txt 2>/dev/null
-# Write fresh diagnostic markers (AFTER the sweep) when set.
+# Write fresh diagnostic markers (after the sweep) when set.
 [[ -n "${FORCE_ICON:-}" ]] && printf '%s' "$FORCE_ICON" >"$GAME_DIR/er-armament-icons-force-icon.txt"
 [[ -n "${TARGET:-}" ]] && printf '%s' "$TARGET" >"$GAME_DIR/er-armament-icons-target.txt"
 
-# SAFETY (bd never-blanket-kill-eldenring): only tear down the PIDs THIS run spawns.
+# SAFETY (bd never-blanket-kill-eldenring): only tear down the PIDs this run spawns.
 pids_for() {
 	if [[ "$IS_WSL" == 1 ]]; then
 		tasklist.exe /FI "IMAGENAME eq $1" /FO CSV /NH 2>/dev/null |
@@ -192,7 +192,7 @@ kill_one() {
 PRE_ER_PIDS=" $(pids_for eldenring.exe) "
 PRE_ME3_PIDS=" $(for img in "${ME3_IMAGES[@]}"; do pids_for "$img"; done | tr '\n' ' ') "
 
-# Last-resort safety-net trap: a SINGLE kill pass for this run's PIDs (no sleep -- the
+# Last-resort safety-net trap: a single kill pass for this run's PIDs (no sleep -- the
 # Python watcher owns the graceful two-pass teardown + verify). Runs only if the watcher
 # is interrupted before it tears down.
 # shellcheck disable=SC2317,SC2329
@@ -223,7 +223,7 @@ echo "======================================================================"
 if [[ "$ME3_NATIVE" == 1 ]]; then
 	# Same invocation shape as the known-good ~/Elden/launch.sh (offline comes from the
 	# profile's start_online=false; me3 runs from the game dir).
-	# EVERY per-run artifact goes into THIS run's directory. A GAME_DIR artifact is SINGLE-SLOT: the DLL
+	# Every per-run artifact goes into this run's directory. A GAME_DIR artifact is single-SLOT: the DLL
 	# rotates `<name>` to `<name>.prev` on its first write, so two launches lose the run before last,
 	# and several sessions launch concurrently here. A copy after the run cannot fix that -- by then
 	# this run has clobbered the previous one's file -- and a crashed run never reaches the copy.

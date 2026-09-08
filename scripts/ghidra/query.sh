@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Fast -process query against the PERSISTENT pre-analyzed ER runtime Ghidra dump project, without
+# Fast -process query against the persistent pre-analyzed ER runtime Ghidra dump project, without
 # re-importing the ~1.5GB gzf. Reopens the saved program in ~5-10s (vs ~2min for a fresh -import).
 #
 #   bash scripts/ghidra/query.sh <postScript.java> [scriptArg ...]
 #
-# The .java GhidraScript's OWN directory is added to -scriptPath, so pass a script that lives in an
-# ISOLATED directory (one that contains ONLY compiling .java files). Ghidra 12.1 compiles every .java in
+# The .java GhidraScript's own directory is added to -scriptPath, so pass a script that lives in an
+# isolated directory (one that contains only compiling .java files). Ghidra 12.1 compiles every .java in
 # a -scriptPath dir as one OSGi bundle, and a single sibling that fails to compile poisons the whole
 # bundle ("class could not be found"). The repo's top-level scripts/ghidra/ tree has ~80 historical
-# postScripts and at least one that does NOT compile under 12.1, so do NOT pass a script from there.
-# Instead use scripts/ghidra/rt/ -- an IN-REPO, version-controlled dir kept deliberately CLEAN (every
+# postScripts and at least one that does not compile under 12.1, so do not pass a script from there.
+# Instead use scripts/ghidra/rt/ -- an in-REPO, version-controlled dir kept deliberately clean (every
 # .java in it must compile). All query postScripts we use live there and are tracked; see
 # scripts/ghidra/rt/README.md. (Everything we run must be in the repo -- no out-of-tree .java.)
 #

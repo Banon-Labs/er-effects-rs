@@ -4,7 +4,7 @@ use super::*;
 /// its verified OnDecide/finalize 0x140927ba0(rcx=dialog) -- the genuine OK handler that
 /// dispatches the chosen button (builder-defaulted to OK) and drives the dialog to emit "stop"
 /// so the parent MenuWindowJob tears it down. Called each frame pre-in-world from the game task
-/// (the menu/game thread, where OnDecide's input-registrar singleton access is valid) UNTIL the
+/// (the menu/game thread, where OnDecide's input-registrar singleton access is valid) until the
 /// closing latch [dialog+0x3b0]==1 or the dialog is freed/reused (vtable mismatch) -- both stop
 /// the calls, avoiding re-dispatch / UAF. Fault-tolerant reads never AV.
 pub(crate) fn force_dismiss_startup_dialog() {
@@ -40,19 +40,19 @@ pub(crate) fn force_dismiss_startup_dialog() {
         ));
         return;
     }
-    // Drive the dialog Decided + OK + fade-complete BEFORE the OK-handler so (a) the title-flow's
-    // modal-build poll ([dialog+0x25e8]>0 at 0x1407b04f5) treats it as resolved and PROCEEDS to the
-    // menu, and (b) the OK-handler's fade gate (commit only when fade_current<=fade_target) fires THIS
+    // Drive the dialog Decided + OK + fade-complete before the OK-handler so (a) the title-flow's
+    // modal-build poll ([dialog+0x25e8]>0 at 0x1407b04f5) treats it as resolved and proceeds to the
+    // menu, and (b) the OK-handler's fade gate (commit only when fade_current<=fade_target) fires this
     // frame -> instant commit/close, no fade-in render = no flash (vs the ~20 OnDecide frames before).
-    // The dialog is vtable-validated above (base MessageBoxDialog OR SaveRetryDialog). bd
+    // The dialog is vtable-validated above (base MessageBoxDialog or SaveRetryDialog). bd
     // press-any-button-golden-lever-job1e8-readiness-2026-06-23 + offline-title-modal-is-saveretrydialog.
-    // FIELD SEMANTICS CORRECTED 2026-07-28 (RE of the 1.16.2 ctor `FUN_1409275b0`; the writes
+    // Field semantics corrected 2026-07-28 (RE of the 1.16.2 ctor `FUN_1409275b0`; the writes
     // themselves are byte-for-byte unchanged so this deprecated path keeps behaving as it did):
-    //   * `+0x25e8` is the BUTTON COUNT, not a state. Writing 2 makes the multi-choice getter
+    //   * `+0x25e8` is the button count, not a state. Writing 2 makes the multi-choice getter
     //     `1 < count` (0x1407b0cf0) -- which the title flow's modal poll at 0x1407b04f5 reads --
     //     report the box as resolved. It CORRUPTS the real count; acceptable only here, on a
     //     startup notice this path is about to force closed.
-    //   * `+0x25e0` is the DEFAULT CURSOR INDEX. Writing 0 makes `OnDecide` dispatch button 0
+    //   * `+0x25e0` is the default cursor index. Writing 0 makes `OnDecide` dispatch button 0
     //     instead of taking its `index == -1` cancel arm.
     unsafe {
         *((dialog + MSGBOX_BUTTON_COUNT_25E8_OFFSET) as *mut i32) =
@@ -66,19 +66,19 @@ pub(crate) fn force_dismiss_startup_dialog() {
             *((dialog + MSGBOX_FADE_CURRENT_1278_OFFSET) as *mut i32) = fade_target_bits;
         }
     }
-    // PROPER OK (NOT force-stop): OnDecide 0x140927ba0 branches on the chosen button [dialog+0x25e0]
+    // Proper OK (not force-stop): OnDecide 0x140927ba0 branches on the chosen button [dialog+0x25e0]
     // -- if == -1 it calls 0x14078dfd0 (the CANCEL/notify-closed path, which kicks the title flow
-    // BACK to PRESS-ANY-BUTTON); if != -1 it DISPATCHES that button (= press OK -> proceed to the
+    // back to press-any-button); if != -1 it dispatches that button (= press OK -> proceed to the
     // main menu offline). The prior force-stop 0x14078dfd0 was exactly the cancel path, so the game
     // bounced back to press-any-button. Fix: set the chosen button to OK (index 0), then OnDecide.
-    // Press OK EVERY FRAME (runtime-confirmed: one-shot only HIGHLIGHTS OK; the modal needs the
+    // Press OK every frame (runtime-confirmed: one-shot only highlights OK; the modal needs the
     // per-frame re-dispatch to progress its decide animation -> activate -> close -> proceed to
-    // the main menu). [dialog+0x25e0]=0 selects OK so OnDecide takes the dispatch (NOT cancel) arm.
-    // Call THE REAL OK-BUTTON HANDLER 0x14078e030(rcx=dialog) -- captured from a live OK-press.
-    // It reads the dialog cursor, gets the OK callback, and COMMITS (0x14078ef20) which actually
-    // CLOSES the dialog and emits its result so the title flow PROCEEDS. This is what a real OK
+    // the main menu). [dialog+0x25e0]=0 selects OK so OnDecide takes the dispatch (not cancel) arm.
+    // Call the real OK-button handler 0x14078e030(rcx=dialog) -- captured from a live OK-press.
+    // It reads the dialog cursor, gets the OK callback, and commits (0x14078ef20) which actually
+    // closes the dialog and emits its result so the title flow proceeds. This is what a real OK
     // does; OnDecide/field-writes/input-injection all failed to close it. Runs each frame on every
-    // captured MessageBoxDialog -> skips ALL of them (connection-error, starting-offline, ...).
+    // captured MessageBoxDialog -> skips all of them (connection-error, starting-offline, ...).
     let ok_handler: unsafe extern "system" fn(usize) = unsafe {
         std::mem::transmute(
             match crate::experiments::gated_game_fn(MSGBOX_OK_HANDLER_RVA, "MSGBOX_OK_HANDLER_RVA")
@@ -164,7 +164,7 @@ pub(crate) fn install_auto_accept_hook() {
 }
 
 /// Diagnostic gate (GAME_DIR file `er-quickload-grsysmsg-log.txt` or `ER_QUICKLOAD_GRSYSMSG_LOG=1`):
-/// arm the GR_System_Message id-logger so a probe can DEFINITIVELY name which message(s) the
+/// arm the GR_System_Message id-logger so a probe can definitively name which message(s) the
 /// menu-open MessageBoxDialogs carry (instead of guessing connection vs save). Reusable tool.
 pub(crate) fn grsysmsg_log_enabled() -> bool {
     matches!(
@@ -180,19 +180,19 @@ pub(crate) use er_telemetry_core::counters::GR_SYSMSG_LOG_COUNT;
 pub(crate) use er_telemetry_core::counters::GR_SYSMSG_LOG_INSTALLED;
 pub(crate) use er_telemetry_core::counters::GR_SYSMSG_LOG_ORIG;
 /// `CS::GetGR_System_Message` (deobf entry 0x140762e30): `MenuString* (rcx=out, edx=int messageId)`.
-/// The dump labels it 0x140762e40 but that is MID-INSTRUCTION (inside `movq $-2,[rsp+0x28]`); the real
-/// MSVC prologue (`mov [rsp+8],rcx; push rdi; sub rsp,0x30`) is at 0x140762e30 -- VERIFIED by deobf
+/// The dump labels it 0x140762e40 but that is mid-instruction (inside `movq $-2,[rsp+0x28]`); the real
+/// MSVC prologue (`mov [rsp+8],rcx; push rdi; sub rsp,0x30`) is at 0x140762e30 -- Verified by deobf
 /// boundary disasm (prev fn ret+int3 at 0x140762e26/27, then this prologue). Body reads FMG repo
 /// [0x143d7d4f8], applies the +0x384 variant, builds the MenuString.
-// CORRECTED 2026-06-23 (corrupted-save-re-findings): 0x762e30 is GetTextEmbedImageName (it does
-// id += 900, uses a different singleton) -- NOT GetGR_System_Message. The real getter is deobf
+// Corrected 2026-06-23 (corrupted-save-re-findings): 0x762e30 is GetTextEmbedImageName (it does
+// id += 900, uses a different singleton) -- Not GetGR_System_Message. The real getter is deobf
 // 0x140762d50 (dump 0x140762e40 - 0xf0 region shift): it loads L"GR_System_Message"+L"SM" and calls
-// MsgRepository::GetAndFormat with the id in edx. Hooking the WRONG fn is why the 401106 corrupted-
+// MsgRepository::GetAndFormat with the id in edx. Hooking the wrong fn is why the 401106 corrupted-
 // save id was never seen (oracle stayed 0). This RVA must be the real getter for the semaphore.
 pub(crate) const GR_SYSTEM_MESSAGE_RVA: u32 = er_game_base::rva::GR_SYSTEM_MESSAGE_RVA as u32;
 pub(crate) const GR_SYSMSG_LOG_MAX: usize = 64;
 
-/// DIAGNOSTIC detour for GetGR_System_Message 0x140762e40. Once the main menu has opened (skip the
+/// Diagnostic detour for GetGR_System_Message 0x140762e40. Once the main menu has opened (skip the
 /// boot-time message flood), log the integer message id (the `edx`/`rdx` arg) + first game caller RVA
 /// for each call, capped. The id maps 1:1 to GR_System_Message_win64 (e.g. 4101 "Cannot connect to
 /// network", 4102 "connection to game server lost", 4190 "network error", 70000 save-data notice,
@@ -201,8 +201,8 @@ pub(crate) const GR_SYSMSG_LOG_MAX: usize = 64;
 /// GR_System_Message ids the game fetches when it builds a "save data is corrupted" dialog (verified
 /// from menu.msgbnd GR_System_Message_win64.fmg). 4191/4192/4193/401106 = "Failed to save game --
 /// save data is corrupted"; 401721 = "Failed to load save data -- corrupted"; 401107 = "delete
-/// corrupted data and create a new save?". Detecting any of these in GetGR_System_Message IS the
-/// memory-read semaphore for the corrupted-save popup (privacy-policy/char-presence-CONFIRMED loop).
+/// corrupted data and create a new save?". Detecting any of these in GetGR_System_Message is the
+/// memory-read semaphore for the corrupted-save popup (privacy-policy/char-presence-confirmed loop).
 pub(crate) const CORRUPTED_SAVE_MSG_IDS: &[i32] = &[4191, 4192, 4193, 401106, 401107, 401721];
 pub(crate) const CORRUPTED_SAVE_LOAD_FAILED_MSG_IDS: &[i32] = &[401721];
 /// The corrupted-save message id last seen (0 = none). Exposed as `oracle_corrupted_save_seen_id`.
@@ -324,12 +324,12 @@ pub(crate) const MENU_JOB_STATE_CONTINUE: i32 = 1;
 pub(crate) use er_telemetry_core::counters::NETWORK_CHECK_SHORTCIRCUIT_COUNT;
 pub(crate) use er_telemetry_core::counters::NETWORK_CHECK_SHORTCIRCUIT_INSTALLED;
 
-/// THE MILESTONE-3 FIX (zero-input, save-safe). `CS::NetworkCheckJob::Run` is a title-flow MenuJob the
-/// TitleTopDialog registrar chains UNCONDITIONALLY at menu-open. Offline, its Steam-holder check
+/// The milestone-3 fix (zero-input, save-safe). `CS::NetworkCheckJob::Run` is a title-flow MenuJob the
+/// TitleTopDialog registrar chains unconditionally at menu-open. Offline, its Steam-holder check
 /// (FUN_140cab320: all 3 holders field@0x10==2) and EOS check (FUN_140ddfb90) never pass, so every
-/// decision-tree leaf builds a GR_System_Message MessageBoxDialog -- EXCEPT one leaf that does
-/// `MenuJobResult::SetResult(Continue)` with no modal (decompile-verified). This detour REPLACES Run
-/// with exactly that clean leaf, skipping the entire tree, so ZERO modals are ever enqueued regardless
+/// decision-tree leaf builds a GR_System_Message MessageBoxDialog -- Except one leaf that does
+/// `MenuJobResult::SetResult(Continue)` with no modal (decompile-verified). This detour replaces Run
+/// with exactly that clean leaf, skipping the entire tree, so zero modals are ever enqueued regardless
 /// of CSNetMan/CSCheatEOS readiness. The original is never called (its only outputs are the result +
 /// the FD4Time vtable, both replicated). No input, no save write; only armed when offline is forced,
 /// so it never alters an online (Seamless Co-op) network check. bd er-effects-rs-0ye.
@@ -344,16 +344,16 @@ pub(crate) unsafe extern "system" fn network_check_job_run_hook(
     // Always exit to the no-modal Continue (offline modal suppression). This job is REPLACED either
     // way, so no real check / modal runs -> save-safe + online-safe.
     //
-    // REGRESSION FIX (2026-06-30): a prior "PORTRAIT HOLD" held this job in a RUNNING state (>1, so
+    // Regression fix (2026-06-30): a prior "PORTRAIT HOLD" held this job in a running state (>1, so
     // MenuJobResult::ShouldContinue keeps it polling) until the menu portrait was captured. That was
-    // self-defeating: holding NetworkCheckJob stalls the title-flow check chain, so the SAVE-data
+    // self-defeating: holding NetworkCheckJob stalls the title-flow check chain, so the save-data
     // ShowProgressJob (the boot ProfileSummary read) never runs -> the profile stays empty -> the
-    // autoload starts a NEW GAME instead of loading the real character (and the stalled flow crashed
+    // autoload starts a new game instead of loading the real character (and the stalled flow crashed
     // the world-load). The hold waited on a capture that could not happen until the read it was
-    // blocking completed. Runtime-confirmed: with the hold gone, the boot read fires (showprog PASS),
+    // blocking completed. Runtime-confirmed: with the hold gone, the boot read fires (showprog pass),
     // the real character loads, and the world reaches `player_present`. The portrait-capture timing is
-    // owned DOWNSTREAM by `portrait_render_window` instead, which holds the load COMMIT after menu-open
-    // (i.e. AFTER the boot read has populated the slot). bd autoload-regression-lookat-breaks-bootread-2026-06-30.
+    // owned downstream by `portrait_render_window` instead, which holds the load commit after menu-open
+    // (i.e. After the boot read has populated the slot). bd autoload-regression-lookat-breaks-bootread-2026-06-30.
     let state = MENU_JOB_STATE_CONTINUE;
     // MenuJobResult::SetResult(result, state, 0): state @ +0 (i32), field1 @ +4 (i32). The native
     // SetResult 0x1407a91e0 only writes these two fields, so replicate inline. Readability-guarded.
@@ -368,7 +368,7 @@ pub(crate) unsafe extern "system" fn network_check_job_run_hook(
         && r8 > null
         && unsafe { safe_read_usize(r8) }.is_some()
     {
-        // NEVER STORE A REFUSAL. `game_data_addr` answers 0 when the running build
+        // Never store a refusal. `game_data_addr` answers 0 when the running build
         // moved this vftable and nothing verified where to, and a 0 here is not a
         // degraded value -- it is a NULL vptr in an object the engine will later
         // call through. Leaving the field as the native left it is strictly safer.
@@ -390,7 +390,7 @@ pub(crate) unsafe extern "system" fn network_check_job_run_hook(
     result
 }
 
-/// Install the NetworkCheckJob::Run short-circuit ONCE (MinHook on 0x140821310), mirroring the
+/// Install the NetworkCheckJob::Run short-circuit once (MinHook on 0x140821310), mirroring the
 /// auto-accept builder-hook precedent. Must arm before menu-open; caller-gated (offline only).
 pub(crate) fn install_network_check_shortcircuit_hook() {
     if NETWORK_CHECK_SHORTCIRCUIT_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
@@ -446,47 +446,47 @@ pub(crate) fn install_network_check_shortcircuit_hook() {
 
 /// CS::ShowProgressJob::Run RVA (deobf entry 0x1408349c0; dump 0x140834ab0, region shift -0xf0,
 /// clean prologue disasm-verified). Signature `MenuJobResult*(rcx=ShowProgressJob, rdx=MenuJobResult*
-/// result, r8=FD4Time*)` -- IDENTICAL to NetworkCheckJob::Run.
+/// result, r8=FD4Time*)` -- Identical to NetworkCheckJob::Run.
 pub(crate) const SHOW_PROGRESS_JOB_RUN_RVA: u32 = 0x8349c0;
 /// `MenuJobState::Success` (=2; Continue=1). Verified from FUN_1407a7340's `SetResult(.,Success,0)`
 /// clean leaf (deobf `lea edx,[r8+2]`). A passing check returns Success -> `ShouldContinue` (state>1)
-/// true -> ShowProgressJob::Run propagates it -> flow ADVANCES (no modal). Forcing Continue(1) would
+/// true -> ShowProgressJob::Run propagates it -> flow advances (no modal). Forcing Continue(1) would
 /// loop the timed job; Success(2) completes it cleanly.
 pub(crate) const MENU_JOB_STATE_SUCCESS: i32 = 2;
 
 pub(crate) use er_telemetry_core::counters::SHOW_PROGRESS_SHORTCIRCUIT_COUNT;
 pub(crate) use er_telemetry_core::counters::SHOW_PROGRESS_SHORTCIRCUIT_INSTALLED;
-/// Original CS::ShowProgressJob::Run trampoline (MinHook). Needed so the SAVE-data progressType can be
-/// PASSED THROUGH to its real delegate -- that delegate IS the boot ProfileSummary read (SLLoadSession
+/// Original CS::ShowProgressJob::Run trampoline (MinHook). Needed so the save-data progressType can be
+/// passed through to its real delegate -- that delegate is the boot ProfileSummary read (SLLoadSession
 /// -> ER0000.sl2). Blanket-suppressing every type (the prior behavior) killed the save read, leaving
 /// an empty profile -> Bandai privacy policy. bd boot-profile-read-STEP_InitMenu-blocked-by-showprogress-shortcircuit-2026-06-23.
 pub(crate) static SHOW_PROGRESS_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-/// ShowProgressJob progressType at [job+0x18] (RE-confirmed). 10 = save-data check/load (MUST run its
+/// ShowProgressJob progressType at [job+0x18] (RE-confirmed). 10 = save-data check/load (must run its
 /// delegate); 20=network, 30/31=sign-in, 60=login (offline-modal types we still short-circuit).
 pub(crate) const SHOW_PROGRESS_TYPE_OFFSET: usize = 0x18;
 pub(crate) const SHOW_PROGRESS_SAVE_TYPE: u32 =
     er_title_flow::boot_hold::SHOW_PROGRESS_SAVE_CHECK_TYPE;
 pub(crate) use er_telemetry_core::counters::SHOW_PROGRESS_TYPE_LOGGED;
 
-/// THE MILESTONE-3 FIX, part 2 (zero-input, save-safe). `CS::ShowProgressJob::Run` (deobf 0x1408349c0)
-/// is the SHARED Run for the offline title-flow check steps (save=10/network=20/sign-in=30,31/
+/// The milestone-3 fix, part 2 (zero-input, save-safe). `CS::ShowProgressJob::Run` (deobf 0x1408349c0)
+/// is the shared Run for the offline title-flow check steps (save=10/network=20/sign-in=30,31/
 /// login=60) the registrar chains at menu-open. Each runs a check delegate (job+0x20, slot +0x10);
-/// offline the delegate returns an ERROR result, which ShowProgressJob::Run propagates so the pump
+/// offline the delegate returns an error result, which ShowProgressJob::Run propagates so the pump
 /// enqueues a GR_System_Message MessageBox. The 3 observed menu-open modals all come from these
-/// ShowProgressJobs (NOT NetworkCheckJob, which is a separate job already hooked). This detour REPLACES
+/// ShowProgressJobs (not NetworkCheckJob, which is a separate job already hooked). This detour replaces
 /// Run with a passing-check exit: result = {state=Success, field1=0} (exactly what FUN_1407a7340's
 /// SetResult(Success) clean leaf yields) + the FD4Time vtable, skipping the delegate -> the job
-/// completes successfully, the flow advances, and ZERO modals are enqueued. One hook covers all the
+/// completes successfully, the flow advances, and zero modals are enqueued. One hook covers all the
 /// check steps. Offline-gated (no effect on an online Seamless Co-op check). bd er-effects-rs-0ye.
 /// Deterministic clean-title active-save-slot override for the System-Quit->Load-Profile switch.
 ///
-/// The clean-title reload is the game's NATIVE most-recent Continue: the ShowProgressJob save-data
-/// delegate (the boot ProfileSummary read) derives+selects the MOST-RECENT save slot and writes it to
+/// The clean-title reload is the game's native most-recent Continue: the ShowProgressJob save-data
+/// delegate (the boot ProfileSummary read) derives+selects the most-recent save slot and writes it to
 /// the active-slot field GameMan+0xac0, and the reload deserializes 0xac0 immediately afterward. On a
-/// switch that makes it re-load the ORIGINAL character (proven 2026-07-02: picked slot 4 'Speed Bean'
+/// switch that makes it re-load the original character (proven 2026-07-02: picked slot 4 'Speed Bean'
 /// but ac0 re-derived to 5 -> loaded 'Patches'). Repointing ac0 to the picked slot on a per-tick poll
-/// LOSES the race -- the derivation and the load happen inside one game-task tick, so the tick-set
-/// landed after the load committed. Calling this RIGHT AFTER the delegate (before the load) wins it
+/// loses the race -- the derivation and the load happen inside one game-task tick, so the tick-set
+/// landed after the load committed. Calling this right after the delegate (before the load) wins it
 /// deterministically. Gated on a torn-down world (local player absent) so it only ever fires at the
 /// clean-title reload, never while the old world is live -- where it would misdirect the return-title
 /// quit-save to the picked slot. Save-safe: a pure active-slot write, no save-file mutation. See bd
@@ -505,7 +505,7 @@ pub(crate) unsafe fn system_quit_repoint_active_slot_at_clean_title(source: &str
     if picked < 0 {
         return;
     }
-    // CLEAN-title only: an OLD world still up means the return-title quit-save has not run yet, and
+    // Clean-title only: an old world still up means the return-title quit-save has not run yet, and
     // ac0 selects the slot it writes -- repointing now would corrupt (overwrite) the picked slot.
     if unsafe { PlayerIns::local_player_mut() }.is_ok() {
         return;
@@ -549,8 +549,8 @@ pub(crate) unsafe extern "system" fn show_progress_job_run_hook(
 ) -> usize {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let result = rdx;
-    // progressType ([job+0x18], low 32 bits). 10 = the SAVE-data check/load: its delegate is the boot
-    // ProfileSummary read, so it MUST run -- pass it through to the original. Suppressing it (as the
+    // progressType ([job+0x18], low 32 bits). 10 = the save-data check/load: its delegate is the boot
+    // ProfileSummary read, so it must run -- pass it through to the original. Suppressing it (as the
     // prior blanket short-circuit did) leaves the profile empty -> privacy policy, and the save is
     // never read. All other types (network/sign-in/login) still get the Success short-circuit so the
     // offline connection modals stay suppressed.
@@ -572,9 +572,9 @@ pub(crate) unsafe extern "system" fn show_progress_job_run_hook(
         ));
     }
     if ptype == Some(SHOW_PROGRESS_SAVE_TYPE) {
-        // MISSING-SAVE HOLD: while no save has been selected, loop this save-data job with
-        // CONTINUE every frame. This holds the title-flow FixOrderJobSequence open at the
-        // save-check WITHOUT freezing any thread -- the boot loading bar sticks at its SAVE_CHECK
+        // Missing-save HOLD: while no save has been selected, loop this save-data job with
+        // continue every frame. This holds the title-flow FixOrderJobSequence open at the
+        // save-check without freezing any thread -- the boot loading bar sticks at its SAVE_CHECK
         // marker, and the DLL-drawn overlay picker (`save_picker_overlay.rs`) composites on top.
         // The game task keeps ticking (so the overlay reads input) and Present keeps firing (so
         // the overlay + bar draw). Making the native title menu input-dead is irrelevant: the
@@ -594,7 +594,7 @@ pub(crate) unsafe extern "system" fn show_progress_job_run_hook(
                 && r8 > null
                 && unsafe { safe_read_usize(r8) }.is_some()
             {
-                // NEVER STORE A REFUSAL. `game_data_addr` answers 0 when the running build
+                // Never store a refusal. `game_data_addr` answers 0 when the running build
                 // moved this vftable and nothing verified where to, and a 0 here is not a
                 // degraded value -- it is a NULL vptr in an object the engine will later
                 // call through. Leaving the field as the native left it is strictly safer.
@@ -629,9 +629,9 @@ pub(crate) unsafe extern "system" fn show_progress_job_run_hook(
                 >(orig)
             };
             let ret = unsafe { call(rcx, rdx, r8, r9) };
-            // The delegate above just selected the MOST-RECENT save slot into GameMan+0xac0. On a
+            // The delegate above just selected the most-recent save slot into GameMan+0xac0. On a
             // System-Quit->Load-Profile switch the reload deserializes 0xac0 next, so override it to
-            // the PICKED slot here -- after the native derivation, before the load. Deterministic, no
+            // the picked slot here -- after the native derivation, before the load. Deterministic, no
             // tick-race. No-ops off the switch path / while the old world is up (see the helper).
             unsafe { system_quit_repoint_active_slot_at_clean_title("show-progress-delegate") };
             return ret;
@@ -647,7 +647,7 @@ pub(crate) unsafe extern "system" fn show_progress_job_run_hook(
         && r8 > null
         && unsafe { safe_read_usize(r8) }.is_some()
     {
-        // NEVER STORE A REFUSAL. `game_data_addr` answers 0 when the running build
+        // Never store a refusal. `game_data_addr` answers 0 when the running build
         // moved this vftable and nothing verified where to, and a 0 here is not a
         // degraded value -- it is a NULL vptr in an object the engine will later
         // call through. Leaving the field as the native left it is strictly safer.
@@ -669,7 +669,7 @@ pub(crate) unsafe extern "system" fn show_progress_job_run_hook(
     result
 }
 
-/// Install the ShowProgressJob::Run short-circuit ONCE (MinHook on 0x1408349c0). Must arm before
+/// Install the ShowProgressJob::Run short-circuit once (MinHook on 0x1408349c0). Must arm before
 /// menu-open; caller-gated (offline only).
 pub(crate) fn install_show_progress_shortcircuit_hook() {
     if SHOW_PROGRESS_SHORTCIRCUIT_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
@@ -699,7 +699,7 @@ pub(crate) fn install_show_progress_shortcircuit_hook() {
         )
     } {
         Ok(hook) => {
-            // Store the trampoline BEFORE enabling so the SAVE-data progressType can be passed through
+            // Store the trampoline before enabling so the save-data progressType can be passed through
             // to the original delegate (the boot ProfileSummary read).
             SHOW_PROGRESS_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
             if let Err(status) = unsafe { hook.queue_enable() } {
@@ -728,12 +728,12 @@ pub(crate) fn install_show_progress_shortcircuit_hook() {
 
 // ---- Missing-save picker: hold the title at press-any-button until the pick ----
 // The native title auto-opens its menu ~25-38s into a parked press-any-button boot (the online->
-// offline sign-in flow timing out chains the menu-open check steps). If that happens BEFORE the user
-// picks a save, the Continue/Load rows build against an EMPTY ProfileSummary (no save yet) -> disabled
-// rows -> no character ever loads and the boot idles forever on a null pump (softlock on a LATE pick;
+// offline sign-in flow timing out chains the menu-open check steps). If that happens before the user
+// picks a save, the Continue/Load rows build against an empty ProfileSummary (no save yet) -> disabled
+// rows -> no character ever loads and the boot idles forever on a null pump (softlock on a late pick;
 // bd er-effects-rs-ns4n follow-up). The save-check ShowProgressJob hold is too late -- it holds the
-// bar AFTER menu-open. This detour suppresses `TitleTopDialog::open_menu` while the picker is pending,
-// so the menu is only ever built AFTER the pick installs the redirect (save present -> rows ENABLED),
+// bar after menu-open. This detour suppresses `TitleTopDialog::open_menu` while the picker is pending,
+// so the menu is only ever built after the pick installs the redirect (save present -> rows enabled),
 // where the normal post-pick accept-byte flow opens it fresh -- identical to the working early-pick
 // path, regardless of how long the user waits. Self-gates on `missing_save_selection_pending()`, so it
 // is a pure pass-through on an early pick and on any run without the missing-save picker armed.
@@ -762,27 +762,27 @@ pub(crate) unsafe extern "system" fn title_open_menu_suppress_hook(
         }
         return 0;
     }
-    // LOG THE PASS-THROUGH TOO. Only the DROPPED calls used to be recorded, which made "did the
+    // Log the pass-through too. Only the dropped calls used to be recorded, which made "did the
     // native title ever open its menu again after the hold released" unanswerable from the log --
-    // the ambiguity that cost the 2026-08-26 softlock its diagnosis. A pass-through counted AFTER a
+    // the ambiguity that cost the 2026-08-26 softlock its diagnosis. A pass-through counted after a
     // suppression is the decisive one: it proves the title re-issues `open_menu` on its own, so
     // dropping a request is a deferral rather than a loss.
     let suppressed = TITLE_OPEN_MENU_SUPPRESSED_COUNT.load(Ordering::SeqCst);
     let n = TITLE_OPEN_MENU_PASSTHROUGH_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-    // OBSERVE THE a40 EDGE AS AN EVENT, NOT BY SAMPLING (bd er-effects-rs-1742).
+    // Observe the a40 edge as an event, not by sampling (bd er-effects-rs-1742).
     //
-    // `OWN_STEPPER_MENU_OPENED` used to be latched in ONE place: `product_core_autoload_tick`, which
-    // sets it only on a tick that happens to READ `dialog+0xa40 == 1`. But a40 is set inside
+    // `OWN_STEPPER_MENU_OPENED` used to be latched in one place: `product_core_autoload_tick`, which
+    // sets it only on a tick that happens to read `dialog+0xa40 == 1`. But a40 is set inside
     // `open_menu` and back to 0 by the follow-up `TitleTopDialog::update` -- the comment beside that
     // latch says so -- so the window can be shorter than one game-task tick at ~28fps. Miss it and
     // the tick re-arms the accept byte instead, which restarts the menu transition, which closes the
     // window again: the title loops forever at press-any-button and the semantic Continue row is
-    // never driven. MEASURED 2026-09-05 on the autoload path: core readiness `ready` with
-    // ready_successes climbing past 400, phase pinned at MENU, `title_open_menu_passthrough_count=1`
-    // (open_menu DID run) and `menu_opened_latch=0` -- the edge happened and nobody saw it.
+    // never driven. Measured 2026-09-05 on the autoload path: core readiness `ready` with
+    // ready_successes climbing past 400, phase pinned at menu, `title_open_menu_passthrough_count=1`
+    // (open_menu did run) and `menu_opened_latch=0` -- the edge happened and nobody saw it.
     //
-    // This detour cannot miss it. It IS the call, so a pass-through is the edge, observed from
-    // inside the native frame with no sampling window at all. Only pass-throughs latch: a SUPPRESSED
+    // This detour cannot miss it. It is the call, so a pass-through is the edge, observed from
+    // inside the native frame with no sampling window at all. Only pass-throughs latch: a suppressed
     // call is one we dropped while the missing-save picker is pending, and the menu genuinely has
     // not opened then, so the picker path is untouched.
     if OWN_STEPPER_MENU_OPENED
@@ -818,7 +818,7 @@ pub(crate) unsafe extern "system" fn title_open_menu_suppress_hook(
     unsafe { call(rcx, rdx, r8, r9) }
 }
 
-/// Install the `TitleTopDialog::open_menu` suppression detour ONCE (MinHook on 0x1409b24e0). Must arm
+/// Install the `TitleTopDialog::open_menu` suppression detour once (MinHook on 0x1409b24e0). Must arm
 /// before the native auto-menu-open (~+38s). Harmless when no picker is pending (pass-through).
 pub(crate) fn install_title_open_menu_suppress_hook() {
     if TITLE_OPEN_MENU_SUPPRESS_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
@@ -874,16 +874,16 @@ pub(crate) fn install_title_open_menu_suppress_hook() {
     }
 }
 
-/// LATCH detour for the CS::SceneObjProxy ctor 0x14074a700 (rcx=proxy[this], rdx=MenuWindow*,
+/// Latch detour for the CS::SceneObjProxy ctor 0x14074a700 (rcx=proxy[this], rdx=MenuWindow*,
 /// r8/r9 forwarded). Disasm-verified: the ctor does `mov %rdx,%rbx` (0x14074a720) then
 /// `mov %rbx,0x20(%rsi)` (0x14074a735) -- so the incoming RDX is the engine-verified MenuWindow it
-/// stores at proxy+0x20 (probe-6 proved the OLD TitleTopDialog-factory rdx was a std::function
-/// delegate, NOT the MenuWindow). Runtime showed the old MenuWindow/MenuWindowProxy vtable constants
+/// stores at proxy+0x20 (probe-6 proved the old TitleTopDialog-factory rdx was a std::function
+/// delegate, not the MenuWindow). Runtime showed the old MenuWindow/MenuWindowProxy vtable constants
 /// are stale for this ctor's engine-provided rdx, but static disassembly still proves the game stores
 /// rdx as proxy+0x20. Treat the engine-provided heap-aligned rdx as the trust boundary and OVERWRITE
-/// LATCHED_MENU_WINDOW on EVERY valid call (most-recent live host window wins -- the title's host
+/// LATCHED_MENU_WINDOW on every valid call (most-recent live host window wins -- the title's host
 /// window is latched by the time STAGE2 runs). Then pure passthrough: call the original trampoline
-/// with ALL args preserved + return its result, never perturbing the build.
+/// with all args preserved + return its result, never perturbing the build.
 /// bd live-dialog-probe6-factory-fires-returns-dialog-rdx-not-menuwindow-2026.
 pub(crate) unsafe extern "system" fn scene_obj_proxy_ctor_hook(
     rcx: usize,
@@ -1098,8 +1098,8 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_begin_title_hook(
     TITLE_NATIVE_MENU_VISUAL_NATIVE_WINDOW.store(native_window, Ordering::SeqCst);
     // Identity layer (er-effects-rs-j74t): this job is now masquerade-preserved; its destructor
     // must apply the strict owningMenuWindow lifetime predicate instead of the state heuristic.
-    // (On the return-to-title rebuild this latch is overwritten with the NEW job ~1ms before the
-    // STALE job's ~MenuWindowJob runs, so the single-latch atomics cannot identify the stale job --
+    // (On the return-to-title rebuild this latch is overwritten with the new job ~1ms before the
+    // stale job's ~MenuWindowJob runs, so the single-latch atomics cannot identify the stale job --
     // the set can.)
     masquerade_preserved_job_note(native_job);
     append_autoload_debug(format_args!(
@@ -1137,18 +1137,18 @@ pub(crate) unsafe fn force_hide_title_logo_surface(
     }
     let orig = TITLE_LOGO_SET_VISIBLE_ORIG.load(Ordering::SeqCst);
     let target = if orig != 0 && orig != HOOK_ORIGINAL_UNSET {
-        // A MinHook trampoline. Already correct for the running build by construction, and NOT an
+        // A MinHook trampoline. Already correct for the running build by construction, and not an
         // address to resolve -- it does not live in the game image at all.
         orig
     } else {
-        // THE FALLBACK THAT CRASHED THE 1.17 BOOT AT ~11s, three runs running. This called
+        // The FALLBACK that crashed the 1.17 boot at ~11s, three runs running. This called
         // `base + 0x9a62c0` raw. On 1.16.2 that is a thunk (`add rcx,0x70; jmp ...`); on 1.17 the
         // same RVA holds `lea eax,[rsp+0x40]; cmp rcx,rax; setne dl` -- the middle of an unrelated
         // function, and the address has no verified mapping. The crash record proves the landing:
         // return address 0x1409a62ce, exactly +0xe into it, with rcx holding `logo`, and RIP ending
-        // up at heap 0x1d107080 -- an EXECUTE fault (access kind 8) in no module.
+        // up at heap 0x1d107080 -- an execute fault (access kind 8) in no module.
         //
-        // Resolving means an unmapped address REFUSES and the logo simply is not hidden. A title
+        // Resolving means an unmapped address refuses and the logo simply is not hidden. A title
         // logo left visible is a cosmetic defect; this was a boot-killer.
         match er_game_base::game_build::resolve_game_address(
             base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA,
@@ -1163,23 +1163,23 @@ pub(crate) unsafe fn force_hide_title_logo_surface(
             }
         }
     };
-    // RELEASE THE FORCE-HIDE ONCE THE COVER IS DONE WITH IT.
+    // Release the force-hide once the cover is done with it.
     //
     // This used to force `visible = 0` unconditionally and forever. `boot_view_cover_release_ready`
     // already decides when the cover has served its purpose and latches the moment in
     // `BOOT_VIEW_RELEASE_READY_MS`, but nothing downstream of the cover consulted it, so the logo
     // stayed suppressed for the rest of the process no matter what the game asked for.
     //
-    // MEASURED 2026-09-03: a session whose world unloaded one heartbeat after loading (an
+    // Measured 2026-09-03: a session whose world unloaded one heartbeat after loading (an
     // invasion-warp `warp=1 -> Committed` that never came back) then sat on a black screen for 72
     // minutes with this detour still answering every native `SetVisible(logo, 1)` with a 0, ~107
     // times a second, 508,460 times in total. With no world and no title, nothing was left to draw.
     //
     // After release, honour what the game asked for. Before release, keep forcing hidden -- that is
     // the whole point of the cover, and the pre-release behaviour is unchanged.
-    // A COVER THAT STOPPED WITHOUT RELEASING MUST STILL LIFT THE SUPPRESSION (2026-09-04). The
+    // A cover that stopped without releasing must still lift the suppression (2026-09-04). The
     // condition moved into `title_visual_suppression_active`, which carries the measurement, because
-    // the two PressStart force-hides had no release gate at all and a black title has to lift ALL
+    // the two PressStart force-hides had no release gate at all and a black title has to lift all
     // of them or it is still a black title.
     let cover_released = !er_telemetry_core::counters::title_visual_suppression_active();
     let effective_visible = if cover_released {

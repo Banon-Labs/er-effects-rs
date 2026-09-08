@@ -46,11 +46,11 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
         }
     };
 
-    // FD4 async-IO DRAIN subsystem (B step-3 lever check, read-only). The cold save-IO read
-    // never drains because the queue-processing worker threads live in the global thread POOL
-    // [0x144853048], NOT in the worker MANAGER. If the pool is NULL cold, cold-building it
+    // FD4 async-IO drain subsystem (B step-3 lever check, read-only). The cold save-IO read
+    // never drains because the queue-processing worker threads live in the global thread pool
+    // [0x144853048], not in the worker manager. If the pool is NULL cold, cold-building it
     // (0x14240afe0) is the untested save-safe lever; if non-null cold, the read fails elsewhere.
-    // CORRECTION (autoresearch 2026-06-18): the "stream task" read is actually
+    // Correction (autoresearch 2026-06-18): the "stream task" read is actually
     // upstream's `runtime_heap_allocator` (DLAllocator) -- always non-null, so the
     // `fd4_stream_task_present` signal is meaningless. Resolve it through fromsoftware-rs.
     const FD4_IO_POOL_RVA: usize = RuntimeGlobalRva::Fd4IoPool as usize;
@@ -132,10 +132,10 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
         crate::experiments::CORRUPTED_SAVE_SEEN_COUNT.load(Ordering::SeqCst),
         crate::experiments::CORRUPTED_SAVE_SEEN_CALLER_RVA.load(Ordering::SeqCst)
     ));
-    // PRIVACY-POLICY SEMAPHORE (privacy-policy-gated-on-character-presence-CONFIRMED-2026-06-23):
+    // Privacy-policy SEMAPHORE (privacy-policy-gated-on-character-presence-confirmed-2026-06-23):
     // this is a pre-render character/profile-summary gate, not evidence that a ToS/policy renderer was
-    // reached. The Bandai-Namco PRIVACY POLICY boot screen appears iff the active ProfileSummary exists
-    // but reports ZERO active slots (`slot_active_bytes == 0`, no character). When a gold/native-profile
+    // reached. The Bandai-Namco privacy policy boot screen appears iff the active ProfileSummary exists
+    // but reports zero active slots (`slot_active_bytes == 0`, no character). When a gold/native-profile
     // load is expected (not telemetry-only), `true` means the profile summary was not populated before
     // the title gate, so the native menu / Continue / ProfileSelect renderer path will not be reached.
     // On a real loaded profile this is false (at least one active slot -> policy skipped). Do not fix a
@@ -147,16 +147,16 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
     body.push_str(&format!(
         "  \"oracle_privacy_policy_gate\": {privacy_policy_gate},\n"
     ));
-    // SPLASH-SKIP SEMAPHORE (splash-skip-correctness): the only failure mode of the BeginLogo logo
+    // Splash-skip SEMAPHORE (splash-skip-correctness): the only failure mode of the BeginLogo logo
     // skip is the je->jg branch flip inside STEP_BeginLogo not being live (never applied, or
     // reverted by Arxan / another mod). So read that .text byte directly each telemetry frame:
-    //   jg (0x7f) = patch LIVE -> STEP_BeginLogo falls through past the ESRB/illegal-copy logo build
+    //   jg (0x7f) = patch live -> STEP_BeginLogo falls through past the ESRB/illegal-copy logo build
     //               (the logos are skipped, the title advances SetState(2)->(3) without them);
     //   je (0x74) = UNPATCHED -> splash will play;
-    //   anything else = corrupted/reverted -> splash-skip is BROKEN.
+    //   anything else = corrupted/reverted -> splash-skip is broken.
     // apply_splash_skip runs at DLL attach (before the title runs state 2), so by the time telemetry
     // writes (at the title/menu) a live jg means the skip already executed this boot. This is the
-    // in-process detector that was MISSING for "are we correctly skipping the splash screens".
+    // in-process detector that was missing for "are we correctly skipping the splash screens".
     if let Some(address) = er_title_flow::splash_skip_je_address() {
         let splash_byte = unsafe { crate::experiments::safe_read_u8(address) }.unwrap_or(0);
         body.push_str(&format!(
@@ -165,7 +165,7 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
             splash_byte
         ));
     }
-    // AUDIO SEMAPHORE: actual Wwise PostEvent submissions. This catches audible-only regressions
+    // Audio SEMAPHORE: actual Wwise PostEvent submissions. This catches audible-only regressions
     // (for example startup/title-logo music) that can block the later title/load flow without a useful
     // screenshot oracle. The hook is observe-only and forwards every event unchanged.
     body.push_str(&format!(
@@ -183,7 +183,7 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
         crate::SOUND_POST_EVENT_LAST_FLAGS.load(Ordering::SeqCst),
         crate::SOUND_POST_EVENT_LAST_CALLER_RVA.load(Ordering::SeqCst)
     ));
-    // oracle_continue_ready_stage / _scan_node_hits / _dialog_vt REMOVED 2026-06-24: they were the
+    // oracle_continue_ready_stage / _scan_node_hits / _dialog_vt removed 2026-06-24: they were the
     // diagnostic for the native_continue Continue-node scan (CONTINUE_READY_STAGE/SCAN_NODE_HITS/
     // DIALOG_VT_SEEN), which was ripped out as dead code -- the scan never found the node and the
     // zero-input load fires via pab-advance + title-accept-byte instead.
@@ -270,12 +270,12 @@ pub(crate) fn json_escape(value: &str) -> String {
         .collect()
 }
 
-// ENV-GATE RATIONALE: ER_QUICKLOAD_CRASH_LOG_PATH is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
+// ENV-gate RATIONALE: ER_QUICKLOAD_CRASH_LOG_PATH is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn crash_log_path() -> PathBuf {
     std::env::var("ER_QUICKLOAD_CRASH_LOG_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
-            // CANONICAL name `er-quickload-crash-log.txt` -- the SAME file the crash-logger enable
+            // Canonical name `er-quickload-crash-log.txt` -- the same file the crash-logger enable
             // sentinel (crash_logger_enabled) and the probe's per-run truncation use. The prior
             // default `er-quickload-crash.log` silently diverged from those, so the probe never
             // cleared the real crash log (it accumulated across runs) and readers checked the wrong
@@ -286,7 +286,7 @@ pub(crate) fn crash_log_path() -> PathBuf {
         })
 }
 
-/// Monotonic process-attach epoch for self-describing DLL logs. Lazily set on the FIRST log call
+/// Monotonic process-attach epoch for self-describing DLL logs. Lazily set on the first log call
 /// (close to DLL_PROCESS_ATTACH in practice), so every emitted line carries `[+<elapsed_ms>ms] `
 /// measured from that common start -- making ordering and gaps obvious in raw logs without needing
 /// the bash launch T0. Mirrors the `TIMELINE_EPOCH` pattern; `Instant` is QPC-backed and works under
@@ -295,7 +295,7 @@ static PROCESS_LOG_EPOCH: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// Elapsed milliseconds since the process-log epoch (lazily anchored on first call). Cheap: a single
 /// short-lived lock, poison-tolerant, no file IO under the lock. `pub(crate)` so the input-trace
-/// JSONL stamps its rows on the SAME clock as the `[+Nms]` debug-log prefixes (cross-correlation).
+/// JSONL stamps its rows on the same clock as the `[+Nms]` debug-log prefixes (cross-correlation).
 pub(crate) fn process_log_elapsed_ms() -> u128 {
     let mut guard = match PROCESS_LOG_EPOCH.lock() {
         Ok(g) => g,
@@ -329,7 +329,7 @@ fn wall_clock_stamp() -> String {
     "0000-00-00 00:00:00:00".to_owned()
 }
 
-/// md5 (hex) of the DLL's own on-disk image, so a log names the EXACT build that wrote it (matches
+/// md5 (hex) of the DLL's own on-disk image, so a log names the exact build that wrote it (matches
 /// the `md5sum` reported for the built DLL). Computed once from `GetModuleFileNameW(SELF_DLL_BASE)`;
 /// only a successful result is cached, so a call before the self-base is recorded transiently returns
 /// `"unknown"` and the next call retries.
@@ -396,7 +396,7 @@ fn log_line_prefix() -> String {
 
 /// One-time self-describing header written the first time a given log file is opened this run: the
 /// full DLL md5 + path + wall-clock, so the build and start time are unambiguous even when many runs
-/// accumulate in the same file. `resolved_path` is the ABSOLUTE path this handle actually opened, so
+/// accumulate in the same file. `resolved_path` is the absolute path this handle actually opened, so
 /// a log found on disk states where it came from and no reader has to guess the process CWD.
 fn write_log_header(file: &mut std::fs::File, resolved_path: &std::path::Path) {
     use std::io::Write;
@@ -425,13 +425,13 @@ pub(crate) fn append_crash_log(args: std::fmt::Arguments<'_>) {
     }
 }
 
-/// Loading-screen portrait capture check, run at CAPTURE time (every time a portrait RGBA is about to
+/// Loading-screen portrait capture check, run at capture time (every time a portrait RGBA is about to
 /// be stored), so a transient wrong-source frame -- our neutral texture flashing in right after Continue
 /// (Bug B), or a small head from the current deliberate low-resolution experiment -- cannot slip between
 /// the coarse telemetry writes. Records the capture dims + neutral-color fraction, latches the two
-/// once-seen bug versions (semaphores), and RETURNS whether this capture is fit to PUBLISH.
+/// once-seen bug versions (semaphores), and returns whether this capture is fit to publish.
 ///
-/// Returns `false` (do NOT publish; hold the previous frame / the loading background) only when the
+/// Returns `false` (do not publish; hold the previous frame / the loading background) only when the
 /// capture is our neutral texture. Small captures are still published: the current 56x56 native-source
 /// experiment intentionally relies on scaling a tiny real head up to the full backbuffer. Cheap: a
 /// strided sample.
@@ -483,8 +483,8 @@ pub(crate) fn note_ls_portrait_capture(w: u32, h: u32, px: &[u8]) -> bool {
             Ordering::SeqCst,
         );
     }
-    // Publishable unless it is our NEUTRAL texture (Bug B) -- that must never reach the loading screen.
-    // We deliberately do NOT reject the too-small case: the current experiment intentionally renders a
+    // Publishable unless it is our neutral texture (Bug B) -- that must never reach the loading screen.
+    // We deliberately do not reject the too-small case: the current experiment intentionally renders a
     // tiny 56x56 native portrait and scales it up to test whether quality is related to choppiness.
     // `is_small` still latches its semaphore for monitoring. Rejected frames are counted so a monitor can
     // see the neutral-texture gate working.
@@ -492,9 +492,9 @@ pub(crate) fn note_ls_portrait_capture(w: u32, h: u32, px: &[u8]) -> bool {
     let publishable = !is_neutral;
     if !publishable {
         LS_PORTRAIT_REJECTED_PUBLISHES.fetch_add(1, Ordering::SeqCst);
-        // ATTRIBUTION (er-effects-rs-k979). A bare reject count cannot distinguish the gate doing
+        // Attribution (er-effects-rs-k979). A bare reject count cannot distinguish the gate doing
         // its job from the pipeline breaking, so a proof gating on "zero rejects" failed healthy
-        // runs. Stamp WHY (the neutral share that tripped it) and WHEN (this capture's version),
+        // runs. Stamp why (the neutral share that tripped it) and when (this capture's version),
         // and split on whether anything has ever published cleanly: before the first clean publish
         // this is warm-up -- the offscreen RT is still the blank background and refusing it is
         // correct -- while after it means the pipeline began emitting blanks mid-window.
@@ -516,9 +516,9 @@ pub(crate) fn note_ls_portrait_capture(w: u32, h: u32, px: &[u8]) -> bool {
     publishable
 }
 
-/// Is a rejected capture pipeline WARM-UP rather than a fault? (er-effects-rs-k979)
+/// Is a rejected capture pipeline warm-up rather than a fault? (er-effects-rs-k979)
 ///
-/// Split on whether THIS WINDOW has published cleanly yet. Before its first clean publish the
+/// Split on whether this window has published cleanly yet. Before its first clean publish the
 /// offscreen RT is still the blank background, so a >=90%-neutral frame is expected and refusing it
 /// is the gate working -- measured in run slot-portrait-proof-20260731-130803, where the neutral
 /// frame was capture version 1, 2 of 1542 were refused, and all 1540 publishes were clean. After a
@@ -526,7 +526,7 @@ pub(crate) fn note_ls_portrait_capture(w: u32, h: u32, px: &[u8]) -> bool {
 /// real defect and the thing a proof should fail on.
 ///
 /// The baseline is essential, not decoration: `LOADING_BG_PORTRAIT_RGBA_VERSION` is cumulative for
-/// the whole PROCESS (that 3-window run ended at 1540 and never reset), so comparing it against 0
+/// the whole process (that 3-window run ended at 1540 and never reset), so comparing it against 0
 /// would mark every window after the first as "already published" and misfile its warm-up reject as
 /// a fault -- reintroducing the very failure this change removes, one window later.
 ///
@@ -556,16 +556,16 @@ mod portrait_reject_attribution_tests {
     #[test]
     fn a_later_windows_warmup_is_still_warmup() {
         // The regression this baseline exists to prevent. Window 2 opens at cumulative version
-        // 1400; a reject before it publishes anything is warm-up, NOT a fault, even though the
+        // 1400; a reject before it publishes anything is warm-up, not a fault, even though the
         // process-wide counter is long past zero.
         assert!(reject_is_warmup(1400, 1400));
     }
 }
 
-/// DEFAULT-OFF marker gate for the `append_autoload_debug` firehose (Phase B decoupled diagnostics,
-/// bd decoupled-diagnostics-architecture-buildplan-2026-07-24). Env vars do NOT cross me3/Proton, so
+/// Default-off marker gate for the `append_autoload_debug` firehose (Phase B decoupled diagnostics,
+/// bd decoupled-diagnostics-architecture-buildplan-2026-07-24). Env vars do not cross me3/Proton, so
 /// the enable is a game-dir marker file `er-quickload-autoload-debug.txt` checked via `.exists()` and
-/// cached once. This is a PURELY DIAGNOSTIC logging toggle -- it changes NO game behavior, only whether
+/// cached once. This is a purely diagnostic logging toggle -- it changes no game behavior, only whether
 /// the passive debug-log lines are written -- so the armed-vs-disarmed A/B baseline pays zero per-frame
 /// log-file cost in both arms. Registered in `.auto/marker_file_gate_baseline.json` diagnostic_gates.
 fn autoload_debug_log_enabled() -> bool {
@@ -583,10 +583,10 @@ const AUTOLOAD_DEBUG_LOG_FILE_NAME: &str = "er-quickload-autoload-debug.log";
 
 /// Deterministic location for the autoload debug log.
 ///
-/// The old default was the RELATIVE `er-quickload-autoload-debug.log`, so under me3/Proton the trace
-/// landed in whatever the process CWD happened to be -- measured, that was the APPDATA SAVE
+/// The old default was the relative `er-quickload-autoload-debug.log`, so under me3/Proton the trace
+/// landed in whatever the process CWD happened to be -- measured, that was the APPDATA save
 /// directory, nowhere near the game dir. A diagnosis run whose log cannot be found is a wasted user
-/// press, so the default now resolves next to the marker file that ENABLES the log
+/// press, so the default now resolves next to the marker file that enables the log
 /// (`game_directory_path()`, the same directory `autoload_debug_log_enabled` probes). The explicit
 /// `ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH` override still wins, and the bare relative name survives only as
 /// a last resort for the case where the game directory cannot be resolved at all.
@@ -609,7 +609,7 @@ static AUTOLOAD_DEBUG_REENTRANT_DROPS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
 std::thread_local! {
-    /// True while THIS thread is somewhere inside `append_autoload_debug`.
+    /// True while this thread is somewhere inside `append_autoload_debug`.
     static AUTOLOAD_DEBUG_IN_PROGRESS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
@@ -620,9 +620,9 @@ std::thread_local! {
 /// Both file operations `append_autoload_debug` performs reach the OS through
 /// `kernel32!CreateFileW`: the marker gate's `.exists()` probe (`std::fs::metadata` opens the path
 /// with `FILE_FLAG_BACKUP_SEMANTICS` before it will answer), and the log handle's own
-/// `OpenOptions::open`. `install_save_file_core_hooks` detours that export in EVERY save mode, and
-/// the detour LOGS -- its very first call, and every save-like path -- so the logger's own open
-/// arrives straight back in the logger ON THE SAME THREAD.
+/// `OpenOptions::open`. `install_save_file_core_hooks` detours that export in every save mode, and
+/// the detour logs -- its very first call, and every save-like path -- so the logger's own open
+/// arrives straight back in the logger on the same thread.
 ///
 /// Neither primitive the outer call holds at that moment is re-entrant:
 ///
@@ -633,7 +633,7 @@ std::thread_local! {
 ///
 /// The thread that hits this is the one installing the hook, during DLL attach, and every other
 /// thread that logs afterwards queues behind it -- so the symptom is the game hanging at boot having
-/// written nothing. Nested lines are DROPPED and counted: a line describing the opening of the log
+/// written nothing. Nested lines are dropped and counted: a line describing the opening of the log
 /// is worth nothing, and the outer line it interrupted is still written normally.
 struct AutoloadDebugReentryGuard;
 
@@ -660,12 +660,12 @@ impl Drop for AutoloadDebugReentryGuard {
     }
 }
 
-// ENV-GATE RATIONALE: ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
+// ENV-gate RATIONALE: ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
-    // PHASE B DECOUPLED DIAGNOSTICS: this per-frame firehose is DEFAULT-OFF. Return before ANY file I/O
+    // Phase B DECOUPLED DIAGNOSTICS: this per-frame firehose is default-off. Return before any file I/O
     // unless the `er-quickload-autoload-debug.txt` marker is present, so the armed-vs-disarmed A/B baseline
-    // has a ZERO-LOG cost in both arms (no per-frame log-file-I/O confound). Cached; no game behavior.
-    // RE-ENTRANCY, checked BEFORE the marker gate: the gate's own `.exists()` probe is a
+    // has a zero-log cost in both arms (no per-frame log-file-I/O confound). Cached; no game behavior.
+    // RE-ENTRANCY, checked before the marker gate: the gate's own `.exists()` probe is a
     // `CreateFileW` and therefore re-enters the save-destination detour, so the recursion is
     // reachable before the gate has even decided whether logging is on. See
     // `AutoloadDebugReentryGuard`.
@@ -675,26 +675,26 @@ pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
     if !autoload_debug_log_enabled() {
         return;
     }
-    // RUN-LENGTH COLLAPSE, AT THE WRITER RATHER THAN PER CALL SITE.
+    // Run-length collapse, at the writer rather than per call site.
     //
-    // `log_save_picker_mode` below already filters ITS family, and the comment there records why:
+    // `log_save_picker_mode` below already filters its family, and the comment there records why:
     // 1,905 identical lines, 20% of one run's log. Filtering one caller does not bound the file,
     // because any other caller can do the same thing -- and one did.
     //
-    // MEASURED 2026-09-03, a 72-minute session that ended on a black screen: a single family,
+    // Measured 2026-09-03, a 72-minute session that ended on a black screen: a single family,
     // `title-cover-part-a: forced TitleBackViewParts/05_001_Title_Logo hidden via SetVisible
     // detour`, wrote 508,460 lines. The log reached 269 MB and was still growing 238 KiB every 4
     // seconds. That is a per-frame detour logging unconditionally, so the cost lands on the game
     // thread exactly the way the FPS note below describes -- and an unbounded file will eventually
     // take the disk with it.
     //
-    // The filter keys on the message FAMILY (`er_game_base::repeat::family_key` collapses every
+    // The filter keys on the message family (`er_game_base::repeat::family_key` collapses every
     // digit-bearing run to `#`), so the whole 508k-line family shares one slot no matter what the
     // pointer and counter in each line say. Nothing is lost silently: a run is restated on a
     // 1-3-10 schedule and its total is reported, which is what keeps "it never changed" and "it
     // only happened once" distinguishable.
     //
-    // The note is written INLINE here rather than by recursing into this function, because the
+    // The note is written inline here rather than by recursing into this function, because the
     // re-entrancy guard above is already held and a recursive call would be dropped.
     static AUTOLOAD_DEBUG_REPEATS: er_game_base::repeat::RepeatFilter =
         er_game_base::repeat::RepeatFilter::new();
@@ -705,13 +705,13 @@ pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
         er_game_base::repeat::Verdict::Suppress => return,
     };
     use std::io::Write;
-    // FPS FIX (bd fps-fix-not-confirmed-new-suspect-perframe-debug-logging): the old path did a full file
-    // OPEN + write + CLOSE on EVERY call (3 syscalls/line). The DLL logs heavily during loads/transitions
+    // FPS fix (bd fps-fix-not-confirmed-new-suspect-perframe-debug-logging): the old path did a full file
+    // open + write + close on every call (3 syscalls/line). The DLL logs heavily during loads/transitions
     // (per-frame WORLDRES-GETTER phase changes, oracles, etc.), so that per-call open/close tanked the
-    // framerate exactly when the user sees it. Keep ONE persistent handle: open+truncate+header once, then
+    // framerate exactly when the user sees it. Keep one persistent handle: open+truncate+header once, then
     // only writeln thereafter -- no per-call open/close. Same output, a fraction of the syscalls.
     static LOG: std::sync::Mutex<Option<std::fs::File>> = std::sync::Mutex::new(None);
-    // Serializes the ONE truncating open so `LOG` is never held across file I/O and two threads can
+    // Serializes the one truncating open so `LOG` is never held across file I/O and two threads can
     // never both truncate the file. Taken only after `LOG` was found empty.
     static LOG_OPEN: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let prefix = log_line_prefix();
@@ -733,7 +733,7 @@ pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
     if write_through_open_handle() {
         return;
     }
-    // NO FILE I/O UNDER `LOG` -- the open below re-enters the `CreateFileW` detour, which takes
+    // No file I/O under `LOG` -- the open below re-enters the `CreateFileW` detour, which takes
     // locks of its own (the save-destination redirect lock, during an armed commit), so holding
     // `LOG` across it invites the reverse lock order from any thread that logs while holding one of
     // them. The guard above stops the same-thread recursion; keeping the open outside `LOG` stops
@@ -745,14 +745,14 @@ pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
     if write_through_open_handle() {
         return;
     }
-    // TRUNCATE ONCE per process so each run starts a CLEAN log (matches the trace DLL's reset-on-attach).
+    // TRUNCATE once per process so each run starts a clean log (matches the trace DLL's reset-on-attach).
     let path = autoload_debug_log_path();
-    // Keep the PREVIOUS run one generation as `.log.prev` instead of destroying it -- this is the
+    // Keep the previous run one generation as `.log.prev` instead of destroying it -- this is the
     // most-read log in the repo and the truncation below is otherwise final. Safe under `LOG_OPEN`:
     // `begin_fresh_run` never holds its own registry lock across file I/O (so there is no reverse
     // order against `LOG_OPEN`), and the re-entrancy guard held by this thread makes the rename's
     // trip through the `CreateFileW` detour come straight back out of this function.
-    // `open_fresh_run_append` IS `begin_fresh_run` + an appending open, which is what this used to
+    // `open_fresh_run_append` is `begin_fresh_run` + an appending open, which is what this used to
     // spell out by hand -- and the hand-rolled version truncated a second time, deleting the build
     // identity `begin_fresh_run` had just written. That is exactly what happened on the 2026-08-24
     // run: every other log in the process opened with `build git=...` and the most-read log in the
@@ -778,9 +778,9 @@ pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
 static SAVE_PICKER_MODE_REPEATS: er_game_base::repeat::RepeatFilter =
     er_game_base::repeat::RepeatFilter::new();
 
-/// Record the save-picker flavour decision ON CHANGE, with an occurrence count.
+/// Record the save-picker flavour decision on change, with an occurrence count.
 ///
-/// `save_picker_seamless_mode_after_settle` RE-DERIVES this from the live ERSC module latch on
+/// `save_picker_seamless_mode_after_settle` RE-derives this from the live ERSC module latch on
 /// every call, and several callers sit on hot paths -- `active_default_save_file_names()` is one.
 /// Measured on run `br-20260831-160354-2513`: 1,905 lines of `seamless=false
 /// reason=active-default-save-file-names`, a dead-flat 112 lines per 30s for the whole run
@@ -850,7 +850,7 @@ mod autoload_debug_log_tests {
         drop(outer);
     }
 
-    /// The real logger's FIRST action is the guard, so a line arriving from inside itself -- which is
+    /// The real logger's first action is the guard, so a line arriving from inside itself -- which is
     /// what the `CreateFileW` detour does when the log's own open re-enters it -- returns without
     /// reaching the marker gate's `OnceLock` or the log `Mutex`. Before this, that call re-locked
     /// both and hung the calling thread.
@@ -865,13 +865,13 @@ mod autoload_debug_log_tests {
     }
 }
 
-/// Wall-clock epoch for the load-timeline markers. Lazily set on the FIRST `timeline_event`
+/// Wall-clock epoch for the load-timeline markers. Lazily set on the first `timeline_event`
 /// call (which is T0 by construction -- the first frame the title is parked at state 10),
 /// so every subsequent `ms=` is measured from that common start. `Instant` is QPC-backed on
 /// the windows target and works under wine, so no new FFI is needed.
 static TIMELINE_EPOCH: Mutex<Option<Instant>> = Mutex::new(None);
 
-/// Emit a frame-stamped load-timeline marker so one parser handles BOTH a native-menu load
+/// Emit a frame-stamped load-timeline marker so one parser handles both a native-menu load
 /// (observe mode) and a DLL-driven load (own-stepper). Format (greppable, single regex):
 ///   `EVENT <name> frame=<n> ms=<elapsed-from-T0> <fields>`
 /// `frame` is the monotonic per-frame `game_task_ticks`; `ms` is wall-clock from the first
@@ -888,7 +888,7 @@ pub(crate) fn timeline_event(name: &str, frame: u64, fields: std::fmt::Arguments
     append_autoload_debug(format_args!("EVENT {name} frame={frame} ms={ms} {fields}"));
 }
 
-// ENV-GATE RATIONALE: ER_QUICKLOAD_TRACE_CONTINUE_PATH is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
+// ENV-gate RATIONALE: ER_QUICKLOAD_TRACE_CONTINUE_PATH is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn continue_trace_log_path() -> PathBuf {
     std::env::var("ER_QUICKLOAD_TRACE_CONTINUE_PATH")
         .map(PathBuf::from)
@@ -917,12 +917,12 @@ static CONTINUE_TRACE_REPEATS: er_game_base::repeat::RepeatFilter =
 ///
 /// # Why verbatim repeats are collapsed here rather than at each hook
 ///
-/// Several of these hooks sit on POLLED game paths -- the game asks the same question every
+/// Several of these hooks sit on polled game paths -- the game asks the same question every
 /// frame and the hook answers identically. Measured on run `br-20260831-160354-2513` (8m39s):
 /// `combined_load_67b940` was entered 8,639 times, every one of them `slot=-1 arg1=0 arg2=1`
-/// from a single 8-frame caller stack, and all 8,639 ENTER lines had **seven** distinct
+/// from a single 8-frame caller stack, and all 8,639 enter lines had **seven** distinct
 /// contents between them. `ENTER`/`LEAVE` together were 94% of an 18,368-line, 5.43 MB file
-/// (37 MB/h, unbounded) -- and the trace is NOT a diagnostic mode: `trace_continue_enabled()`
+/// (37 MB/h, unbounded) -- and the trace is not a diagnostic mode: `trace_continue_enabled()`
 /// is `product_autoload_enabled()`, so every product run pays it.
 ///
 /// Collapsing at the writer rather than per hook means no call site can be added without the

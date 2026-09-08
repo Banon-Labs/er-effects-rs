@@ -2,11 +2,11 @@
 //!
 //! GOAL: every non-empty highlightable armament/ranged/catalyst/shield tile, in every
 //! menu that renders the shared tile widget, gets the weapon's skill (Ash of War) icon
-//! as a vanilla-style corner badge in the tile's BOTTOM-LEFT corner. Pure DLL-driven:
+//! as a vanilla-style corner badge in the tile's bottom-left corner. Pure DLL-driven:
 //! no regulation.bin changes, no loose packed files; icons resolve by Scaleform symbol
 //! name from the game's own texture repositories at runtime.
 //!
-//! MECHANISM (static RE 2026-07-23, bd er-effects-rs-pe98 comments): the game populates
+//! Mechanism (static RE 2026-07-23, bd er-effects-rs-pe98 comments): the game populates
 //! each tile natively -- `TilePopulate(SceneObjProxy* tile, MenuGaitem*)` (dump
 //! FUN_1408ff560) fills the tile's named child proxies and pushes icons through the
 //! universal icon setter (dump FUN_14074bdb0), which draws a bitmap-fill quad via the
@@ -14,13 +14,13 @@
 //! (affinity/infusion) are driven the same way. We post-hook TilePopulate and drive a
 //! badge child with the game's own primitives.
 //!
-//! MILESTONE 1 (this build): diagnostic only -- install the TilePopulate MinHook, count
+//! Milestone 1 (this build): diagnostic only -- install the TilePopulate MinHook, count
 //! fires, log sample (tile, gaitem) pointers. Proves the hook target and call volume
 //! across menus before any badge drawing.
 
 // A cdylib whose every consumer is `DllMain` and the hooks it installs, all of them
 // `#[cfg(windows)]`. On a host build the shell is compiled with its only callers cfg'd
-// out, so `dead_code`/`unused_imports` there report the cfg, not real debt. The SHIPPING
+// out, so `dead_code`/`unused_imports` there report the cfg, not real debt. The shipping
 // target (x86_64-pc-windows-msvc) carries the full deny with no allows.
 #![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
@@ -31,10 +31,10 @@ use std::{
 
 use er_game_base::log::{append_line, game_directory_path};
 
-/// `base + rva`, resolved for the RUNNING build, or `None` when this build moved the function.
+/// `base + rva`, resolved for the running build, or `None` when this build moved the function.
 ///
 /// Every Scaleform call below used to transmute a hand-built `base + rva`, which on ELDEN RING 1.17
-/// calls the 1.16.2 address -- whatever now occupies it -- with nothing to refuse it. A MAPPED
+/// calls the 1.16.2 address -- whatever now occupies it -- with nothing to refuse it. A mapped
 /// constant is no safer that way: the map knows the new address and `base + rva` never asks it.
 /// Refusing costs a badge; calling an arbitrary address costs the process.
 #[cfg(windows)]
@@ -60,21 +60,21 @@ const LOG_FILE_NAME: &str = "er-armament-icons.log";
 //    dump VA -> deobf VA recorded on bd er-effects-rs-pe98) --
 
 /// Per-tile populate `TilePopulate(SceneObjProxy* tile, MenuGaitem*)`.
-/// dump FUN_1408ff560 -> deobf 0x1408ff470 (shift -0xf0). HOOK target.
+/// dump FUN_1408ff560 -> deobf 0x1408ff470 (shift -0xf0). Hook target.
 const TILE_POPULATE_RVA: usize = 0x8ff470;
 /// Universal icon setter `SetIcon(SceneObjProxy*, iconInfo*)` (iconInfo +0x38 category
-/// byte, +0x3c i32 iconId). dump FUN_14074bdb0 -> deobf 0x14074bcc0 (-0xf0). CALL target
+/// byte, +0x3c i32 iconId). dump FUN_14074bdb0 -> deobf 0x14074bcc0 (-0xf0). Call target
 /// for the badge draw (milestone 2).
 const ICON_SETTER_RVA: usize = 0x74bcc0;
 /// Menu-side MenuGaitem -> swordArtsParamId resolver `int f(MenuGaitem*)` (dump
 /// FUN_140849970): returns -1 for non-weapons; honors the socketed Ash-of-War gem
 /// override (gemParamId +0x7c, gaitem handle +0x50) before falling back to the
 /// EquipParamWeapon row's swordArtsParamId.
-/// dump 0x140849970 -> deobf 0x140849880 (-0xf0). CALL target.
+/// dump 0x140849970 -> deobf 0x140849880 (-0xf0). Call target.
 const MENU_GAITEM_SWORD_ARTS_RESOLVER_RVA: usize = 0x849880;
 /// `LookupSwordArtsParam(SwordArtsParamLookupResult* out, uint id)` -- POD result
 /// `{ u32 paramId @0x0, SwordArtsParam* row @0x8 }`, row null when the id misses.
-/// dump 0x140d50d70 -> deobf 0x140d50cc0 (-0xb0). CALL target.
+/// dump 0x140d50d70 -> deobf 0x140d50cc0 (-0xb0). Call target.
 const LOOKUP_SWORD_ARTS_PARAM_RVA: usize = 0xd50cc0;
 /// `FUN_1408487d0(MenuGaitem*) -> u32 iconId` -- the tile's own item icon id (the main
 /// ItemIcon). Used by the mirror-item-icon diagnostic to draw a guaranteed-visible glyph
@@ -83,13 +83,13 @@ const MENU_GAITEM_ICON_ID_RVA: usize = 0x8486e0;
 /// `FUN_140d81a20(CSScaleformValue* value, float* out4)` -- GLOBAL/stage-space bounds of a
 /// bound display object: out = {xmin, ymin, xmax, ymax} in the 1920x1080 GFx stage, pixels
 /// (twips->px already applied). value = proxy+0x28. Its local-space sibling is FUN_140d82060.
-/// dump 0x140d81a20 -> deobf 0x140d81970 (-0xb0). CALL target for the oracle crop rect.
+/// dump 0x140d81a20 -> deobf 0x140d81970 (-0xb0). Call target for the oracle crop rect.
 const PROXY_GLOBAL_RECT_RVA: usize = 0xd81970;
-/// `FUN_140d82060(CSScaleformValue* value, float* out4) -> out` -- LOCAL-space bounds of a
+/// `FUN_140d82060(CSScaleformValue* value, float* out4) -> out` -- Local-space bounds of a
 /// bound display object, {xmin,ymin,xmax,ymax} px; {0,0,0,0} when unbound/empty. This is
 /// the rect the icon setter reads to compute the drawn quad's scale (= rect/tex), so an
 /// empty (zero-extent) container yields a zero-scale, invisible icon. value = proxy+0x28.
-/// dump 0x140d82060 -> deobf 0x140d81fb0 (-0xb0, content-unique). CALL target.
+/// dump 0x140d82060 -> deobf 0x140d81fb0 (-0xb0, content-unique). Call target.
 const PROXY_LOCAL_RECT_RVA: usize = 0xd81fb0;
 /// `MenuGaitem.itemId` (+0x4c): top nibble = category (0 = weapon), low 28 bits =
 /// EquipParamWeapon id. Identifies the weapon in a tile for deterministic slot picking.
@@ -101,7 +101,7 @@ const MENU_GAITEM_CATEGORY_SHIFT: u32 = 28;
 const MENU_GAITEM_CATEGORY_WEAPON: u32 = 0;
 /// `GetEquipParamGem(EquipParamGemLookupResult* out, uint id)` -- out.paramId@0, out.paramRow@8
 /// (0 on miss). dump 0x140d2a420 -> deobf 0x140d2a360 (-0xc0; prologue disasm-confirmed:
-/// id<0 js + SoloParamRepository load). CALL target.
+/// id<0 js + SoloParamRepository load). Call target.
 const GET_EQUIP_PARAM_GEM_RVA: usize = 0xd2a360;
 /// `EquipParamGem.iconId` = u16 at row+0x4 (Ghidra get_structure _EQUIP_PARAM_GEM_ST). The
 /// applied ash's inventory item icon = the crescent icon shown in the detail panel.
@@ -111,7 +111,7 @@ const EQUIP_PARAM_GEM_ICON_ID_OFFSET: usize = 0x4;
 /// looked it up for -- see `resolve_gem_icon_id`.
 const EQUIP_PARAM_GEM_SWORD_ARTS_ID_OFFSET: usize = 0x18;
 /// SwordArtsParam row: skill iconId is the u16 at row +0x1A. Ground-truthed to the
-/// game's OWN HUD skill-icon builder CS::CSFeManImp::UpdatePlayerComponents (dump
+/// game's own HUD skill-icon builder CS::CSFeManImp::UpdatePlayerComponents (dump
 /// 0x140772b70): it reads `*(u16*)(swordArtsRow + offsetof(_EQUIP_PARAM_GOODS_ST,
 /// behaviorId=0x18) + 2)` = row+0x1A and feeds it to the iconInfo builder for the
 /// equipped-weapon skill icon. Reading the same offset makes the badge match the
@@ -119,22 +119,22 @@ const EQUIP_PARAM_GEM_SWORD_ARTS_ID_OFFSET: usize = 0x18;
 const SWORD_ARTS_PARAM_ICON_ID_OFFSET: usize = 0x1a;
 /// iconInfo builder `FUN_14073d4e0(iconInfo* out, uint iconId)`: zero-fills the
 /// 0x40-byte iconInfo, writes category (+0x38, from the iconId range table) and
-/// iconId (+0x3c). dump 0x14073d4e0 -> deobf 0x14073d3e0 (-0x100). CALL target.
+/// iconId (+0x3c). dump 0x14073d4e0 -> deobf 0x14073d3e0 (-0x100). Call target.
 const ICON_INFO_BUILDER_RVA: usize = 0x73d3e0;
 /// `SceneObjProxy::assignComponentWithName(SceneObjProxy* parent, SceneObjProxy* out,
 /// const char* nameFmt, ...)` -- constructs into raw `out` (no pre-init needed),
-/// returns `out`. dump 0x14074a3e0 -> deobf 0x14074a2f0 (-0xf0). CALL target.
+/// returns `out`. dump 0x14074a3e0 -> deobf 0x14074a2f0 (-0xf0). Call target.
 const ASSIGN_COMPONENT_WITH_NAME_RVA: usize = 0x74a2f0;
 /// `bool FUN_140733250(SceneObjProxy*)` -- did the named resolve bind a real GFx
-/// display object. dump 0x140733250 -> deobf 0x140733150 (-0x100). CALL target.
+/// display object. dump 0x140733250 -> deobf 0x140733150 (-0x100). Call target.
 const PROXY_IS_BOUND_RVA: usize = 0x733150;
 /// `FUN_140733440(SceneObjProxy*, u8 visible)` -- GFx SetDisplayInfo(visible);
 /// stateful in the movie, no native per-frame re-hide.
-/// dump 0x140733440 -> deobf 0x140733340 (-0x100). CALL target.
+/// dump 0x140733440 -> deobf 0x140733340 (-0x100). Call target.
 const PROXY_SET_VISIBLE_RVA: usize = 0x733340;
-/// `CS::CSScaleformValue::~CSScaleformValue` -- MANDATORY after every
+/// `CS::CSScaleformValue::~CSScaleformValue` -- Mandatory after every
 /// assignComponentWithName resolve (the proxy holds a ref-counted GFx Value).
-/// dump 0x140d7f900 -> deobf 0x140d7f850 (-0xb0). CALL target.
+/// dump 0x140d7f900 -> deobf 0x140d7f850 (-0xb0). Call target.
 const SCALEFORM_VALUE_DTOR_RVA: usize = 0xd7f850;
 /// `CSScaleformValue scaleformValue` lives at SceneObjProxy +0x28 (Ghidra
 /// get_structure CS/SceneObjProxy: size 0x60, scaleformValue @40, len 0x38).
@@ -182,12 +182,12 @@ static FORCE_ICON_ID: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(FORCE_ICON_NONE);
 
 /// Approach-B target child (ER_ARMAMENT_ICONS_TARGET): the named tile child the badge icon
-/// is drawn INTO. The product default is `ArtsIcon` -- the tile's VANILLA bottom-left slot
-/// (sprite 71 places it at (-32, +37); `AttributeIcon` is bottom-RIGHT and `ItemIcon` is
+/// is drawn into. The product default is `ArtsIcon` -- the tile's vanilla bottom-left slot
+/// (sprite 71 places it at (-32, +37); `AttributeIcon` is bottom-right and `ItemIcon` is
 /// centred). It is the game's own Ash-of-War slot, so driving it shows the AoW where the
 /// game already intended to, rather than hijacking an unrelated child.
 ///
-/// `AutoReplenish` is NOT usable here: a whole-corpus scan found that name in exactly one
+/// `AutoReplenish` is not usable here: a whole-corpus scan found that name in exactly one
 /// movie, `03_050_itembox.gfx` (the sort chest), and never in `02_011_equip`/`02_020_inventory`
 /// -- so on armament tiles there is no refill child to reuse, and injecting one is dropped
 /// at instantiation. The runtime GFX edit instead re-points `ArtsIcon`'s existing
@@ -197,7 +197,7 @@ static TARGET_CHILD: std::sync::OnceLock<std::ffi::CString> = std::sync::OnceLoc
 /// Where the badge clip can live, in priority order.
 ///
 /// Most tiles carry the game's own `ArtsIcon` child and the GFX edit re-points it. The
-/// Equipment loadout grid (`02_010_equiptop` sprite 59) has NO arts slot, so the edit nests
+/// Equipment loadout grid (`02_010_equiptop` sprite 59) has no arts slot, so the edit nests
 /// the badge inside that tile's `ItemIcon` container instead and it resolves one level down.
 /// Both are tried because a single hooked function populates every menu's tiles.
 #[cfg(windows)]
@@ -222,8 +222,8 @@ fn badge_target_paths() -> impl Iterator<Item = &'static std::ffi::CStr> {
     )
 }
 
-/// Read a diagnostic override, preferring a game-dir FILE marker over the env var of the
-/// same meaning. WSL bash env vars do NOT cross the WSL->Windows boundary unless listed in
+/// Read a diagnostic override, preferring a game-dir file marker over the env var of the
+/// same meaning. WSL bash env vars do not cross the WSL->Windows boundary unless listed in
 /// WSLENV (bd wslenv-env-not-propagating-to-windows-game), so a file marker is the reliable
 /// channel the smoke harness already uses (er-harness-drive-mode.txt). Returns the trimmed
 /// non-empty value, or `None`.
@@ -244,10 +244,10 @@ fn diag_override(env_name: &str, file_name: &str) -> Option<String> {
 }
 
 pub(crate) fn log_message(args: fmt::Arguments<'_>) {
-    // REDIRECTABLE, because the game-directory copy is SINGLE-SLOT and was being destroyed twice
+    // REDIRECTABLE, because the game-directory copy is single-slot and was being destroyed twice
     // over. `er_game_base::log::begin_fresh_run` keeps exactly one previous generation, so two
     // launches lose the run before last -- and `scripts/run-armament-icons-{live,smoke}.sh` each ran
-    // an `rm -f` of this file from the game directory BEFORE launching, which also drops the stale
+    // an `rm -f` of this file from the game directory before launching, which also drops the stale
     // `.prev` (that removal is unconditional when the live file is absent). Two prior runs' evidence,
     // neither of them the deleting run's, and several sessions launch concurrently here.
     //
@@ -276,9 +276,9 @@ pub unsafe extern "system" fn DllMain(
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
         // One sink for this DLL's hook + address lines. Without it a refused address is
-        // silent HERE, because every cdylib links its own copy of er-hook/er-game-base.
+        // silent here, because every cdylib links its own copy of er-hook/er-game-base.
         // A rust_panic in a cdylib loaded into the game is otherwise anonymous: the message goes to a
-        // stderr nobody reads, and what survives is a 0xe06d7363 record naming the MODULE and nothing
+        // stderr nobody reads, and what survives is a 0xe06d7363 record naming the module and nothing
         // else. Two boots were lost to one before this existed. See er_game_base::panic_report.
         er_game_base::panic_report::report_panics_to("er-armament-icons", log_message);
         er_hook::set_hook_logger(log_message);
@@ -301,7 +301,7 @@ fn spawn_install_thread() {
             use eldenring::cs::CSTaskImp;
             use fromsoftware_shared::FromStatic;
 
-            // Install the crash tracer FIRST so any subsequent hook-install or parse-hook
+            // Install the crash tracer first so any subsequent hook-install or parse-hook
             // access violation writes a deep trace (faulting RVA + backtrace) to the log.
             crash_trace::install();
 
@@ -316,7 +316,7 @@ fn spawn_install_thread() {
                 }
             }
             // Approach-B draw target (default AutoReplenish/IconImage): the tile clip to draw the
-            // badge INTO. Diagnostic override examples: AttributeIcon, ItemIcon/IconImage.
+            // badge into. Diagnostic override examples: AttributeIcon, ItemIcon/IconImage.
             if let Some(v) =
                 diag_override("ER_ARMAMENT_ICONS_TARGET", "er-armament-icons-target.txt")
                 && let Ok(cstr) = std::ffi::CString::new(v)
@@ -339,9 +339,9 @@ fn spawn_install_thread() {
                     id => id.to_string(),
                 }
             ));
-            // Arm the GFX file-open hook AS EARLY AS POSSIBLE (only needs the module base, not
+            // Arm the GFX file-open hook as early as possible (only needs the module base, not
             // CSTaskImp): the equip movie can preload before the task manager is ready, and the
-            // edit must reach the FIRST parse or the tile instantiates from vanilla bytes.
+            // edit must reach the first parse or the tile instantiates from vanilla bytes.
             let Ok(base) = er_game_base::mem::game_module_base() else {
                 log_message(format_args!(
                     "install: game_module_base unresolved; aborting"
@@ -354,7 +354,7 @@ fn spawn_install_thread() {
             // Wait for the game's task manager the way the sibling DLLs do (yield, no sleep):
             // its readiness implies the game image and its statics are mapped, before the
             // tile-populate draw hook (whose draw path uses live game state).
-            // BOUNDED (2026-08-29): see er_game_base::wait -- the unbounded form of this loop
+            // Bounded (2026-08-29): see er_game_base::wait -- the unbounded form of this loop
             // starved the wineserver and hung a boot. A give-up means the draw hook is not
             // installed, which is an inert overlay rather than a dead game.
             if er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok()).is_none() {
@@ -446,8 +446,8 @@ unsafe extern "system" fn tile_populate_hook(tile: usize, gaitem: usize) -> usiz
         return ret;
     }
     if gaitem < HEAP_LO {
-        // An EMPTY slot ("equip to nothing" rows, unfilled grid cells). The badge clip is part
-        // of the movie and tiles are RECYCLED as the list scrolls, so simply not drawing leaves
+        // An empty slot ("equip to nothing" rows, unfilled grid cells). The badge clip is part
+        // of the movie and tiles are recycled as the list scrolls, so simply not drawing leaves
         // whatever the previous occupant showed -- which is how the backing plate ended up on
         // every empty row. Hide it explicitly.
         if let Ok(base) = er_game_base::mem::game_module_base() {
@@ -501,8 +501,8 @@ unsafe fn resolve_gem_icon_id(_base: usize, arts_id: i32) -> u32 {
     if res.row == 0 {
         return 0;
     }
-    // VERIFY the row actually belongs to this ash. `arts_id * 100` is a heuristic that holds
-    // for 113 of 116 icon-bearing gems but silently lands on an UNRELATED row for the rest,
+    // Verify the row actually belongs to this ash. `arts_id * 100` is a heuristic that holds
+    // for 113 of 116 icon-bearing gems but silently lands on an unrelated row for the rest,
     // which then paints that row's icon (or a 21xxx dev/HUD id) onto the wrong weapon:
     //   arts 10  "No Skill"          -> gem 1000   = a dev row, iconId 21000
     //   arts 309 "Thops's Barrier"   -> gem 30900  = "No Skill", iconId 8367
@@ -522,7 +522,7 @@ unsafe fn resolve_gem_icon_id(_base: usize, arts_id: i32) -> u32 {
 #[cfg(windows)]
 type RectGetterFn = unsafe extern "system" fn(*const u8, *mut f32) -> *mut f32;
 
-/// Bind `name` under `tile`, read its LOCAL and GLOBAL(stage) bounds, drop the transient
+/// Bind `name` under `tile`, read its local and global(stage) bounds, drop the transient
 /// value. Returns `None` if the name did not bind. Used to compare the working control
 /// (`ItemIcon`) against the dormant target (`ArtsIcon`) so one run reveals whether the badge
 /// is invisible because its container is zero-extent (approach-A/B discriminator).
@@ -678,12 +678,12 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
         row: usize,
     }
 
-    // ARMAMENT-ONLY GATE. `MenuGaitem.itemId` (+0x4c) carries the item category in its top
+    // Armament-only gate. `MenuGaitem.itemId` (+0x4c) carries the item category in its top
     // nibble; category 0 is EquipParamWeapon, which is every armament -- melee weapons,
     // shields, bows/crossbows, staves and seals. Anything else (consumables, materials,
     // armour, talismans) can never carry an Ash of War and must never show a badge.
     //
-    // Checked FIRST and explicitly, rather than relying on the arts resolver returning -1,
+    // Checked first and explicitly, rather than relying on the arts resolver returning -1,
     // because "only ever target armaments" is a product requirement and deserves its own
     // named gate rather than being an emergent property of another function's return value.
     let item_id = unsafe { *((gaitem + MENU_GAITEM_ITEM_ID_OFFSET) as *const u32) };
@@ -737,27 +737,27 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
     }
     let arts_icon_id =
         unsafe { *((lookup_result.row + SWORD_ARTS_PARAM_ICON_ID_OFFSET) as *const u16) } as u32;
-    // PRIMARY SOURCE: the applied Ash-of-War GEM's item icon -- what the detail panel shows.
+    // Primary SOURCE: the applied Ash-of-War gem's item icon -- what the detail panel shows.
     // Verified offline (WitchyBND regulation extract): most SwordArtsParam rows have iconId=0
     // (Stormcaller/Sword Dance/...), so the skill-param icon is blank; the real crescent icon is
     // EquipParamGem.iconId (row+0x4), e.g. gem 12300 "Ash of War: Stormcaller" iconId=8320.
     let gem_icon_id = unsafe { resolve_gem_icon_id(base, arts_id) };
-    // ONLY the gem item icon is a valid badge. The two sources are different icon FAMILIES,
+    // Only the gem item icon is a valid badge. The two sources are different icon families,
     // not interchangeable fallbacks (run 20260727-223344): gem icons are 83xx-85xx Ash-of-War
-    // ITEM art, drawn on the ornate backing the UI shows everywhere; `SwordArtsParam.iconId`
+    // item art, drawn on the ornate backing the UI shows everywhere; `SwordArtsParam.iconId`
     // is a 21xxx bare skill glyph with no backing, which rendered as an icon floating on
     // nothing.
     //
     // Gem presence is also the discriminator for "this ash should show no badge at all": an
     // ash with no purchasable/transferable gem is a weapon-unique ash (Reduvia, Flowerstone
     // Gavel, Putrescent Cleaver), and vanilla shows no icon or backplate for those. Ripple
-    // Blade is likewise a unique weapon but carries Wild Strikes, a normal ash WITH a gem, so
-    // it keeps its badge -- uniqueness of the WEAPON is not the test, gem existence is.
+    // Blade is likewise a unique weapon but carries Wild Strikes, a normal ash with a gem, so
+    // it keeps its badge -- uniqueness of the weapon is not the test, gem existence is.
     let real_icon_id = gem_icon_id;
-    // DIAGNOSTIC-ONLY override (ER_ARMAMENT_ICONS_FORCE_ICON=<u16 menu icon id>): draw a fixed,
+    // Diagnostic-only override (ER_ARMAMENT_ICONS_FORCE_ICON=<u16 menu icon id>): draw a fixed,
     // guaranteed-visible icon into every badge instead of the skill icon. Used to (a) locate the
     // badge's on-screen rect via a locator-vs-vanilla pixel diff and (b) prove the pixel path flips
-    // the diff oracle to SUCCESS. NOT product behavior -- product uses the real skill icon.
+    // the diff oracle to success. Not product behavior -- product uses the real skill icon.
     let forced = FORCE_ICON_ID.load(Ordering::Relaxed);
     let icon_id = if forced == FORCE_ICON_MIRROR {
         // Mirror the tile's own item icon (guaranteed visible) into the badge -- locator for the
@@ -838,17 +838,17 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
     // Value; skipping the dtor leaks movie-object references).
     let mut proxy = [0u8; PROXY_SIZE];
 
-    // BIND PROBE (run-2/3 diagnostic: every tile UNBOUND): for the first few WEAPON tiles,
+    // BIND probe (run-2/3 diagnostic: every tile UNBOUND): for the first few weapon tiles,
     // log which known child names actually bind under this tile proxy. ItemIcon is a
-    // KNOWN-PRESENT control -- if it fails too, the assign call/parent is wrong; if only
+    // known-present control -- if it fails too, the assign call/parent is wrong; if only
     // ArtsIcon fails, this tile template lacks that child.
     if attempt <= SAMPLE_LOG_CALLS {
         // One-time: dump the bound clip's Scaleform vtables to pin the ObjectInterface
         // Invoke/clip-create slots for the bottom-left badge's runtime clip creation.
         unsafe { dump_scaleform_vtables(base, tile) };
-        // Full child inventory with LOCAL rects (tile-relative: +x=right, +y=down; AttributeIcon
-        // local[17,30,43,56]=bottom-right proven). Names are the AUTHORITATIVE set the game's
-        // TilePopulate references (deobf 0x1408ff470 string refs). Goal: find a BOTTOM-LEFT clip
+        // Full child inventory with local rects (tile-relative: +x=right, +y=down; AttributeIcon
+        // local[17,30,43,56]=bottom-right proven). Names are the authoritative set the game's
+        // TilePopulate references (deobf 0x1408ff470 string refs). Goal: find a bottom-left clip
         // (local x<0, y>0) for the additive AoW badge, since AttributeIcon is bottom-right
         // (infusion, untouched), ArtsIcon is detail-only + zero-extent, and grid tiles otherwise
         // bind only ItemIcon/AttributeIcon. A bound child with a real rect is a draw candidate.
@@ -887,8 +887,8 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
         ));
     }
 
-    // A/B DIAGNOSTIC (one run answers both): the icon setter scales the drawn quad by
-    // rect/tex where rect = the target's LOCAL bounds (verified: FUN_140d816f0 computes
+    // A/B diagnostic (one run answers both): the icon setter scales the drawn quad by
+    // rect/tex where rect = the target's local bounds (verified: FUN_140d816f0 computes
     // scaleXY = (rect_wh)/(tex_wh)). If ArtsIcon is an empty, zero-extent container its rect
     // is 0 => scale 0 => invisible, which is exactly why a "DRAWN" badge still matches vanilla.
     // Log the working control (ItemIcon) vs ArtsIcon(pre) so the trace confirms the cause and
@@ -916,10 +916,10 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
     // Nothing to badge when the tile's item has no Ash of War: ammunition, "equip to nothing"
     // rows and similar resolve arts_id=0 -> icon_id=0.
     //
-    // Skipping the DRAW is not enough: the badge slot is part of the movie, so it renders
-    // whatever its clip contains whether or not we paint into it. Tiles are also RECYCLED as
+    // Skipping the draw is not enough: the badge slot is part of the movie, so it renders
+    // whatever its clip contains whether or not we paint into it. Tiles are also recycled as
     // the list scrolls, so a slot left visible by a previous weapon would linger on an empty
-    // row. Explicitly HIDE the slot on every non-badged tile.
+    // row. Explicitly hide the slot on every non-badged tile.
     if icon_id == 0 {
         BADGE_NO_ICON.fetch_add(1, Ordering::SeqCst);
         unsafe { hide_badge_slot(base, tile) };
@@ -927,9 +927,9 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
     }
 
     // Draw the badge icon into the tile's bottom-left ArtsIcon slot. The icon setter reads the
-    // target's LOCAL rect to scale the drawn quad, so a bound-but-ZERO-extent target yields a
+    // target's local rect to scale the drawn quad, so a bound-but-zero-extent target yields a
     // degenerate scale and paints an oversized/mispositioned glyph rather than a corner badge
-    // (observed run 20260727-213757: 16 DRAWN, every one with ArtsIcon_post rect [0,0,0,0]).
+    // (observed run 20260727-213757: 16 drawn, every one with ArtsIcon_post rect [0,0,0,0]).
     // Require a real extent, not merely a bound proxy; the rect trace above records the skip.
     // Try each mount point in turn: the tile's own `ArtsIcon`, then the nested
     // `ItemIcon/ArtsIcon` used by tiles that have no arts slot of their own.
@@ -951,12 +951,12 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
     }
     if !bound_with_extent {
         // Unusable slot: make sure a recycled tile is not left showing a previous badge.
-        // NO dtor here -- the loop above already released every candidate it tried, and the
+        // No dtor here -- the loop above already released every candidate it tried, and the
         // CSScaleformValue is ref-counted, so a second release would corrupt the refcount.
         unsafe { hide_badge_slot(base, tile) };
         let unbound_total = BADGE_UNBOUND.fetch_add(1, Ordering::SeqCst) + 1;
         if unbound_total <= SAMPLE_LOG_CALLS {
-            // Which child names DID bind on this tile: the template signature is what tells a
+            // Which child names did bind on this tile: the template signature is what tells a
             // "movie not covered yet" tile apart from a genuinely empty slot.
             let mut inv = String::new();
             for name in [
@@ -1065,7 +1065,7 @@ unsafe fn hide_badge_slot(_base: usize, tile: usize) {
         )
     };
 
-    // Hide EVERY mount point, not just the first that binds: one hooked function populates
+    // Hide every mount point, not just the first that binds: one hooked function populates
     // every menu's tiles, and which mount a given tile uses depends on its movie.
     for candidate in badge_target_paths() {
         let mut proxy = [0u8; PROXY_SIZE];

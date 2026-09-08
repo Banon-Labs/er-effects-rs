@@ -1,16 +1,16 @@
-//! The ProfileSelect row's merged header label: ONE text element replacing the three that used to
+//! The ProfileSelect row's merged header label: One text element replacing the three that used to
 //! sit before the attribute block (`PlayerName`, the `Level` FMG caption, and the `Level` value).
 //!
-//! WHY MERGE (user request 2026-08-06/07). Three independently-placed fields have to be kept in
+//! Why merge (user request 2026-08-06/07). Three independently-placed fields have to be kept in
 //! horizontal agreement by hand, in a schema, against a proportional font whose glyph advances we
 //! do not model. Every name length change re-opens that alignment question. One field with markers
-//! makes the spacing a property of the STRING -- the font lays it out, and there is nothing left to
+//! makes the spacing a property of the string -- the font lays it out, and there is nothing left to
 //! align. It also frees the caption's width: `Level` is 5 glyphs, `RL` is 2, and the user asked for
 //! the reclaimed space to carry a new `WL` (max weapon upgrade level) readout.
 //!
-//! WHERE IT RENDERS. The merged text goes into the row model's `PlayerName` `CS::MenuString`
-//! (`rowModel + 0x50`) before the native row populate reads it, so the game's OWN writer
-//! (`FUN_1408757e0` -> `FUN_140749ed0`) draws it. That is why this module emits PLAIN TEXT and not
+//! Where it renders. The merged text goes into the row model's `PlayerName` `CS::MenuString`
+//! (`rowModel + 0x50`) before the native row populate reads it, so the game's own writer
+//! (`FUN_1408757e0` -> `FUN_140749ed0`) draws it. That is why this module emits plain text and not
 //! Scaleform HTML: `ErCharStats` is pushed through our own SetText and may be marked-up, but
 //! `PlayerName` is written by the native path, which does not enable HTML on that field. A `<` in a
 //! character name therefore stays a literal `<`, exactly as it does today on the unmerged field.
@@ -29,12 +29,12 @@ pub const MARKER_WEAPON_LEVEL: &str = "%weapon_level";
 
 /// The shipped row-header template.
 ///
-/// `[ ... ]` is an OPTIONAL GROUP: it is emitted only when every marker inside it resolves. That is
+/// `[ ... ]` is an optional GROUP: it is emitted only when every marker inside it resolves. That is
 /// what makes one template serve every row state without a second code path -- a slot whose level
 /// could not be decoded renders the bare name instead of a dangling `RL `, and `WL` simply does not
-/// appear until a weapon level is available. The leading space lives INSIDE each group so a dropped
+/// appear until a weapon level is available. The leading space lives inside each group so a dropped
 /// group leaves no trailing whitespace behind.
-/// The comma lives INSIDE the level group, so a row with no level renders `Maddened Bean` and not
+/// The comma lives inside the level group, so a row with no level renders `Maddened Bean` and not
 /// `Maddened Bean,` — punctuation that only makes sense when something follows it must be dropped
 /// with the thing it introduces.
 pub const SHIPPED_ROW_HEADER_TEMPLATE: &str =
@@ -114,7 +114,7 @@ const MARKERS: [&str; 3] = [
 /// Expand `template` against `values`.
 ///
 /// Outside a group, an unresolved marker expands to nothing (it is the caller's statement that the
-/// value is optional in that position). Inside `[ ... ]`, ONE unresolved marker drops the WHOLE
+/// value is optional in that position). Inside `[ ... ]`, one unresolved marker drops the whole
 /// group, which is what keeps ` RL ` off screen when the level is unknown. A group containing no
 /// markers at all is emitted verbatim -- it is literal text the author chose to bracket.
 ///
@@ -168,7 +168,7 @@ fn expand_group(body: &str, values: &RowHeaderValues) -> Option<String> {
     let mut i = 0usize;
     while i < body.len() {
         if let Some(marker) = MARKERS.iter().find(|m| body[i..].starts_with(**m)) {
-            // The group is all-or-nothing: bail on the FIRST unresolved marker.
+            // The group is all-or-nothing: bail on the first unresolved marker.
             out.push_str(&values.resolve(marker)?);
             i += marker.len();
         } else {
@@ -241,7 +241,7 @@ mod tests {
     }
 
     /// Weapon level is not yet sourced; the shipped template must already be correct for the day it
-    /// is, and correct TODAY with the value absent. Both directions are pinned here so wiring the
+    /// is, and correct today with the value absent. Both directions are pinned here so wiring the
     /// source in later cannot change the no-source rendering.
     #[test]
     fn weapon_level_zero_renders_but_absent_weapon_level_does_not() {

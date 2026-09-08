@@ -51,15 +51,15 @@ FIXTURE_FACE_MAGIC_OFFSET = 0x13718
 # variable-width Gaitem map and Seamless/vanilla profile differences mean the
 # absolute offsets vary in live USER_DATA entries.  The extractor therefore uses
 # these deltas only as fast paths, then falls back to scanning backwards from a
-# FACE buffer for a plausible PlayerGameData block instead of hard-coding a
+# face buffer for a plausible PlayerGameData block instead of hard-coding a
 # particular character's identity.
 FIXTURE_FACE_TO_PLAYER_GAME_DATA_DELTA = FIXTURE_FACE_MAGIC_OFFSET - FIXTURE_PLAYER_GAME_DATA_OFFSET
 LIVE_FACE_TO_PLAYER_GAME_DATA_DELTA = 0xA26C
 MAX_PLAYER_TO_FACE_SEARCH = 0x20000
-# A character's OWN FaceData (the first FACE magic in its USER_DATA00N slot) sits a
+# A character's own FaceData (the first face magic in its USER_DATA00N slot) sits a
 # short, version-dependent distance after its PlayerGameData.  Measured deltas
 # (150-Banon): slot 0 = 0xa26c, slots 1-9 = 0xa22c.  We window the name-anchored
-# PGD scan to this bracket before the slot's leading FACE magic occurrence(s) so
+# PGD scan to this bracket before the slot's leading face magic occurrence(s) so
 # the scan stays fast (a ~0x600-byte window, not a whole-slot walk) while still
 # tolerating the per-version delta variance with margin.
 PGD_FACE_DELTA_WINDOW_LOW = 0xA000
@@ -235,7 +235,7 @@ def bnd4_entries(data: bytes) -> list[dict[str, Any]]:
     return entries
 
 
-# `USER_DATA010.active_slot`: the AUTHORITATIVE per-slot occupancy bitmap, mirroring
+# `USER_DATA010.active_slot`: the authoritative per-slot occupancy bitmap, mirroring
 # `er_save_loader::bnd4::active_slots`. Offsets are that decoder's, byte for byte.
 USER_DATA010_NAME = "USER_DATA010"
 USER_DATA010_MENU_SAVE_LOAD_LEN_OFF = 0x150
@@ -248,15 +248,15 @@ ENTRY_MD5_LEN = 0x10
 
 
 def active_slot_bitmap(data: bytes) -> list[bool] | None:
-    """Which slots the GAME considers occupied, or None when the bitmap is unreadable.
+    """Which slots the game considers occupied, or None when the bitmap is unreadable.
 
-    WHY A BITMAP AND NOT "the body decodes to a name and a level".
+    Why a BITMAP and not "the body decodes to a name and a level".
 
     Deleting a character does not erase its `USER_DATA00N` body -- it clears this bitmap. So a
     deleted slot still decodes to a perfectly plausible name, level, runes and stats, and any
     occupancy test built on the body alone reports characters the game will not load.
 
-    MEASURED 2026-09-03. `save-files/50-Merchant-Unleveled/ER0000.sl2` decodes as TEN occupied
+    Measured 2026-09-03. `save-files/50-Merchant-Unleveled/ER0000.sl2` decodes as ten occupied
     slots by name+level; its bitmap says `[0]`, one character, "Invader Merchant" level 50. The
     APPDATA `ER0000.sl2` decodes as ten and its bitmap says `[0,1,2,3]`. Every seeded launch this
     tool produced was therefore free to pick a slot that does not exist -- and
@@ -396,9 +396,9 @@ def plausible_player_game_data(slot_data: bytes, player_game_data_offset: int, f
         # SL2.bt PlayerGameData.MaxHealth is the *effective* max HP (base + talisman
         # / buff modifiers), while BaseMaxHealth is the unmodified base from Vigor.
         # An equipped/leveled character therefore has base_max_health <= max_health
-        # (NOT the reverse) -- the earlier `max_health <= base_max_health` constraint
+        # (not the reverse) -- the earlier `max_health <= base_max_health` constraint
         # was inverted and rejected every real high-level/equipped character, forcing
-        # the decoder into a backwards FACE scan that latched onto garbage
+        # the decoder into a backwards face scan that latched onto garbage
         # character-creation template remnants in empty slots.  Evidence: 150-Banon
         # slot 0 has health=2343, max_health=2343, base_max_health=1704.
         and base_max_health <= max_health
@@ -410,13 +410,13 @@ def plausible_player_game_data(slot_data: bytes, player_game_data_offset: int, f
 
 
 def plausible_player_game_data_core(slot_data: bytes, player_game_data_offset: int) -> bool:
-    """Validate a PlayerGameData block on its OWN fields, independent of any FACE buffer.
+    """Validate a PlayerGameData block on its own fields, independent of any face buffer.
 
-    The FACE-anchored predicate (``plausible_player_game_data``) additionally
+    The face-anchored predicate (``plausible_player_game_data``) additionally
     requires a co-located, well-formed FaceDataBuffer (version 4, size 288).  That
     gate is too strong: some real characters (observed: 150-Banon slot 1
     "Dark Moon Bean" L90) store a FaceData whose ``size`` field is not 288 at the
-    usual delta, so no FACE buffer validates next to the PGD even though the PGD
+    usual delta, so no face buffer validates next to the PGD even though the PGD
     itself is sound.  This core predicate anchors only on the SL2.bt
     PlayerGameData fields, so name+level+stats decode correctly even when the
     face buffer is absent or in an unexpected format.
@@ -463,17 +463,17 @@ def plausible_player_game_data_core(slot_data: bytes, player_game_data_offset: i
 
 
 def scan_player_game_data_offsets(slot_data: bytes) -> list[int]:
-    """Locate PlayerGameData blocks using the FACE-independent core validator.
+    """Locate PlayerGameData blocks using the face-independent core validator.
 
-    Every occupied SL2.bt slot stores its FaceData (a ``FACE`` magic) a short,
-    version-dependent distance AFTER its PlayerGameData.  We therefore window the
-    search to the region preceding each ``FACE`` magic occurrence (the magic bytes
+    Every occupied SL2.bt slot stores its FaceData (a ``face`` magic) a short,
+    version-dependent distance after its PlayerGameData.  We therefore window the
+    search to the region preceding each ``face`` magic occurrence (the magic bytes
     are found even when the buffer's version/size fields are malformed, as happens
     for some characters' own FaceData -- e.g. 150-Banon slot 1 "Dark Moon Bean",
-    whose nearest FACE has size!=288).  Within each window we accept any PGD that
+    whose nearest face has size!=288).  Within each window we accept any PGD that
     passes ``plausible_player_game_data_core`` -- which anchors only on the
-    CharacterName / PlayerGameData fields, NOT on a well-formed FaceDataBuffer.
-    This is both correct (finds PGDs the FACE-coupled scan misses) and bounded
+    CharacterName / PlayerGameData fields, not on a well-formed FaceDataBuffer.
+    This is both correct (finds PGDs the face-coupled scan misses) and bounded
     (a few windows of MAX_PLAYER_TO_FACE_SEARCH instead of a whole-slot byte walk).
     """
     offsets: set[int] = set()
@@ -488,11 +488,11 @@ def scan_player_game_data_offsets(slot_data: bytes) -> list[int]:
 
 
 def face_magic_offset_for_pgd(slot_data: bytes, player_game_data_offset: int) -> int:
-    """Pick the FACE buffer offset to use for secondary face-data fields.
+    """Pick the face buffer offset to use for secondary face-data fields.
 
-    Prefer a well-formed FaceDataBuffer (FACE + version 4 + size 288) located at
-    one of the known PGD->FACE deltas; otherwise the nearest well-formed FACE
-    after the PGD; otherwise the fixed LIVE delta location (face bytes may then be
+    Prefer a well-formed FaceDataBuffer (face + version 4 + size 288) located at
+    one of the known PGD->face deltas; otherwise the nearest well-formed face
+    after the PGD; otherwise the fixed live delta location (face bytes may then be
     partial -- face fields are best-effort and never gate identity decoding).
     """
     def is_well_formed(face_magic_offset: int) -> bool:
@@ -623,7 +623,7 @@ def decode_fields_at(
 
 def decode_sl2_bt_fixture_fields(slot_data: bytes) -> dict[str, Any]:
     # Fixture fast-path: only trust the hard-coded fixture offsets when the PGD
-    # they point at actually validates -- otherwise a coincidental FACE byte at
+    # they point at actually validates -- otherwise a coincidental face byte at
     # FIXTURE_FACE_MAGIC_OFFSET would mis-decode a differently-laid-out live save.
     face_at_fixture_offset = slot_data[FIXTURE_FACE_MAGIC_OFFSET:FIXTURE_FACE_MAGIC_OFFSET + len(FACE_MAGIC)] == FACE_MAGIC
     if (
@@ -639,7 +639,7 @@ def decode_sl2_bt_fixture_fields(slot_data: bytes) -> dict[str, Any]:
         )
 
     # Primary live path: anchor on the CharacterName / PlayerGameData fields
-    # directly (FACE-independent).  This locates the true PGD for every occupied
+    # directly (face-independent).  This locates the true PGD for every occupied
     # slot, including characters whose FaceDataBuffer is missing or in an
     # unexpected format next to the PGD (e.g. 150-Banon slot 1 "Dark Moon Bean").
     pgd_candidates = scan_player_game_data_offsets(slot_data)
@@ -660,8 +660,8 @@ def decode_sl2_bt_fixture_fields(slot_data: bytes) -> dict[str, Any]:
             "sl2-bt-live-user-data",
         )
 
-    # Fallback: FACE-anchored scan (kept for saves where the name-anchored core
-    # validator finds nothing but a co-located valid FACE buffer exists).
+    # Fallback: Face-anchored scan (kept for saves where the name-anchored core
+    # validator finds nothing but a co-located valid face buffer exists).
     candidates: list[tuple[tuple[int, int], int, int]] = []
     for face_magic_offset in find_face_magic_offsets(slot_data):
         for player_game_data_offset in candidate_player_game_data_offsets(slot_data, face_magic_offset):

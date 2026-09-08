@@ -1,24 +1,24 @@
-// THE WRITE-COMPLETION EVENT for a bypassed save.
+// The write-completion event for a bypassed save.
 //
 // `include!`d into `lib.rs` so it shares the crate's flat module namespace (same pattern
 // the product's telemetry writers use) while keeping each file under the size gate.
 //
 // `FUN_14240fd70` == `SaveLoad2::SLSaveSession`'s job body, the function the SL worker
-// thread runs to perform one save. Its RETURN is the moment the bypassed save has finished
-// writing, and it is the ONLY completion signal in this chain that does not require
+// thread runs to perform one save. Its return is the moment the bypassed save has finished
+// writing, and it is the only completion signal in this chain that does not require
 // somebody to poll.
 //
 // Why a poll cannot be relied on (1.16.2 decompile, shift 0):
 //
 //   * `FUN_140e6e430` (the status poll) reports "terminal" as case `0x14`, and 0x14 is
-//     produced by `FUN_14240a1f0` ONLY when `FUN_14240c270(queue, id)` fails to find the
-//     job -- i.e. after the worker has REMOVED it from the queue. It is strictly later than
+//     produced by `FUN_14240a1f0` only when `FUN_14240c270(queue, id)` fails to find the
+//     job -- i.e. after the worker has removed it from the queue. It is strictly later than
 //     the write, and nothing in the job body ever sets a terminal state itself: the body
-//     sets `job+0x98` to 0x16 on entry and 2 mid-write, and BOTH map to the poll's
+//     sets `job+0x98` to 0x16 on entry and 2 mid-write, and both map to the poll's
 //     `break -> return 1` ("still in flight") arm.
 //   * The poll has exactly two consumers: `CS::MoveMapStep::DoSaveStuff`, gated on
 //     `GameMan::IsSaveState1()`, and `FUN_14082a0f0`, the "saving..." MenuJob. The Save Game
-//     commit closes the menus BEFORE it fires (deliberately -- it is what stops the b73-only
+//     commit closes the menus before it fires (deliberately -- it is what stops the b73-only
 //     lane stealing the bypass token), so the MenuJob consumer may not exist at all for our
 //     commit.
 //
@@ -35,7 +35,7 @@
 
 /// `FUN_14240fd70` -- `SaveLoad2::SLSaveSession`'s job body (worker thread), reached only
 /// through the vtable the save-job constructor `FUN_14240fa50` installs. That constructor
-/// has ONE call site, `FUN_14240e6f0`, the save-side worker enqueue -- so this body runs
+/// has one call site, `FUN_14240e6f0`, the save-side worker enqueue -- so this body runs
 /// for saves and for nothing else. Loads build a different job through `FUN_14240e420`.
 #[cfg(windows)]
 const SL_SAVE_JOB_BODY_RVA: usize = 0x240fd70;
@@ -91,13 +91,13 @@ static ORIG_SAVE_JOB_BODY: AtomicUsize = AtomicUsize::new(0);
 /// the only enqueue that ever reaches the worker is a bypassed one, so this is "times a
 /// sanctioned save actually started writing".
 static SAVE_JOB_STARTS: AtomicU64 = AtomicU64::new(0);
-/// Times a save job body RETURNED. This is the write-completion event.
+/// Times a save job body returned. This is the write-completion event.
 static SAVE_JOB_COMPLETIONS: AtomicU64 = AtomicU64::new(0);
 /// `SLSessionResultInfo+0x10` read at the last body return, or
 /// [`SAVE_JOB_RESULT_UNREADABLE`].
 static SAVE_JOB_LAST_RESULT: AtomicU32 = AtomicU32::new(SAVE_JOB_RESULT_UNREADABLE);
-/// [`SAVE_JOB_COMPLETIONS`] sampled immediately BEFORE the bypassed enqueue was forwarded.
-/// The adoption below requires a completion STRICTLY AFTER this, so a job that finished
+/// [`SAVE_JOB_COMPLETIONS`] sampled immediately before the bypassed enqueue was forwarded.
+/// The adoption below requires a completion strictly after this, so a job that finished
 /// before our submit can never be mistaken for ours.
 static SAVE_JOB_COMPLETIONS_AT_ALLOW: AtomicU64 = AtomicU64::new(0);
 /// 1 once the job-body observer is bound. Zero means every commit must fall back to the
@@ -147,13 +147,13 @@ pub fn save_job_completions() -> u64 {
 ///
 /// The read order is load-bearing. The observer increments `STARTS` before the body and
 /// `COMPLETIONS` after it, so `starts >= completions` always. Sampling COMPLETIONS first and
-/// STARTS second means that if the two are equal, they were equal at the later of the two
+/// starts second means that if the two are equal, they were equal at the later of the two
 /// reads: `completions` can only have grown since its read, and it is bounded above by
 /// `starts`, which we read afterwards. Sampling in the other order admits a job that started
 /// between the reads and reports it as quiescent.
 ///
 /// This is the writer-side interlock the destination redirect needs. The native in-place
-/// writer `FUN_1424142e0` opens the container ONCE PER DIRTY BLOCK, so a redirect window that
+/// writer `FUN_1424142e0` opens the container once per dirty block, so a redirect window that
 /// closes mid-body patches the remaining blocks into whatever the unredirected path resolves
 /// to -- the very file the user chose not to overwrite.
 pub fn save_job_writer_idle() -> bool {
@@ -183,7 +183,7 @@ pub fn save_job_no_trampoline() -> u64 {
 ///
 /// This is `FUN_140e6e430`'s terminal (`case 0x14`) arm verbatim: it calls `FUN_14240a180`,
 /// which returns exactly this field, and then maps `0 -> 0`, `3 -> 7`, `2|4 -> 8`, `7 -> 2`,
-/// everything else `-> 9`. Reproducing the mapping rather than the SIDE EFFECTS is
+/// everything else `-> 9`. Reproducing the mapping rather than the side effects is
 /// deliberate -- the native arm also releases the request and sets the `DAT_14458937d`
 /// save-error flag, and an observer must not do either.
 ///
@@ -199,7 +199,7 @@ pub fn save_job_result_to_status(result: u32) -> u32 {
     }
 }
 
-/// Latch the current commit as FAILED because the submit itself did not happen.
+/// Latch the current commit as failed because the submit itself did not happen.
 ///
 /// Uses the same one-winner CAS as the two success paths, so a failure can never overwrite
 /// an outcome that was already observed. The status is the poll's generic "finished, not
@@ -224,7 +224,7 @@ fn latch_submit_failure_as_final_status(why: &str) {
 
 /// Record the worker's completion counter at the instant a bypassed submit is forwarded.
 ///
-/// Sampled BEFORE the native enqueue call, not after: the worker can pick the job up and
+/// Sampled before the native enqueue call, not after: the worker can pick the job up and
 /// finish it before the enqueue even returns, and a later sample would then be unable to
 /// tell our own completion from a pre-existing one.
 #[cfg(windows)]
@@ -234,10 +234,10 @@ fn arm_save_job_completion_watch() {
 
 /// Adopt a completed SL save job as the current commit's terminal status.
 ///
-/// Called from the product's commit tick. Does nothing unless ALL of these hold, which is
+/// Called from the product's commit tick. Does nothing unless all of these hold, which is
 /// what makes it positive evidence rather than an absence of failure:
 ///
-///   1. a completion watch is live -- our one-shot token was CONSUMED by an enqueue, so a
+///   1. a completion watch is live -- our one-shot token was consumed by an enqueue, so a
 ///      real submit happened and no terminal status has been latched for it yet;
 ///   2. [`SAVE_JOB_COMPLETIONS`] has advanced past the value sampled at that enqueue, so the
 ///      job that finished is one that started after our submit;
@@ -280,13 +280,13 @@ pub fn adopt_completed_save_job_as_final_status() -> Option<u32> {
 /// worker thread**, not the game thread.
 ///
 /// Pure observation: it calls the body and records two atomics around it. It deliberately
-/// does NOT log and does NOT publish. The body is the code that opens the save file, copies
+/// does not log and does not publish. The body is the code that opens the save file, copies
 /// `ER0000.sl2.bak` and writes every block, and this host DLL detours file APIs of its own
 /// -- emitting a log line or serializing a telemetry snapshot from inside that call would
 /// re-enter those detours on the writer's own thread. The counters are read (and the human
 /// line emitted) by the product's commit tick on the game thread instead.
 ///
-/// The result is read AFTER the body returns, from `SLSession+0xa0 -> +0x10`, which is the
+/// The result is read after the body returns, from `SLSession+0xa0 -> +0x10`, which is the
 /// same field `FUN_14240a180` returns and the poll's terminal arm maps. The job object is
 /// still owned by the queue at that point, so the read is against live memory.
 #[cfg(windows)]
@@ -304,7 +304,7 @@ unsafe extern "system" fn save_job_body_hook(job: usize) {
     unsafe { original(job) };
     let result = read_save_job_result(job).unwrap_or(SAVE_JOB_RESULT_UNREADABLE);
     SAVE_JOB_LAST_RESULT.store(result, Ordering::SeqCst);
-    // LAST, and after the result store: the game-thread adopter gates on this counter, so it
+    // Last, and after the result store: the game-thread adopter gates on this counter, so it
     // must not become visible before the value it certifies.
     SAVE_JOB_COMPLETIONS.fetch_add(1, Ordering::SeqCst);
 }

@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Capture the lobby KEYS and VALUES Seamless publishes and filters on, correctly.
+"""Capture the lobby keys and values Seamless publishes and filters on, correctly.
 
-WHY A SECOND TRACER RATHER THAN A FIX TO THE FIRST
+Why a second tracer rather than a fix to the first
 --------------------------------------------------
 `frida-steam-vtable-trace.py` finds the `ISteamMatchmaking` pointer by hooking the accessor that
-hands it out -- and that accessor fires ONCE, at startup. Restarting it mid-session to fix a bug
-would lose the pointer for the rest of the run. So this attaches to an ALREADY-KNOWN interface
+hands it out -- and that accessor fires once, at startup. Restarting it mid-session to fix a bug
+would lose the pointer for the rest of the run. So this attaches to an already-known interface
 pointer instead, which the first tracer prints on capture, and hooks the same vtable directly.
 Both can run at once; neither needs the other to stop.
 
-THE BUG IT EXISTS TO AVOID: `readUtf8String(96)` THROWS when fewer than 96 bytes are mapped, so a
+The bug it exists to AVOID: `readUtf8String(96)` throws when fewer than 96 bytes are mapped, so a
 short string near the end of a page reads as `null` and a published key silently disappears. That
 is exactly what happened on the 2026-08-06 host run -- every `SetLobbyData` logged `str: null`
 while the key bytes were visibly sitting in a register (`0x61705f7962626f6c` == "lobby_ap"). Use
@@ -17,14 +17,14 @@ while the key bytes were visibly sitting in a register (`0x61705f7962626f6c` == 
 
 Strings are recovered three ways, because on this path each fails differently:
   1. as a `char*` (the declared signature)
-  2. as INLINE BYTES in the register itself -- a small-string value passed by register, which is
+  2. as inline bytes in the register itself -- a small-string value passed by register, which is
      how "lobby_ap" showed up in arg4 and is invisible to any pointer-based read
   3. as a `char**` one level down, for a std::string-shaped argument
 
-SLOT NAMES are the public Steamworks order for `SteamMatchMaking009`; see
+Slot names are the public Steamworks order for `SteamMatchMaking009`; see
 `scripts/steam-matchmaking-slots.py` for the provenance caveat and the argument-shape cross-check.
 
-READ-ONLY: arguments are logged, never altered, and nothing is called.
+Read-ONLY: arguments are logged, never altered, and nothing is called.
 
     uv run --with frida python3 scripts/frida-steam-lobby-keys.py --iface 0x45d1bb50
 """
@@ -50,7 +50,7 @@ WATCH = {
     5: "AddRequestLobbyListStringFilter",
     6: "AddRequestLobbyListNumericalFilter",
     7: "AddRequestLobbyListNearValueFilter",
-    # GetLobbyByIndex is how a caller walks the RESULTS of a lobby-list query, so counting it is
+    # GetLobbyByIndex is how a caller walks the results of a lobby-list query, so counting it is
     # the only way to learn how many candidates a query actually returned. That number decides
     # whether preferring among results is even possible: one result means there is nothing to
     # prefer, and the only lever is narrowing the request itself.
@@ -187,7 +187,7 @@ def _selftest() -> int:
         == [("er_map", "m60_51_36_00")],
         "a char* key/value pair is recovered",
     )
-    # THE CASE THAT MOTIVATED THIS TOOL: the pointer read fails, but the bytes are in the register.
+    # The case that motivated this TOOL: the pointer read fails, but the bytes are in the register.
     check(
         summarize([{"type": "lobby", "name": "SetLobbyData",
                     "args": [arg(), arg(inline="lobby_ap"), arg(inline="1245620")]}])["published"]
@@ -206,7 +206,7 @@ def _selftest() -> int:
         == [("lobby_key", "abc123")],
         "a request filter is recovered with key and value",
     )
-    # A call whose strings never resolved must NOT become a bogus published key.
+    # A call whose strings never resolved must not become a bogus published key.
     check(
         summarize([{"type": "lobby", "name": "SetLobbyData", "args": [arg(), arg(), arg()]}])["published"] == [],
         "a call with no recoverable strings publishes nothing rather than an empty key",

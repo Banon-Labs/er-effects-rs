@@ -4,17 +4,17 @@
 //!
 //! A DLL cannot know its position in history from its own bytes. It knows the commit it was
 //! built from -- that is baked in -- but "is that commit still the tip" is a question only the
-//! repository can answer, and the release list is the cheapest form of the answer: the tags ARE
+//! repository can answer, and the release list is the cheapest form of the answer: the tags are
 //! the commits (`main-<40 hex>`), so nothing has to be downloaded or opened to read them.
 //!
 //! # One request, off the game thread, failing open
 //!
-//! A single GET on a background thread at startup. If it fails -- offline, rate-limited, GitHub
+//! A single get on a background thread at startup. If it fails -- offline, rate-limited, GitHub
 //! down -- the list stays empty and every build renders as `Standing::Unknown`, which is drawn
 //! quietly and never red. A watermark that turned red because a network call failed would be
 //! worse than no watermark: it would teach the reader that red means nothing.
 
-/// Host GitHub's REST API answers on.
+/// Host GitHub's rest API answers on.
 #[cfg(windows)]
 const API_HOST: &str = "api.github.com";
 
@@ -68,7 +68,7 @@ pub fn parse_release_tags(body: &str) -> Vec<String> {
 
 /// Fetch the release list and publish it, on a background thread.
 ///
-/// Returns immediately. Never runs on the game thread: the GET is blocking, and a TLS handshake
+/// Returns immediately. Never runs on the game thread: the get is blocking, and a TLS handshake
 /// inside `Present` or a frame task would be a visible hitch at best.
 #[cfg(windows)]
 pub fn spawn_lookup(log: fn(std::fmt::Arguments<'_>)) {
@@ -117,7 +117,7 @@ mod tests {
     use super::*;
 
     /// A trimmed copy of the real 2026-08-25 response shape, including the semver release that
-    /// must NOT be admitted.
+    /// must not be admitted.
     const SAMPLE: &str = r#"[
       {"tag_name":"main-ba46f81cc9306253958013affa1c916f980e1162","prerelease":true},
       {"tag_name":"main-c57b5c1bf04abcf567e841333032fdaa76f0e2ca","prerelease":true},

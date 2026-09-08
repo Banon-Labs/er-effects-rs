@@ -37,8 +37,8 @@ require_path() {
 	fi
 }
 
-# Env override first, then PATH, then the CURRENT user's home. The /mnt/d entry is the retired
-# WSL2 layout and is LAST-resort only: on a native Linux box it does not exist, so leaving it
+# Env override first, then path, then the current user's home. The /mnt/d entry is the retired
+# WSL2 layout and is last-resort only: on a native Linux box it does not exist, so leaving it
 # first made a present install read as "the tool is missing".
 find_witchy() {
 	if [[ -n "$witchy" ]]; then

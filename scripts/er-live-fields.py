@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 """Read-only live memory inspection of a running (Wine/Proton) game process.
 
-WHY THIS EXISTS (user directive 2026-08-12). Answering a read-only question about game memory --
+Why this exists (user directive 2026-08-12). Answering a read-only question about game memory --
 "which field is the caret", "does this offset track the scroll", "what is this pointer now" -- used
 to mean editing the DLL to add a telemetry dump, rebuilding, tearing the game down and relaunching
 it. That throws away a live session and the user's place in the menus to learn something a read
 could have taken straight out of the running process.
 
-HOW IT READS, AND WHY NOT FRIDA (learned the hard way 2026-08-12). This opens `/proc/<pid>/mem` and
+How it reads, and why not FRIDA (learned the hard way 2026-08-12). This opens `/proc/<pid>/mem` and
 seeks. Nothing is injected into the target, no thread is suspended, and no code runs inside the
 game -- it is the same mechanism a debugger uses to peek memory, minus the debugger.
 
-Do NOT reach for frida here. `frida.attach()` on the Wine/Proton `eldenring.exe` injects a
+Do not reach for frida here. `frida.attach()` on the Wine/Proton `eldenring.exe` injects a
 bootstrapper that segfaults **inside the target**: it printed "bootstrapper crashed with signal 11"
 and killed a live session mid-session, destroying the very thing the read was meant to preserve.
 A read must never be able to do that, so the injection path is gone rather than merely discouraged.
 
-If you need to know WHICH CODE writes a field (not just its value), that genuinely needs in-process
+If you need to know which code writes a field (not just its value), that genuinely needs in-process
 instrumentation, and the sanctioned path for a Wine target is the `linux-x86-debug` sibling toolkit's
-`tracebreakpoint` (winedbg --gdb attach), NOT frida. See AGENTS.md.
+`tracebreakpoint` (winedbg --gdb attach), not frida. See AGENTS.md.
 
 Examples:
     scripts/er-live-fields.py --selftest
@@ -110,7 +110,7 @@ def dump(pid: int, addr: int, size: int, expect_max: int, raw: bool) -> int:
 def selftest() -> int:
     """Prove the read path end to end without touching the game.
 
-    A CHILD process is the target rather than this one, so the test exercises the real
+    A child process is the target rather than this one, so the test exercises the real
     cross-process read rather than a same-process shortcut that would pass for the wrong reason.
     """
     import subprocess

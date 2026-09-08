@@ -9,7 +9,7 @@
 //!
 //! It used to be deliberately liberal, backed by `#![allow(unused_imports)]` at the crate
 //! root. That blanket is gone (workspace lint parity, 2026-08-21): a crate-wide allow made
-//! the crate's clean bill of health unreadable, because it hid stale imports in the FEATURE
+//! the crate's clean bill of health unreadable, because it hid stale imports in the feature
 //! modules as readily as intentional ones here. Every re-export below is now one rustc
 //! agrees something resolves through, on the cfg it is declared for -- which is why several
 //! of them carry `#[cfg(windows)]`: their only consumers are the Windows-gated modules, and
@@ -56,7 +56,7 @@ pub(crate) use crate::resource_readback::*;
 pub(crate) use crate::stats_lines::*;
 #[cfg(windows)]
 pub(crate) use crate::stats_loading_text::*;
-// `native_overlay`, `player_identity`, `stats_overlay` and `title_stats_text` are NOT re-exported:
+// `native_overlay`, `player_identity`, `stats_overlay` and `title_stats_text` are not re-exported:
 // nothing in the crate resolves a name through them, and their own modules are reachable directly.
 
 // --- telemetry counters whose canonical product re-export stays in er-quickload ----
@@ -65,14 +65,14 @@ pub(crate) use er_telemetry_core::counters::{
     PROFILE_SPARE_ORPHAN, SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT,
 };
 
-// --- private sentinels (values copied EXACTLY from the product originals; the product
+// --- private sentinels (values copied exactly from the product originals; the product
 // --- keeps its own copies, so these deliberately never leak out of this crate) ------
 /// er-quickload `constants/anti_debug.rs`: `TITLE_OWNER_SCAN_START_ADDRESS = usize::MIN`.
 pub(crate) const TITLE_OWNER_SCAN_START_ADDRESS: usize = usize::MIN;
 /// er-quickload `constants.rs`: `HOOK_ORIGINAL_UNSET = 0`.
 pub(crate) const HOOK_ORIGINAL_UNSET: usize = 0;
 /// er-title-flow `MENU_TRACE_UNSEEN_SEQ = NULL_MODULE_BASE = 0`: "this menu sequence has never
-/// been observed". Copied rather than imported because er-title-flow DEPENDS on this crate, so
+/// been observed". Copied rather than imported because er-title-flow depends on this crate, so
 /// depending back on it is a cycle; the product keeps its own re-export.
 #[cfg(windows)]
 pub(crate) const MENU_TRACE_UNSEEN_SEQ: usize = 0;

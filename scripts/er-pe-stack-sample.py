@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Sample the PE-side call stack of a thread in a running Wine/Proton process.
 
-Read-only. Opens /proc/<pid>/mem and /proc/<pid>/task/<tid>/syscall; it does NOT
+Read-only. Opens /proc/<pid>/mem and /proc/<pid>/task/<tid>/syscall; it does not
 ptrace-attach, inject, or suspend anything. Safe to point at a live Elden Ring --
 unlike frida.attach(), which kills it (see AGENTS.md).
 
@@ -18,7 +18,7 @@ shift 0, so a reported eldenring.exe address can be fed straight to
 scripts/ghidra/mcp_query.py getFunctionByAddress.
 
   python3 scripts/er-pe-stack-sample.py <pid> [--samples N] [--tid TID]
-                                        [--window BYTES] [--all-modules]
+                                        [--window bytes] [--all-modules]
   python3 scripts/er-pe-stack-sample.py --selftest
 """
 
@@ -92,7 +92,7 @@ def sample(pid: str, tid: str, nsamples: int, window: int, resolve, budget: floa
 
     The retry path yields the timeslice (`os.sched_yield`) rather than sleeping. There is no
     readiness primitive for "the target thread entered a syscall", and a sleep would be the wrong
-    shape anyway: what this loop needs is for the OTHER thread to be scheduled, which is exactly
+    shape anyway: what this loop needs is for the other thread to be scheduled, which is exactly
     what a yield asks for. `budget` is a wall-clock ceiling so a thread that never leaves userspace
     ends the sampler instead of spinning forever.
     """

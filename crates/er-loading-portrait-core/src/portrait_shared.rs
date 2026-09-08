@@ -6,7 +6,7 @@ use er_game_base::fnv1a::{fnv1a64, fnv1a64_extend};
 // path-A overlay composite (bd er-effects-rs-f9mq) because path B and the shared capture
 // pipeline depend on them.
 
-/// FNV-1a 64 over a character name's UTF-16 units (LE bytes), truncated to usize. The portrait
+/// FNV-1a 64 over a character name's UTF-16 units (le bytes), truncated to usize. The portrait
 /// identity tag (bd er-effects-rs-dpf6 Phase 1): stamped at the game-thread build kick, copied next to
 /// the bridge at publish, compared at the own-menu-switch rearm. 0 is reserved for "unknown/empty".
 pub fn portrait_name_hash_utf16(units: &[u16]) -> usize {
@@ -21,7 +21,7 @@ pub fn portrait_name_hash_utf16(units: &[u16]) -> usize {
     (h as usize).max(1)
 }
 
-/// Name-hash of a ProfileSummary RECORD (name UTF-16 units at record+0). Game-thread only (guarded
+/// Name-hash of a ProfileSummary record (name UTF-16 units at record+0). Game-thread only (guarded
 /// game-memory read through the host seam). 0 = empty/unreadable name.
 ///
 /// # Safety
@@ -75,16 +75,16 @@ pub unsafe fn portrait_slot_name_hash(slot: i32) -> usize {
 }
 
 /// Close the loading-portrait window: clear the published snapshot + the "have a head" gate so a later
-/// window cannot flash the PREVIOUS character, drop the RT/depth candidate pins (the next window's
-/// renderers are new objects), and clear the teardown-spared renderer so the NEXT load's teardown re-spares
+/// window cannot flash the previous character, drop the RT/depth candidate pins (the next window's
+/// renderers are new objects), and clear the teardown-spared renderer so the next load's teardown re-spares
 /// the new character (LOADING_BG_PORTRAIT_SPARED_RENDERER is gated `== 0` and was otherwise never reset --
 /// it stayed pinned to the first character's now-stale renderer, and driving that leaked renderer risks a
 /// use-after-free). Idempotent.
 ///
-/// THIS HAD ZERO CALLERS UNTIL 2026-08-22, and the doc comment claimed one it did not have. The
+/// This had zero callers until 2026-08-22, and the doc comment claimed one it did not have. The
 /// only live reset was `loading_portrait_window_reset_for_switch`, called from exactly one place --
-/// `rearm_boot_progress_for_own_menu_load`, i.e. a System->Quit slot confirm. So a NORMAL load
-/// (boot, death, fast travel) never released ANY of it: the published head and its frozen crop
+/// `rearm_boot_progress_for_own_menu_load`, i.e. a System->Quit slot confirm. So a normal load
+/// (boot, death, fast travel) never released any of it: the published head and its frozen crop
 /// envelope stayed live in gameplay, `LOADING_BG_PORTRAIT_SPARED_RENDERER` kept one live
 /// `CSMenuProfModelRend` retained forever and never delete-enqueued, and the pins/anim binding/
 /// target slot all stayed pointed at the finished load. `portrait_loadwin_try_release_window_state`
@@ -92,33 +92,33 @@ pub unsafe fn portrait_slot_name_hash(slot: i32) -> usize {
 /// past the close until the boot-view cover has actually released, because the cover outlives the
 /// native loading screen by its release fade and is still drawing the head across it.
 ///
-/// BE CLEAR ABOUT WHAT THAT BUYS. It removes the portrait from any future SPURIOUS cover -- there
-/// is no published head left to draw -- and it stops leaking a renderer per session. It does NOT
+/// Be clear about what that BUYS. It removes the portrait from any future SPURIOUS cover -- there
+/// is no published head left to draw -- and it stops leaking a renderer per session. It does not
 /// stop a cover surface reappearing after a load, because our compositor is not what draws it (see
 /// `cover_after_release.rs`). Fixing the leak is worth doing on its own terms; do not read it as a
 /// fix for the user-visible flash.
 ///
-/// AND WHAT IT COSTS. Dropping the head at a normal close also means a LATER same-identity bridge
+/// And what it costs. Dropping the head at a normal close also means a later same-identity bridge
 /// hold has nothing to hold: `loading_portrait_window_reset_for_switch` will see `have_head ==
 /// false` at the next switch and start head-less, paying the ~2.3 s confirm->publish latency that
 /// the bridge existed to hide. That trade is deliberate -- a head that survives into gameplay is
 /// exactly the thing a spurious cover can put back on screen.
 ///
-/// MAKE-BEFORE-BREAK IS PRESERVED for a switch that is actually in flight: an outstanding
+/// Make-before-break is preserved for a switch that is actually in flight: an outstanding
 /// provisional hold (`PORTRAIT_BRIDGE_HOLD_PROVISIONAL`) keeps the bridge and the frozen crop
 /// envelope through this reset, exactly as `..._for_switch` does when it decides to hold. Without
 /// that, the switch's return-to-title teardown window would close under the hold and drop the head
-/// the confirm-press had just decided to keep. Every OTHER per-window pin/latch still resets.
+/// the confirm-press had just decided to keep. Every other per-window pin/latch still resets.
 pub fn loading_portrait_window_reset(reason: &str) {
     let hold_bridge = PORTRAIT_BRIDGE_HOLD_PROVISIONAL.load(Ordering::SeqCst) != 0;
     loading_portrait_window_reset_inner(reason, hold_bridge)
 }
 
-/// Own-menu-switch variant (bd er-effects-rs-dpf6 Phase 3): if the INCOMING target identity
-/// (slot + ProfileSummary name-hash) matches the currently-published head's identity tag, KEEP the
+/// Own-menu-switch variant (bd er-effects-rs-dpf6 Phase 3): if the incoming target identity
+/// (slot + ProfileSummary name-hash) matches the currently-published head's identity tag, keep the
 /// bridge and the frozen crop envelope across the rearm -- a same-character reload's cover shows the
 /// held head from frame one instead of clearing it 0.1ms after RETARGET's make-before-break claimed it
-/// holds. An identity MISMATCH (or unknown identity on either side) keeps the full 2026-07-06
+/// holds. An identity mismatch (or unknown identity on either side) keeps the full 2026-07-06
 /// wrong-character clear. Game-thread only (reads the incoming slot's summary record).
 ///
 /// # Safety
@@ -131,23 +131,23 @@ pub fn loading_portrait_window_reset(reason: &str) {
 /// it is ordered against the publish path by being on the same thread, not by a lock.
 pub unsafe fn loading_portrait_window_reset_for_switch(selected_slot: i32, reason: &str) {
     // Reject attribution baseline (er-effects-rs-k979). LOADING_BG_PORTRAIT_RGBA_VERSION is
-    // cumulative for the whole PROCESS -- it ends a 3-window run in the 1500s and never resets --
-    // so "has anything published yet" is only meaningful against the CURRENT window. Snapshot it
+    // cumulative for the whole process -- it ends a 3-window run in the 1500s and never resets --
+    // so "has anything published yet" is only meaningful against the current window. Snapshot it
     // here, at the one place a new portrait window begins, or every warm-up reject from switch 2
     // onward would be misfiled as a post-publish fault.
     er_telemetry_core::counters::LS_PORTRAIT_REJECT_PUBLISH_BASELINE.store(
         LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst),
         Ordering::SeqCst,
     );
-    // ONE WINDOW'S GRACE, NOT TWO. A hold still outstanding here rode the whole window that just
+    // One window'S grace, not two. A hold still outstanding here rode the whole window that just
     // ended without ever publishing a frame of its own and without being revoked -- nothing
     // confirmed it and nothing refuted it. That is the 2026-08-22 `displayed-stale` shape (65
     // frames displayed, 0 published, 0 captured), and because the hold's own predicate compares one
-    // record against itself, holding AGAIN on the same unchanged record would re-take it every
+    // record against itself, holding again on the same unchanged record would re-take it every
     // switch and let one stale head own window after window. Refuse the re-take instead: an
     // unproven head gets exactly one window, then the full wrong-character clear applies.
     //
-    // Deliberately NOT a time or frame threshold. The legitimate bridge routinely covers seconds
+    // Deliberately not a time or frame threshold. The legitimate bridge routinely covers seconds
     // (the measured confirm->publish latency is ~2.3s and windows 1/2/4 of that run published
     // 259-281 frames each after holding), and no measurement exists that separates "still waiting"
     // from "never coming" inside a window. "Did the last window ever prove it" needs no constant.
@@ -167,7 +167,7 @@ pub unsafe fn loading_portrait_window_reset_for_switch(selected_slot: i32, reaso
     let published_slot = LS_PORTRAIT_PUBLISHED_SLOT.load(Ordering::SeqCst);
     let published_hash = LS_PORTRAIT_PUBLISHED_NAME_HASH.load(Ordering::SeqCst);
     let have_head = PROFILE_HAVE_KEYED_FRAME.load(Ordering::SeqCst) != 0;
-    // The predicate moved to `portrait_identity` unchanged, where a host test pins WHY a match here
+    // The predicate moved to `portrait_identity` unchanged, where a host test pins why a match here
     // is worth so little: `incoming_hash` and `published_hash` are the same ProfileSummary record
     // read at two different times, so a same-slot reselect matches by construction and the hold
     // cannot see that the record disagrees with the character that will actually load.
@@ -181,7 +181,7 @@ pub unsafe fn loading_portrait_window_reset_for_switch(selected_slot: i32, reaso
         );
     if hold {
         let n = PORTRAIT_BRIDGE_SAME_IDENTITY_HOLDS.fetch_add(1, Ordering::SeqCst) + 1;
-        // PROVISIONAL from this instant. The independent signal that can falsify it -- the record's
+        // Provisional from this instant. The independent signal that can falsify it -- the record's
         // face fingerprint vs the one the preview took from the picked save's own bytes -- does not
         // exist yet; it arrives at the first build kick, ~1.4s later on the measured machine. So the
         // hold is armed for revocation rather than trusted (`loading_portrait_bridge_hold_face_check`).
@@ -193,7 +193,7 @@ pub unsafe fn loading_portrait_window_reset_for_switch(selected_slot: i32, reaso
     loading_portrait_window_reset_inner(reason, hold);
 }
 
-/// Drop the published head and the frozen crop envelope: after this the loading screen has NO
+/// Drop the published head and the frozen crop envelope: after this the loading screen has no
 /// portrait to draw until something publishes a new one.
 ///
 /// Extracted so the window reset's wrong-character clear and a mid-window hold revocation do
@@ -207,7 +207,7 @@ fn loading_portrait_drop_published_bridge() {
     // Identity tag lives-and-dies with the bridge content.
     LS_PORTRAIT_PUBLISHED_SLOT.store(0, Ordering::SeqCst);
     LS_PORTRAIT_PUBLISHED_NAME_HASH.store(0, Ordering::SeqCst);
-    // Crop envelope: re-seed for the NEW character's silhouette (it was frozen after the first
+    // Crop envelope: re-seed for the new character's silhouette (it was frozen after the first
     // PORTRAIT_CROP_SEED_N frames and previously never reset, so a different character inherited
     // the prior head's rect).
     PORTRAIT_CROP_MINX.store(usize::MAX, Ordering::SeqCst);
@@ -215,17 +215,17 @@ fn loading_portrait_drop_published_bridge() {
     PORTRAIT_CROP_MAXX.store(0, Ordering::SeqCst);
     PORTRAIT_CROP_MAXY.store(0, Ordering::SeqCst);
     PORTRAIT_CROP_SEED_FRAMES.store(0, Ordering::SeqCst);
-    // Growth events belong to ONE window's settle. Carrying the previous window's count forward would
+    // Growth events belong to one window's settle. Carrying the previous window's count forward would
     // make the `portrait-crop[..]` growth numbers and the oracle disagree about which window they describe.
     PORTRAIT_CROP_GROWTH_EVENTS.store(0, Ordering::SeqCst);
 }
 
-/// Resolve an outstanding provisional bridge hold against the build kick's record-vs-preview FACE
+/// Resolve an outstanding provisional bridge hold against the build kick's record-vs-preview face
 /// fingerprint. Returns true when the hold was revoked. Game thread (the caller has just read the
 /// record); no-op when no hold is outstanding.
 ///
-/// WHY THE HOLD NEEDED AN OUTSIDE SIGNAL AT ALL. Every other identity check the portrait pipeline
-/// runs reads the ProfileSummary record on BOTH sides of its comparison -- the hold's name hashes,
+/// Why the hold needed an outside signal at all. Every other identity check the portrait pipeline
+/// runs reads the ProfileSummary record on both sides of its comparison -- the hold's name hashes,
 /// the published-vs-target name hashes, the loadwin `identity=` tag -- so all of them agree with
 /// themselves no matter how wrong the record is. Run br-20260822-040913-f0f4 is the demonstration:
 /// window #3 closed `identity=ok` while this fingerprint had already disagreed twice, and the
@@ -235,7 +235,7 @@ fn loading_portrait_drop_published_bridge() {
 /// can say the record is wrong -- and the drift it reported that day is itself the proof the record
 /// had been rewritten since the preview stamped it.
 ///
-/// WHY REVOCATION RATHER THAN A BETTER HOLD PREDICATE. This signal does not exist when the hold is
+/// Why REVOCATION rather than a better hold PREDICATE. This signal does not exist when the hold is
 /// taken. The rearm ran at +107006ms; the first fingerprint comparison ran at +108385ms. Folding it
 /// into the rearm decision is not available -- the only options at rearm are the record-derived
 /// hashes that cannot fail. So the hold is taken optimistically (make-before-break is worth
@@ -276,19 +276,19 @@ pub fn loading_portrait_bridge_hold_face_check(
     true
 }
 
-/// A publish of THIS window's own frame supersedes any provisional hold: the bridge no longer
+/// A publish of this window's own frame supersedes any provisional hold: the bridge no longer
 /// holds a previous window's head, so there is nothing left to revoke. Called from the depth-keyed
 /// worker publish, which is the write that `PORTRAIT-LOADWIN VERDICT`'s `publishes=` counts; the
-/// two colour-only bridge writers deliberately do NOT clear it, because neither bumps
+/// two colour-only bridge writers deliberately do not clear it, because neither bumps
 /// `LOADING_BG_PORTRAIT_RGBA_VERSION` and both build from the same possibly-wrong record.
 pub fn loading_portrait_bridge_hold_superseded_by_publish() {
     PORTRAIT_BRIDGE_HOLD_PROVISIONAL.store(0, Ordering::SeqCst);
 }
 
 fn loading_portrait_window_reset_inner(reason: &str, hold_bridge: bool) {
-    // WORKER-OFFLOAD SWITCH SAFETY (2026-07-06). Bump the pipeline generation FIRST: any portrait consume
-    // job still in flight on the worker thread snapshotted the PREVIOUS gen, so when it re-reads this before
-    // it pins/publishes it will see the bump and DISCARD -- a head captured for the old window can never be
+    // Worker-OFFLOAD switch SAFETY (2026-07-06). Bump the pipeline generation FIRST: any portrait consume
+    // job still in flight on the worker thread snapshotted the previous gen, so when it re-reads this before
+    // it pins/publishes it will see the bump and discard -- a head captured for the old window can never be
     // pinned/published into the new one.
     PORTRAIT_PIPELINE_GEN.fetch_add(1, Ordering::SeqCst);
     // Then bounded-drain the in-flight consume jobs (up to ~15ms, yielding) so late telemetry lands in the
@@ -302,19 +302,19 @@ fn loading_portrait_window_reset_inner(reason: &str, hold_bridge: bool) {
             std::thread::yield_now();
         }
     }
-    // CLEAR-ON-COMPLETE (user 2026-07-06, REVERSING the 2026-07-03 make-before-break KEEP): drop the
+    // Clear-on-complete (user 2026-07-06, reversing the 2026-07-03 make-before-break keep): drop the
     // published head snapshot the moment the load completes (character in-world, native bar terminal).
     // The kept bridge was the stale-content reservoir behind the second-load wrong-head bug: the next
-    // window's forge baked the PREVIOUS character's held frame into the now-loading background at decode
+    // window's forge baked the previous character's held frame into the now-loading background at decode
     // time (the bake was decode-once), so the old head
     // stayed on screen for the whole next load even while the readback/publish pipeline was proven
-    // (pixel-diff vs same-character baseline, runs 2026-07-06) to produce the NEW character. With the
+    // (pixel-diff vs same-character baseline, runs 2026-07-06) to produce the new character. With the
     // snapshot cleared here there is nothing stale to bake or bridge: the next window starts head-less
     // and shows the new character's first keyed frame. Costs a brief head-less loading screen
     // (~0.5s after the window's table build in both measured runs) -- preferred over a wrong head.
     //
-    // SAME-IDENTITY HOLD (bd er-effects-rs-dpf6 Phase 3): when the caller PROVED the incoming target
-    // is the SAME character as the published head (slot + name-hash tag match), keeping the bridge
+    // Same-identity hold (bd er-effects-rs-dpf6 Phase 3): when the caller proved the incoming target
+    // is the same character as the published head (slot + name-hash tag match), keeping the bridge
     // cannot show a wrong head -- it shows the right head a full publish-latency (~4s from confirm on
     // the measured machine) earlier. Only the bridge, its identity tag, and the frozen crop envelope
     // are kept; every per-window counter/pin below still resets.
@@ -335,9 +335,9 @@ fn loading_portrait_window_reset_inner(reason: &str, hold_bridge: bool) {
     // Fresh adaptive tear baseline for the next window's character (honest content scores differ
     // per character: speckled textures sit ~40, smooth skin ~3).
     PROFILE_TEAR_EMA.store(0, Ordering::SeqCst);
-    // Do NOT drop the spared renderer -- that leaked one live CSMenuProfModelRend per switch (it was
+    // Do not drop the spared renderer -- that leaked one live CSMenuProfModelRend per switch (it was
     // excluded from the native delete and its offscreen draw task kept filling the 192-slot GX
-    // command queue -> 0x1aeaf05 overflow ~switch #4). MOVE it to the orphan slot; the game-thread
+    // command queue -> 0x1aeaf05 overflow ~switch #4). Move it to the orphan slot; the game-thread
     // teardown-spare hook delete-enqueues it via CSDelayDeleteMan at the next teardown (this reset
     // runs off the game thread, so it stashes rather than deleting in place).
     let prev_spared = LOADING_BG_PORTRAIT_SPARED_RENDERER.swap(0, Ordering::SeqCst);
@@ -345,18 +345,18 @@ fn loading_portrait_window_reset_inner(reason: &str, hold_bridge: bool) {
         PROFILE_SPARE_ORPHAN.store(prev_spared, Ordering::SeqCst);
     }
     PROFILE_SPARE_CANDIDATE.store(0, Ordering::SeqCst);
-    // Re-arm the idle-anim bind + drop the motion-metric history so the NEXT load window binds its
+    // Re-arm the idle-anim bind + drop the motion-metric history so the next load window binds its
     // own renderer and starts a fresh inter-frame diff (cumulative attempt/max oracles are kept).
     PORTRAIT_ANIM_BIND_STATE.store(0, Ordering::SeqCst);
     PORTRAIT_ANIM_BOUND_RENDERER.store(0, Ordering::SeqCst);
     PORTRAIT_ANIM_BOUND_LOC.store(0, Ordering::SeqCst);
     PORTRAIT_KICK_SLOT_KEY.store(0, Ordering::SeqCst);
     PORTRAIT_KICK_RENDERER.store(0, Ordering::SeqCst);
-    // Release this window's committed portrait target so the NEXT load is free to name a different
+    // Release this window's committed portrait target so the next load is free to name a different
     // character. Without this reset the latch would pin the boot character's face across every
     // later System->Quit->Load switch -- the same wrong-face class in the opposite direction.
     PORTRAIT_WINDOW_TARGET_SLOT.store(0, Ordering::SeqCst);
-    // ...and its AUTHORITY with it. A stale `from_pick` would make the next window's guessed latch
+    // ...and its authority with it. A stale `from_pick` would make the next window's guessed latch
     // claim the user had chosen it, permanently disabling the one promotion a real pick is owed.
     PORTRAIT_WINDOW_TARGET_FROM_PICK.store(
         crate::portrait_lookat::PORTRAIT_WINDOW_TARGET_PICK_NO,
@@ -380,7 +380,7 @@ fn loading_portrait_window_reset_inner(reason: &str, hold_bridge: bool) {
     // for the next window. drive << display == the head froze early (freeze-after-capture); the
     // user's "stopped animating / frozen the whole loading screen" symptom shows here as a low ratio.
     //
-    // `drive` counts the POSE drive only (model update task + per-frame push), which sits behind
+    // `drive` counts the pose drive only (model update task + per-frame push), which sits behind
     // `off_resources_ready` in `profile_lookat_realtime_draw_tick`. When that gate is shut the pose
     // drive contributes nothing while the pipeline is otherwise healthy, so `drive` alone cannot
     // distinguish "the head froze" from "the pose drive was never allowed to run". `render_drive`
@@ -391,18 +391,18 @@ fn loading_portrait_window_reset_inner(reason: &str, hold_bridge: bool) {
     // here with the other per-window counters; leaving stale copies from an earlier window makes a later
     // no-copy failure report as cause=0/unknown instead of the actionable no-copy class.
     let copies = PROFILE_RT_SRV_COPIES_WINDOW.swap(0, Ordering::SeqCst);
-    // SESSION TOTAL beside the per-window delta. Run br-20260831-160354-2513 closed every window
+    // Session total beside the per-window delta. Run br-20260831-160354-2513 closed every window
     // with `copies=0` -- including windows that published 181 and 268 clean portraits -- which
     // leaves two very different readings indistinguishable from the window number alone: the copy
     // never succeeds at all, or it succeeds outside these windows. The cumulative count separates
-    // them without adding instrumentation, and it is the fact the mid-window FAST-FAIL in
+    // them without adding instrumentation, and it is the fact the mid-window fast-fail in
     // `lookat_bone_hooks` is currently blocked on (see its comment).
     let copies_total = er_telemetry_core::counters::PROFILE_RT_SRV_COPIES.load(Ordering::SeqCst);
     PROFILE_DRIVE_FRAMES_WINDOW_LAST.store(drive, Ordering::SeqCst);
     PROFILE_DISPLAY_FRAMES_WINDOW_LAST.store(display, Ordering::SeqCst);
-    // PUBLISH-STARVATION ATTRIBUTION (2026-07-03 soak: windows froze on the PRIOR character with the
+    // Publish-starvation attribution (2026-07-03 soak: windows froze on the prior character with the
     // drive running ~1:1, so the starving class is publish-side and the cumulative oracles cannot say
-    // WHICH window starved or WHY). Snapshot each publish/skip class per window (delta vs the previous
+    // which window starved or why). Snapshot each publish/skip class per window (delta vs the previous
     // reset) so a frozen window names its own cause: published==0 with a dominant torn/unkeyed/multi
     // count is the starvation signature; pin_moves counts content-RT recreations inside the window.
     let winof = |cum: &AtomicUsize, last: &AtomicUsize| -> usize {
@@ -501,24 +501,24 @@ fn loading_portrait_window_reset_inner(reason: &str, hold_bridge: bool) {
         &PROFILE_PUBLISH_SKIPPED_BADIOU,
         &PROFILE_PUBLISH_SKIPPED_BADIOU_WINDOW_MARK,
     );
-    // HARNESS-FAILURE semaphore (user directive 2026-07-06): a window that DROVE the model (produced
-    // readback frames) yet published ZERO clean portraits is a broken feature for that character, not an
-    // acceptable silent skip. The FAST-FAIL in the draw tick trips this mid-window (grace=0) so it fires
+    // Harness-failure semaphore (user directive 2026-07-06): a window that drove the model (produced
+    // readback frames) yet published zero clean portraits is a broken feature for that character, not an
+    // acceptable silent skip. The fast-fail in the draw tick trips this mid-window (grace=0) so it fires
     // the frame the render misses, not here at window close. This is the BACKSTOP: it records the
     // precise per-window dominant cause for the log, and only increments the failure counter if the
     // fast-fail latch did not already count this window (defensive; ~never with grace=0). Guarded on
-    // the pipeline having RUN -- a window that never got a model (build-side gap) is not a
+    // the pipeline having run -- a window that never got a model (build-side gap) is not a
     // publish-gate fault.
     //
-    // ANCHOR CHANGED FROM `drive` TO `render_drive` (run br-20260831-160354-2513). `drive` sits
+    // Anchor changed from `drive` to `render_drive` (run br-20260831-160354-2513). `drive` sits
     // behind `off_resources_ready`, which was shut for the whole run
-    // (`oracle_portrait_pump_block_off_resource = 710`), so `drive > 0` was NEVER true and this
+    // (`oracle_portrait_pump_block_off_resource = 710`), so `drive > 0` was never true and this
     // entire backstop was dead code. The window it existed for went by unreported: window #4 closed
     // `PORTRAIT-LOADWIN VERDICT #4: cause=kicked-no-publish ... publishes=0` and
     // `oracle_portrait_window_publish_failures` still read 0. `render_drive` is the tick that owns
     // the copy/readback/publish attempt, which is what "the window drove and still published
     // nothing" was always trying to say. Evaluated once, at close, so unlike the mid-window
-    // FAST-FAIL it cannot trip on frame 1 of a healthy window.
+    // fast-fail it cannot trip on frame 1 of a healthy window.
     if published == 0 && render_drive > 0 {
         let cause = if torn >= unkeyed && torn >= badiou && torn >= lowmask && torn > 0 {
             1 // torn: usable frames the tear metric rejected
@@ -573,13 +573,13 @@ fn loading_portrait_window_reset_inner(reason: &str, hold_bridge: bool) {
     PROFILE_PUBLISH_CLEAN_WINDOW.store(0, Ordering::SeqCst);
     PORTRAIT_WINDOW_PUBLISH_FAIL_LATCHED.store(0, Ordering::SeqCst);
     PORTRAIT_LAST_SKIP_CLASS.store(0, Ordering::SeqCst);
-    // THE VERDICTS ARE COMPUTED, NOT ASSERTED (run br-20260831-160354-2513). This line used to end
+    // The VERDICTS are computed, not asserted (run br-20260831-160354-2513). This line used to end
     // with two parentheticals stated as findings about the window it was describing:
     // `(drive<<display == froze early)` and `(clean=0 with drive>0 == PUBLISH FAILURE ...)`. They
-    // were legends for how to READ the numbers, printed unconditionally -- so the line fired
+    // were legends for how to read the numbers, printed unconditionally -- so the line fired
     // "froze early" and "PUBLISH FAILURE" on windows that had done neither, in the same sentence as
     // the numbers refuting it (`displayed 0` beside a verdict of `displayed=270`; `clean=0 ==
-    // PUBLISH FAILURE` beside `clean=268`). An instrument that reports a fault on a healthy window
+    // publish failure` beside `clean=268`). An instrument that reports a fault on a healthy window
     // is worse than no instrument: this project lost real time to it. Both are now derived from
     // this window's own data, and say nothing when the data does not support them.
     let anim_verdict = if display == 0 {
@@ -588,7 +588,7 @@ fn loading_portrait_window_reset_inner(reason: &str, hold_bridge: bool) {
         "not-displayed"
     } else if pose_blocked > 0 && drive == 0 {
         // The pose drive was skipped on purpose (null native GX resource wrapper), so a static head
-        // here is a BLOCKED pose drive, not a freeze. Naming the block is the whole point.
+        // here is a blocked pose drive, not a freeze. Naming the block is the whole point.
         "pose-drive-blocked"
     } else if drive == 0 {
         "pose-drive-idle"
@@ -606,7 +606,7 @@ fn loading_portrait_window_reset_inner(reason: &str, hold_bridge: bool) {
         // No pipeline tick at all: a build-side gap, not a publish-gate fault.
         "no-render-drive"
     };
-    // DID IT ANIMATE FOR AS LONG AS IT WAS ON SCREEN? The counts above cannot answer that -- they
+    // Did it animate for as long as it was on screen? The counts above cannot answer that -- they
     // say how many frames were published, never when the last one was. `frozen_before_cover_stop_ms`
     // is the answer as a subtraction: the gap between the last frame on which the head actually
     // changed and the moment the cover let go. 0 means the portrait was still moving when the
@@ -636,10 +636,10 @@ fn loading_portrait_window_reset_inner(reason: &str, hold_bridge: bool) {
     ));
 }
 
-/// Invalidate the depth-key MASKING PLANE for a NEW model: drop the cached mask and the pinned depth
+/// Invalidate the depth-key masking plane for a new model: drop the cached mask and the pinned depth
 /// candidate so the next `apply_depth_alpha_key` RECOMPUTES the silhouette from the new model's own depth
 /// buffer instead of reusing the previous character's cached mask. Without this, a System Quit -> Load
-/// Profile character switch would cut the OLD character's silhouette out of the NEW head until fresh depth
+/// Profile character switch would cut the old character's silhouette out of the new head until fresh depth
 /// happened to land. Fail-open in the gap (leaves the head opaque) -- never a stale wrong-shape cutout.
 pub fn invalidate_portrait_depth_mask() {
     PROFILE_DEPTH_PIN.store(0, Ordering::SeqCst);
@@ -681,7 +681,7 @@ pub fn portrait_center_nonblack(width: u32, height: u32, pixels: &[u8]) -> bool 
     false
 }
 
-/// True if the read-back RGBA8 image looks like a SOLID-COLOR-CHECKER PLACEHOLDER (our magenta/white or
+/// True if the read-back RGBA8 image looks like a solid-color-checker PLACEHOLDER (our magenta/white or
 /// magenta/yellow er-tpf cover, or an unrendered RT clear pattern) rather than a real 3D head render.
 ///
 /// WHY: `portrait_center_nonblack` only proves "not all black" -- a bright magenta checker (255,0,255)
@@ -691,7 +691,7 @@ pub fn portrait_center_nonblack(width: u32, height: u32, pixels: &[u8]) -> bool 
 /// render driver dies post-Continue). A real character render has many shaded colors and few fully-
 /// saturated "pure" texels; a checker is ~2 colors, each with channels pinned to 0/255. Heuristic over the
 /// center region: sample texels, quantize to 5 bits/channel, and call it a checker if (a) the 2 most-common
-/// quantized colors cover >= 85% of samples AND (b) >= 70% of samples are "pure" (every channel <16 or >239).
+/// quantized colors cover >= 85% of samples and (b) >= 70% of samples are "pure" (every channel <16 or >239).
 pub fn portrait_looks_like_checker(width: u32, height: u32, pixels: &[u8]) -> bool {
     let w = width as usize;
     let h = height as usize;

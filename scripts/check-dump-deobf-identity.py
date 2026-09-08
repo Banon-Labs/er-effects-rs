@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Prove a 1.16.2 Ghidra-dump VA is the SAME code as that VA in `eldenring-deobf.bin`.
+"""Prove a 1.16.2 Ghidra-dump VA is the same code as that VA in `eldenring-deobf.bin`.
 
 AGENTS.md records that for 1.16.2 the dump VA, the deobf VA and the live runtime VA are all
-identical (shift 0) -- and that `scripts/dump-deobf-shift.py` is CROSS-VERSION (its dump side
+identical (shift 0) -- and that `scripts/dump-deobf-shift.py` is cross-version (its dump side
 is still the 1.16.1 image) so it invents a nonzero shift and returns addresses that land
 mid-instruction. This tool is the cheap replacement for the "still byte-check anything you
-will CALL or PATCH" step: it asks the 1.16.2 MCP daemon for the first N instructions at a VA,
-disassembles the SAME VA out of the flat deobf image with objdump, and compares the
+will call or patch" step: it asks the 1.16.2 MCP daemon for the first N instructions at a VA,
+disassembles the same VA out of the flat deobf image with objdump, and compares the
 (offset, mnemonic) sequences.
 
 Matching sequences mean the two images agree at that address, i.e. the VA is safe to cite,
-call or patch. A mismatch means the address is wrong for one of the two images -- do NOT hook
+call or patch. A mismatch means the address is wrong for one of the two images -- do not hook
 it; find the real VA by byte signature (`scripts/find-deobf-bytes.py`).
 
 Usage:
@@ -44,7 +44,7 @@ MAX_INSTRUCTION_BYTES = 16
 SUBPROCESS_TIMEOUT_SECONDS = 20
 
 # objdump emits `ADDR:\tBYTES\tMNEMONIC OPERANDS`. A long instruction wraps onto a follow-on
-# `ADDR:\tBYTES` line with NO third field -- matching those yields a hex byte as a "mnemonic"
+# `ADDR:\tBYTES` line with no third field -- matching those yields a hex byte as a "mnemonic"
 # and desynchronises the comparison, so the third field is required.
 OBJDUMP_LINE = re.compile(r"^\s*([0-9a-f]+):\t[0-9a-f ]+\t\s*(.+)$")
 # objdump prints a lone prefix as its own token ahead of the real mnemonic ("rex push %rbx").
@@ -59,7 +59,7 @@ class McpUnavailable(RuntimeError):
 
 
 def mcp_query(method: str, params: dict, port: int) -> dict:
-    """Same framing as scripts/ghidra/mcp_query.py: 4-byte BE length + JSON."""
+    """Same framing as scripts/ghidra/mcp_query.py: 4-byte be length + JSON."""
     request = json.dumps({"id": "1", "method": method, "params": params}).encode()
     try:
         with socket.create_connection(("localhost", port), timeout=SUBPROCESS_TIMEOUT_SECONDS) as sock:
@@ -131,12 +131,12 @@ def deobf_instructions(va: int, count: int, image: Path) -> list[tuple[int, str]
 def normalise(mnemonic: str) -> str:
     """Fold the spelling differences between Ghidra's and objdump's mnemonics.
 
-    They disagree cosmetically on jumps (JZ/JE), on AT&T operand-size suffixes (MOVQ/MOV) and
+    They disagree cosmetically on jumps (JZ/JE), on at&T operand-size suffixes (MOVQ/MOV) and
     on the CALL/JMP spelling of a few forms. Only the *shape* of the instruction stream needs
     to agree for two images to be the same code at that address.
     """
     mnemonic = mnemonic.split(".")[0]
-    # objdump spells the sign/zero-extending moves with AT&T source+dest size letters
+    # objdump spells the sign/zero-extending moves with at&T source+dest size letters
     # (MOVSBL, MOVSWQ, MOVZBL, MOVSLQ, ...); Ghidra spells them MOVSX / MOVZX / MOVSXD.
     if re.fullmatch(r"MOVS[BWL][WLQ]", mnemonic):
         return "MOVSXD" if mnemonic == "MOVSLQ" else "MOVSX"
@@ -159,7 +159,7 @@ def normalise(mnemonic: str) -> str:
         "MOVABS": "MOV",
     }
     mnemonic = aliases.get(mnemonic, mnemonic)
-    # objdump prints AT&T size suffixes on some forms; Ghidra does not.
+    # objdump prints at&T size suffixes on some forms; Ghidra does not.
     if len(mnemonic) > 2 and mnemonic[-1] in "BWLQ" and mnemonic[:-1] in {
         "MOV", "PUSH", "POP", "ADD", "SUB", "CMP", "TEST", "CALL", "JMP", "LEA", "XOR", "AND", "OR",
     }:

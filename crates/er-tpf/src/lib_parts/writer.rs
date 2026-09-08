@@ -92,7 +92,7 @@ mod tests {
         // dwHeight @ +12, dwWidth @ +16.
         assert_eq!(u32_at(&dds, 12), h);
         assert_eq!(u32_at(&dds, 16), w);
-        // dwPitchOrLinearSize == width*4 (PITCH).
+        // dwPitchOrLinearSize == width*4 (pitch).
         assert_eq!(u32_at(&dds, 20), w * 4);
         // dwMipMapCount == 1 @ +28.
         assert_eq!(u32_at(&dds, 28), 1);
@@ -199,7 +199,7 @@ mod tests {
         // dwHeight @ +12, dwWidth @ +16.
         assert_eq!(u32_at(&dds, 12), h);
         assert_eq!(u32_at(&dds, 16), w);
-        // dwPitchOrLinearSize == width*4 (PITCH).
+        // dwPitchOrLinearSize == width*4 (pitch).
         assert_eq!(u32_at(&dds, 20), w * 4);
         // DDS_PIXELFORMAT.dwSize == 32 @ +76.
         assert_eq!(u32_at(&dds, 76), 32);
@@ -280,7 +280,7 @@ mod tests {
         assert_eq!(blob[0x0C], TPF_PLATFORM_PC);
         assert_eq!(blob[0x0D], TPF_DEFAULT_FLAG2);
         assert_eq!(blob[0x0E], TPF_ENCODING_SHIFT_JIS);
-        assert_eq!(blob[0x0F], 0); // extFlag bit0 CLEAR
+        assert_eq!(blob[0x0F], 0); // extFlag bit0 clear
 
         // Entry table begins at +0x10.
         let data_offset = u32_at(&blob, 0x10) as usize;

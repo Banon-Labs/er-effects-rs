@@ -194,13 +194,13 @@ pub struct Items {
     pub ammo: Ammo,
 }
 
-/// The four ammunition positions, each holding an item NAME.
+/// The four ammunition positions, each holding an item name.
 ///
 /// # This category has a shape of its own, and it is not a [`SlotList`]
 ///
-/// Every other category is a list of [`Slot`] objects. Ammo is a flat object keyed by POSITION,
+/// Every other category is a list of [`Slot`] objects. Ammo is a flat object keyed by position,
 /// whose value is the bare name string -- `{"arrow1": "Bone Arrow", "bolt2": "Lightning Bolt"}` --
-/// so there is no `order`, no `equipIndex`, no `equipSet` and no upgrade: the KEY is the equip
+/// so there is no `order`, no `equipIndex`, no `equipSet` and no upgrade: the key is the equip
 /// position, and an ammo entry that is not equipped simply does not exist. Taken from the
 /// planner's own code rather than inferred: its picker writes
 /// `character.items.ammo[slot] = ammo.name` for `slot` drawn from `['arrow1','arrow2']` and
@@ -209,13 +209,13 @@ pub struct Items {
 ///
 /// # Absent, empty, and the shape that was deleted
 ///
-/// All three of the captured fixtures carry NO ammo -- two spell it `"ammo": {}` (which is the
+/// All three of the captured fixtures carry no ammo -- two spell it `"ammo": {}` (which is the
 /// planner's own default for a new character) and the third, authored at planner version 3.7.7,
 /// has no `ammo` key at all, because the feature shipped in 3.9 (2025-07-25, "*New Feature: Ammo
 /// inventory*"). Unequipping the last one deletes the object again, so an absent key and an empty
 /// one mean the same thing and both have to parse.
 ///
-/// There WAS an older shape, and modelling it would be modelling something the planner destroys:
+/// There was an older shape, and modelling it would be modelling something the planner destroys:
 /// its migration runs `if (items.ammo && 'slots' in items.ammo) delete items.ammo`, so a
 /// `{"slots": [...]}` ammo object is not a variant to support -- it is a document the planner has
 /// already decided is unreadable.
@@ -227,7 +227,7 @@ pub struct Items {
 ///
 /// # The keys, and why they are a shared table
 ///
-/// [`AMMO_POSITION_KEYS`] holds the four spellings in `ChrAsmSlot` order, and BOTH directions
+/// [`AMMO_POSITION_KEYS`] holds the four spellings in `ChrAsmSlot` order, and both directions
 /// read it: this module to name the position it parsed, and `er-build-import-runtime`'s exporter
 /// to name the position it is writing. Two hand-written lists is two chances to interleave them
 /// differently, and the export direction has no read-back to catch it -- a bolt written under an
@@ -251,7 +251,7 @@ pub struct Ammo {
 /// The planner's four ammunition keys, **in `ChrAsmSlot` order** -- `Arrow1 = 6, Bolt1 = 7,
 /// Arrow2 = 8, Bolt2 = 9`.
 ///
-/// The ORDER is the engine's and the SPELLINGS are the planner's, and neither half is free to
+/// The order is the engine's and the SPELLINGS are the planner's, and neither half is free to
 /// change: the engine interleaves the two kinds while the planner's UI groups them
 /// (`['arrow1','arrow2']`, then `['bolt1','bolt2']`), so a table written in the planner's grouping
 /// and added to [`crate::equip::CHR_ASM_SLOT_AMMO_1`] puts every bolt in an arrow slot. One table,
@@ -261,7 +261,7 @@ pub const AMMO_POSITION_KEYS: [&str; 4] = ["arrow1", "bolt1", "arrow2", "bolt2"]
 impl Ammo {
     /// The four positions **in `ChrAsmSlot` order**, each with the planner key that names it.
     ///
-    /// The order is load-bearing and is the ENGINE's, not the planner's: `ChrAsmSlot` runs
+    /// The order is load-bearing and is the engine's, not the planner's: `ChrAsmSlot` runs
     /// `Arrow1 = 6, Bolt1 = 7, Arrow2 = 8, Bolt2 = 9`, interleaving the two kinds, while the
     /// planner's own UI groups them (`['arrow1','arrow2']` then `['bolt1','bolt2']`). A caller
     /// that indexed this array and added it to the base slot while using the planner's grouping

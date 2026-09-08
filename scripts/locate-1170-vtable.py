@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
 """Locate a 1.16.2 C++ vtable in the 1.17 image, then read every slot.
 
-WHY A SEPARATE TOOL. A virtual function is often reachable ONLY through its vtable: nothing
+Why a separate tool. A virtual function is often reachable only through its vtable: nothing
 `call`s it directly, so `resolve-1170-by-caller-rel32.py` finds no bridge, and its body is a
 `ret 0` stub or a two-instruction getter, so `map-rvas-1162-to-1170.py` finds nine equally-good
 shape matches. Both tools are working correctly and both are unable to answer. The vtable itself
-is the missing witness -- it is an ARRAY OF POINTERS, and an array is far more distinctive than
+is the missing witness -- it is an array of pointers, and an array is far more distinctive than
 any one of the stubs it points at.
 
-THE METHOD. Take the 1.16.2 vtable's slots. Some of their functions are already mapped to 1.17 by
+The method. Take the 1.16.2 vtable's slots. Some of their functions are already mapped to 1.17 by
 signature or by caller. For each such slot i with a known 1.17 target T', every place in the 1.17
 image holding the 8 bytes of T' is a candidate for "slot i lives here", implying a vtable base of
 `hit - i*8`. Collect that implication from every mapped slot and take the base that the most slots
-AGREE on. Independent slots voting for one base is the evidence; a base carried by a single slot is
+agree on. Independent slots voting for one base is the evidence; a base carried by a single slot is
 a coincidence waiting to happen and is reported as weak.
 
-WHY THIS IS SAFER THAN IT LOOKS. The vote is over pointer VALUES at fixed STRIDES, so a wrong base
+Why this is safer than it looks. The vote is over pointer values at fixed strides, so a wrong base
 would need several unrelated 1.17 functions to sit at exactly the right multiples of 8 from each
-other -- which is the same thing as being the vtable. Once the base is fixed, the REMAINING slots
+other -- which is the same thing as being the vtable. Once the base is fixed, the remaining slots
 are read straight out of the image, and those reads are not predictions at all: they are what the
 1.17 binary literally contains, including for the stubs neither other tool could touch.
 
-SUPERSEDED FOR ANY CLASS WITH SIBLINGS -- USE `find-1170-vtable-by-rtti.py` INSTEAD.
-Measured 2026-09-01: for `RideManipulator` (1.16.2 `0x142a2c108`) the vote TIED at 42 slots
-between `0x142a2c8e8` and `0x142a2f118`, and this file returned the first. It was WRONG. RTTI
-shows `0x142a2f118` is `RideManipulator` and `0x142a2c8e8` is `ChrManipulator` -- the BASE CLASS,
+Superseded for any class with siblings -- Use `find-1170-vtable-by-rtti.py` instead.
+Measured 2026-09-01: for `RideManipulator` (1.16.2 `0x142a2c108`) the vote tied at 42 slots
+between `0x142a2c8e8` and `0x142a2f118`, and this file returned the first. It was wrong. RTTI
+shows `0x142a2f118` is `RideManipulator` and `0x142a2c8e8` is `ChrManipulator` -- the base class,
 which of course shares almost every slot with its child. The vote cannot separate a class from its
 parent, because slot agreement is exactly what inheritance produces. Use this tool only for a
 class whose decorated name RTTI does not carry; otherwise the name chain is exact and free.

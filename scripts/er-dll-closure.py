@@ -5,19 +5,19 @@ Answers the question a generated profile has to get right: given the changes on 
 branch, which cdylibs must be loaded for the run to be testing them -- and is that set
 safe to load together?
 
-THE DIFF BASE IS `origin/main`, ALWAYS, AND ALWAYS THE WORKING TREE
+The diff base is `origin/main`, always, and always the working tree
 -------------------------------------------------------------------
 Stacked branches are the norm here, and a PR near the tip of a stack has a tiny diff
 against its immediate parent while the *stack* changes a great deal. Runtime-testing the
 tip means testing everything below it, so the base is `merge-base(origin/main, HEAD)` --
 never local `main` (which drifts) and never the parent branch.
 
-The far end of the diff is the WORKING TREE, not `HEAD`. Cargo compiles what is on disk:
+The far end of the diff is the working tree, not `HEAD`. Cargo compiles what is on disk:
 uncommitted edits and new untracked files are in the DLL whether or not they are committed.
 Diffing to `HEAD` would omit the crate whose code is genuinely loaded, which is the one
 failure this tool cannot afford.
 
-WHY A CLOSURE AND NOT JUST THE TOUCHED CRATE
+Why a closure and not just the touched crate
 --------------------------------------------
 `er-game-base` is a path dependency of 26 crates and `er-hook` of 15. Editing either
 changes the code inside DLLs whose own directories were never touched, so "the crates you
@@ -27,7 +27,7 @@ That same fan-out is why the conflict table exists: a wide closure will happily 
 loading the product next to `er_loading_portrait.dll`, which is documented in-tree as
 a double-Present-hook corruption.
 
-WHY CONFLICTS ARE RESOLVED LOUDLY RATHER THAN REFUSED OUTRIGHT
+Why conflicts are resolved loudly rather than refused outright
 --------------------------------------------------------------
 The first cut of this script refused on any conflicting pair. Measuring it against the real
 graph killed that: a change to `er-game-base` closes over all 16 shells and hits all five
@@ -41,7 +41,7 @@ described: this output, the profile header, the running block, and the run state
 excluded DLL is a stated non-result, not an omission.
 
 Two cases still refuse outright, because neither can be resolved without guessing:
-  * a conflict between two NON-product DLLs -- nothing ranks them;
+  * a conflict between two non-product DLLs -- nothing ranks them;
   * a DLL named explicitly with `--with` that a conflict would exclude -- an explicit
     request must never be quietly overridden, and must never corrupt the process either.
 
@@ -143,7 +143,7 @@ def owning_packages(changed: list[str]) -> tuple[set[str], list[str]]:
 
 
 def changed_paths(base: str) -> list[str]:
-    """Paths differing between `base` and the WORKING TREE, plus untracked non-ignored files."""
+    """Paths differing between `base` and the working tree, plus untracked non-ignored files."""
     tracked = git("diff", "--name-only", base).splitlines()
     untracked = git(
         "ls-files", "--others", "--exclude-standard"
@@ -177,7 +177,7 @@ def resolve_base(base_ref: str, fetch: bool) -> tuple[str, str]:
 
 
 PRODUCT_PACKAGE = "er-quickload"
-# The one conflict kind that is a claim about WHO IS DRIVING, not about corruption. `--agent-driven`
+# The one conflict kind that is a claim about who is driving, not about corruption. `--agent-driven`
 # may accept it; every other kind stays fatal. See `resolve_conflicts`.
 AGENT_DRIVEN_CONFLICT_KIND = "drives-input"
 
@@ -207,26 +207,26 @@ def resolve_conflicts(
     Returns (kept, excluded, unresolvable). `pinned` names packages the caller asked for
     explicitly: excluding one of those would silently override a direct request, so a pinned
     conflict loser is reported as unresolvable instead, and a pinned opt-in-only DLL is simply
-    kept -- naming it with `--with` IS the opt-in.
+    kept -- naming it with `--with` is the opt-in.
 
-    `agent_driven` accepts the ONE conflict kind that is a statement about who is driving rather
+    `agent_driven` accepts the one conflict kind that is a statement about who is driving rather
     than about corruption: `drives-input`. Its whole content is "a run that loads this cannot be
-    described as user-driven", which is not a defect when the run is DECLARED agent-driven --
+    described as user-driven", which is not a defect when the run is declared agent-driven --
     AGENTS.md's 2026-07-22 standing order requires the agent to drive every input, and the
     input harness is how. It is a narrow admission, not a bypass: no other kind is affected, the
     loser must still be `--with`-pinned, and the acceptance is recorded in `excluded` (kind
-    `drives-input-accepted`) so the run block STATES that the user was not in control.
+    `drives-input-accepted`) so the run block states that the user was not in control.
     """
     kept = set(selected)
     excluded: list[dict] = []
     unresolvable: list[dict] = []
     accepted: list[dict] = []
 
-    # OPT-IN-ONLY DLLs come out FIRST, before any conflict ranking. They are co-loadable --
-    # nothing about them corrupts a run -- but they CHANGE THE GAME the user sees, and a
+    # OPT-in-only DLLs come out first, before any conflict ranking. They are co-loadable --
+    # nothing about them corrupts a run -- but they change the game the user sees, and a
     # dependency-closure walk is not consent. A gameplay mod nobody asked for arriving because
     # it happens to depend on a crate this branch touched is how a run stops being the run the
-    # user wanted. `--with` is the consent, and it is the ONLY way in.
+    # user wanted. `--with` is the consent, and it is the only way in.
     for name in sorted(set(table.get("opt_in_only", {})) & kept):
         if name in pinned:
             continue
@@ -248,7 +248,7 @@ def resolve_conflicts(
         loser = b if a == PRODUCT_PACKAGE else a
         if loser in pinned:
             if agent_driven and conflict["kind"] == AGENT_DRIVEN_CONFLICT_KIND:
-                # NOT `excluded` -- the package is KEPT. It goes in its own list so the run block
+                # Not `excluded` -- the package is kept. It goes in its own list so the run block
                 # can say "the player was not in control" without listing a loaded DLL under a
                 # heading that means "withheld".
                 accepted.append(
@@ -336,12 +336,12 @@ def compute(
         candidates = {PRODUCT_PACKAGE}
         fallback = "no changed file feeds any cdylib; falling back to the product DLL alone"
     elif PRODUCT_PACKAGE not in candidates:
-        # THE PRODUCT IS NEVER OPTIONAL (bd er-effects-rs-l9tu, fixed 2026-09-04). `--with X` on a
+        # The product is never optional (bd er-effects-rs-l9tu, fixed 2026-09-04). `--with X` on a
         # tree whose changes feed no cdylib used to produce a closure of exactly X: naming any
         # package made `candidates` non-empty, which skipped the fallback above, and the product
         # left the profile without a word. That run is not merely surprising, it is unreadable --
-        # the staged sidecar is still `er-quickload.toml` and the launcher's TESTIMONY step still
-        # waits for the PRODUCT's own `runtime-config: loaded` line, so the run either hangs at
+        # the staged sidecar is still `er-quickload.toml` and the launcher's testimony step still
+        # waits for the product's own `runtime-config: loaded` line, so the run either hangs at
         # testimony or prints a block crediting the product for a load that was not its.
         #
         # Unioning it in rather than refusing, because every companion chains onto the product's
@@ -360,9 +360,9 @@ def compute(
         candidates, table, pinned, agent_driven
     )
 
-    # `--without` is applied LAST, after conflict ranking, so an exclusion cannot be undone by a
+    # `--without` is applied last, after conflict ranking, so an exclusion cannot be undone by a
     # later rule -- and it is recorded in `excluded` with the same shape as a conflict drop, so
-    # the run block SAYS which DLL was withheld. A silent omission is how an A/B turns into two
+    # the run block says which DLL was withheld. A silent omission is how an A/B turns into two
     # runs nobody can tell apart. Its use case is the param-patching class: any DLL that mutates
     # a param row at runtime moves the Seamless lobby-key fingerprint and drops the player out
     # of matchmaking, and the only way to prove which one is to re-run without it.
@@ -377,7 +377,7 @@ def compute(
             }
         )
 
-    # PRODUCT FIRST, then the rest alphabetically. me3 loads natives in profile order, and the
+    # Product first, then the rest alphabetically. me3 loads natives in profile order, and the
     # companions resolve the product's `er_effects_union_register` export to chain onto prologues it
     # already owns (scripts/me3-launch-lib.sh says the same). A plain `sorted()` put
     # `er-armament-icons` ahead of `er-quickload`, so the companion's install thread could run

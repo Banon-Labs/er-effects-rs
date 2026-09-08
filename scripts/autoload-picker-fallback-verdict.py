@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """RAM verdict for the autoload -> save-picker fallback (user 2026-08-26).
 
-Scores ONE runtime run purely from `oracle_*` telemetry. No screenshots, no user
+Scores one runtime run purely from `oracle_*` telemetry. No screenshots, no user
 adjudication: the run either shows the dead end becoming a picker and the pick
 superseding it, or it does not.
 
 The feature under test: when the autoload finds its Continue slot unloadable it must
-REJECT the save, arm the picker LATE (post-boot), and let the pick supersede the bad
+reject the save, arm the picker late (post-boot), and let the pick supersede the bad
 selection. The old behavior spun on that branch forever, so "picker armed at boot"
-is NOT this feature -- arming must happen strictly AFTER the first rejection, which
+is not this feature -- arming must happen strictly after the first rejection, which
 is why every gate below is ordered against the rejection row.
 
 Usage:
@@ -31,9 +31,9 @@ REJECT_FIELD = "oracle_autoload_empty_slot_rejections"
 
 
 def _rows_from(path: Path) -> list[dict]:
-    """Accept BOTH shapes the runtime writes.
+    """Accept both shapes the runtime writes.
 
-    `er-quickload-telemetry.json` as the DLL leaves it on disk is ONE dict -- the last
+    `er-quickload-telemetry.json` as the DLL leaves it on disk is one dict -- the last
     snapshot, not a timeseries. The watcher-collected artifact is a list of per-poll
     dicts. Passing the live file to `load_rows` yields zero rows and the run scores
     UNPROVEN for a reason that has nothing to do with the feature, which is exactly the
@@ -104,11 +104,11 @@ def evaluate(rows: list[dict]) -> tuple[list[tuple[str, str, str]], str]:
         f"slot rejected as empty-like at t={t_rej}ms ({REJECT_FIELD}={_num(rows[rej_i], REJECT_FIELD)})",
     ))
 
-    # --- Gate 2: picker armed LATE. Arming at boot is the OLD no-save path, not this feature.
+    # --- Gate 2: picker armed late. Arming at boot is the old no-save path, not this feature.
     if len(rows) == 1:
-        # One snapshot has no ordering to read, and `armed` is a LIVE flag that the pick
+        # One snapshot has no ordering to read, and `armed` is a live flag that the pick
         # clears -- so a run that armed, drew and was picked reports armed=0, identical to
-        # one that never armed at all. Judge it by the CUMULATIVE draw counter instead and
+        # one that never armed at all. Judge it by the cumulative draw counter instead and
         # say plainly that the ordering half is unproven rather than inventing a verdict.
         drew = _num(rows[0], "oracle_save_picker_overlay_draw_hits")
         gates.append((
@@ -173,9 +173,9 @@ def _tail_gates(rows: list[dict], gates: list) -> tuple[list, str]:
         + ("" if picks >= 1 else " -- no save was chosen"),
     ))
 
-    # --- Gate 5: the pick SUPERSEDED the bad selection and a real character loaded.
+    # --- Gate 5: the pick superseded the bad selection and a real character loaded.
     # stats compositing is the loaded-character oracle: stats and picker are mutually
-    # exclusive by construction, so stats drawing proves the picker released AND the
+    # exclusive by construction, so stats drawing proves the picker released and the
     # game thread built readable lines from an actual character.
     stats_built = max(_num(r, "oracle_stats_text_built") for r in rows)
     stats_drew = max(_num(r, "oracle_overlay_stats_draw_hits") for r in rows)
@@ -190,9 +190,9 @@ def _tail_gates(rows: list[dict], gates: list) -> tuple[list, str]:
 
     # --- Gate 5b: the title-time deserializer must never have run.
     # 0x14067b290 has exactly one native caller, CS::MoveMapStep::DoSaveStuff, reachable
-    # only from the IN-WORLD MoveMapStep::Update. Calling it from the boot title reads the
+    # only from the in-world MoveMapStep::Update. Calling it from the boot title reads the
     # save stream from position=32 and dispatches gaitemInsTable[-1] -> AV at 0x67141a.
-    # Four separate attempts to GATE its preconditions each moved the fault one step later
+    # Four separate attempts to gate its preconditions each moved the fault one step later
     # without removing it, so the only passing value is zero: the picked save must reach the
     # world down the native Continue path, exactly like the default save already does.
     deser_field = "oracle_title_time_deser_calls"
@@ -211,10 +211,10 @@ def _tail_gates(rows: list[dict], gates: list) -> tuple[list, str]:
             "branch the picked save took",
         ))
 
-    # --- Gate 5c: the boot check validated the container the RUNTIME actually opens.
+    # --- Gate 5c: the boot check validated the container the runtime actually opens.
     # The 2026-08-26 root cause: under Seamless the game opens ER0000.co2, but
     # default_save_file_for_steam_id64 falls back to ER0000.sl2 when the .co2 holds no
-    # character -- so boot reported DEFAULT-USER-SAVE (+98ms) on a container ersc.dll never
+    # character -- so boot reported default-user-save (+98ms) on a container ersc.dll never
     # reads. missing_save_selection_pending() was therefore false, should_hold_save_check never
     # held, the save-data job passed through at +14s with a blank ProfileSummary, and the picker
     # armed ~1076s later against a title that had already spent its menu-open attempts. Every
@@ -239,10 +239,10 @@ def _tail_gates(rows: list[dict], gates: list) -> tuple[list, str]:
 
     # --- Gate 6: world readiness.
     #
-    # This gate USED to require `oracle_can_move`, and that was wrong. That oracle latches only
-    # after >=60 consecutive frames of INJECTED-forward havok motion -- its own comment calls it
+    # This gate used to require `oracle_can_move`, and that was wrong. That oracle latches only
+    # after >=60 consecutive frames of injected-forward havok motion -- its own comment calls it
     # the "input-causes-movement gate". It proves the movement-injection harness works. A run
-    # where a HUMAN loads a character and walks around never arms that probe, so `can_move` stays
+    # where a human loads a character and walks around never arms that probe, so `can_move` stays
     # false and `move_probe_moved_frames` stays 0 no matter how thoroughly the load succeeded.
     # Demanding it here failed every honest user-driven run and would have blocked a PR whose
     # load was demonstrably fine (2026-08-26: char_name="Ordinary Bean", grounded, real havok
@@ -284,17 +284,17 @@ def _selftest() -> int:
 
     failures = []
 
-    # 1. A DLL without the feature scores UNPROVEN, never PASS.
+    # 1. A DLL without the feature scores UNPROVEN, never pass.
     g, o = evaluate([row(0), row(100)])
     if o != "UNPROVEN":
         failures.append(f"old-DLL run should be UNPROVEN, got {o}")
 
-    # 2. The old dead-end behavior (rejects, never arms) must FAIL.
+    # 2. The old dead-end behavior (rejects, never arms) must fail.
     g, o = evaluate([row(0, **{REJECT_FIELD: 0}), row(50, **{REJECT_FIELD: 3})])
     if o != "FAIL":
         failures.append(f"spin-forever run should FAIL, got {o}")
 
-    # 3. The boot no-save path must NOT be mistaken for the feature.
+    # 3. The boot no-save path must not be mistaken for the feature.
     g, o = evaluate([
         row(0, **{REJECT_FIELD: 0}, oracle_save_picker_overlay_armed=True),
         row(50, **{REJECT_FIELD: 1}, oracle_save_picker_overlay_armed=True),
@@ -304,7 +304,7 @@ def _selftest() -> int:
     if not any(gate == "picker_armed_late" and v == "FAIL" for gate, v, _ in g):
         failures.append("boot-armed picker should fail specifically on picker_armed_late")
 
-    # 4. Armed but never composited must FAIL (armed != visible).
+    # 4. Armed but never composited must fail (armed != visible).
     g, o = evaluate([
         row(0, **{REJECT_FIELD: 0}),
         row(50, **{REJECT_FIELD: 1}),
@@ -325,10 +325,10 @@ def _selftest() -> int:
             oracle_char_name="angrE", oracle_player_present=True,
             oracle_grounded=True, oracle_play_time_live=True),
     ]
-    # A run that is green on every OTHER gate but predates the routing counter is
+    # A run that is green on every other gate but predates the routing counter is
     # UNPROVEN, not PASS: without oracle_title_time_deser_calls there is no way to tell
     # whether the picked save reached the world natively or through the title-time
-    # deserialize that crashes. Scenario 8 below is the same run WITH the counter at 0.
+    # deserialize that crashes. Scenario 8 below is the same run with the counter at 0.
     g, o = evaluate(good)
     if o != "UNPROVEN":
         failures.append(f"good run lacking the deser counter should be UNPROVEN, got {o}: {g}")
@@ -338,7 +338,7 @@ def _selftest() -> int:
     if o != "FAIL":
         failures.append(f"msgbox run should FAIL, got {o}")
 
-    # 6. Reached the picker but never got a character back = FAIL, not PASS.
+    # 6. Reached the picker but never got a character back = fail, not pass.
     half = [dict(r) for r in good]
     half[3] = row(200, **{REJECT_FIELD: 1}, oracle_save_picker_overlay_pick_count=1)
     g, o = evaluate(half)
@@ -360,7 +360,7 @@ def _selftest() -> int:
     clean = [dict(r) for r in good]
     for r in clean:
         r["oracle_title_time_deser_calls"] = 0
-    # Clean ROUTING but no boot-container field yet: UNPROVEN, not PASS. Scenario 11 is the
+    # Clean routing but no boot-container field yet: UNPROVEN, not pass. Scenario 11 is the
     # same run with the container field present and matching, which is the real all-green case.
     g, o = evaluate(clean)
     if o != "UNPROVEN":
@@ -391,8 +391,8 @@ def _selftest() -> int:
     if o != "PASS":
         failures.append(f"matching-container run should PASS, got {o}: {g}")
 
-    # 12. A HUMAN-driven run: character in world, but nothing injected input, so can_move is
-    # false and move_probe_moved_frames is 0. This must PASS -- it is the shape of every run the
+    # 12. A human-driven run: character in world, but nothing injected input, so can_move is
+    # false and move_probe_moved_frames is 0. This must pass -- it is the shape of every run the
     # user actually performs, and the old gate failed all of them.
     human = [dict(r) for r in okc]
     human[3]["oracle_can_move"] = False

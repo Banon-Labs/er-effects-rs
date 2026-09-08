@@ -1,25 +1,25 @@
-// NATIVE LOADING-SCREEN EXPOSURE SEMAPHORE (er-effects-rs-wmw defect #1, user report 2026-07-30:
+// Native loading-screen exposure SEMAPHORE (er-effects-rs-wmw defect #1, user report 2026-07-30:
 // "the custom loading screen disappeared for about one frame and the vanilla loading screen flashed
 // through").
 //
-// The defect is a PER-FRAME event, so it needs a per-frame oracle: the aggregate counters we already
+// The defect is a per-frame event, so it needs a per-frame oracle: the aggregate counters we already
 // had (`oracle_boot_view_stop_reason`, `oracle_portrait_onto_draw_hits`) can say the cover stopped,
-// but never that a frame REACHED THE SCREEN with the game's own loading screen visible. This module
+// but never that a frame reached the screen with the game's own loading screen visible. This module
 // closes that gap. On every Present the detour reports which gate decided this frame's cover; when
-// the game's `CS::LoadingScreen` is live and the cover did NOT draw, the frame is latched as an
-// EXPOSURE frame -- literally the frame the user saw vanilla -- and attributed to the blocking gate.
+// the game's `CS::LoadingScreen` is live and the cover did not draw, the frame is latched as an
+// exposure frame -- literally the frame the user saw vanilla -- and attributed to the blocking gate.
 //
 // Telemetry-only: nothing here changes what is drawn. It converts a visual report into a RAM oracle
 // so the flash-through can be reproduced and attributed without reading a screenshot.
 //
-// NOT the same thing as `BOOT_VIEW_NATIVE_EXPOSURE_FRAMES` / `oracle_boot_view_native_exposure_*`
+// Not the same thing as `BOOT_VIEW_NATIVE_EXPOSURE_FRAMES` / `oracle_boot_view_native_exposure_*`
 // (branch loading-portrait-semaphores-20260730). That one lives in the cover state machine and
-// counts times the cover was RESUMED because the native loading screen reappeared -- a mitigation,
+// counts times the cover was resumed because the native loading screen reappeared -- a mitigation,
 // measured at the decision layer, which cannot say whether a frame actually reached the screen. This
 // one is measured at Present, the last point before the user's eyes, and counts the frames
 // themselves. Whether that resume mitigation works is exactly a question these counters can answer.
 //
-// WHICH LOADING SCREENS THIS JUDGES (2026-08-30). Not all of them. The product cover is a
+// Which loading screens this judges (2026-08-30). Not all of them. The product cover is a
 // boot/character-load surface: it owns the dead early-boot gap and a System->Quit -> Load Character
 // switch, and the game's own screen for a fast travel, a death respawn or an area transition was
 // never ours to draw over. Those frames are now filed under `NATIVE_LS_GATE_UNOWNED_LOAD` instead
@@ -28,7 +28,7 @@
 // is up, so re-arm" signal is the one that must never be used.
 //
 // Reading the oracles:
-//   oracle_native_ls_exposure_owned_frames  > 0  THE DEFECT: a screen the cover owed the user and
+//   oracle_native_ls_exposure_owned_frames  > 0  the DEFECT: a screen the cover owed the user and
 //                                      did not draw. This is the acceptance number.
 //   oracle_native_ls_exposure_frames   every uncovered vanilla-loading-screen frame, owned or not
 //   oracle_native_ls_exposure_max_run  == 1 a one-frame flash (the exact user report)
@@ -39,17 +39,17 @@
 //   oracle_native_ls_exposure_last_stop_reason  BOOT_VIEW_STOP_REASON at the last exposure frame
 //                                      (1 = release fade, 2 = FPS bail, 3 = world handoff)
 //
-// THE OTHER HALF OF THE FRAME (2026-08-22). This module only judges frames where the native
-// loading screen is LIVE, and that turned out to be a blind spot as large as the one it closed: the
-// "loading screen reappears after Escape" report happens AFTER the native screen stops ticking, so
+// The other half of the frame (2026-08-22). This module only judges frames where the native
+// loading screen is live, and that turned out to be a blind spot as large as the one it closed: the
+// "loading screen reappears after Escape" report happens after the native screen stops ticking, so
 // the only per-frame oracle in the DLL switched itself off for the whole window the user was
 // describing and the reproducing run logged nothing at all. The stale frames now go to
 // `cover_after_release.rs` instead of being dropped. Nothing here changed to make room for it.
 //
-// A frame is only judged while the native loading screen is LIVE. `LOADING_SCREEN_UPDATE_LAST_MS` is
+// A frame is only judged while the native loading screen is live. `LOADING_SCREEN_UPDATE_LAST_MS` is
 // stamped by the native CS::LoadingScreen::Update hook every frame the screen ticks, so freshness is
 // the live signal. The window is deliberately wider than one frame (the game presents as slowly as
-// ~5 fps during loading, bd FPS-DELTA-CONFIRMED-load2-20fps-load1-45fps) so a slow frame is not
+// ~5 fps during loading, bd FPS-delta-confirmed-load2-20fps-load1-45fps) so a slow frame is not
 // misread as the screen having closed; it is still far below the 1500 ms window-close quiet period
 // used by [`portrait_loadwin_tick`].
 const NATIVE_LS_LIVE_FRESH_MS: u64 = 250;
@@ -57,7 +57,7 @@ const NATIVE_LS_LIVE_FRESH_MS: u64 = 250;
 /// Called once per Present on the game swapchain with the gate that decided this frame's cover.
 /// Cheap by construction (a handful of relaxed atomics) -- it runs on the render thread.
 ///
-/// `base` is the game module base, used only by the post-release MIRROR path below.
+/// `base` is the game module base, used only by the post-release mirror path below.
 pub(crate) fn native_ls_exposure_record(base: usize, gate: usize) {
     use er_telemetry_core::counters::{
         BOOT_VIEW_STOP_REASON, LOADING_SCREEN_UPDATE_LAST_MS, NATIVE_LS_COVERED_FRAMES,
@@ -69,19 +69,19 @@ pub(crate) fn native_ls_exposure_record(base: usize, gate: usize) {
     let update_last = LOADING_SCREEN_UPDATE_LAST_MS.load(Ordering::SeqCst) as u64;
     let now_ms = crate::experiments::boot_view_epoch_ms().max(1);
     // One line, once, mapping this clock to the log's `[+Nms]` prefix. Placed here because this is
-    // the earliest thing that runs every frame AND already reads the boot-view clock, so it neither
+    // the earliest thing that runs every frame and already reads the boot-view clock, so it neither
     // needs a home of its own nor risks anchoring that clock. One atomic load per frame after the
     // first.
     log_clock_map_once();
-    // MIRROR PATH (2026-08-22). The staleness test below is what made this function blind to the
-    // "loading screen reappears after Escape" report: the defect happens AFTER the native screen
+    // Mirror path (2026-08-22). The staleness test below is what made this function blind to the
+    // "loading screen reappears after Escape" report: the defect happens after the native screen
     // has stopped ticking, which is precisely when this returns. Those frames are not
     // uninteresting, they are the interesting ones -- hand them to the post-release watch instead
     // of dropping them. The accounting below is untouched; this is an added path, not a changed
     // one, and the two are mutually exclusive by construction.
     if update_last == 0 || now_ms.saturating_sub(update_last) > NATIVE_LS_LIVE_FRESH_MS {
-        // The game's loading screen is not on screen this frame; nothing to be EXPOSED -- but
-        // something may still be COVERING, which is a different question with its own oracles.
+        // The game's loading screen is not on screen this frame; nothing to be exposed -- but
+        // something may still be covering, which is a different question with its own oracles.
         cover_after_release_record(base, now_ms);
         return;
     }
@@ -90,20 +90,20 @@ pub(crate) fn native_ls_exposure_record(base: usize, gate: usize) {
         NATIVE_LS_EXPOSURE_CUR_RUN.store(0, Ordering::SeqCst);
         return;
     }
-    // WHOSE LOADING SCREEN IS THIS? The composite reports gate 4 for every frame it declined to
-    // draw, which is the honest answer to the question IT was asked ("did the cover draw?") and the
+    // Whose loading screen is this? The composite reports gate 4 for every frame it declined to
+    // draw, which is the honest answer to the question it was asked ("did the cover draw?") and the
     // wrong answer to the one this module asks ("did the user see vanilla where our cover should
     // have been?"). A fast travel, a death respawn and an area transition all put a
     // `CS::LoadingScreen` up that the product has never covered. Re-file those under their own gate
     // so the defect bucket means the defect -- `er_telemetry_core::counters` carries the argument
     // and the run that forced it.
     //
-    // GATE 2 REACHES THIS TOO (run br-20260831-160354-2513). The re-file used to test only gate 4,
+    // Gate 2 reaches this too (run br-20260831-160354-2513). The re-file used to test only gate 4,
     // so the ownership question was never asked of `NATIVE_LS_GATE_EPOCH_WORLD_LIVE` -- and that
-    // gate returns EARLIER, at `present_overlay.rs`'s epoch fast-path, upstream of the composite.
+    // gate returns earlier, at `present_overlay.rs`'s epoch fast-path, upstream of the composite.
     // Every gate-2 frame was therefore counted `owned` unconditionally. Measured cost: that run
     // reported `oracle_native_ls_exposure_owned_frames = 318` with
-    // `by_gate = [0,0,318,0,0,295]`, of which 310 were a plain FAST TRAVEL by the reloaded
+    // `by_gate = [0,0,318,0,0,295]`, of which 310 were a plain fast travel by the reloaded
     // character (`warp_requested=true` at log 8479/8483, window 310412..319432 ms) -- the exact
     // category the gate-4 path was already excusing correctly two windows earlier, where the same
     // warp shape produced 243 frames filed as gate 5. So the identical event was a defect or not
@@ -155,7 +155,7 @@ pub(crate) fn native_ls_exposure_record(base: usize, gate: usize) {
             native_ls_gate_name(gate)
         ));
     } else if run == 1 {
-        // Said plainly, and ONCE per hole, because the previous wording sent an investigation
+        // Said plainly, and once per hole, because the previous wording sent an investigation
         // after a cover re-arm for a load that never happened.
         append_autoload_debug(format_args!(
             "native loading screen at {now_ms}ms is the GAME's (fast travel / death / area transition) -- the product cover does not cover these, so this is not an exposure defect (gate={gate} boot_view_stop_reason={stop_reason} frames_so_far={n})"

@@ -1,4 +1,4 @@
-//! Decides WHEN a rejection is worth putting on screen, and what it should say.
+//! Decides when a rejection is worth putting on screen, and what it should say.
 //!
 //! Kept separate from the code that displays it so the policy can be tested on a host with no game
 //! attached. The display side is a game-thread call into `CSPopupMenu`; this half is arithmetic.
@@ -6,12 +6,12 @@
 //! # Why this is not simply "one banner per rejection"
 //!
 //! Measured 2026-08-06: Seamless retries roughly every 20 seconds, and during a hunt in a busy
-//! bracket most of those retries end in a rejection at the SAME wrong place — the same host, or
+//! bracket most of those retries end in a rejection at the same wrong place — the same host, or
 //! the same popular area, coming back around. A banner every time would be wallpaper within a
 //! minute, and a notification the player learns to ignore is worse than none: it costs screen space
 //! and teaches them the mod is noisy.
 //!
-//! So a place is announced when it is NEW relative to the last thing announced, and consecutive
+//! So a place is announced when it is new relative to the last thing announced, and consecutive
 //! rejections at that same place stay silent. Moving to a different wrong place is genuinely new
 //! information and is announced again, including a return to somewhere announced earlier — the
 //! player's question is "where am I being sent right now", not "where have I ever been sent".
@@ -21,9 +21,9 @@ use core::fmt::Write as _;
 use crate::invasion_warp::BlockKey;
 use crate::local_invasion::RejectReason;
 
-/// A few words naming WHY a destination was refused, for the banner.
+/// A few words naming why a destination was refused, for the banner.
 ///
-/// The player can already see WHERE from the block name; what they cannot see is whether the mod
+/// The player can already see where from the block name; what they cannot see is whether the mod
 /// refused it on the rule they set, on a place they excluded by hand, or because it could not
 /// resolve a name at all. Those lead to different actions — move, un-exclude, or open the map —
 /// so collapsing them into a bare "rejected" wastes the notification.
@@ -48,7 +48,7 @@ pub const fn reason_phrase(reason: RejectReason) -> &'static str {
 ///
 /// A success and a rejection are different announcements about the same place, which is why this
 /// is one enum rather than two independent latches: an invasion that finally lands at a block the
-/// player was repeatedly rejected from MUST speak, and a rejection after a success must speak too.
+/// player was repeatedly rejected from must speak, and a rejection after a success must speak too.
 /// Two separate latches would have each suppressed the other's news.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Announced {
@@ -62,7 +62,7 @@ enum Announced {
 /// Tracks what was last announced so repeats can be suppressed.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RejectNotice {
-    /// The most recent ANNOUNCEMENT. `None` before the first one.
+    /// The most recent announcement. `None` before the first one.
     last_announced: Option<Announced>,
     /// Rejections suppressed since that announcement, for the telemetry line.
     suppressed: usize,
@@ -104,11 +104,11 @@ impl RejectNotice {
         }
         let mut text = String::new();
         // Short on purpose: the banner's width is bounded by the donor string's allocation, and a
-        // message that overflows is silently truncated rather than wrapped. WHERE and WHY, because
+        // message that overflows is silently truncated rather than wrapped. Where and why, because
         // the place alone does not tell the player whether to move, un-exclude somewhere, or open
         // their map.
         //
-        // The NAME when there is one. A block id is precise and unreadable -- being told you were
+        // The name when there is one. A block id is precise and unreadable -- being told you were
         // rejected from `m60_50_39_00` on a banner that closes itself in a couple of seconds is a
         // lookup task, not a notification. The id remains the fallback rather than being dropped,
         // because it is the only thing available before the map has been opened, and a rejection
@@ -129,11 +129,11 @@ impl RejectNotice {
         Some(text)
     }
 
-    /// Feed a destination the filter ACCEPTED. Returns the text to display, or `None`.
+    /// Feed a destination the filter accepted. Returns the text to display, or `None`.
     ///
-    /// THE BUG THIS FIXES: the banner announced every rejection and then said nothing when the
+    /// The bug this FIXES: the banner announced every rejection and then said nothing when the
     /// hunt finally succeeded, so the last thing left on screen was a rejection -- the player was
-    /// told where they were NOT going and never told they had arrived. Worse, the rejection latch
+    /// told where they were not going and never told they had arrived. Worse, the rejection latch
     /// was never cleared by the success, so a later rejection at that same block stayed silent as
     /// a "repeat" of an announcement from before the invasion that happened in between.
     ///
@@ -168,7 +168,7 @@ impl RejectNotice {
         Some(text)
     }
 
-    /// Feed a destination that arrived while the filter was SWITCHED OFF.
+    /// Feed a destination that arrived while the filter was switched off.
     ///
     /// The banner is not a by-product of filtering. With the master switch off nothing is judged,
     /// so there is no verdict to report -- but where the server just sent the player is still the
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn the_block_id_is_the_fallback_when_nothing_has_a_name_yet() {
-        // Before the world map is opened NOTHING has a name, which is the same condition that makes
+        // Before the world map is opened nothing has a name, which is the same condition that makes
         // `area` mode fail closed. A rejection with no place at all would be worse than an
         // unfriendly one, so the id stays as the fallback rather than being dropped.
         let mut notice = RejectNotice::new();
@@ -278,7 +278,7 @@ mod tests {
         assert!(text.contains("m60_42_36_00"), "{text}");
     }
 
-    /// THE POINT OF THE MODULE. Seamless retries every ~20s and the same wrong place recurs; a
+    /// The point of the module. Seamless retries every ~20s and the same wrong place recurs; a
     /// banner every time is wallpaper, and a notification the player ignores is worse than none.
     #[test]
     fn consecutive_rejections_at_the_same_place_stay_silent() {
@@ -313,7 +313,7 @@ mod tests {
     }
 
     /// Returning somewhere announced earlier is announced again: the player's question is where
-    /// they are being sent NOW, not where they have ever been sent.
+    /// they are being sent now, not where they have ever been sent.
     #[test]
     fn returning_to_an_earlier_place_announces_again() {
         let mut notice = RejectNotice::new();
@@ -326,7 +326,7 @@ mod tests {
         );
     }
 
-    /// Disabled must still ADVANCE the state. Otherwise switching the option on mid-session would
+    /// Disabled must still advance the state. Otherwise switching the option on mid-session would
     /// announce a place the player was rejected from minutes ago, as though it had just happened.
     #[test]
     fn disabled_stays_silent_but_still_tracks_where_we_are() {
@@ -367,7 +367,7 @@ mod tests {
     }
 
     /// The banner is width-bounded by the donor string's allocation, so the text has to stay short
-    /// or it is silently truncated. Checked across EVERY reason, not one -- the bound is only
+    /// or it is silently truncated. Checked across every reason, not one -- the bound is only
     /// meaningful if it holds for the longest phrase, and adding a wordier reason later is exactly
     /// how this would regress unnoticed.
     #[test]
@@ -396,7 +396,7 @@ mod tests {
         }
     }
 
-    /// The reason is the whole point of the notice: WHERE alone does not tell the player whether to
+    /// The reason is the whole point of the notice: Where alone does not tell the player whether to
     /// move, un-exclude a place, or open their map.
     #[test]
     fn the_message_names_why_not_just_where() {
@@ -415,7 +415,7 @@ mod tests {
         );
     }
 
-    /// A different REASON at the same place is new information -- the place stopped being refused
+    /// A different reason at the same place is new information -- the place stopped being refused
     /// for the old cause -- so it is announced rather than suppressed as a repeat.
     #[test]
     fn a_new_reason_at_the_same_place_is_announced() {
@@ -463,7 +463,7 @@ mod tests {
 
     #[test]
     fn a_success_clears_the_rejection_latch_so_a_later_rejection_speaks() {
-        // THE REPORTED BUG. Rejected at a place, invaded successfully, rejected at that same place
+        // The reported bug. Rejected at a place, invaded successfully, rejected at that same place
         // again: the third event is news and was being swallowed as a repeat of the first.
         let mut notice = RejectNotice::new();
         assert!(

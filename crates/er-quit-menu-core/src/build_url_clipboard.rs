@@ -8,7 +8,7 @@
 //! visible field is a Scaleform `DefineEditText` inside `02_990`, driven by the game's own
 //! keyboard-event handling, and nothing in that handling consults a clipboard.
 //!
-//! The image DOES contain a working `CF_UNICODETEXT` reader -- `FUN_1426760c0`, which opens the
+//! The image does contain a working `CF_UNICODETEXT` reader -- `FUN_1426760c0`, which opens the
 //! clipboard on an HWND held at `this+0x8b0` and copies the wide string into a `DLString`. It is
 //! not reachable from here: it occupies slot `+0x100` of exactly one vtable (`0x143296bb8`, the
 //! only vtable in the whole image that holds it), whose siblings measure text through
@@ -17,8 +17,8 @@
 //! SoftwareKeyboardManagerImpl` (Steam gamepad text input) with a Scaleform `02_990` MenuWindow
 //! fallback -- and neither half touches that vtable.
 //!
-//! So the paste happens on OUR side of the boundary: this DLL reads the clipboard and puts the
-//! text into the field. Once when the field opens, and again whenever the clipboard CHANGES while
+//! So the paste happens on our side of the boundary: this DLL reads the clipboard and puts the
+//! text into the field. Once when the field opens, and again whenever the clipboard changes while
 //! it is open -- the second half is what makes a player's Ctrl+V appear to work, because by the
 //! time they press it they have already copied the link.
 //!
@@ -40,7 +40,7 @@ use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, Glo
 // siblings are. Declared by hand rather than worked around, in the same style as the WinHTTP
 // imports in `er-build-import-runtime::http`: the exact ABI is then visible at the call site and
 // cannot drift with a crate upgrade. It is needed on exactly one path -- the allocation that
-// `SetClipboardData` REFUSED, which this process still owns and must not leak.
+// `SetClipboardData` refused, which this process still owns and must not leak.
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn GlobalFree(hmem: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
@@ -113,7 +113,7 @@ unsafe fn read_open_clipboard() -> Option<String> {
 /// A monotonically increasing count of clipboard writes, process-wide.
 ///
 /// This is the cheap half of the live mirror: it needs no clipboard lock, cannot fail, and cannot
-/// block another process, so the open field can ask it every frame. Only a CHANGE justifies the
+/// block another process, so the open field can ask it every frame. Only a change justifies the
 /// real read below. Zero is returned when the caller has no clipboard access at all, which the
 /// mirror treats as "no news" rather than as a change.
 pub fn clipboard_sequence() -> u32 {
@@ -151,14 +151,14 @@ pub fn build_url_initial_text() -> String {
 }
 
 // ---------------------------------------------------------------------------------------------
-// WRITING. The read above exists because the game's own field has no paste; this exists because the
+// Writing. The read above exists because the game's own field has no paste; this exists because the
 // Generate Build Link row produces something the player will want to send to someone, and a link
 // that only ever appeared inside a browser tab they then closed is a link they cannot get back.
 //
-// Under Wine the Windows clipboard is bridged to the host X11/Wayland selection in BOTH directions,
+// Under Wine the Windows clipboard is bridged to the host X11/Wayland selection in both directions,
 // so a link copied here can be pasted into a Linux application. That bridge is asynchronous going
 // out as well as coming in -- ownership is handed over when the host asks for it -- which is why
-// this reports only that the clipboard ACCEPTED the data, never that a paste elsewhere will work.
+// this reports only that the clipboard accepted the data, never that a paste elsewhere will work.
 
 /// Put `text` on the clipboard as `CF_UNICODETEXT`.
 ///
@@ -166,7 +166,7 @@ pub fn build_url_initial_text() -> String {
 /// same reason the read returns `None`: the caller's response to all of them is identical, and the
 /// row reports the outcome in one word either way.
 ///
-/// The clipboard takes ownership of the global on success, so it is freed ONLY on the paths where
+/// The clipboard takes ownership of the global on success, so it is freed only on the paths where
 /// `SetClipboardData` did not take it -- freeing it afterwards would hand every later paste a
 /// dangling block.
 pub fn set_clipboard_text(text: &str) -> bool {
@@ -180,7 +180,7 @@ pub fn set_clipboard_text(text: &str) -> bool {
         if OpenClipboard(Some(HWND::default())).is_err() {
             return false;
         }
-        // `EmptyClipboard` is not optional: it is what makes this process the clipboard OWNER, and
+        // `EmptyClipboard` is not optional: it is what makes this process the clipboard owner, and
         // `SetClipboardData` fails without that ownership.
         if EmptyClipboard().is_err() {
             let _ = CloseClipboard();

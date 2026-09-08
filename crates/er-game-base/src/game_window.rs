@@ -9,11 +9,11 @@
 //! ERROR_INVALID_WINDOW_HANDLE, the unwrap panics, and the panic unwinds out of an
 //! `extern "system"` callback, which is an abort.
 //!
-//! MEASURED, 2026-08-29, twice, in different modules and therefore not a property of either:
+//! Measured, 2026-08-29, twice, in different modules and therefore not a property of either:
 //! `er_build_watermark.dll` died that way 229 ms after the first backbuffer draw; with that shell
 //! excluded, `er_net_effects.dll` -- the next module to win the overlay-host claim -- died the
-//! same way at +2060 ms. A third run with the same binaries did NOT die and reached a mapped
-//! 3072x1712 window, which is what makes it a RACE against window creation rather than a
+//! same way at +2060 ms. A third run with the same binaries did not die and reached a mapped
+//! 3072x1712 window, which is what makes it a race against window creation rather than a
 //! systematic failure, and what makes waiting the fix.
 //!
 //! # What it does not claim
@@ -37,7 +37,7 @@ struct Rect {
     bottom: i32,
 }
 
-// user32 is NOT linked by default the way kernel32 is, so the window calls need the attribute or
+// user32 is not linked by default the way kernel32 is, so the window calls need the attribute or
 // the DLLs fail at link with `undefined symbol: EnumWindows`.
 #[cfg(windows)]
 #[link(name = "user32")]

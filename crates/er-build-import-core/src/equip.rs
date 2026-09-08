@@ -14,7 +14,7 @@
 //! | armour | `protectors.<part>.slots[].equipSet` | non-null = this is the worn one |
 //! | talismans | `talismans.slots[].equipSet` | 0..4 |
 //! | spells | `spells.slots[].order` | memorisation order; there is no equip position |
-//! | ammo | `items.ammo` | `{arrow1, bolt1, arrow2, bolt2}` -> name; the KEY is the position |
+//! | ammo | `items.ammo` | `{arrow1, bolt1, arrow2, bolt2}` -> name; the key is the position |
 //! | quickbar | `items.tools.slots[].equipIndex` | `< 10` -> quickbar position |
 //! | pouch | `items.tools.slots[].equipIndex` | `10..16` -> up, right, left, down, 1, 2 |
 //! | physick | `items.crystalTears` | two entries, `null` when empty |
@@ -83,17 +83,17 @@ pub const POUCH_SLOTS: usize = 6;
 /// Physick tear slots.
 pub const PHYSICK_SLOTS: usize = 2;
 
-// THE ARMAMENT SLOT MAP, OWNED HERE BECAUSE TWO DIRECTIONS NOW USE IT.
+// The armament slot map, owned here because two directions now use it.
 //
 // The planner blocks its six armament indices three-per-hand (`equipIndex >= 3 ? row 1 : row 0`),
 // while `ChrAsmSlot` INTERLEAVES them (`0 = WeaponLeft1, 1 = WeaponRight1, 2 = WeaponLeft2`, ...).
 // The importer needs planner -> slot; the exporter needs slot -> planner. Keeping one table and
 // deriving both means the pair cannot drift into a hand swap that only shows up in a round trip.
 //
-// INFERRED, and the one mapping in the importer not proven from the binary: the planner's first
-// block is taken to be the RIGHT hand, because the game's own Status screen lists `R Armament 1..3`
+// Inferred, and the one mapping in the importer not proven from the binary: the planner's first
+// block is taken to be the right hand, because the game's own Status screen lists `R Armament 1..3`
 // before `L Armament 1..3` and the planner mirrors that layout. If imported builds come out
-// hand-swapped, THIS TABLE is the single line to flip -- and flipping it moves both directions at
+// hand-swapped, this table is the single line to flip -- and flipping it moves both directions at
 // once, which is the whole reason it is here.
 
 /// `ChrAsmSlot` of each planner armament index, in planner order.
@@ -165,12 +165,12 @@ pub struct EquipRef {
     pub item_id: u32,
     /// Bare param row id, which is what most native equip calls take.
     pub param_id: u32,
-    /// OTHER category-tagged ids the game files this same item under.
+    /// Other category-tagged ids the game files this same item under.
     ///
     /// The equip asks the inventory "where is item X". That question has to be asked about every
     /// row the item can be, not just the row the catalog answered with, for exactly the reason
     /// [`Grant::also_known_as`](crate::plan::Grant::also_known_as) carries the same list: an
-    /// upgraded flask or talisman is a DIFFERENT goods row from the unupgraded one, so a
+    /// upgraded flask or talisman is a different goods row from the unupgraded one, so a
     /// character who has drunk one Sacred Tear does not hold the id the build named. Two
     /// consecutive live imports reported the Crimson and Cerulean flasks `NOT-IN-INVENTORY`
     /// while they were in the player's pouch, once per row of the unupgraded name.
@@ -298,7 +298,7 @@ impl EquipPlan {
     /// Derived from [`EquipPlan::positions`] rather than counted independently, because two
     /// counts of the same thing are two chances to disagree -- and when they disagreed, the
     /// larger one was printed as the denominator of a score the smaller one had already passed.
-    /// Spells are NOT included: they are memorised by a different native and reported on their
+    /// Spells are not included: they are memorised by a different native and reported on their
     /// own line with their own denominator.
     pub fn occupied(&self) -> usize {
         self.positions().len()
@@ -306,7 +306,7 @@ impl EquipPlan {
 
     /// Every position this plan intends to fill, in the order they are written.
     ///
-    /// THIS is the denominator. A position that never reaches a slot has to show up here and
+    /// This is the denominator. A position that never reaches a slot has to show up here and
     /// then fail to be accounted for, which is what makes it visible; a pass that reports a
     /// score against the subset it happened to attempt can print a perfect run while dropping
     /// everything it never tried.
@@ -534,7 +534,7 @@ impl PositionResult {
     }
 }
 
-/// Totals over a [`EquipLedger`], with the PLAN as the denominator.
+/// Totals over a [`EquipLedger`], with the plan as the denominator.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LedgerCounts {
     /// Positions the plan asked for.
@@ -548,7 +548,7 @@ pub struct LedgerCounts {
     /// The sum of [`Self::mismatched`], [`Self::not_in_inventory`] and [`Self::not_attempted`],
     /// kept as one number because the headline reports failure as one number.
     pub failed: usize,
-    /// Positions that were WRITTEN and read back holding something else.
+    /// Positions that were written and read back holding something else.
     pub mismatched: usize,
     /// Positions whose item could not be found in the character's inventory, so nothing was
     /// written.
@@ -583,7 +583,7 @@ impl LedgerCounts {
 /// The importer used to report equipping as `verified / attempted`. When a whole family of
 /// positions was never attempted, they left the denominator with them, and a run that dropped
 /// them printed `10/10 verified` -- a perfect score for a partial import. The ledger is
-/// constructed from [`EquipPlan::positions`] BEFORE anything is written, so a position that is
+/// constructed from [`EquipPlan::positions`] before anything is written, so a position that is
 /// never visited stays in the ledger as `unaccounted` and shows up in the headline.
 #[derive(Debug, Clone, Default)]
 pub struct EquipLedger {
@@ -654,7 +654,7 @@ impl EquipLedger {
         counts
     }
 
-    /// THE BALANCE. Planned, reached, still holding the build's item at the end -- with the
+    /// The balance. Planned, reached, still holding the build's item at the end -- with the
     /// difference between each pair named on the same line.
     ///
     /// This exists because the numbers that would have caught the last defect were all present
@@ -664,7 +664,7 @@ impl EquipLedger {
     /// which of them had ever been right. A pass that quietly drops a fifth of its work is the
     /// failure; a pass that cannot say how much it dropped is how that survives.
     ///
-    /// `stripped` is the number of positions that PASSED their own read-back and were wrong
+    /// `stripped` is the number of positions that passed their own read-back and were wrong
     /// again by the end -- the only ones anything can be said to have taken back off. It is the
     /// caller's because only the pass can observe it.
     pub fn balance(&self, stripped: usize) -> String {
@@ -948,9 +948,9 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
         &mut out.contested,
     );
 
-    // AMMUNITION NEEDS NO CONTEST. Every other category can put two rows on one position, because
+    // Ammunition needs no contest. Every other category can put two rows on one position, because
     // the planner leaves a stale `equipIndex` on the row that used to hold it; ammo cannot, because
-    // the POSITION IS THE KEY -- an object has one value per key, and the planner deletes the key
+    // the position is the key -- an object has one value per key, and the planner deletes the key
     // when the slot is emptied. So this is a plain walk rather than a `settle`, and there is
     // nothing for `contested` to record.
     out.ammo = vec![None; AMMO_SLOTS];

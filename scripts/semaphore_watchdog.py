@@ -2,20 +2,20 @@
 """Progress-idle teardown watchdog for game runtime probes (pure logic, no I/O).
 
 The runtime model (user directive 2026-07-17, bd runtime-teardown-semaphore-progress-watchdog-2026-07-17)
-is semaphore-progress, not wall-clock: a game run should tear down a small delay AFTER the last
-in-memory RAM oracle the specific test cares about, and should be killed early if it makes NO
+is semaphore-progress, not wall-clock: a game run should tear down a small delay after the last
+in-memory RAM oracle the specific test cares about, and should be killed early if it makes no
 progress for an idle window -- with the canonical 180s cap only as a never-should-hit backstop.
 
 This class is the enforcement. A probe feeds it the parsed telemetry dict every sample; it returns
 a Decision. It is deliberately I/O-free so it unit-tests without a game and drops into any probe
 loop (Windows y22i, Linux readiness watcher, future goal-validation harnesses).
 
-THE ONE RULE THAT MAKES IT CORRECT: the idle timer is reset ONLY by a monotonic PROGRESS oracle
+The one rule that makes it CORRECT: the idle timer is reset only by a monotonic progress oracle
 advancing (oracle_loading_bar_progress_permille = real Gauge_3 world-load progress, phase counters,
-mount-phase). It must NEVER be gated on a liveness counter like oracle_present_hook_hits or a frame
-tick -- those advance every rendered frame even while the world is wedged at WORLD RES WAIT, which
+mount-phase). It must never be gated on a liveness counter like oracle_present_hook_hits or a frame
+tick -- those advance every rendered frame even while the world is wedged at world RES wait, which
 would mask the exact stall we are trying to catch. "Progress" here = a watched key's numeric value
-INCREASED since the previous sample (so permille resetting 1000->0 between the first and second load
+increased since the previous sample (so permille resetting 1000->0 between the first and second load
 is correctly treated as a non-event, not a stall and not progress).
 """
 from __future__ import annotations
@@ -58,7 +58,7 @@ def coerce_number(value) -> float | None:
 class ProgressWatchdog:
     """Decide when a game runtime probe should tear down.
 
-    idle_window_seconds : max time (once armed) with NO progress-oracle advance before a stall
+    idle_window_seconds : max time (once armed) with no progress-oracle advance before a stall
                           teardown. The forcing-function target is ~1s; start looser and tighten
                           per phase as sub-second progress instrumentation is proven.
     teardown_delay_seconds : after the terminal semaphore fires, keep running this long so final
@@ -67,10 +67,10 @@ class ProgressWatchdog:
                           that also never advances a progress oracle for the idle window -- normally
                           the stall path fires first.
     terminal_predicate  : telemetry -> bool; the objective is answered (e.g. world readiness).
-    arm_predicate       : telemetry -> bool; until this is True the idle timer does NOT run (so a
+    arm_predicate       : telemetry -> bool; until this is True the idle timer does not run (so a
                           legitimately coarse pre-load boot phase cannot false-stall). None == armed
                           immediately.
-    progress_keys       : oracle keys whose INCREASE counts as progress.
+    progress_keys       : oracle keys whose increase counts as progress.
     """
 
     idle_window_seconds: float = 10.0

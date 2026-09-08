@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Trace what Seamless Co-op executes during an invasion, live.
 
-WHY
+Why
 ---
-Seamless Co-op has its OWN invasion system -- it does not use retail Elden Ring matchmaking --
+Seamless Co-op has its own invasion system -- it does not use retail Elden Ring matchmaking --
 and `ersc.dll` is Themida-packed, so the file cannot be read statically. The packing only
 protects the FILE: by the time the player uses the invasion item, the code is unpacked and
 running. Tracing it reads straight through the protection.
@@ -11,7 +11,7 @@ running. Tracing it reads straight through the protection.
 The deliverable is a BACKTRACE at each hit. That is what names the ersc.dll functions on the
 invasion path, which is the thing static analysis could not produce.
 
-MODES
+Modes
 -----
   --hooks     Intercept ersc RVAs and record args + backtrace on each hit. Cheap; start here.
               Defaults to the one ersc address already established: +0x8f4b0, the callback that
@@ -21,25 +21,25 @@ MODES
               empty, which is what Themida's missing unwind data would cause. Expect the game
               to slow down noticeably while it runs.
 
-HOW TO USE IT (the point is a human-driven window)
+How to use it (the point is a human-driven window)
 --------------------------------------------------
   1. Start the game with the Seamless profile and get in-world.
   2. Start this tracer.
   3. Use the invasion item, and keep going until the game says it found someone to invade.
   4. Ctrl-C. Everything is written to the output JSONL.
 
-HOW WE REACH THE PROCESS
+How we reach the process
 ------------------------
 The game runs under Wine/Proton, so a Linux-side `frida.attach()` cannot see it -- there is no
 Linux process to attach to. The working path in this repo is the GADGET: `frida-gadget.dll` is
 loaded into the game as an me3 `[[natives]]` entry and listens on 127.0.0.1:27042, and we
-connect to that as a REMOTE DEVICE. Same mechanism as scripts/frida/badge-scale.py.
+connect to that as a remote device. Same mechanism as scripts/frida/badge-scale.py.
 
 So the game must be launched with a profile that includes the gadget. There is one at
 /home/banon/Elden/pr190-invasion-warp-seamless-frida.me3 (written by this repo); it is the
 normal invasion-warp Seamless profile plus the gadget DLL.
 
-RUN IT (frida is provisioned ephemerally by uv; nothing is installed system-wide):
+Run it (frida is provisioned ephemerally by uv; nothing is installed system-wide):
     uv run --with frida python3 /home/banon/projects/er-mods-rs/scripts/frida-trace-ersc.py --hooks
     uv run --with frida python3 /home/banon/projects/er-mods-rs/scripts/frida-trace-ersc.py --hooks --rva 0x8f4b0
     uv run --with frida python3 /home/banon/projects/er-mods-rs/scripts/frida-trace-ersc.py --stalker
@@ -49,7 +49,7 @@ SELFTEST (no game, no frida):
 
 SAFETY
 ------
-  * READ-ONLY: the agent never writes target memory and never calls into the target.
+  * Read-ONLY: the agent never writes target memory and never calls into the target.
   * Detaches on observable events -- the gadget script being destroyed (game gone) or stdin
     reaching EOF (operator done) -- so nothing is left running on the user's game.
 """
@@ -79,7 +79,7 @@ DEFAULT_HOOKS = [
 def summarize(records: list[dict]) -> list[str]:
     """Turn raw hit records into the ordered, deduped call path.
 
-    Separated from the frida plumbing because this is the part that produces the ANSWER, and it
+    Separated from the frida plumbing because this is the part that produces the answer, and it
     should be checkable without a game. Order is first-seen, because the sequence in which ersc
     functions are reached is the thing being reconstructed -- sorting would destroy it.
     """
@@ -121,7 +121,7 @@ def _selftest() -> int:
         == ["ersc.dll+0x8f4b0", "ersc.dll+0x1234", "eldenring.exe+0xaf9d20"],
         "a hit contributes itself then its callers, in order",
     )
-    # THE POINT OF THE TOOL: the SEQUENCE is the finding. Sorting or set-ordering it would
+    # The point of the TOOL: the sequence is the finding. Sorting or set-ordering it would
     # destroy exactly the information the trace exists to recover.
     check(
         summarize(
@@ -205,7 +205,7 @@ def main() -> int:
                 print(f"       <- [{frame.get('kind')}] {frame.get('at')}")
 
     # The game runs under Wine/Proton, so there is no Linux process to attach to. The gadget
-    # inside the game listens on a socket and we connect to THAT.
+    # inside the game listens on a socket and we connect to that.
     try:
         device = frida.get_device_manager().add_remote_device(args.gadget)
         session = device.attach("Gadget")
@@ -254,7 +254,7 @@ def main() -> int:
         print("=" * 72)
         print()
 
-        # Stay resident on OBSERVABLE events only -- the gadget script being destroyed (the game
+        # Stay resident on observable events only -- the gadget script being destroyed (the game
         # is gone), or the operator finishing. No timer and no poll: a trace window is exactly as
         # long as it takes a human to use the item and get a match, which is not a number this
         # script can know.

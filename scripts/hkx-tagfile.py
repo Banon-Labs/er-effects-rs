@@ -5,7 +5,7 @@ Enough of the format to enumerate typed items and read reflected struct members,
 which is all that is needed to pull hkbBehaviorGraphStringData::eventNames out of
 an ELDEN RING <chr>.behbnd.dcx payload without HKLib.
 
-Sections: TAG0{ SDKV, DATA, TYPE{TPTR,TSTR,TNA1,FSTR,TBDY,THSH,TPAD}, INDX{ITEM,PTCH} }
+Sections: TAG0{ SDKV, data, type{TPTR,TSTR,TNA1,FSTR,TBDY,THSH,TPAD}, INDX{item,PTCH} }
 """
 import struct, sys, json
 
@@ -142,7 +142,7 @@ class Tagfile:
     def _patches(self):
         s, e = self.sec['TAG0/INDX/PTCH']
         o = s
-        self.ptch = {}   # DATA offset -> item index
+        self.ptch = {}   # Data offset -> item index
         while o + 8 <= e:
             ti, cnt = struct.unpack_from('<II', self.d, o)
             o += 8

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # One-shot persistent import + auto-analysis of the dearxan-DEOBFUSCATED ER mapped image
-# (eldenring-deobf.bin) into a reusable Ghidra project. Unlike the ermaporch DUMP project,
-# this program's addresses are DEOBF-NATIVE (base 0x140000000, file offset == RVA) -- i.e.
-# the same address space scripts/disas-deobf.sh / er_disasm use, with NO dump-vs-deobf shift.
+# (eldenring-deobf.bin) into a reusable Ghidra project. Unlike the ermaporch dump project,
+# this program's addresses are DEOBF-native (base 0x140000000, file offset == RVA) -- i.e.
+# the same address space scripts/disas-deobf.sh / er_disasm use, with no dump-vs-deobf shift.
 # That makes it the right target for the RF function finder when you want VAs you can
 # actually call/patch (run: scripts/ghidra/find-functions-rf.sh --proj-dir ... --proj-name erdeobf).
 #
-# The image is a RAW mapped blob (no PE headers), so it is imported with the Binary loader,
-# x86-64, based at 0x140000000. Auto-analysis of a ~94MB blob is SLOW (many minutes) -- run
+# The image is a raw mapped blob (no PE headers), so it is imported with the Binary loader,
+# x86-64, based at 0x140000000. Auto-analysis of a ~94MB blob is slow (many minutes) -- run
 # this in the background. It is offline static analysis; there is no runtime-probe cap concern.
 #
 # Same tmpdir gotcha as the other Ghidra helpers: force java.io.tmpdir onto /home (the /tmp
@@ -31,7 +31,7 @@ mkdir -p "$TMP" "$PROJ"
 export TMPDIR="$TMP"
 export GHIDRA_JAVA_OPTIONS="-Djava.io.tmpdir=$TMP"
 
-# Import WITHOUT auto-analysis, then run analysis via AnalyzeWithProgress.java so the long
+# Import without auto-analysis, then run analysis via AnalyzeWithProgress.java so the long
 # analysis phase logs a live progress heartbeat (analyzeHeadless saves the program afterward).
 "$HEADLESS" "$PROJ" "$PROJ_NAME" \
   -import "$IMG" \

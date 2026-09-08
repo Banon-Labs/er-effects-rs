@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
-"""Measure ELDEN RING 1.16.2 -> 1.17 STRUCT FIELD OFFSET drift from the two images.
+"""Measure ELDEN RING 1.16.2 -> 1.17 STRUCT field offset drift from the two images.
 
-THE BLIND SPOT THIS CLOSES
+The blind spot this closes
 --------------------------
-`er-game-base` now refuses any game ADDRESS that has no verified 1.17 mapping, so a moved
-function announces itself in the log. There is no equivalent protection for a struct FIELD
-OFFSET. `PlayerGameData` grew 8 bytes in 1.17 -- `GetScadutreeBlessing` is byte-identical
-between the builds EXCEPT `[rcx+0xab5]` -> `[rcx+0xabd]` -- and a constant like
+`er-game-base` now refuses any game address that has no verified 1.17 mapping, so a moved
+function announces itself in the log. There is no equivalent protection for a struct field
+offset. `PlayerGameData` grew 8 bytes in 1.17 -- `GetScadutreeBlessing` is byte-identical
+between the builds except `[rcx+0xab5]` -> `[rcx+0xabd]` -- and a constant like
 `GAME_MAN_SAVED_MAP_C30_OFFSET` carrying a 1.16.2 value into a 1.17 object produces no
 refusal, no crash and no log line. It silently reads, or writes, the wrong member.
 
-HOW IT IS MEASURED (not guessed)
+How it is measured (not guessed)
 --------------------------------
-A field offset is used by INSTRUCTIONS. So take a function whose 1.16.2 -> 1.17 identity is
+A field offset is used by instructions. So take a function whose 1.16.2 -> 1.17 identity is
 already established (`docs/recon/rva-map-1162-to-1170.functions.tsv`, ~128k pairs; the
 hand-verified subset is in `...verified.tsv`), decode both bodies, and keep only the pairs
-that are instruction-for-instruction identical EXCEPT for memory displacements on a register
-base. In such a pair the code did not change, so every displacement that DID change is a
+that are instruction-for-instruction identical except for memory displacements on a register
+base. In such a pair the code did not change, so every displacement that did change is a
 field that moved, and by exactly how much. That set is the struct drift, measured.
 
 `scripts/map-rvas-1162-to-1170.py::build_masked_pattern` masks precisely these bytes so its
 signatures survive the drift. This tool is the inverse: it keeps what that one discards.
 
-WHAT IS DELIBERATELY NOT COUNTED AS STRUCT DRIFT
+What is deliberately not counted as STRUCT drift
 -----------------------------------------------
 * `[rip + disp]`   -- code and data moved; the displacement changing says nothing about a struct.
 * branch/call targets -- same reason.
@@ -31,24 +31,24 @@ WHAT IS DELIBERATELY NOT COUNTED AS STRUCT DRIFT
   fields.
 * absolute `[0x1400...]` operands -- data addresses, not fields.
 * immediates -- `add rcx, 0xab5` really can carry a field offset, but an immediate is far more
-  often a size, an id or a flag mask, so immediate changes go in a SEPARATE, explicitly
-  lower-confidence table and any function containing one is downgraded to MIXED.
+  often a size, an id or a flag mask, so immediate changes go in a separate, explicitly
+  lower-confidence table and any function containing one is downgraded to mixed.
 
-WHAT A RESULT MEANS
+What a result means
 -------------------
 A row here says: in N functions that are otherwise identical between the builds, displacement
-`old` became `new`. That is strong evidence the field at `old` in SOME structure moved. It is
-NOT evidence about a particular repo constant, because the same number is a field offset in
-many unrelated structures. So the cross-reference (`--report`) always prints BOTH sides: how
+`old` became `new`. That is strong evidence the field at `old` in some structure moved. It is
+not evidence about a particular repo constant, because the same number is a field offset in
+many unrelated structures. So the cross-reference (`--report`) always prints both sides: how
 often that value was seen drifting and how often it was seen unchanged, plus named example
 functions, and it refuses to convert either into a verdict on its own. A missing offset costs a
 lookup; a wrong one writes.
 
-USAGE
+Usage
     --selftest                     assert the parser, the classifier and a known 1.17 field move
     --inventory                    part 1: count and classify every *_OFFSET constant
     --scan                         part 2: measure drift across every mapped pair   (~1 min)
-    --attribute                    ask Ghidra which TYPE each drifting function operates on
+    --attribute                    ask Ghidra which type each drifting function operates on
     --regions [--min-fields N]     cluster the raw rows into candidate structures
     --report [--autoload-only]     cross-reference the inventory against the measurement
     --explain 0xc30                everything measured about one displacement
@@ -64,18 +64,18 @@ ORDER: --scan, then --attribute (needs `bash scripts/ghidra/mcp-up-1162.sh`), th
 `--scan` and `--find-displacement` decode ~29 MB of function bodies on each side; background them.
 Everything else reads cached output under `--out-dir`.
 
-WHERE A FUNCTION ENDS IS PART OF THE MEASUREMENT
+Where a function ends is part of the measurement
 -----------------------------------------------
 MSVC emits no unwind record for a leaf or a thunk, so `.pdata` cannot say where those end -- and
 they are exactly the shape a field getter takes. Their extent is DECODED (forward-branch
 watermark; the implementation is shared with `scripts/verify-rva-map-1170.py` rather than written
 twice), never guessed at the next `.pdata` start. Guessing ran each such comparison through the
 inter-function padding -- 0xCC in one build, 0x90 in the other -- and into unrelated neighbours,
-which desynchronises the two decodes and reports the function as CHANGED. On 2026-08-30 that
+which desynchronises the two decodes and reports the function as changed. On 2026-08-30 that
 produced six false "this hooked function changed in 1.17" verdicts, `SetSaveSlot` among them.
 `--check-extents` is the standing proof; `--selftest` pins the shape.
 
-THE ONE RULE FOR READING THE OUTPUT: a displacement is not a field. `0xb0c` moved in 1.17 -- in
+The one rule for reading the OUTPUT: a displacement is not a field. `0xb0c` moved in 1.17 -- in
 `MoWwiseManImp`. `DIALOG_SLOT_CURSOR_B0C_OFFSET` is also `0xb0c` and indexes something else
 entirely, and is unaffected. Never act on a number without the structure beside it.
 """
@@ -99,7 +99,7 @@ FUNCTION_MAP = ROOT / "docs/recon/rva-map-1162-to-1170.functions.tsv"
 VERIFIED_MAP = ROOT / "docs/recon/rva-map-1162-to-1170.verified.tsv"
 NEEDED_MAP = ROOT / "docs/recon/rva-map-1162-to-1170.needed-verified.tsv"
 # Resolved by scripts/struct_drift_out.py, not spelled here: this used to be a literal
-# containing an agent SESSION UUID, which is correct for exactly one session and wrong for
+# containing an agent session UUID, which is correct for exactly one session and wrong for
 # every other one. `$ER_STRUCT_DRIFT_OUT` still overrides, and so does `--out-dir`.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import struct_drift_out  # noqa: E402 -- the path is set up on the line above
@@ -133,7 +133,7 @@ GLOBAL_DISPLACEMENT_MIN = 0x100000
 # images
 # --------------------------------------------------------------------------------------------
 class Image:
-    """A flat (virtual-layout) PE image: file offset == RVA, VA == BASE + offset."""
+    """A flat (virtual-layout) PE image: file offset == RVA, VA == base + offset."""
 
     def __init__(self, path: Path):
         self.path = path
@@ -173,7 +173,7 @@ class Image:
 # --------------------------------------------------------------------------------------------
 # operand-text parsing
 #
-# Capstone's Intel `op_str` is compared as TEXT rather than through `insn.operands`. Two reasons,
+# Capstone's Intel `op_str` is compared as text rather than through `insn.operands`. Two reasons,
 # both practical: the text already normalises a disp8/disp32 re-encoding (`[rcx + 0x7f]` and
 # `[rcx + 0x80]` print the same shape though their byte lengths differ), and detail-mode operand
 # access in Python costs several times a lite decode over 29 MB of code. The parse below is
@@ -181,7 +181,7 @@ class Image:
 # --------------------------------------------------------------------------------------------
 # Capstone prints an immediate below 10 in decimal and everything else as `0x..`, so a
 # number-matcher that only knows `0x` silently misses `cmp ..., 0` -- and a `0` -> `1` change then
-# reads as a different SHAPE and the whole function is discarded. Both spellings are matched.
+# reads as a different shape and the whole function is discarded. Both spellings are matched.
 _NUM = r"(?:0x[0-9a-f]+|\d+)"
 _SIGNED_TAIL = re.compile(r"\s*([+-])\s*(" + _NUM + r")\s*$")
 _ABSOLUTE = re.compile(r"^\s*(" + _NUM + r")\s*$")
@@ -251,7 +251,7 @@ def parse_mem_body(body: str) -> tuple[str, int, str]:
 
 
 def immediates(shape_text: str, op_str: str) -> list[int]:
-    """Every immediate OUTSIDE a `[...]`, in order -- the ones `split_memory` turned into `#I`."""
+    """Every immediate outside a `[...]`, in order -- the ones `split_memory` turned into `#I`."""
     out: list[int] = []
     i = 0
     n = len(op_str)
@@ -288,8 +288,8 @@ def _sibling_leaf_extent():
     """`leaf_extent` from `scripts/verify-rva-map-1170.py`, imported rather than reimplemented.
 
     That file already solved this exact problem and paid for the solution: the obvious rule --
-    stop at the first `ret` -- is WRONG for a range-checked getter, whose fast-path `ret` sits
-    IN FRONT of the branch target of its own bounds check (`cmp / ja / <compute> / ret /
+    stop at the first `ret` -- is wrong for a range-checked getter, whose fast-path `ret` sits
+    in front of the branch target of its own bounds check (`cmp / ja / <compute> / ret /
     xor eax,eax / ret`). Its sweep therefore carries a watermark of the furthest forward branch
     target and only accepts a terminator beyond it. Two implementations of a rule that subtle
     would drift apart, and the second one would be the one nobody re-checked against Ghidra.
@@ -306,21 +306,21 @@ def _sibling_leaf_extent():
 def extent_of(rva: int, ends: dict[int, int], image: bytes, starts: set[int], leaf_extent):
     """Where the function at `rva` ends: `.pdata` if it declares one, else DECODED. Never guessed.
 
-    THE BUG THIS REPLACES, because the replacement only makes sense against it. The old rule was
+    The bug this replaces, because the replacement only makes sense against it. The old rule was
     "`.pdata` end, or else the next `.pdata` start, capped at 0x400". MSVC emits no unwind record
     for a leaf or a thunk, so for exactly those functions the fallback ran from the function's
-    entry all the way to the next function that DOES have unwind data -- over its own `ret`, over
+    entry all the way to the next function that does have unwind data -- over its own `ret`, over
     the inter-function padding, and on through several unrelated neighbours.
 
-    That is not merely too much text. The padding is the poison: MSVC pads with EITHER `int3`
+    That is not merely too much text. The padding is the poison: MSVC pads with either `int3`
     (0xCC) or `nop` (0x90) and does not make the same choice in two builds, so the two decodes
     fall out of phase at the first pad byte and every instruction after it compares unequal. The
-    measured result on 2026-08-30 was `--pairs` reporting SEVEN hooked functions whose bodies had
-    changed in 1.17 when only ONE had. `FUN_14067a980` came back "89 vs 6 instructions" -- both
+    measured result on 2026-08-30 was `--pairs` reporting seven hooked functions whose bodies had
+    changed in 1.17 when only one had. `FUN_14067a980` came back "89 vs 6 instructions" -- both
     numbers describing padding and strangers, not the 6-instruction function at that address.
 
     A decoded extent that stops at the real terminator keeps the two builds in phase. When even
-    that fails, the answer is `None` -> NO-EXTENT: an honest "not measured" is worth more than a
+    that fails, the answer is `None` -> no-EXTENT: an honest "not measured" is worth more than a
     comparison whose inputs are the wrong bytes.
     """
     if rva in ends:
@@ -347,7 +347,7 @@ class Comparison:
         self.stack_drift: list[tuple[str, int, int]] = []
         self.global_drift: list[tuple[int, int]] = []  # image-base-relative globals (old, new)
         self.imm_drift: list[tuple[str, int, int]] = []  # (mnemonic, old, new)
-        self.stable: list[int] = []  # non-stack, non-rip displacements that did NOT move
+        self.stable: list[int] = []  # non-stack, non-rip displacements that did not move
         # The same, keyed by base register. `stable` alone cannot support a bracket: one function
         # walks several objects and a held offset on `rax` says nothing about a field reached
         # through `rbx`.
@@ -364,8 +364,8 @@ def is_branchy(mnemonic: str) -> bool:
 def compare_bodies(md, a: bytes, a_va: int, b: bytes, b_va: int) -> Comparison:
     """Compare two function bodies instruction-for-instruction.
 
-    Returns SHAPE-DIFF unless the two decode to the same number of instructions with the same
-    mnemonics and the same operand SHAPES -- i.e. the code is the same and only numbers differ.
+    Returns shape-diff unless the two decode to the same number of instructions with the same
+    mnemonics and the same operand shapes -- i.e. the code is the same and only numbers differ.
     Only then are the number differences meaningful, and they are split into field displacements,
     stack displacements and immediates.
     """
@@ -522,8 +522,8 @@ def scan(args) -> int:
                     "insns": cmp.insns,
                     "field_drift": [[b, o, n] for b, o, n in cmp.field_drift],
                     "imm_drift": [[m, o, n] for m, o, n in cmp.imm_drift],
-                    # The offsets this same function read at the SAME place in both builds. For a
-                    # struct that grew, these are the fields BELOW the insertion point, and they
+                    # The offsets this same function read at the same place in both builds. For a
+                    # struct that grew, these are the fields below the insertion point, and they
                     # are what lets the report say "0x68 did not move" instead of "not observed".
                     "stable": sorted(set(cmp.stable)),
                 }
@@ -607,7 +607,7 @@ def pairs_mode(args) -> int:
     `docs/recon/rva-map-1162-to-1170.verified.tsv` -- pairs established by hand, which are exactly
     the code the product detours and therefore exactly the objects its offsets index.
 
-    Both the moved and the UNCHANGED displacements are printed. An unchanged one is the only
+    Both the moved and the unchanged displacements are printed. An unchanged one is the only
     positive clearance available: it says this specific function still reads this specific field
     at this specific offset in 1.17.
     """
@@ -671,7 +671,7 @@ def pairs_mode(args) -> int:
 def check_extents(args) -> int:
     """Cross-check every DECODED leaf extent against Ghidra's own 1.16.2 function size.
 
-    The decoded extent is the only part of this tool that is INFERRED rather than read out of the
+    The decoded extent is the only part of this tool that is inferred rather than read out of the
     image, so it is the only part that needs an independent witness. Ghidra analysed the same
     1.16.2 bytes with its own flow analysis and recorded a size per function; if the watermark
     sweep and Ghidra disagree about where a function ends, one of them is wrong and the
@@ -696,16 +696,16 @@ def check_extents(args) -> int:
     starts = set(ends)
     leaf_extent = _sibling_leaf_extent()
 
-    # WITNESS 1: the linker's own table, over every small function that HAS one.
+    # Witness 1: the linker's own table, over every small function that has one.
     #
     # Ghidra can only be asked about the few dozen leaves in the pair tables. `.pdata` declares
     # 200k+ extents that were written by the linker rather than inferred by anyone, and the rule
     # under test is not allowed to know which functions have a record. So run the decoder on the
-    # functions that DO have one and require it to reproduce the declared end. This is the check
+    # functions that do have one and require it to reproduce the declared end. This is the check
     # that would have caught the old fallback immediately: "next .pdata start, capped at 0x400"
     # overruns nearly every one of these.
     # Two records must be filtered out first, or the check measures its own sample rather than
-    # the rule. `.pdata` emits one RUNTIME_FUNCTION per CHUNK, so a chunked function contributes
+    # the rule. `.pdata` emits one RUNTIME_FUNCTION per chunk, so a chunked function contributes
     # records whose `begin` is a mid-function address and whose `end` is a chunk end, not a
     # function end -- decoding from there correctly runs on into the next chunk, and scoring that
     # as an overrun blames the decoder for the table's shape. Measured: 379 of 2000 unfiltered
@@ -754,7 +754,7 @@ def check_extents(args) -> int:
           "2 is the check that governs.)")
     print()
 
-    # WITNESS 2: Ghidra's independent flow analysis, on the leaves that actually matter.
+    # Witness 2: Ghidra's independent flow analysis, on the leaves that actually matter.
     sources = [Path(args.pairs)] if args.pairs else [VERIFIED_MAP, NEEDED_MAP]
     rvas: set[int] = set()
     for path in sources:
@@ -799,13 +799,13 @@ def check_extents(args) -> int:
 def find_displacement(args) -> int:
     """Every mapped function that uses a given displacement, and whether it moved in 1.17.
 
-    `--report` can only clear a constant whose STRUCTURE it can name, and most cannot be named.
+    `--report` can only clear a constant whose structure it can name, and most cannot be named.
     This is the way to settle one of those by hand: give it the number, and it lists the functions
     that read at that offset in 1.16.2 together with what happened to each in 1.17. Ghidra names
     them, so the answer arrives as "GameMan's save-slot writer still reads +0xc30" rather than as
     a count.
 
-    A function that came out SHAPE-DIFF is listed too and explicitly NOT counted either way: its
+    A function that came out shape-diff is listed too and explicitly not counted either way: its
     body changed, so the displacement cannot be compared, and silence there would read as a clean
     bill of health.
     """
@@ -887,14 +887,14 @@ CONST_RE = re.compile(
 LITERAL_RE = re.compile(r"^(0x[0-9A-Fa-f_]+|\d+)$")
 OFFSET_OF_RE = re.compile(r"core::mem::offset_of!\s*\(\s*([A-Za-z0-9_]+)\s*,")
 
-# INCLUSION RULE, stated so a reader can disagree with it precisely.
+# Inclusion rule, stated so a reader can disagree with it precisely.
 #
-# A constant counts as a GAME STRUCT FIELD OFFSET when all of:
-#   1. its name contains OFFSET and it is a `const`/`static`;
+# A constant counts as a game STRUCT field offset when all of:
+#   1. its name contains offset and it is a `const`/`static`;
 #   2. it resolves to a byte offset -- a literal, an `offset_of!` on a type that describes game
 #      memory, or arithmetic over those;
 #   3. it is not matched by an exclusion below.
-# Everything excluded is excluded because the bytes it indexes are NOT a game object in the
+# Everything excluded is excluded because the bytes it indexes are not a game object in the
 # game's address space, so a 1.17 struct change cannot reach it.
 EXCLUSIONS: list[tuple[str, re.Pattern, str]] = [
     (
@@ -902,9 +902,9 @@ EXCLUSIONS: list[tuple[str, re.Pattern, str]] = [
         re.compile(
             r"^(CONTEXT_|PEB_|LDR_ENTRY_|UNICODE_STRING_|TEB_|PE_|DOS_|NT_HEADER|SECTION_HEADER"
             r"|IMAGE_|EXCEPTION_RECORD)"
-            # NOTE: the OTHER non-game ABI structures this repo reads -- XINPUT_STATE /
+            # NOTE: the other non-game ABI structures this repo reads -- XINPUT_STATE /
             # XINPUT_GAMEPAD / XINPUT_CAPABILITIES, DEVMODEW, the PE optional header's data
-            # directory, the MSVC `basic_string` members -- are NOT listed here. They are recorded
+            # directory, the MSVC `basic_string` members -- are not listed here. They are recorded
             # once, as `None`, in `scripts/adjudicate-autoload-offsets.py::OWNERS`, which is the
             # table both this tool's consumers and check-singleton-field-offsets.py already
             # import. Naming them in two places is a second claim about the same fact, and this
@@ -955,7 +955,7 @@ EXCLUSIONS: list[tuple[str, re.Pattern, str]] = [
         "a tuning value, an index step or a scan parameter that happens to have OFFSET in its name",
     ),
 ]
-# Files that parse BYTES OFF DISK rather than a live object. Their offsets are just as real and
+# Files that parse bytes off disk rather than a live object. Their offsets are just as real and
 # just as version-fragile, but a 1.17 image change cannot reach them -- the save format is
 # versioned separately -- so they are outside this tool's question. Named by file because the
 # constants inside them (`REC_NAME_OFFSET`, `SUMMARY_TABLE_OFFSET`) carry no name-level tell.
@@ -1005,7 +1005,7 @@ AUTOLOAD_CRATES = autoload_crates()
 # --------------------------------------------------------------------------------------------
 # `offset_of!` resolution
 #
-# 119 of the offsets are `core::mem::offset_of!(GameMan, some_field)`. That LOOKS type-safe and is
+# 119 of the offsets are `core::mem::offset_of!(GameMan, some_field)`. That looks type-safe and is
 # not: the type is a 1.16.2 mirror -- either a `*Layout` struct in this repo or a struct in the
 # sibling `fromsoftware-rs` -- so the number it yields is a 1.16.2 number with a type annotation
 # on it. Resolving them matters twice over: it puts them in the cross-reference at all, and the
@@ -1032,7 +1032,7 @@ def collect_structs() -> dict[str, list[tuple[str, str]]]:
     out: dict[str, list[tuple[str, str]]] = {}
     roots = [ROOT / "crates"]
     if SIBLING.is_dir():
-        # ONLY the Elden Ring bindings and the shared types. The sibling also carries Dark Souls 3,
+        # Only the Elden Ring bindings and the shared types. The sibling also carries Dark Souls 3,
         # Sekiro and Nightreign, which define their own `PlayerGameData` -- and DS3's is a
         # completely different object. Reading the wrong game's struct produces a number that is
         # confidently wrong, which is the exact failure this whole tool exists to catch.
@@ -1124,9 +1124,9 @@ def struct_size_align(name: str, structs, depth=0):
     return ((cursor + max_align - 1) // max_align * max_align, max_align)
 
 
-# When a constant is a bare literal its struct identity lives only in its NAME. This maps the
+# When a constant is a bare literal its struct identity lives only in its name. This maps the
 # repo's naming prefixes onto the Ghidra type names the drift is attributed to, so a value can be
-# checked against the drift of the RIGHT object instead of against every object that happens to
+# checked against the drift of the right object instead of against every object that happens to
 # use the same number. Only prefixes whose meaning is unambiguous are listed; anything absent is
 # reported as "struct unknown", which is the honest answer and keeps a numeric coincidence from
 # being printed as a hit.
@@ -1154,7 +1154,7 @@ NAME_PREFIX_TYPES = [
 #     A name is a comment, so this is labelled `name-hint` wherever it is used, and --selftest
 #     checks it against every constant whose value is known independently.
 _PIN_RE = re.compile(r"assert!\(\s*([A-Z0-9_]+)\s*==\s*(0x[0-9a-fA-F_]+|\d+)\s*\)")
-# The token must look like hex AND carry a digit, unless it is one or two characters. Without the
+# The token must look like hex and carry a digit, unless it is one or two characters. Without the
 # digit rule a field named `..._FACE_OFFSET` resolves to 0xface.
 _NAME_HEX_RE = re.compile(r"_([0-9A-F]{1,6})_OFFSET(?:$|_)")
 
@@ -1206,19 +1206,19 @@ def classify(name: str, crate: str, rel_path: str = "") -> tuple[bool, str]:
 
 
 def inventory() -> list[dict]:
-    """Every `*_OFFSET` constant, with a NUMBER or a printed reason there is none.
+    """Every `*_OFFSET` constant, with a number or a printed reason there is none.
 
-    THE THIRD PASS, AND WHY THERE HAS TO BE ONE. Until 2026-08-31 an initialiser this could not
+    The third pass, and why there has to be one. Until 2026-08-31 an initialiser this could not
     read was filed as `kind="expr"` with `resolved=None` and nothing else happened to it. 41 of the
     813 live game-struct-field offsets sat in that state, and every downstream census -- the drift
     join, the unattributed ratchet -- then skipped them for want of a number. They were excluded
-    from the population WITHOUT appearing in the unattributed list either, so a reader counting
+    from the population without appearing in the unattributed list either, so a reader counting
     rows saw a total that silently omitted them: not checked, and not reported as unchecked.
 
     Almost all of them are chains: `FACE_BODY_FIELD_HAIR_MODEL_OFFSET = FACE_BODY_FIELD_FACE_MODEL_
-    OFFSET + size_of::<u32>()`, ten deep in one file, rooted in an `offset_of!` this DOES resolve.
+    offset + size_of::<u32>()`, ten deep in one file, rooted in an `offset_of!` this does resolve.
     So the passes run in order -- literals, then `offset_of!` against the modelled layouts, then
-    `scripts/const_fold.py` over everything else with the first two passes' answers SEEDED into it.
+    `scripts/const_fold.py` over everything else with the first two passes' answers seeded into it.
     Seeding is the only way a number reaches the folder: it has no fallback and no guess, and what
     it still cannot evaluate keeps `resolved=None` and gains an `unresolved` reason that
     `--inventory` prints and `scripts/check-expression-constants.py` fails on.
@@ -1236,14 +1236,14 @@ def inventory() -> list[dict]:
             name, ty, value = match.group(1), match.group(2), " ".join(match.group(3).split())
             included, why = classify(name, crate, rel)
             offset_of_type = None
-            # SHAPE ONLY. Computing the VALUE here is what this loop used to do and is exactly the
-            # defect: it took the FIRST `offset_of!` in the initialiser, added any `size_of::<X>()`
+            # Shape only. Computing the value here is what this loop used to do and is exactly the
+            # defect: it took the first `offset_of!` in the initialiser, added any `size_of::<X>()`
             # it could find (as a `+`, whatever the source's actual operator), and dropped every
             # other term -- then labelled the result `offset_of(resolved)`, the most confident kind
             # this inventory has. `GAME_MAN_FLAG_B73_PROBE_OFFSET = GAME_MAN_ARM_FLAG_B72_OFFSET +
             # offset_of!(GameManAutoloadFlagCluster, probe_b73)` came out as 0x1 instead of 0xb73,
             # because 0xb72 is not spelled as an `offset_of!` or a `size_of`. Values now come from
-            # pass 3, which evaluates the WHOLE expression or refuses out loud.
+            # pass 3, which evaluates the whole expression or refuses out loud.
             if LITERAL_RE.match(value):
                 kind, resolved = "literal", int(value.replace("_", ""), 0)
             elif OFFSET_OF_RE.search(value):
@@ -1280,7 +1280,7 @@ def inventory() -> list[dict]:
                     "autoload": crate in AUTOLOAD_CRATES,
                 }
             )
-    # PASS 3. Fold the expressions, with the first two passes seeded as FACTS -- and only the
+    # Pass 3. Fold the expressions, with the first two passes seeded as facts -- and only the
     # facts. A `literal` is what the source says; a `struct_layout` entry is a modelled `repr(C)`
     # layout. A `name-hint` is neither: it reads the hex out of the constant's own name, which this
     # file's own comment calls a comment. Seeding those would let a guess become the root of a
@@ -1307,8 +1307,8 @@ def inventory() -> list[dict]:
                     row["unresolved"] = folded.reason
                 continue
             row["folded"] = folded.value
-            # THE FOLD WINS, and a disagreement is a finding rather than a tie to break. Both
-            # earlier passes read only PART of an expression: the name-hint reads the name, and the
+            # The fold wins, and a disagreement is a finding rather than a tie to break. Both
+            # earlier passes read only part of an expression: the name-hint reads the name, and the
             # `offset_of!` pass reads the macro and any `+ size_of::<X>()` tail while silently
             # dropping every named term. That is how `GAME_MAN_FLAG_B73_PROBE_OFFSET =
             # GAME_MAN_ARM_FLAG_B72_OFFSET + offset_of!(cluster, probe_b73)` was filed as 0x1
@@ -1326,10 +1326,10 @@ def inventory() -> list[dict]:
             gained += 1
         if not gained:
             break
-    # PASS 4, LAST RESORT AND LABELLED AS SUCH. A `const _: () = assert!(NAME == 0x..)` pin is the
+    # Pass 4, last resort and labelled as such. A `const _: () = assert!(NAME == 0x..)` pin is the
     # compiler's own answer for this build, so it outranks a hint; the hint reads hex out of the
-    # constant's NAME, which is a comment. Both run only on rows the evaluator could not do, and a
-    # pin that CONTRADICTS a fold is reported rather than merged, because one of the two is wrong.
+    # constant's name, which is a comment. Both run only on rows the evaluator could not do, and a
+    # pin that contradicts a fold is reported rather than merged, because one of the two is wrong.
     for row in rows:
         if row["name"] in pins:
             if row["folded"] is not None and row["folded"] != pins[row["name"]]:
@@ -1370,8 +1370,8 @@ def print_inventory(args) -> int:
     print(f"\n  on the autoload path: {on_path} of {len(included)}")
     kinds = collections.Counter(r["kind"] for r in included)
     print(f"  by shape: {dict(kinds)}")
-    # THE VISIBLE BUCKET. Silent exclusion is the whole defect: a constant with no number is not
-    # "outside the census", it is an UNCHECKED game-struct field offset, and it says so here.
+    # The visible bucket. Silent exclusion is the whole defect: a constant with no number is not
+    # "outside the census", it is an unchecked game-struct field offset, and it says so here.
     stuck = [r for r in included if r["resolved"] is None]
     print()
     print(f"  no value could be established for {len(stuck)} of {len(included)}; "
@@ -1421,7 +1421,7 @@ def ghidra_names(vas: list[str]) -> dict[str, str]:
 def report(args) -> int:
     """Name the repo constants the measurement says are wrong.
 
-    The join is on (STRUCTURE, offset), never on offset alone. `0xb0c` moved to `0xb60` in 1.17 --
+    The join is on (structure, offset), never on offset alone. `0xb0c` moved to `0xb60` in 1.17 --
     in `MoWwiseManImp`, the Wwise audio manager. `DIALOG_SLOT_CURSOR_B0C_OFFSET` is also `0xb0c`
     and indexes a title-screen dialog. Joining on the number alone calls that a hit, and it is
     not one; that single false positive is the difference between this tool being useful and it
@@ -1429,7 +1429,7 @@ def report(args) -> int:
 
     So a constant is only judged when its structure is known -- exactly, from the `offset_of!`
     type it is written against, or from a naming prefix in `NAME_PREFIX_TYPES`. A constant whose
-    structure cannot be named is reported as UNKNOWN rather than cleared, because "no drift was
+    structure cannot be named is reported as unknown rather than cleared, because "no drift was
     measured for a number" is not evidence that the field did not move.
     """
     attributed_path = args.out_dir / "field-drift-attributed.json"
@@ -1471,7 +1471,7 @@ def report(args) -> int:
             continue
         at_or_below = [m for m in moved if m["old"] <= offset]
         if not at_or_below:
-            # Every measured move in this structure is ABOVE this field, and the same functions
+            # Every measured move in this structure is above this field, and the same functions
             # were seen reading fields at or above it unchanged -- so it sits under the insertion.
             verdicts["BELOW-INSERTION"] += 1
             continue
@@ -1540,16 +1540,16 @@ MOVED_STRUCTS = {
     "SosSignMan", "Packet74",
 }
 
-# A use site that WRITES through the offset. A wrong read returns a wrong number, which usually
+# A use site that writes through the offset. A wrong read returns a wrong number, which usually
 # surfaces as visibly wrong behaviour; a wrong write puts a value into a member the mod does not
 # own, in an object the game is still using. So writes are triaged first.
 WRITE_MARKERS = re.compile(r"as\s*\*mut|write_volatile|write_unaligned|\bptr::write|\.write\(")
 
 
 def offset_use_sites() -> dict[str, dict]:
-    """For every `*_OFFSET` constant, where it is used and whether any use WRITES through it.
+    """For every `*_OFFSET` constant, where it is used and whether any use writes through it.
 
-    The inventory says where a constant is DECLARED. That says nothing about blast radius: a
+    The inventory says where a constant is declared. That says nothing about blast radius: a
     constant read once in a diagnostic and a constant written on the autoload path are the same
     row. This walks the crates for use sites and grades them, so the 553 unresolved constants can
     be worked in the order that a wrong answer costs the most.
@@ -1586,19 +1586,19 @@ def offset_use_sites() -> dict[str, dict]:
 
 
 def diff_pair(args) -> int:
-    """Read the displacements of a pair whose BODY changed, by aligning the two decodes.
+    """Read the displacements of a pair whose body changed, by aligning the two decodes.
 
     `compare_bodies` refuses a function whose instruction sequence differs, and it is right to:
     once the two streams are out of step, position N on one side is not position N on the other,
     and every displacement "difference" after that point is an artifact. But refusing leaves the
-    most dangerous functions in the migration -- the ones that actually changed -- with UNKNOWN
+    most dangerous functions in the migration -- the ones that actually changed -- with unknown
     offsets and nothing more to say. `STEP_MoveMap` is squarely on the autoload path and gained
     two instructions in 1.17; "unknown" is the honest verdict and a useless one.
 
     So align them properly instead of pretending they are aligned. `difflib.SequenceMatcher` over
     the NORMALISED instruction shapes (mnemonic + register operand form, displacements dropped --
     the same normalisation the matcher masks with) finds the equal runs; inside an equal run the
-    two instructions ARE the same instruction, so their displacements can be compared exactly as
+    two instructions are the same instruction, so their displacements can be compared exactly as
     in an identical function. The inserted/deleted regions are reported as such and no offset is
     claimed from them.
 
@@ -1651,17 +1651,17 @@ def diff_pair(args) -> int:
             ):
                 if not a_base or a_base == "rip" or a_base in STACK_BASES:
                     continue
-                # A NEGATIVE displacement on a general register is a frame-pointer alias
+                # A negative displacement on a general register is a frame-pointer alias
                 # (MSVC parks one in r11/rbx around a big frame), not a field: no object is
                 # indexed backwards from its own base.
                 if a_disp <= 0 or a_disp >= GLOBAL_DISPLACEMENT_MIN:
                     continue
                 if a_disp == b_disp:
-                    # Keyed by BASE REGISTER, not by number. One function routinely walks two
+                    # Keyed by base register, not by number. One function routinely walks two
                     # different objects (`FUN_1404ca5f0` moves `[rbx+0x88]` while holding
                     # `[rax+0x88]` still), and a bracket -- "a field below it and a field above
                     # it both held, so there is no insertion between them" -- is only an argument
-                    # about ONE object. Merging the bases would let a held offset in object A
+                    # about one object. Merging the bases would let a held offset in object A
                     # vouch for a field in object B.
                     held[(a_base, a_disp)] += 1
                 else:
@@ -1699,14 +1699,14 @@ def diff_pair(args) -> int:
 
 
 def hooked_holds(out_dir: Path) -> dict[int, list[str]]:
-    """Displacement -> the functions THIS MOD HOOKS that still read it at that offset in 1.17.
+    """Displacement -> the functions this mod hooks that still read it at that offset in 1.17.
 
-    THE ONLY POSITIVE CLEARANCE THAT DOES NOT NEED A STRUCTURE NAME. Every other line of evidence
+    The only positive clearance that does not need a structure name. Every other line of evidence
     here is about a number: how often it moved, how often it held, in objects nobody named. This
     is about the code the product actually detours. If `SetSaveSlot` -- a hand-verified pair, the
     same function in both builds -- still writes `[rcx+0xac0]` in 1.17, then whatever object
     `SetSaveSlot` is handed did not move that field, and a repo constant used on the pointer that
-    same function is given is clear. That is an argument about OUR object, reached without ever
+    same function is given is clear. That is an argument about our object, reached without ever
     naming its type.
 
     It is deliberately narrow: 430-odd pairs against the scan's 128,602, so most numbers get no
@@ -1725,7 +1725,7 @@ def hooked_holds(out_dir: Path) -> dict[int, list[str]]:
 
     holds: dict[int, list[str]] = collections.defaultdict(list)
     # (label, base) -> {held displacements}, and the same key -> {moved displacements}. Keyed by
-    # BASE so a span is an argument about one object; see `diff_pair`.
+    # base so a span is an argument about one object; see `diff_pair`.
     spans: dict[tuple[str, str], set[int]] = collections.defaultdict(set)
     span_moves: dict[tuple[str, str], set[int]] = collections.defaultdict(set)
     for path in (VERIFIED_MAP, NEEDED_MAP):
@@ -1753,11 +1753,11 @@ def hooked_holds(out_dir: Path) -> dict[int, list[str]]:
 
 
 def bracket(offset: int, spans, span_moves, only: str = "") -> list[str]:
-    """Functions that prove `offset` did not move WITHOUT ever reading it.
+    """Functions that prove `offset` did not move without ever reading it.
 
-    THE ARGUMENT. A structure grows by INSERTION: every field at or above the insertion point
+    The argument. A structure grows by INSERTION: every field at or above the insertion point
     shifts, everything below it stays. So if one function, through one base register, still reads
-    some field BELOW `offset` at the same displacement in 1.17, and some field ABOVE it at the
+    some field below `offset` at the same displacement in 1.17, and some field above it at the
     same displacement too, then no insertion happened anywhere between those two -- and `offset`
     lies between them. The field is proven not to have moved by fields that are not it.
 
@@ -1769,11 +1769,11 @@ def bracket(offset: int, spans, span_moves, only: str = "") -> list[str]:
     The base register is what keeps this honest. One function walks several objects, and a held
     offset on `rax` says nothing about a field reached through `rbx`.
 
-    NOT A VERDICT ON ITS OWN, and this is the third time this file has had to learn it. Run over
+    Not a verdict on its own, and this is the third time this file has had to learn it. Run over
     all 430 hooked pairs the bracket fires for every one of the 48 unresolved constants, because
     some function somewhere holds a field either side of any small number -- the same coincidence
     that made the offset-only join worthless, wearing a span instead of a point. A bracket only
-    argues about the object the function was handed, so the caller must say WHICH function is the
+    argues about the object the function was handed, so the caller must say which function is the
     right object. It is an instrument for a human with a hypothesis, not a classifier.
     """
     out = []
@@ -1792,15 +1792,15 @@ def bracket(offset: int, spans, span_moves, only: str = "") -> list[str]:
 
 
 def resolve_unknown(args) -> int:
-    """Adjudicate the constants `--report` leaves as UNKNOWN-STRUCT, worst blast radius first.
+    """Adjudicate the constants `--report` leaves as unknown-STRUCT, worst blast radius first.
 
-    WHY THESE ARE NOT SIMPLY UNRESOLVABLE. `--report` refuses to judge a constant whose STRUCTURE
+    Why these are not simply UNRESOLVABLE. `--report` refuses to judge a constant whose structure
     it cannot name, because joining on the offset alone is worthless -- `0xb0c` moved in
     `MoWwiseManImp` while `DIALOG_SLOT_CURSOR_B0C_OFFSET` is a different object at the same
-    number. That refusal is right when a number was seen MOVING somewhere: then the structure is
+    number. That refusal is right when a number was seen moving somewhere: then the structure is
     the only thing that separates a hit from a coincidence.
 
-    It is not right when a number was never seen moving ANYWHERE. The scan is exhaustive over the
+    It is not right when a number was never seen moving anywhere. The scan is exhaustive over the
     mapped half of the image, so "this displacement changed in 0 of the N otherwise-identical
     function pairs that use it, and held still in M instructions" is a statement about every
     structure the scan can see, ours included. Naming the structure adds nothing to it. That
@@ -1808,11 +1808,11 @@ def resolve_unknown(args) -> int:
     idea of this mode.
 
     So each constant lands in one of:
-      NOT-MOVED-ANYWHERE  held M times, moved 0 times      -> cleared, structure-independently
-      MOVED-SOMEWHERE     moved somewhere                  -> needs the witness read (--names)
-      NO-EVIDENCE         held 0, moved 0                  -> stays UNKNOWN, honestly
+      Not-moved-anywhere  held M times, moved 0 times      -> cleared, structure-independently
+      moved-somewhere     moved somewhere                  -> needs the witness read (--names)
+      no-evidence         held 0, moved 0                  -> stays unknown, honestly
 
-    NO-EVIDENCE is the honest answer, not a failure. `0xab5` -- the one offset this migration
+    No-evidence is the honest answer, not a failure. `0xab5` -- the one offset this migration
     already knows moved -- lands there, because its only witness is a `.pdata`-less leaf that the
     function map does not contain.
     """
@@ -1849,7 +1849,7 @@ def resolve_unknown(args) -> int:
         offset = r["resolved"]
         held = stable.get(offset, 0)
         moved = moves.get(offset, [])
-        # NOT a verdict, deliberately. Promoting "some hooked function holds this number" to a
+        # Not a verdict, deliberately. Promoting "some hooked function holds this number" to a
         # clearance re-commits the exact error this tool exists to avoid, only inverted: `0x8`,
         # `0x10` and `0x18` are read by nearly every hooked function, so the join lit up 484 of
         # the 553 -- confidence manufactured out of a coincidence, which is worse than a
@@ -1859,8 +1859,8 @@ def resolve_unknown(args) -> int:
         if offset == 0:
             # The first member sits at 0 in both builds by construction, and this measurement
             # skips zero displacements (`[rcx]` carries no byte to compare), so these would
-            # otherwise pile into NO-EVIDENCE and make the honest-unknown count look worse than
-            # it is. Not a clearance: an insertion at the FRONT of a structure -- a new leading
+            # otherwise pile into no-evidence and make the honest-unknown count look worse than
+            # it is. Not a clearance: an insertion at the front of a structure -- a new leading
             # member, or a new base class -- would move the field now at 0 without this method
             # ever seeing it. It is unmeasurable by this method, and says so.
             verdict = "OFFSET-ZERO-UNMEASURABLE"
@@ -1879,14 +1879,14 @@ def resolve_unknown(args) -> int:
     print(f"  {len(graded)} constants; {written} of them are WRITTEN through somewhere "
           "in the crates\n")
 
-    # THE SECOND DISCRIMINATOR, for the constants a move was measured at.
+    # The second DISCRIMINATOR, for the constants a move was measured at.
     #
-    # A number that moved somewhere is not a verdict on OUR object, and `held 7090 / moved 1` is
-    # a ratio, not proof. What settles it is WHICH object moved: `--attribute` already named the
+    # A number that moved somewhere is not a verdict on our object, and `held 7090 / moved 1` is
+    # a ratio, not proof. What settles it is which object moved: `--attribute` already named the
     # structures that grew in 1.17, so if every function that moved this displacement operates on
     # one of those and our constant plainly names something else, the move is accounted for
     # elsewhere and this constant is not implicated. Where a witness cannot be typed the
-    # constant stays MOVED-SOMEWHERE and must be read by hand -- an untyped witness is not a
+    # constant stays moved-somewhere and must be read by hand -- an untyped witness is not a
     # clean one.
     cache_path = args.out_dir / "ghidra-function-types.json"
     cache = json.loads(cache_path.read_text()) if cache_path.is_file() else {}
@@ -2009,7 +2009,7 @@ def function_types(cache: dict[str, dict], vas: list[str]) -> dict[str, dict]:
 
 
 def attribute(args) -> int:
-    """Ask the 1.16.2 dump WHICH TYPE each drifting function operates on.
+    """Ask the 1.16.2 dump which type each drifting function operates on.
 
     A displacement is only half an answer. `0xb0c` moved to `0xb60` -- in `MoWwiseManImp`, whose
     layout has nothing to do with the dialog-slot object a constant of the same value indexes.
@@ -2094,12 +2094,12 @@ def attribute(args) -> int:
 
 
 def regions(args) -> int:
-    """Cluster the raw drift rows into candidate STRUCTURES.
+    """Cluster the raw drift rows into candidate structures.
 
     A single row ("0xc30 became 0xc88") is a number. What a reader needs is the object: a run of
     offsets that all moved by the same amount, witnessed by an overlapping set of functions. Two
-    rows are joined when they share a delta AND at least one witnessing function -- the function
-    is the evidence that the two offsets are fields of the SAME object, which mere numeric
+    rows are joined when they share a delta and at least one witnessing function -- the function
+    is the evidence that the two offsets are fields of the same object, which mere numeric
     adjacency is not. Each component then reports the offset range that moved, how far, and the
     functions that prove it, which Ghidra can name.
     """
@@ -2172,7 +2172,7 @@ def explain(args) -> int:
     print(f"displacement {want:#x}")
     held = stable.get(want, 0)
     if not held and not moves:
-        # Zero of both is NOT a clean bill of health, and printing "never observed moving" alone
+        # Zero of both is not a clean bill of health, and printing "never observed moving" alone
         # reads exactly like one. `0xab5` lands here: the function that proves it moved,
         # `GetScadutreeBlessing`, is a leaf with no unwind record, so it is absent from `.pdata`
         # and therefore absent from the `.pdata`-derived function map this scan walks.
@@ -2304,7 +2304,7 @@ KNOWN = {
 }
 
 
-# LEAF EXTENTS, pinned against Ghidra's own 1.16.2 function sizes.
+# Leaf EXTENTS, pinned against Ghidra's own 1.16.2 function sizes.
 #
 # These are the addresses in the hooked-pair tables that `.pdata` does not describe, so their
 # extent is DECODED and the decoder is the only thing standing between this tool and a fabricated
@@ -2323,7 +2323,7 @@ LEAF_EXTENTS_1162 = {
     0x14067ABB0: 0x0D,  # SetInitialAreaEntityId
     0x140D4CC50: 0x2F,  # GetParamResCap
     0x1426634A0: 0x1D,  # FUN_1426634a0
-    0x140261B80: 0x1A,  # the range-checked getter whose branch target sits BEHIND its first ret
+    0x140261B80: 0x1A,  # the range-checked getter whose branch target sits behind its first ret
     0x140262250: 0x13,  # MarkProfileIndexAsUsed -- likewise
 }
 
@@ -2419,7 +2419,7 @@ def selftest(args) -> int:
             if not ok:
                 failures.append(f"leaf extent {va:#x}")
 
-        # THE REGRESSION THIS FILE EXISTS TO PREVENT. The old fallback -- "decode to the next
+        # The regression this file exists to prevent. The old fallback -- "decode to the next
         # .pdata start, capped at 0x400" -- is reconstructed here and required to disagree, so
         # that reintroducing it cannot pass silently. It runs past the real `ret`, through the
         # inter-function padding (0xCC in one build, 0x90 in the other) and into unrelated
@@ -2436,9 +2436,9 @@ def selftest(args) -> int:
             if guessed > want:
                 guessed_worse.append(va)
         # 0x1403efc30 is the one leaf the guess gets right, and only by luck: the next function
-        # WITH unwind data happens to begin at its true end. Its neighbour 0x1403efc20 -- the
+        # with unwind data happens to begin at its true end. Its neighbour 0x1403efc20 -- the
         # same 0x10-byte shape, one slot earlier -- is overrun to 0x20 by the same rule. So the
-        # guess is required to be wrong everywhere EXCEPT that coincidence, which is a sharper
+        # guess is required to be wrong everywhere except that coincidence, which is a sharper
         # assertion than "wrong somewhere" and fails if anyone softens the extent rule back.
         lucky = {0x1403EFC30}
         want_wrong = sorted(set(LEAF_EXTENTS_1162) - lucky)
@@ -2498,11 +2498,11 @@ def selftest(args) -> int:
             failures.append(name)
 
     print("\nnaming convention vs independently resolved values")
-    # Constants whose embedded hex deliberately names something OTHER than their own offset.
-    # Listed by hand so that a NEW disagreement is a selftest failure rather than noise: the
+    # Constants whose embedded hex deliberately names something other than their own offset.
+    # Listed by hand so that a new disagreement is a selftest failure rather than noise: the
     # name is what resolves an `offset_of!` this tool cannot lay out, so it has to stay honest.
     KNOWN_NAME_DIVERGENCE = {
-        # names the SAVE-FILE field C4, while the value is the in-memory record's 0x293
+        # names the save-file field C4, while the value is the in-memory record's 0x293
         "PROFILE_SUMMARY_FIELD_C4_OFFSET",
         # renamed field, stale number kept in the symbol
         "PADMAPS_88_OFFSET",

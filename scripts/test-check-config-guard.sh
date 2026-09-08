@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# DOES THE CONFIG GUARD ACTUALLY CATCH A GATE THAT REWRITES THE REPOSITORY CONFIG?
+# Does the CONFIG guard actually catch a gate that REWRITES the repository CONFIG?
 #
-# scripts/check-gate-config-guard.sh compares core.bare and core.hooksPath in the SHARED git dir
+# scripts/check-gate-config-guard.sh compares core.bare and core.hooksPath in the shared git dir
 # before and after the gate suite, because on 2026-08-31 the suite itself flipped core.bare to true
 # and unset core.hooksPath in the live checkout -- twice, silently, from a push made in a linked
 # worktree (bd hooks-selftest-under-git-hook-blanks-the-live-config-2026-08-31).
 #
 # A guard nobody has watched fail is a guard nobody knows is wired up. This proves it in both
-# directions against the REAL text: the fixture SOURCES the guard file rather than copying it, so a
+# directions against the real text: the fixture sources the guard file rather than copying it, so a
 # rename, a rewrite or a deletion changes this test's behaviour or stops it finding the guard at
 # all -- it cannot drift into testing a stale copy of the logic. (Before 2026-09-03 the guard was
 # the opening trap of scripts/ci-local-check.sh and this test copied that file's head; the hook now
@@ -29,7 +29,7 @@ for required in gate_config_snapshot gate_config_report gate_config_key; do
 	fi
 done
 
-# The fixtures below run git commands in throwaway repositories. If THIS script inherits a git
+# The fixtures below run git commands in throwaway repositories. If this script inherits a git
 # environment -- which is exactly the bug under test -- those commands would retarget the real
 # checkout and the test would corrupt the thing it is defending.
 # shellcheck disable=SC2046  # word splitting is the point: one variable name per word.

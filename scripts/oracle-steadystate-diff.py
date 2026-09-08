@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Oracle STEADY-STATE semaphore parity diff (Milestone-1, acceptance strengthened 2026-07-22).
+"""Oracle steady-state semaphore parity diff (Milestone-1, acceptance strengthened 2026-07-22).
 
-The trajectory comparator (oracle-compare.py) walks ordered DISCRETE transitions and catches a
-load that takes the wrong path / wrong order / wrong timing. It does NOT catch a divergence that
-only appears AFTER the character is movable and every discrete step already matched -- the classic
+The trajectory comparator (oracle-compare.py) walks ordered discrete transitions and catches a
+load that takes the wrong path / wrong order / wrong timing. It does not catch a divergence that
+only appears after the character is movable and every discrete step already matched -- the classic
 example being the 20 fps reload (fps is a continuous field, not a transition) and its co-divergent
-`oracle_chr_draw_group_enabled == False`. The strengthened acceptance judges parity over BOTH the
-load trajectory AND a *sustained post-readiness steady-state window*. This tool is that second half.
+`oracle_chr_draw_group_enabled == False`. The strengthened acceptance judges parity over both the
+load trajectory and a *sustained post-readiness steady-state window*. This tool is that second half.
 
-It takes a BASELINE window (vanilla continue/reload -- the ground truth) and a CANDIDATE window (the
+It takes a baseline window (vanilla continue/reload -- the ground truth) and a candidate window (the
 mod's switched reload), slices each to the sustained post-readiness window (oracle_can_move truthy,
 first `--settle` frames dropped so asset-streaming transients don't mask the persistent component),
 NORMALIZES the inherently-nondeterministic fields (§3b of the goal: heap/RNG/wall-clock/frame-index/
-monotonic counters), and emits an ORDERED divergence list -- every scalar/categorical semaphore whose
+monotonic counters), and emits an ordered divergence list -- every scalar/categorical semaphore whose
 steady-state value differs, most structurally-severe first. Pass == empty diff (exact after
 normalization, zero tolerance).
 
@@ -67,7 +67,7 @@ DROP_FIELDS = {
     "oracle_rawinput_blocked_unfocused_events",
     "oracle_switch_reload_drain_waits",
     # mod-internal switch FSM bookkeeping -- no vanilla counterpart, describes the mod's own switch
-    # state machine, not a GAME-state semaphore. Parity is about game state, so these are scaffolding.
+    # state machine, not a game-state semaphore. Parity is about game state, so these are scaffolding.
     "oracle_switch_reload_phase",
     "oracle_switch_reload_committed",
     "oracle_switch_player_present",
@@ -132,7 +132,7 @@ def _canon(v):
     """Canonical categorical value with §3b normalization.
 
     Heap-pointer-valued semaphores (raw 0x... addresses) are inherently nondeterministic run-to-run;
-    offline we cannot module-relativize them, so we normalize to null/non-null PRESENCE, which is the
+    offline we cannot module-relativize them, so we normalize to null/non-null presence, which is the
     honest, deterministic parity signal (a pointer being set vs 0x0 is meaningful; its exact address is
     not). Everything else compares order-insensitively.
     """
@@ -149,7 +149,7 @@ def steady_window(
     """Sustained post-readiness window: rows where `window_field` is truthy, first `settle` dropped.
 
     Default `oracle_can_move` = genuinely movable (the strictest readiness). A vanilla telemetry-only
-    capture driven in BOOT mode holds the character in-world without movement injection, so use
+    capture driven in boot mode holds the character in-world without movement injection, so use
     `oracle_player_present` there -- the char is rendered + cadence-populated even if can_move never
     latched. Comparing a vanilla present-window to a mod can_move-window is honest for the render-bound
     fps/cadence/GX semaphores (they are readiness-independent); the caller picks the field per side.

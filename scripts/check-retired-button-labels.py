@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Fail when prose names a Quit-tab button that is no longer on screen.
 
-WHY THIS IS A GATE AND NOT A NOTE
+Why this is a gate and not a NOTE
 ---------------------------------
-Both load rows on the Quit Game tab are OURS -- vanilla ships only `Save Game` and
+Both load rows on the Quit Game tab are ours -- vanilla ships only `Save Game` and
 `Return to Desktop`. They were renamed on 2026-07-31 after a review found the original pair
 indistinguishable, but the old words stayed in `AGENTS.md`, in the plan docs and in the
 constant names. The cost is not cosmetic: on 2026-08-19 an agent read the goal statement in
@@ -13,9 +13,9 @@ user had to send a screenshot of a menu with no such button on it.
 A note asking future readers to remember a rename is exactly the kind of advisory that gets
 missed -- which is how it survived three weeks. So the rename is enforced here instead.
 
-WHAT IT CHECKS
+What it checks
 --------------
-1. The CURRENT labels are read out of the source that actually renders them, so if the rows
+1. The current labels are read out of the source that actually renders them, so if the rows
    are renamed again this gate breaks instead of silently guarding stale words.
 2. A retired name may appear in prose only when it is marked as history -- next to its
    replacement, or behind an explicit "ex-"/"renamed"/"old name" marker. Bare use in the
@@ -29,14 +29,14 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-# The row TEXT layer moved out of the product DLL into the quit-menu crate
+# The row text layer moved out of the product DLL into the quit-menu crate
 # (`experiments/startup_hooks/quit_menu/system_quit_dialog_handlers.rs` ->
 # `er_quit_menu_core::row_text`). This gate follows the bytes, because reading a file that no
 # longer holds a label would make it pass on nothing.
 LABEL_SOURCE = REPO_ROOT / "crates/er-quit-menu-core/src/row_text.rs"
 PROSE = [REPO_ROOT / "AGENTS.md", *sorted((REPO_ROOT / "docs").rglob("*.md"))]
 
-# Retired -> the row it became. The replacement is CONFIRMED against the source below, so a
+# Retired -> the row it became. The replacement is confirmed against the source below, so a
 # further rename cannot leave this table quietly wrong.
 RETIRED = {
     "Load Profile": "Load Character",

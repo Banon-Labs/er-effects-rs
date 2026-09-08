@@ -8,7 +8,7 @@
 //!
 //! # What it does
 //!
-//! It BLOCKS saving. No byte of the player's save is written while it is loaded.
+//! It blocks saving. No byte of the player's save is written while it is loaded.
 //!
 //! Two cooperating layers, and it matters that they are separate:
 //!
@@ -20,7 +20,7 @@
 //! every native observer sees the state a real successful save leaves. Loads are
 //! untouched, so Continue and Load Game still read the real file.
 //!
-//! **NEVER load this DLL together with `er_quickload.dll` in one me3 profile.** The
+//! **never load this DLL together with `er_quickload.dll` in one me3 profile.** The
 //! product DLL now installs the same `er-save-suppress` hooks itself; each DLL carries
 //! its own MinHook instance, so loading both would double-detour `0x140e6fb50` /
 //! `0x140e6e430` and corrupt each other's trampolines. The census probe profile stays
@@ -36,10 +36,10 @@
 //! proves the SL submit is the only *known* write path, and the census is what would
 //! catch an unknown one.
 
-// HOST-BUILD HYGIENE. This crate is a windows `cdylib`: on a non-windows host every item
+// Host-build hygiene. This crate is a windows `cdylib`: on a non-windows host every item
 // whose only consumer is `DllMain` or a hook reads as dead, and `[workspace.lints.rust]
 // warnings = "deny"` promotes that to a hard compile ERROR -- so `cargo test -p er-save-disable`
-// failed outright, and its unit tests had therefore never executed in ANY gate. Same fix,
+// failed outright, and its unit tests had therefore never executed in any gate. Same fix,
 // same reason, as er-save-suppress / er-seamless-bugfixes / er-armament-icons. The shipping
 // target is unaffected: this allow does not exist there.
 // scripts/check-save-disable-warnings.py still holds the windows build to zero warnings.
@@ -62,7 +62,7 @@ const DLL_MAIN_SUCCESS: i32 = 1;
 
 const LOG_FILE_NAME: &str = "er-save-disable.log";
 
-/// What the run is actually doing, derived from what installed at RUNTIME rather than
+/// What the run is actually doing, derived from what installed at runtime rather than
 /// from a compile-time claim -- a build that intended to suppress but failed to arm must
 /// not report itself as suppressing.
 pub(crate) fn phase() -> &'static str {
@@ -73,7 +73,7 @@ pub(crate) fn phase() -> &'static str {
     }
 }
 
-/// Diagnostic disarm for the MANDATORY positive control: the identical build with
+/// Diagnostic disarm for the mandatory positive control: the identical build with
 /// interception off, to show that the detectors do fire and the save file does change
 /// when nothing is suppressed.
 ///
@@ -99,13 +99,13 @@ pub(crate) fn hooks_installed() -> usize {
     HOOKS_INSTALLED.load(Ordering::SeqCst)
 }
 
-/// Append one census line, into THIS run's directory when the launcher named one.
+/// Append one census line, into this run's directory when the launcher named one.
 ///
-/// The game-directory copy of this log is SINGLE-SLOT: `er_game_base::log::begin_fresh_run`
+/// The game-directory copy of this log is single-SLOT: `er_game_base::log::begin_fresh_run`
 /// keeps exactly one previous generation, so two launches lose the run before last, and
 /// several sessions launch concurrently in this repo. Worse, `run-save-census-probe.sh` used
 /// to `rm -f` the live file before launching, and the rotation removes a stale `.prev`
-/// unconditionally when the live file is absent -- so that swept away TWO runs' census
+/// unconditionally when the live file is absent -- so that swept away two runs' census
 /// evidence at once, neither of them the deleting run's. The redirect is what lets a launcher
 /// hand each run its own directory; the game-directory fallback stays because the env has to
 /// survive `launch.sh` -> me3 -> Proton and a log written nowhere reads as "the DLL never
@@ -131,9 +131,9 @@ pub unsafe extern "system" fn DllMain(
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
         // One sink for this DLL's hook + address lines. Without it a refused address is
-        // silent HERE, because every cdylib links its own copy of er-hook/er-game-base.
+        // silent here, because every cdylib links its own copy of er-hook/er-game-base.
         // A rust_panic in a cdylib loaded into the game is otherwise anonymous: the message goes to a
-        // stderr nobody reads, and what survives is a 0xe06d7363 record naming the MODULE and nothing
+        // stderr nobody reads, and what survives is a 0xe06d7363 record naming the module and nothing
         // else. Two boots were lost to one before this existed. See er_game_base::panic_report.
         er_game_base::panic_report::report_panics_to("er-save-disable", log_message);
         er_hook::set_hook_logger(log_message);
@@ -155,7 +155,7 @@ fn spawn_census_task() {
         .name("er-save-disable".to_owned())
         .spawn(|| {
             let mut attempts = 0_u64;
-            // BOUNDED (2026-08-29): an unbounded `loop { yield_now() }` in two other shells starved the
+            // Bounded (2026-08-29): an unbounded `loop { yield_now() }` in two other shells starved the
             // wineserver and hung a whole boot -- see er_game_base::wait. Same shape, same fix.
             let found =
                 er_game_base::wait::poll_until(|| match er_game_base::mem::game_module_base() {
@@ -177,9 +177,9 @@ fn spawn_census_task() {
                 return;
             };
             witness::set_game_base(base);
-            // Wire the shared suppression core's seams to THIS DLL's surfaces before
+            // Wire the shared suppression core's seams to this DLL's surfaces before
             // anything can install: human lines to er-save-disable.log, publishes to the
-            // census telemetry snapshot THROUGH the witness reentrancy guard (the
+            // census telemetry snapshot through the witness reentrancy guard (the
             // suppression hooks are not observation paths, so they enter with the guard
             // clear; taking it in the sink keeps `telemetry::write_snapshot`'s documented
             // invariant true for every caller).
@@ -191,7 +191,7 @@ fn spawn_census_task() {
             // that escapes suppression during the arming window is still recorded.
             let installed = hooks::install();
             HOOKS_INSTALLED.store(installed, Ordering::SeqCst);
-            // The census-only env check moved OUT of the core (`install` takes a plain
+            // The census-only env check moved out of the core (`install` takes a plain
             // bool): only this standalone diagnostic DLL consults the env var, so no
             // env var can alter the product DLL's behavior.
             let census_only = census_only_requested();
@@ -216,7 +216,7 @@ fn spawn_census_task() {
             //
             // Through the guard: `hooks::install()` armed the detours above, so this is
             // the DLL's first re-entry into its own hooks. Without it the save-path
-            // filter is the ONLY thing keeping the census from observing its own output.
+            // filter is the only thing keeping the census from observing its own output.
             let _ = witness::with_guard(telemetry::write_snapshot);
         });
 }

@@ -10,7 +10,7 @@ PlaceObject2/3 (depth/char/name/matrix), DefineSprite (recursing), DefineEditTex
 ImportAssets2, SymbolClass, FrameLabel, ExporterInfo, DefineSceneAndFrameLabelData.
 
 Matrix/RECT decoding mirrors crates/er-gfx/src/codec (SWF bit order, twips).
-Usage: python3 scripts/gfx_display_list.py <file.gfx> [--json OUT]
+Usage: python3 scripts/gfx_display_list.py <file.gfx> [--json out]
 """
 import struct, sys, json
 

@@ -471,7 +471,7 @@ impl DdsImage {
         w.u32(flags); // dwFlags
         w.u32(self.height); // dwHeight
         w.u32(self.width); // dwWidth
-        w.u32(self.pitch()); // dwPitchOrLinearSize = width*4 (PITCH)
+        w.u32(self.pitch()); // dwPitchOrLinearSize = width*4 (pitch)
         w.u32(0); // dwDepth
         w.u32(mips); // dwMipMapCount
         w.zeros(44); // dwReserved1[11]
@@ -719,7 +719,7 @@ impl Tpf {
         w.u8(self.platform); // platform (PC = 0)
         w.u8(self.flag2); // flag2
         w.u8(self.encoding); // encoding
-        w.u8(0); // reserved / extFlag -- bit0 CLEAR
+        w.u8(0); // reserved / extFlag -- bit0 clear
 
         // --- texture entries (PC layout, TPF_PC_ENTRY_SIZE each) ---
         for (i, tex) in self.textures.iter().enumerate() {

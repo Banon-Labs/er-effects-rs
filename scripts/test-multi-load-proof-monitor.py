@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Offline unit test for multi-load-proof-monitor's HARD RENDER GATE + dwell/liveness state machine
+"""Offline unit test for multi-load-proof-monitor's hard render gate + dwell/liveness state machine
 (docs/goals/repeatable-multi-save-load-acceptance.md §4.4/§4.6). No game, no corpus dependency beyond
 the frozen snapshot's real angrE identity. Drives monitor() with a synthetic telemetry writer thread.
 
 Cases:
-  1. render-frozen forever      -> STALL-RENDER-FROZEN FAIL (the 2026-07-18 false-pass must now fail).
-  2. render-ready + world-live  -> PASS after the dwell (present->dwell verified before completion).
-  3. render-ready but play clock FROZEN (world not live) -> STALL-RENDER-FROZEN FAIL (nothing moving).
-  4. render-ready blips (drops mid-dwell) then holds -> PASS (a blip restarts, does not falsely pass).
+  1. render-frozen forever      -> stall-render-frozen fail (the 2026-07-18 false-pass must now fail).
+  2. render-ready + world-live  -> pass after the dwell (present->dwell verified before completion).
+  3. render-ready but play clock frozen (world not live) -> stall-render-frozen fail (nothing moving).
+  4. render-ready blips (drops mid-dwell) then holds -> pass (a blip restarts, does not falsely pass).
 """
 from __future__ import annotations
 
@@ -72,7 +72,7 @@ def run_case(name: str, writer, deadline: float, expect_pass: bool, expect_verdi
 
     # Interruptible pace primitive (never signalled for pacing) -- mirrors the monitor's _POLL_WAIT:
     # the writer thread's real synchronization is the `stop` Event; this only bounds write frequency so
-    # the poll interval is passed as a VARIABLE, not a literal (no raw sleep / no literal-timeout wait).
+    # the poll interval is passed as a variable, not a literal (no raw sleep / no literal-timeout wait).
     writer_tick = 0.05
     def write_loop():
         t0 = time.time()
@@ -104,16 +104,16 @@ def main() -> int:
         print(f"SKIP: corpus absent ({CORPUS})")
         return 0
     results = []
-    # 1. Frozen forever -> STALL-RENDER-FROZEN (the false-pass regression guard).
+    # 1. Frozen forever -> stall-render-frozen (the false-pass regression guard).
     results.append(run_case("frozen", lambda dt: frozen_tel(), deadline=3.0,
                             expect_pass=False, expect_verdict_contains="STALL-RENDER-FROZEN"))
-    # 2. Render-ready + world-live (play clock advances ~1000ms/s of wall time) -> PASS after dwell.
+    # 2. Render-ready + world-live (play clock advances ~1000ms/s of wall time) -> pass after dwell.
     results.append(run_case("live", lambda dt: good_tel(int(100000 + dt * 1000)), deadline=8.0,
                             expect_pass=True, expect_verdict_contains="PASS"))
-    # 3. Render-ready but play clock FROZEN (nothing moving) -> STALL-RENDER-FROZEN.
+    # 3. Render-ready but play clock frozen (nothing moving) -> stall-render-frozen.
     results.append(run_case("render_ready_dead", lambda dt: render_ready_but_dead_tel(555000), deadline=3.0,
                             expect_pass=False, expect_verdict_contains="STALL-RENDER-FROZEN"))
-    # 4. Render-ready blips off every other 0.3s window, else live -> still PASS once it holds >=1s.
+    # 4. Render-ready blips off every other 0.3s window, else live -> still pass once it holds >=1s.
     def blink(dt: float) -> dict:
         if dt < 1.0 and int(dt * 3) % 2 == 0:
             return frozen_tel()

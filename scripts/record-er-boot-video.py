@@ -7,27 +7,27 @@ run must produce a frame-per-tick folder they can scroll in Dolphin and drag fra
 Flow:
   1. Launch the approved first-boot Continue probe (scripts/run-product-continue-direct-probe.sh);
      it owns preflight (Steam up, no existing ER, fresh DLL staging) and final cleanup.
-  2. Poll Hyprland for ONLY the exact ER window (class steam_app_1245620; never enumerate or log
+  2. Poll Hyprland for only the exact ER window (class steam_app_1245620; never enumerate or log
      other clients). When it maps with stable geometry, start
      `wf-recorder -g <geom> -r 60 -D` (no-damage => constant framerate, so frame N <-> N/60s).
   3. Poll er-quickload-telemetry.json for the loading-screen trigger:
      oracle_loadscreen_table_builds > 0 (the native "Now Loading" table build -- the same latch
-     that drives the custom boot bar to its 700 permille native-handoff stop) OR
+     that drives the custom boot bar to its 700 permille native-handoff stop) or
      oracle_boot_view_last_permille >= 700. RAM oracles only; screenshots are never the oracle.
   4. On trigger: kill eldenring.exe immediately (teardown), SIGINT the recorder at the same
      moment so the video ends on teardown and never captures the desktop behind the dying window.
   5. Extract every frame with ffmpeg (fps=60 -> frame-%05d.png), write video-timeline.json
      mapping frame numbers to wall-clock/launch-relative seconds. Pass --dolphin to open the
-     frames folder for the user -- only AFTER the agent's deterministic pixel/telemetry
+     frames folder for the user -- only after the agent's deterministic pixel/telemetry
      verification pass, never as a default (user 2026-07-06).
 
-The agent must NOT read the frames (no-image-reading directive); they are FOR THE USER.
+The agent must not read the frames (no-image-reading directive); they are for the user.
 Deterministic pixel telemetry (luminance scans, blackframe detection) is the verification tool.
 
 Usage:
   record-er-boot-video.py [--dry-run] [--selftest] [--dolphin]
                           [--artifact-dir DIR] [--trigger-permille N]
-                          [--post-trigger-grace SECONDS]
+                          [--post-trigger-grace seconds]
 """
 from __future__ import annotations
 
@@ -80,7 +80,7 @@ def eldenring_pids() -> list[int]:
 
 
 def hypr_er_window(hyprctl: str) -> dict | None:
-    """Return ONLY the exact-class ER client. The full client list is filtered in memory and
+    """Return only the exact-class ER client. The full client list is filtered in memory and
     never printed/logged/persisted (privacy: other windows must not leak into artifacts)."""
     try:
         out = subprocess.run(
@@ -272,7 +272,7 @@ def main() -> int:
     stop_reason = "unknown"
     window_events: list[dict] = []
 
-    # Window wait: start recording at the FIRST stable mapped geometry (two identical consecutive
+    # Window wait: start recording at the first stable mapped geometry (two identical consecutive
     # samples ride out the game's startup window reconfiguration jump). Deadline = probe cap +
     # margin; the probe's own watcher owns the hard runtime cap.
     deadline = launch_epoch + cap + 15
@@ -358,7 +358,7 @@ def main() -> int:
                         teardown_epoch = teardown_game()
                     recorder_sigint_epoch = stop_recorder(recorder)
                     break
-                # Re-validate ONLY the target window every iteration: timestamp every state
+                # Re-validate only the target window every iteration: timestamp every state
                 # change (this IPC call is also the loop pacer). Occlusion/moves are logged,
                 # not fatal (the user may deliberately interact); disappearance is handled by
                 # the game-pid check above on the next iteration.

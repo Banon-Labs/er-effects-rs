@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
-"""ONE definition of "which `.rs` files under this root are this repository's Rust source".
+"""One definition of "which `.rs` files under this root are this repository's Rust source".
 
 Six gates used to carry six hand-maintained copies of this directory list and six copies of the
 walk that consumes it. They had already drifted: on 2026-08-31 `check-no-lossy-utf8.py` was the
-only one whose list omitted `.claude`, so it read 14,284 `.rs` copies out of OTHER AGENTS'
+only one whose list omitted `.claude`, so it read 14,284 `.rs` copies out of other agents'
 worktrees -- 96.2% of the 14,855 files it looked at -- and a stray `String::from_utf8_lossy` in
 any sibling agent's sandbox failed this repo's gate. Nobody noticed, because the only symptoms
 were a slow gate and an occasional red from a directory nobody thinks of as part of the repo.
 One shared definition is the fix for the drift; the per-gate `also_ignore` argument is how a
 gate says "and this one too, for THIS reason" without forking the whole list again.
 
-THE WALK PRUNES, IT DOES NOT POST-FILTER. `dirs[:] = ...` during `os.walk` yields exactly the
+The walk PRUNES, it does not post-filter. `dirs[:] = ...` during `os.walk` yields exactly the
 paths a post-filtered `root.rglob("*.rs")` kept -- a path under an ignored directory carries
 that directory in its relative `.parts`, so the post-filter had already dropped it -- while
-never READING the ignored subtree. Measured 2026-08-31: `rglob` traversed all 1,118,634 entries
+never reading the ignored subtree. Measured 2026-08-31: `rglob` traversed all 1,118,634 entries
 under this repo root (`.worktrees` 564,630 + `.claude` 387,965 + `target` 159,386 = 99.4% of
 them) to arrive at 571 real source files, and under load that walk took 28-69s.
 
-NOT `git ls-files`. Measured and rejected for this family: the tracked set ADDS 20 tracked
+Not `git ls-files`. Measured and rejected for this family: the tracked set adds 20 tracked
 `third_party/hudhook/*.rs` these gates deliberately exclude (they would go red on vendored
-upstream code) and DROPS the untracked `crates/**/*.rs` that sibling agents have in flight (the
+upstream code) and drops the untracked `crates/**/*.rs` that sibling agents have in flight (the
 gates would stop seeing uncommitted work). The filesystem walk is the correct input here.
 """
 
@@ -31,7 +31,7 @@ from typing import Iterable, Iterator
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# Directories under this repo root that are NOT this repository's Rust source. Every entry here
+# Directories under this repo root that are not this repository's Rust source. Every entry here
 # is load-bearing: each one actually holds `.rs` files a gate would otherwise read. Counts are
 # `.rs` files measured under this root on 2026-08-31.
 NOT_REPO_SOURCE: frozenset[str] = frozenset(
@@ -41,7 +41,7 @@ NOT_REPO_SOURCE: frozenset[str] = frozenset(
         # Gitignored local worktrees/sandboxes (AGENTS.md "Local Hidden Worktrees") -- deliberate
         # local work, explicitly not repo dirt, and not the committed tree a gate speaks for.
         ".worktrees",
-        # Other agents' worktree COPIES of this same tree, each a full checkout: 14,284 `.rs`.
+        # Other agents' worktree copies of this same tree, each a full checkout: 14,284 `.rs`.
         # Scanning them double-counts every real file and lets a sibling's sandbox fail this
         # repo's gate. The bare segment also covers `.claude/skills` etc., none of which is
         # product source.

@@ -2,12 +2,12 @@
 """Behavioral tests for the cupcake signal `last_assistant_idle_hold`.
 
 The signal script scans the last-completed assistant turn of the session transcript and returns a
-TAGGED marker:
+tagged marker:
   * IDLEHOLD:<phrase>  -- an unjustified idle/hold announcement while a background task runs
-  * ""                 -- clean (no hold language, OR the hold is justified / accompanied by
+  * ""                 -- clean (no hold language, or the hold is justified / accompanied by
                           substantive non-overlapping work / blocked on the user)
 
-We drive it against crafted transcript JSONL under a temporary HOME so the script's
+We drive it against crafted transcript JSONL under a temporary home so the script's
 `~/.claude/projects/<cwd-key>/*.jsonl` discovery resolves to our fixture, then assert the tag.
 """
 from __future__ import annotations
@@ -29,7 +29,7 @@ def user(text: str) -> dict:
 
 
 def tool_result() -> dict:
-    """A tool-result carrier user event -- must NOT split the assistant turn."""
+    """A tool-result carrier user event -- must not split the assistant turn."""
     return {"type": "user", "message": {"content": [{"type": "tool_result", "content": "ok"}]}}
 
 
@@ -61,7 +61,7 @@ def assistant_agent() -> dict:
 
 
 def run_signal(events: list[dict]) -> str:
-    """Write events to a fixture transcript under a temp HOME and return the signal's stdout."""
+    """Write events to a fixture transcript under a temp home and return the signal's stdout."""
     with tempfile.TemporaryDirectory() as home:
         key = PROJECT_DIR.replace("/", "-")
         tdir = Path(home) / ".claude" / "projects" / key
@@ -148,7 +148,7 @@ def main() -> int:
         "expected empty when the hold is accompanied by justification prose",
     )
 
-    # (4) A status-peek-only Bash (tail/wc of a log) does NOT count as substantive -> still flagged.
+    # (4) A status-peek-only Bash (tail/wc of a log) does not count as substantive -> still flagged.
     expect(
         "hold-plus-status-peek-only",
         [
@@ -172,7 +172,7 @@ def main() -> int:
         "expected empty for ordinary technical prose with no hold language",
     )
 
-    # (6) A wait genuinely BLOCKED ON THE USER is legitimate -> not flagged.
+    # (6) A wait genuinely blocked on the user is legitimate -> not flagged.
     expect(
         "wait-blocked-on-user",
         [
@@ -194,7 +194,7 @@ def main() -> int:
         "expected empty when the hold phrase appears only inside double quotes",
     )
 
-    # (8) Hold in a NON-final block of the turn (a later clean block must not mask it) -> detected.
+    # (8) Hold in a non-final block of the turn (a later clean block must not mask it) -> detected.
     expect(
         "hold-in-nonfinal-block",
         [
@@ -206,7 +206,7 @@ def main() -> int:
         "expected IDLEHOLD from a whole-turn scan when the hold is not the last block",
     )
 
-    # (9) Interrupted turn: a NEW user prompt after the hold -> the prior turn is still detected.
+    # (9) Interrupted turn: a new user prompt after the hold -> the prior turn is still detected.
     expect(
         "interrupted-turn",
         [
@@ -235,7 +235,7 @@ def main() -> int:
         "I expect the compile to finish shortly and will pick this back up then."
     )
 
-    # (10) Pure pause + LONG message, not blocked on the user -> VERBOSEPAUSE.
+    # (10) Pure pause + long message, not blocked on the user -> VERBOSEPAUSE.
     expect(
         "verbose-pure-pause-long",
         [user("Kick off the build."), assistant_text(long_pause_message)],
@@ -243,7 +243,7 @@ def main() -> int:
         "expected VERBOSEPAUSE for a pure pause whose message is long/multi-topic",
     )
 
-    # (11) Pure pause + SHORT, precise blocked note (no idle phrase) -> clean.
+    # (11) Pure pause + short, precise blocked note (no idle phrase) -> clean.
     expect(
         "verbose-pure-pause-short",
         [
@@ -257,7 +257,7 @@ def main() -> int:
         "expected empty for a short, precise blocked-pause note",
     )
 
-    # (12) LONG message but the turn also does substantive Edit work -> clean (may report results).
+    # (12) long message but the turn also does substantive Edit work -> clean (may report results).
     expect(
         "verbose-long-with-edit",
         [
@@ -270,7 +270,7 @@ def main() -> int:
         "expected empty when a long message accompanies substantive Edit work",
     )
 
-    # (12b) LONG message but the turn also launches a subagent -> clean.
+    # (12b) long message but the turn also launches a subagent -> clean.
     expect(
         "verbose-long-with-agent",
         [
@@ -283,7 +283,7 @@ def main() -> int:
         "expected empty when a long message accompanies an Agent launch",
     )
 
-    # (13) LONG message that is genuinely BLOCKED ON THE USER -> exempt -> clean.
+    # (13) long message that is genuinely blocked on the user -> exempt -> clean.
     expect(
         "verbose-long-blocked-on-user",
         [
@@ -303,7 +303,7 @@ def main() -> int:
         "expected empty for a long message that is genuinely blocked on the user",
     )
 
-    # (14) LONG message but only a status-peek Bash (tail) -> still a pure pause -> VERBOSEPAUSE.
+    # (14) long message but only a status-peek Bash (tail) -> still a pure pause -> VERBOSEPAUSE.
     expect(
         "verbose-long-with-status-peek",
         [
@@ -316,13 +316,13 @@ def main() -> int:
         "expected VERBOSEPAUSE when a long pause turn's only Bash is a status peek",
     )
 
-    # (15) REGRESSION -- a long PROSE ANSWER is not a pause. Nothing is running, the message announces
+    # (15) regression -- a long prose answer is not a pause. Nothing is running, the message announces
     # no hold, the user simply asked a question that prose answers. Before 2026-08-22 this fired
     # VERBOSEPAUSE, which halted three consecutive real answers -- twice on the corrective rewrite the
-    # wall_of_text guard demanded back when it still halted at Stop, a turn that has no tool_use BY
-    # CONSTRUCTION. Length alone is wall_of_text's jurisdiction, not this rule's.
+    # wall_of_text guard demanded back when it still halted at Stop, a turn that has no tool_use by
+    # construction. Length alone is wall_of_text's jurisdiction, not this rule's.
     # >450 chars on purpose: at 411 the length heuristic would not fire and case (15) would pass
-    # trivially, testing nothing. This is a plain ANSWER -- no idle phrasing, no pending-work
+    # trivially, testing nothing. This is a plain answer -- no idle phrasing, no pending-work
     # phrasing, nothing running in the transcript.
     answer_no_pending = (
         "Yes -- intended. The build I launched before you asked for the relaunch already contained "
@@ -343,9 +343,9 @@ def main() -> int:
         "expected empty for a long prose ANSWER with nothing pending -- it is not a pause",
     )
 
-    # (16) CONTROL for (15): the identical message becomes a VERBOSEPAUSE the moment something really
-    # is running, because then the turn IS stopping with work pending and owes a terse blocked-note.
-    # The job is launched in an EARLIER turn -- launching it in this one would itself be substantive
+    # (16) control for (15): the identical message becomes a VERBOSEPAUSE the moment something really
+    # is running, because then the turn is stopping with work pending and owes a terse blocked-note.
+    # The job is launched in an earlier turn -- launching it in this one would itself be substantive
     # work and exempt the turn for a different reason, which would not test the pause gate at all.
     expect(
         "verbose-long-prose-answer-with-live-background-job",

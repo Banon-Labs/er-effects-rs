@@ -2,18 +2,18 @@
 """Deep-trace an Elden Ring crash from its Windows minidump.
 
 WHY: our in-process VEH crash logger (crates/er-quickload/src/crashlog/) can only catch faults that
-happen AFTER our DLL loads. A crash in the me3 loader (me3_mod_host.dll) during early boot -- before any
+happen after our DLL loads. A crash in the me3 loader (me3_mod_host.dll) during early boot -- before any
 er_*.dll is injected -- is invisible to it (observed 2026-07-24: run 075217 crashed ~3s after launch in
-ntdll heap code with me3_mod_host frames, and the ONLY record was the Windows minidump, parsed by hand).
+ntdll heap code with me3_mod_host frames, and the only record was the Windows minidump, parsed by hand).
 This tool automates that hand-parse so every crashed run gets a deep trace with zero guesswork.
 
-WHAT IT REPORTS:
+What it REPORTS:
   - exception code (e.g. 0xC0000005 ACCESS_VIOLATION) + faulting address + read/write/exec
-  - the MODULE that owns the faulting address (name + offset), and the eldenring.exe game RVA
+  - the module that owns the faulting address (name + offset), and the eldenring.exe game RVA
     (addr - eldenring.exe base) so it maps to Ghidra/the deobf binary via scripts/dump-deobf-shift.py
   - the full loaded-module list (name, base, size)
   - a module-resolved backtrace: the crashing thread's stack scanned for return addresses that fall in
-    ANY loaded module -> "module+0xoffset" per frame (this is what named the me3_mod_host frames)
+    any loaded module -> "module+0xoffset" per frame (this is what named the me3_mod_host frames)
 
 Windows writes these dumps to %LOCALAPPDATA%\\CrashDumps once WerFault local dumps are enabled; on this
 box that is /mnt/c/Users/choza/AppData/Local/CrashDumps/eldenring.exe.<pid>.dmp. Override the dir with
@@ -50,17 +50,17 @@ except ModuleNotFoundError:
 def _tolerate_unknown_stream_types() -> None:
     """Let an unknown minidump stream type be skipped instead of killing the whole parse.
 
-    MEASURED 2026-09-02: our own hang watchdog's dump (`er-crash-hang-minidump.dmp`, written by
+    Measured 2026-09-02: our own hang watchdog's dump (`er-crash-hang-minidump.dmp`, written by
     `er-crash-logging.dll` via MiniDumpWriteDump under Wine) carries stream type `0xFFF0`, and the
     `minidump` package builds every directory entry with `MINIDUMP_STREAM_TYPE(raw_value)`. A plain
     `enum.Enum` raises on an unrecognised value, so the exception escapes `MinidumpFile.parse` and
-    the ENTIRE dump is unreadable -- `ValueError: 65520 is not a valid MINIDUMP_STREAM_TYPE` --
+    the entire dump is unreadable -- `ValueError: 65520 is not a valid MINIDUMP_STREAM_TYPE` --
     even though the thread list, module list and exception record it contains are all perfectly
     well-formed. Vendor-defined streams above `LastReservedStream` (0xFFFF) are legal per the
     format, so refusing them is the library being stricter than the spec.
 
     `_missing_` returning a pseudo-member is the sanctioned Enum hook for exactly this: the value
-    round-trips, nothing is registered on the class, and every KNOWN stream type still resolves to
+    round-trips, nothing is registered on the class, and every known stream type still resolves to
     its real member, so no stream we care about changes behaviour.
     """
     from minidump.directory import MINIDUMP_STREAM_TYPE

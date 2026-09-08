@@ -77,7 +77,7 @@ fn resolve_minhook_src_dir(manifest_dir: &Path) -> PathBuf {
         if candidate.join("buffer.c").is_file() {
             return candidate;
         }
-        // `vendor/` is git-excluded and exists only in the MAIN checkout, so a build from a linked
+        // `vendor/` is git-excluded and exists only in the main checkout, so a build from a linked
         // git worktree finds nothing above itself. Follow the worktree's `.git` file back to the
         // main working tree and look there before giving up.
         if let Some(main_worktree) = main_worktree_root(ancestor) {
@@ -109,7 +109,7 @@ fn resolve_minhook_src_dir(manifest_dir: &Path) -> PathBuf {
     );
 }
 
-/// Main working tree of a linked git worktree, from its `.git` FILE.
+/// Main working tree of a linked git worktree, from its `.git` file.
 ///
 /// A linked worktree's `.git` is a file reading `gitdir: <main>/.git/worktrees/<name>`, so the main
 /// working tree is the grandparent of that `worktrees/<name>` directory, minus the `.git` component.

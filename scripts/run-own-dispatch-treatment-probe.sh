@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Wrapper: load the gated probe env from .envs and run the m28 direct-enqueue TREATMENT probe
+# Wrapper: load the gated probe env from .envs and run the m28 direct-enqueue treatment probe
 # (own_load_continue=1 + own_dispatch=1). Zero-input, save-safe, telemetry-only. See bd er-effects-rs-uvh.
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

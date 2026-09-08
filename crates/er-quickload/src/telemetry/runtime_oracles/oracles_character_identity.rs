@@ -2,14 +2,14 @@
 // face data, name, stats) and the play-time world-live clock derived from the same singleton.
 //
 // One value leaves this subsystem: `play_time_live`. The loading-screen gauge at the very end of
-// the emission needs it to report the gauge's LIVE state rather than its stale during-load latch
+// the emission needs it to report the gauge's live state rather than its stale during-load latch
 // (see `oracles_loading_screen_live.rs`), so it is returned rather than recomputed -- recomputing
 // would sample the clock twice in one telemetry write and could disagree with itself.
 
 /// Returns `play_time_live`: the world clock has advanced past this load epoch's threshold.
 fn write_character_identity_oracles(body: &mut String) -> bool {
     const NULL_PTR: usize = 0;
-    // IDENTITY oracle: loaded character values that should match the chosen save slot.
+    // Identity oracle: loaded character values that should match the chosen save slot.
     // These mirror ER-Save-File-Readers' player_game_data models (health/fp today, broader
     // slot attributes as that reference grows) while reading the live GameDataMan path used by
     // dump_load_correctness: GameDataMan = [base + 0x3d5df38]; PlayerGameData = [GameDataMan+8].
@@ -31,8 +31,8 @@ fn write_character_identity_oracles(body: &mut String) -> bool {
         }
         .unwrap_or(NULL_PTR)
     };
-    // WORLD-LIVE liveness clock: GameDataMan::play_time (u32 ms). Advances only while the world
-    // simulation steps; PAUSED during loads/menus/frozen-world. A rising value across a dwell
+    // World-live liveness clock: GameDataMan::play_time (u32 ms). Advances only while the world
+    // simulation steps; Paused during loads/menus/frozen-world. A rising value across a dwell
     // window is the render-gate's proof the world is live (not a present-but-frozen reload).
     const PLAY_TIME_READ_FAIL: i64 = -1;
     let play_time_ms: i64 = if gdm == NULL_PTR {
@@ -43,11 +43,11 @@ fn write_character_identity_oracles(body: &mut String) -> bool {
         }
         .map_or(PLAY_TIME_READ_FAIL, |v| i64::from((v & 0xffff_ffff) as u32))
     };
-    // WORLD-CLOCK-LIVE semaphore (user 2026-07-19, bd play-time-live-world-clock-semaphore): the
-    // input-trace path computes this but only emits it to the trace jsonl; mirror it into the MAIN
+    // World-clock-live semaphore (user 2026-07-19, bd play-time-live-world-clock-semaphore): the
+    // input-trace path computes this but only emits it to the trace jsonl; mirror it into the main
     // telemetry so the samechar-3x load1-vs-load2 comparison can actually use it (its
     // "world_clock:live" checkpoint reads `play_time_live`). play_time advances only while the world
-    // sim steps; a >=1s rise past THIS load epoch's first-seen value = the world is genuinely live
+    // sim steps; a >=1s rise past this load epoch's first-seen value = the world is genuinely live
     // (the loading-screen playtime the user watched ticking). Necessary-not-sufficient for control.
     const PLAY_TIME_LIVE_THRESHOLD_MS: i64 = 1000;
     static PT_ORACLE_EPOCH: std::sync::atomic::AtomicUsize =
@@ -57,13 +57,13 @@ fn write_character_identity_oracles(body: &mut String) -> bool {
     let pt_epoch = crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
         .load(std::sync::atomic::Ordering::SeqCst);
     if PT_ORACLE_EPOCH.swap(pt_epoch, std::sync::atomic::Ordering::Relaxed) != pt_epoch {
-        // New load epoch -> re-arm; the baseline re-latches on the epoch's first REAL reading below.
+        // New load epoch -> re-arm; the baseline re-latches on the epoch's first real reading below.
         PT_ORACLE_FIRST.store(PLAY_TIME_READ_FAIL, std::sync::atomic::Ordering::Relaxed);
     }
-    // Baseline only on a LOADED-character playtime (> 0), mirroring the input-trace fix
-    // (`PLAY_TIME_TRACE_FIRST` in input_trace.rs). On the BOOT epoch GameDataMan exists with
+    // Baseline only on a loaded-character playtime (> 0), mirroring the input-trace fix
+    // (`PLAY_TIME_TRACE_FIRST` in input_trace.rs). On the boot epoch GameDataMan exists with
     // play_time == 0 long before the Continue deserialize, so baselining at 0 made the first
-    // post-deserialize sample report the save's ENTIRE stored playtime as "advance" (measured run
+    // post-deserialize sample report the save's entire stored playtime as "advance" (measured run
     // product-continue-direct-20260729-205115: oracle_play_time_advanced_ms == oracle_play_time_ms
     // == 388876164, ~108h) -> play_time_live falsely latched BOOT_VIEW_EPOCH_WORLD_LIVE for epoch 0
     // at ~+16s, mid boot loading screen, freezing the loading-portrait drive tick (bd
@@ -79,8 +79,8 @@ fn write_character_identity_oracles(body: &mut String) -> bool {
         PLAY_TIME_READ_FAIL
     };
     let play_time_live: bool = play_time_advanced_ms >= PLAY_TIME_LIVE_THRESHOLD_MS;
-    // Consecutive-live-frames streak for the child-done-override RELEASE (bd
-    // CORRECTION-STEP4-finalize-substate-is-0): count up while live, reset on any non-live frame.
+    // Consecutive-live-frames streak for the child-done-override release (bd
+    // correction-STEP4-finalize-substate-is-0): count up while live, reset on any non-live frame.
     if play_time_live {
         er_telemetry_core::counters::WORLD_LIVE_STABLE_FRAMES
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -89,8 +89,8 @@ fn write_character_identity_oracles(body: &mut String) -> bool {
             .store(0, std::sync::atomic::Ordering::Relaxed);
     }
     if play_time_live {
-        // Publish the PER-EPOCH world-live signal so the boot-view compositor stops its per-frame GPU
-        // readback once THIS switch's world is genuinely running (bd
+        // Publish the per-epoch world-live signal so the boot-view compositor stops its per-frame GPU
+        // readback once this switch's world is genuinely running (bd
         // fps-killer-rootcaused-per-frame-gpu-readback-boot-view-not-stopping-inworld-load2).
         crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE
             .store(pt_epoch, std::sync::atomic::Ordering::Relaxed);

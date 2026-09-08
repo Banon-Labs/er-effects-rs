@@ -25,7 +25,7 @@ pub enum EditOp {
     Replace,
     /// Remove the matched anchor tag (`new_tag` is unused / `None`).
     Remove,
-    /// Insert `new_tag` immediately AFTER the matched anchor tag (the anchor
+    /// Insert `new_tag` immediately after the matched anchor tag (the anchor
     /// itself is left in place). Lets a transform add a tag the vanilla movie
     /// does not have (e.g. a second placement of an injected field).
     InsertAfter,
@@ -158,7 +158,7 @@ type PlannedEdit = (Option<usize>, usize, EditOp, Option<Tag>, usize);
 pub fn apply_edits(movie: &mut Movie, edits: &[TagEdit]) -> Result<usize, EditError> {
     // Phase 1 (read-only): resolve every edit to (container, anchor index) and
     // pre-parse replacements/insertions. Nothing is mutated until every edit
-    // resolved. `taken` conflict-guards only Replace/Remove (which CONSUME the
+    // resolved. `taken` conflict-guards only Replace/Remove (which consume the
     // anchor); an InsertAfter merely references the anchor as a position, so it
     // may share an anchor with a replace/remove.
     let mut planned: Vec<PlannedEdit> = Vec::with_capacity(edits.len());

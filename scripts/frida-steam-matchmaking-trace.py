@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Trace how Seamless Co-op finds and joins a lobby, through the Steam API.
 
-WHY THIS, AND WHY NOT A MEMORY DUMP
+Why this, and why not a memory dump
 -----------------------------------
 The functions that choose an invasion target -- ersc `0x18006a2d0`
 (`seamless_session_manager.cpp:2014`) and `0x18006a1e0` (`yui_nexus_3.cpp`) -- are `e9` jumps
@@ -20,17 +20,17 @@ string. If it is not filtered, that absence is equally decisive -- and it is the
 between "a unique password targets your friend" and "it does nothing", which has already been
 asserted once in this repo without evidence and turned out to be wrong.
 
-READ-ONLY. Arguments are logged, never altered. Hooking Steam's own exports does not touch
+Read-only. Arguments are logged, never altered. Hooking Steam's own exports does not touch
 `ersc.dll` and cannot perturb its logic.
 
-REACHING THE PROCESS
+Reaching the process
 --------------------
 The game runs under Wine/Proton, so a Linux-side `frida.attach()` sees nothing. `frida-gadget.dll`
 is loaded into the game as an me3 `[[natives]]` entry and listens on 127.0.0.1:27042; we connect
-to that as a REMOTE DEVICE. Launch with a gadget-bearing profile, e.g.
+to that as a remote device. Launch with a gadget-bearing profile, e.g.
 /home/banon/Elden/pr190-invasion-warp-seamless-frida.me3
 
-RUN IT (uv provisions frida per-run; nothing is installed system-wide):
+Run it (uv provisions frida per-run; nothing is installed system-wide):
     uv run --with frida python3 /home/banon/projects/er-mods-rs/scripts/frida-steam-matchmaking-trace.py --list
     uv run --with frida python3 /home/banon/projects/er-mods-rs/scripts/frida-steam-matchmaking-trace.py
 
@@ -53,21 +53,21 @@ DEFAULT_OUT = (
 
 #: Substrings of the flat-API export names worth hooking.
 #:
-#: MEASURED 2026-08-04: hooking ONLY the lobby API and attaching after boot produced ZERO calls
+#: Measured 2026-08-04: hooking only the lobby API and attaching after boot produced zero calls
 #: across a complete invasion. Two reasons, and both are corrected here:
 #:
-#:  1. WRONG SURFACE. Seamless's matchmaking is its own, not the vanilla shape. Whatever selects
+#:  1. Wrong surface. Seamless's matchmaking is its own, not the vanilla shape. Whatever selects
 #:     a target has to move data between peers, so the networking APIs are added -- P2P sessions
 #:     and SteamNetworkingMessages carry ERSC's own protocol, and rich presence / lobby member
 #:     data are how a session advertises who is in it.
-#:  2. WRONG TIME. A lobby joined during session setup is invisible to a tracer that attaches
-#:     afterwards. Nothing here fixes that -- the tracer must be started at BOOT, before the
+#:  2. Wrong time. A lobby joined during session setup is invisible to a tracer that attaches
+#:     afterwards. Nothing here fixes that -- the tracer must be started at boot, before the
 #:     session forms, or a per-session (rather than per-invasion) search is missed entirely.
 #:
 #: Kept broad on purpose: a call that never happens costs one idle hook, while a surface left
 #: unhooked costs a whole run and reads as a false negative.
 INTERESTING = [
-    # Lobby search/join -- the vanilla-shaped surface. Retained so its ABSENCE stays on record.
+    # Lobby search/join -- the vanilla-shaped surface. Retained so its absence stays on record.
     "AddRequestLobbyListStringFilter",
     "AddRequestLobbyListNumericalFilter",
     "AddRequestLobbyListNearValueFilter",

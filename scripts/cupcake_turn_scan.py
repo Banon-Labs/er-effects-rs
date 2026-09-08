@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ONE definition of "what did the last assistant turn actually do", shared by the Stop-hook signals.
+"""One definition of "what did the last assistant turn actually do", shared by the Stop-hook signals.
 
 Every `.cupcake/signals/last_assistant_*.sh` that has to answer "did that turn do real work, or did it
 just talk?" used to answer it with its own private copy of the same code. Two copies are two rules:
@@ -7,10 +7,10 @@ they drift, and then two guards disagree about the same turn. This module is the
 `.cupcake/signals/last_assistant_idle_hold.sh` and `.cupcake/signals/last_assistant_unexecuted_promise.sh`
 both import it, so a fix to the peek-command list or the blocked-on-user phrasing lands in both at once.
 
-What lives here (and NOWHERE else):
+What lives here (and nowhere else):
   * transcript discovery         -- `latest_transcript`
-  * turn bucketing               -- `split_turns`; a turn is bounded by REAL user prompts, and a
-                                    tool-result carrier "user" event does NOT split one
+  * turn bucketing               -- `split_turns`; a turn is bounded by real user prompts, and a
+                                    tool-result carrier "user" event does not split one
   * substantive work vs peeking  -- `bash_is_status_peek`, `Turn.work`
   * blocked-on-the-user prose    -- `USER_WAIT_RE`, `blocked_on_user`
   * live background work         -- `live_background_work`: a backgrounded Bash or an async Agent
@@ -19,10 +19,10 @@ What lives here (and NOWHERE else):
   * where a paragraph starts     -- `prose_paragraphs`, and `Turn.text_runs`, the contiguous prose
                                     runs a length rule must measure instead of the whole turn
 
-Signal-SPECIFIC prose classification (which phrases are banned, how long is too long) stays in the
+Signal-specific prose classification (which phrases are banned, how long is too long) stays in the
 individual signal: that is the part each guard genuinely owns.
 
-Import contract: every consumer must fail OPEN (emit nothing) if this module cannot be imported, so a
+Import contract: every consumer must fail open (emit nothing) if this module cannot be imported, so a
 missing/renamed file can never wedge a session.
 """
 from __future__ import annotations
@@ -72,7 +72,7 @@ def load_events(path: str) -> list[dict]:
 # --- turn bucketing ---------------------------------------------------------------------------
 
 def is_real_user_prompt(ev: dict) -> bool:
-    """A genuine user prompt starts a new turn. Tool-result 'user' events do NOT (they are the harness
+    """A genuine user prompt starts a new turn. Tool-result 'user' events do not (they are the harness
     handing tool output back mid-turn), so they must not split the assistant turn."""
     if ev.get("type") != "user":
         return False
@@ -96,12 +96,12 @@ def assistant_text(ev: dict) -> str:
     return "\n".join(out)
 
 
-# Command names that make a Bash call a mere "status peek" (looking at a log/output), NOT real work.
+# Command names that make a Bash call a mere "status peek" (looking at a log/output), not real work.
 PEEK_CMDS = {"tail", "cat", "head", "wc", "grep", "ls", "echo", "less", "more"}
 
 
 def bash_is_status_peek(cmd) -> bool:
-    """True when EVERY command in the (possibly piped/chained) Bash invocation is a peek command.
+    """True when every command in the (possibly piped/chained) Bash invocation is a peek command.
     Any non-peek command (cargo, python, bd remember, a build, ...) makes the call substantive."""
     if not isinstance(cmd, str) or not cmd.strip():
         return False  # empty command -> not a peek (but also handled as non-substantive by caller)
@@ -151,11 +151,11 @@ def assistant_has_substantive_tool(ev: dict) -> bool:
 
 @dataclass
 class Turn:
-    """One assistant turn: its text blocks and tool_use blocks, IN ORDER.
+    """One assistant turn: its text blocks and tool_use blocks, in order.
 
     `blocks` is the ordered stream, each entry ("text", str) or ("tool", block-dict). Order is what
     lets a caller ask the question that separates a kept promise from a broken one: was there a tool
-    call AFTER the sentence that promised one?
+    call after the sentence that promised one?
     """
 
     blocks: list[tuple] = field(default_factory=list)
@@ -175,13 +175,13 @@ class Turn:
 
     @property
     def text_runs(self) -> list[str]:
-        """The turn's prose split into CONTIGUOUS runs -- consecutive text blocks with no tool call
+        """The turn's prose split into contiguous runs -- consecutive text blocks with no tool call
         between them.
 
         This is the unit a length rule has to measure, and measuring the whole turn instead is what
         made the old wall-of-text guard fire on work it should never have touched. A tool-heavy turn
         emits a one-line preamble before each call ("Now the disassembly.", "Reading the policy.");
-        eleven of those are eleven runs of ONE line, not an eleven-paragraph wall, and the user reads
+        eleven of those are eleven runs of one line, not an eleven-paragraph wall, and the user reads
         them one at a time interleaved with tool activity. Summing them scored that turn identical to
         an eleven-paragraph essay.
         """
@@ -244,7 +244,7 @@ def last_text_turn(turns: list[Turn]) -> Turn | None:
 
 # --- prose segmentation -----------------------------------------------------------------------
 
-# WHY THIS LIVES HERE AND NOT IN THE SIGNAL. The module docstring says prose CLASSIFICATION stays in
+# Why this lives here and not in the signal. The module docstring says prose classification stays in
 # the individual signal, and it does: "how many paragraphs is too many" is still the wall_of_text
 # signal's own call. What lives here is the mechanical part -- where a paragraph starts and stops --
 # because three consumers need the identical answer (the signal, its regression test, and the
@@ -267,7 +267,7 @@ _CAPTION_RE = re.compile(r":\**\s*$")
 
 
 def _is_structure_line(line: str) -> bool:
-    """True for a line that is scannable STRUCTURE rather than prose to read."""
+    """True for a line that is scannable structure rather than prose to read."""
     if line != line.lstrip() and len(line) - len(line.lstrip()) >= 2:
         return True  # indented: list continuation or an indented code block
     stripped = line.strip()
@@ -282,14 +282,14 @@ def _is_structure_line(line: str) -> bool:
 
 
 def prose_paragraphs(text: str) -> list[str]:
-    """The blank-line-delimited blocks of the text that are PROSE the user has to READ.
+    """The blank-line-delimited blocks of the text that are prose the user has to read.
 
     Structure is not prose and never counts: fenced code (closed or left open), tables, list items
     and their indented continuations, headings, horizontal rules, and a caption line that introduces
-    structure in the same block. The objection this serves is to READING, and those are scanned.
+    structure in the same block. The objection this serves is to reading, and those are scanned.
 
-    Classification is PER LINE, not per block, which is the fix for the shape that used to inflate
-    the count most: the old rule exempted a block only when EVERY line was a table row (or every line
+    Classification is per line, not per block, which is the fix for the shape that used to inflate
+    the count most: the old rule exempted a block only when every line was a table row (or every line
     a list item), so the ordinary "Findings:\n| a | b |" -- a caption with its table -- was scored as
     a prose paragraph, and three tables with three captions read as three paragraphs of prose.
     """
@@ -313,7 +313,7 @@ def prose_paragraphs(text: str) -> list[str]:
 
 # --- blocked on the user ----------------------------------------------------------------------
 
-# Phrases that mean the turn is legitimately BLOCKED ON THE USER (awaiting their answer/drive). Kept
+# Phrases that mean the turn is legitimately blocked on the user (awaiting their answer/drive). Kept
 # specific so an incidental "you"/"your" in ordinary prose does not over-exempt.
 USER_WAIT_RE = re.compile(
     r"\bwait(?:ing)?\s+for\s+(?:the\s+)?(?:user|you)\b"
@@ -349,7 +349,7 @@ DETACHED_RE = re.compile(
 # the very turn it exists to catch.
 RECENT_TURNS = 10
 
-# The harness's own words when a tool call was LAUNCHED rather than awaited. A backgrounded Bash and
+# The harness's own words when a tool call was launched rather than awaited. A backgrounded Bash and
 # an async subagent both answer immediately with one of these and report for real later, through a
 # `<task-notification>`. Treating that immediate acknowledgement as the result is what makes a guard
 # think a running job has finished -- measured on a real transcript, where "Command running in
@@ -410,15 +410,15 @@ class BackgroundWork:
 def live_background_work(events: list[dict]) -> BackgroundWork:
     """What work is still running at turn-end.
 
-    A caller must NOT read "something is running" as "the promise is covered". An Elden Ring session
+    A caller must not read "something is running" as "the promise is covered". An Elden Ring session
     the user is inspecting stays up for an hour; a promise to go fix an unrelated file is not being
     carried by it, it is being deferred behind it -- the exact disappearance the promise guard exists
     to stop, and measured on the real transcript that prompted the guard, where a game launch two
     lines earlier would otherwise have excused it. Live work covers a promise only when the promise
-    WAITS ON that work ("once it lands", "whatever it finds", "if it flags") or when the live thing is
+    waits on that work ("once it lands", "whatever it finds", "if it flags") or when the live thing is
     a `watcher`.
 
-    Otherwise deliberately GENEROUS -- every branch here suppresses a halt, so a false "something is running" is
+    Otherwise deliberately generous -- every branch here suppresses a halt, so a false "something is running" is
     a quiet non-event while a false "nothing is running" would accuse an agent that did cover itself.
     Three sources, all read straight out of the transcript:
 
@@ -429,10 +429,10 @@ def live_background_work(events: list[dict]) -> BackgroundWork:
       * a foreground Bash call in the last turn that detached a process itself (nohup/setsid/`&`), or
         a Monitor/SendMessage call, which wake or watch work that outlives the turn.
 
-    BUT ONLY RECENTLY LAUNCHED WORK COUNTS (RECENT_TURNS). A launch whose completion never made it
+    But only recently launched work counts (RECENT_TURNS). A launch whose completion never made it
     into the transcript -- the notification was dropped, the session was resumed into a new file, the
     task was killed -- would otherwise stay "pending" forever and silently exempt every turn after it
-    for the rest of the session. Measured on real transcripts: ONE subagent launched at line 658 and
+    for the rest of the session. Measured on real transcripts: One subagent launched at line 658 and
     never notified suppressed the guard across the remaining 2,800 lines, including the exact turn the
     guard exists to catch. A guard that quietly stops firing is worse than one that never shipped, so
     a launch older than RECENT_TURNS turns is treated as finished. Genuine long-running work is
@@ -480,7 +480,7 @@ def live_background_work(events: list[dict]) -> BackgroundWork:
                 launched = bool(BACKGROUND_LAUNCH_RE.search(text))
                 if tid in pending_bg and not launched:
                     # A real result (output, exit status) -- the job is done. A "running in
-                    # background" acknowledgement is NOT a result and leaves it pending.
+                    # background" acknowledgement is not a result and leaves it pending.
                     pending_bg.pop(tid, None)
                 if tid in agent_uses:
                     if launched:
@@ -493,7 +493,7 @@ def live_background_work(events: list[dict]) -> BackgroundWork:
         if at >= cutoff
     ]
     if candidates:
-        # Report the MOST RECENT live job; with several in flight the newest is the representative one.
+        # Report the most recent live job; with several in flight the newest is the representative one.
         _launched_at, description = max(candidates)
         return BackgroundWork(description)
 

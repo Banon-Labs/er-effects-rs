@@ -3,9 +3,9 @@
 # Follows the import log and prints an updating "% complete" line. The percentage is an ESTIMATE:
 # functions-discovered / expected-total, where the expected total defaults to the 1.16.1 runtime
 # dump's function count (~366744). The deobf binary's true total may differ, so the bar is
-# capped at 99% until the analyzer prints DONE (then it shows 100%).
+# capped at 99% until the analyzer prints done (then it shows 100%).
 #
-#   scripts/ghidra/tail-analysis-progress.sh [LOG] [TARGET_FUNC_COUNT]
+#   scripts/ghidra/tail-analysis-progress.sh [log] [TARGET_FUNC_COUNT]
 LOG="${1:-/home/banon/ghidra_maporch/tmp/deobf-import.log}"
 TARGET="${2:-366744}"
 

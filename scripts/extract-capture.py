@@ -2,7 +2,7 @@
 """Extract one draw's bound constant buffers + textures from a RenderDoc capture.
 
 Run under qrenderdoc (which bundles the `renderdoc` Python module — the standalone
-module is NOT packaged on Arch):
+module is not packaged on Arch):
 
     QT_QPA_PLATFORM=offscreen qrenderdoc --python scripts/extract-capture.py -- \
         <capture.rdc> <out_dir> [--event-id N | --match SUBSTR] [--list]
@@ -159,7 +159,7 @@ def run_extract(rdc, out, event_id, match, do_list, skip_textures):
         # Constant buffers bound to this stage. NB: vkd3d-proton's descriptor buffers make
         # every register report as 0, so the FILENAME must use a running index, not the
         # register — else all cbuffers overwrite one file. The register is kept (informational)
-        # but the replay re-associates by byte SIZE, not register.
+        # but the replay re-associates by byte size, not register.
         for slot, ud in enumerate(cbs):
             d = ud.descriptor
             rid = d.resource
@@ -223,7 +223,7 @@ def _thread_excepthook(args):
 
 def main():
     # qrenderdoc swallows print()/stdout into its own console, so log to a file the host
-    # shell can read. Run the extraction on a WORKER thread and return, so qrenderdoc's main
+    # shell can read. Run the extraction on a worker thread and return, so qrenderdoc's main
     # thread is free to pump the Qt event loop that the replay/readback calls depend on —
     # calling SetFrameEvent/GetBufferData on the main thread deadlocks.
     import threading

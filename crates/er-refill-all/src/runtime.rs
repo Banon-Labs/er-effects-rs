@@ -4,18 +4,18 @@
 //!
 //! The requirement is that the hotkey "can only have an effect when the user is in the menu view
 //! that would have any refillable item options". That menu is the storage box, and its dialog is
-//! `CS::DepositoryDialog`. This DLL brackets that dialog's LIFETIME -- latching on its constructor
+//! `CS::DepositoryDialog`. This DLL brackets that dialog's lifetime -- latching on its constructor
 //! and clearing on its destructor -- and acts only while the latch is open. The dialog is genuinely
 //! heap-owned rather than pooled (its scalar-deleting destructor calls `operator_delete(this,
 //! 0x3190)`), so construction and destruction really are "opened" and "closed".
 //!
-//! # Why NOT the shared `MenuWindow::Update`
+//! # Why not the shared `MenuWindow::Update`
 //!
 //! The first version hooked `FUN_140745570` -- the `MenuWindow` update every dialog inherits -- and
 //! identified the storage box by comparing `*this` against its vtable. That worked live, but it was
 //! the wrong prologue to own, for two independent reasons:
 //!
-//! 1. **It is shared with every other menu window in the game, and MinHook binds ONE detour per
+//! 1. **It is shared with every other menu window in the game, and MinHook binds one detour per
 //!    address.** The second `MH_CreateHook` on an address gets `MH_ERROR_ALREADY_CREATED`; the
 //!    loser reports installed, never runs, and logs nothing. `er-hook`'s own header records that as
 //!    measured, not hypothetical: the product and `er-armament-icons` both detoured the Scaleform
@@ -25,10 +25,10 @@
 //!    `extern "system" fn(usize, usize, usize, usize) -> usize`, but `MenuWindow::Update` is
 //!    `(this, f32 delta, InputData*)` -- `delta` travels in **XMM1**, with RDX unused. The union
 //!    never names XMM1, so routing that prologue through a Rust dispatcher would leave the frame
-//!    delta riding in a volatile register the ABI does not model, for EVERY menu in the game. The
+//!    delta riding in a volatile register the ABI does not model, for every menu in the game. The
 //!    corruption that risks is worse than the collision it would prevent.
 //!
-//! So this hooks two `DepositoryDialog`-SPECIFIC prologues instead, both of which take integer
+//! So this hooks two `DepositoryDialog`-specific prologues instead, both of which take integer
 //! arguments only and therefore fit the union's ABI exactly:
 //!
 //! | | address | signature | uniqueness |
@@ -60,7 +60,7 @@ use crate::{
 };
 
 /// `CS::ItemReplenishStateTracker::SetState(tracker*, int* itemId, bool state)`. The absolute
-/// setter, and the only function here that writes a NEW entry.
+/// setter, and the only function here that writes a new entry.
 const SET_STATE_RVA: usize = 0x23dd80;
 
 /// `GameDataMan + 0x8` -> `mainPlayerGameData`.
@@ -77,10 +77,10 @@ const DEPOSITORY_DIALOG_CTOR_RVA: usize = 0x8d54a0;
 /// which is also the evidence the dialog is heap-owned rather than pooled: construction and
 /// destruction really do bracket "the storage box is open".
 const DEPOSITORY_DIALOG_DTOR_RVA: usize = 0x8d6430;
-/// `FUN_1408f13b0(DepositoryDialog*, int)` -- REBUILD THE DISPLAYED ITEM LIST.
+/// `FUN_1408f13b0(DepositoryDialog*, int)` -- Rebuild the displayed item list.
 ///
 /// Writing replenish state changes nothing on screen by itself. The vanilla toggle
-/// (`FUN_1408d87d0`) calls `SetItemReplenishState` and then IMMEDIATELY calls this with `1`; it
+/// (`FUN_1408d87d0`) calls `SetItemReplenishState` and then immediately calls this with `1`; it
 /// tail-calls `FUN_1408f6dc0`, which resets the dialog's gaitem list and re-runs the row-build
 /// lambda through vtable slots `0xf`/`0x10`. Without it the rows keep whatever refill icon they
 /// were built with, so the tracker and the screen disagree -- which is indistinguishable, from the
@@ -88,7 +88,7 @@ const DEPOSITORY_DIALOG_DTOR_RVA: usize = 0x8d6430;
 /// 449 entries and the icons did not move.
 const DEPOSITORY_DIALOG_REFRESH_RVA: usize = 0x8f13b0;
 
-/// `CS::DepositoryDialog::vftable`. Assigned ONLY by that class's constructor (verified: two
+/// `CS::DepositoryDialog::vftable`. Assigned only by that class's constructor (verified: two
 /// references in the image, both in `DepositoryDialog::DepositoryDialog`), so `*this == this`
 /// is a sound identity test for "the storage box dialog is the one updating".
 const DEPOSITORY_DIALOG_VFTABLE_RVA: usize = 0x2aebba0;
@@ -107,7 +107,7 @@ static GAME_BASE: AtomicUsize = AtomicUsize::new(0);
 static ORIG_DEPOSITORY_CTOR: AtomicUsize = AtomicUsize::new(0);
 static ORIG_DEPOSITORY_DTOR: AtomicUsize = AtomicUsize::new(0);
 static HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-/// The live `DepositoryDialog*`, or 0 while the storage box is closed. THE GATE.
+/// The live `DepositoryDialog*`, or 0 while the storage box is closed. The gate.
 static LIVE_DEPOSITORY_DIALOG: AtomicUsize = AtomicUsize::new(0);
 
 /// Frames the storage box was actually open, counted by the per-frame task.
@@ -143,7 +143,7 @@ pub(crate) fn install(base: usize) {
     }
     GAME_BASE.store(base, Ordering::SeqCst);
 
-    // THROUGH THE UNION, NEVER A BARE `MhHook`. MinHook binds one detour per address, and the
+    // Through the union, never a bare `MhHook`. MinHook binds one detour per address, and the
     // second `MH_CreateHook` on an address gets `MH_ERROR_ALREADY_CREATED`: the loser reports
     // installed, never runs, and logs nothing. `register_shared_hook` chains into the product
     // DLL's single union when `er_quickload.dll` is co-loaded and uses this DLL's own union when
@@ -151,15 +151,15 @@ pub(crate) fn install(base: usize) {
     // targets take integer arguments only, which is exactly what the union's four-`usize` ABI
     // models -- see the module header for why the `MenuWindow::Update` prologue could not be.
     //
-    // DTOR FIRST, CTOR SECOND, AND THE ORDER IS LOAD-BEARING (2026-08-31).
+    // DTOR first, CTOR second, and the order is load-bearing (2026-08-31).
     //
-    // `register_shared_hook` ENABLES immediately -- it is not MinHook's deferred queue -- so the
+    // `register_shared_hook` enables immediately -- it is not MinHook's deferred queue -- so the
     // first successful registration in this loop is live the instant it returns. The pair is only
     // safe as a pair: the ctor latches `LIVE_DEPOSITORY_DIALOG` and the dtor is the sole code that
     // clears it. Registered ctor-first, a refused dtor address (which is exactly what 1.17 hands
-    // back for an RVA with no verified mapping) left the ctor detour ARMED with no way to unlatch,
+    // back for an RVA with no verified mapping) left the ctor detour armed with no way to unlatch,
     // and the `Err` arm's `return` did not undo it -- `er_hook` has no unregister. The caller then
-    // registers the `FrameBegin` task REGARDLESS of this function returning early, so `tick()` went
+    // registers the `FrameBegin` task regardless of this function returning early, so `tick()` went
     // on calling `live_depository_dialog()` every frame and reading through a freed
     // `DepositoryDialog*` for the rest of the session. Only the vftable sanity read in
     // `live_depository_dialog` stood between that and acting on a dead object.
@@ -171,14 +171,14 @@ pub(crate) fn install(base: usize) {
     // immediate-enable registrar instead of through `MH_ApplyQueued`.
     for (name, target, handler, slot) in [
         (
-            // RAW `base + rva`, NOT `game_data_addr` -- matching the ctor row below.
+            // Raw `base + rva`, not `game_data_addr` -- matching the ctor row below.
             //
-            // `register_shared_hook` takes its target UNRESOLVED, deliberately, and resolves it
+            // `register_shared_hook` takes its target unresolved, deliberately, and resolves it
             // exactly once in whichever image will own the detour (`er-hook/src/lib.rs`, the
             // comment beginning "UNRESOLVED, deliberately"). This row used to hand it
-            // `game_data_addr(base, DEPOSITORY_DIALOG_DTOR_RVA, ..)`, which IS
+            // `game_data_addr(base, DEPOSITORY_DIALOG_DTOR_RVA, ..)`, which is
             // `resolve_game_address(base + rva).unwrap_or(0)` -- so the address was translated
-            // 1.16.2 -> 1.17 here and then handed to a registrar that translates it AGAIN. The
+            // 1.16.2 -> 1.17 here and then handed to a registrar that translates it again. The
             // second translation looks up a 1.17 address in a table keyed by 1.16.2 addresses:
             // it either refuses (the feature silently never installs) or, where a 1.17 address
             // happens to collide with a 1.16.2 key, lands on an unrelated function. Its own
@@ -186,7 +186,7 @@ pub(crate) fn install(base: usize) {
             // contract of the API they both call.
             //
             // `scripts/check-double-resolved-hook-targets.py` is the gate for this class and did
-            // NOT catch it: its taint follows `let` bindings, and this target is an element of an
+            // not catch it: its taint follows `let` bindings, and this target is an element of an
             // array literal destructured by the `for` pattern, never bound to a local.
             "DepositoryDialog::dtor",
             base + DEPOSITORY_DIALOG_DTOR_RVA,
@@ -265,7 +265,7 @@ unsafe extern "system" fn depository_ctor_union(a: usize, b: usize, c: usize, d:
     this
 }
 
-/// The storage box closed: clear the latch BEFORE the memory is freed.
+/// The storage box closed: clear the latch before the memory is freed.
 ///
 /// Cleared first, then the original runs and `operator_delete`s the object. Doing it the other way
 /// round would leave a window in which the per-frame task could read a freed dialog.
@@ -308,13 +308,13 @@ pub(crate) fn tick() {
     if base == 0 {
         return;
     }
-    // THE GATE.
+    // The gate.
     let Some(dialog) = live_depository_dialog(base) else {
         return;
     };
     DEPOSITORY_FRAMES.fetch_add(1, Ordering::Relaxed);
 
-    // Sample the pad BEFORE the config reload, so a rebind can seed its latch from the buttons
+    // Sample the pad before the config reload, so a rebind can seed its latch from the buttons
     // that are down at that instant instead of clearing it and manufacturing a press.
     let buttons = read_pad_buttons();
     LAST_PAD_BUTTONS.store(buttons, Ordering::Relaxed);
@@ -324,7 +324,7 @@ pub(crate) fn tick() {
     }
     let config = config::config();
 
-    // Safety: the FrameBegin task runs on one thread, and this is the only code that touches EDGES.
+    // Safety: the FrameBegin task runs on one thread, and this is the only code that touches edges.
     let edges = unsafe { (&raw mut EDGES).as_mut() }.and_then(Option::as_mut);
     let Some(edges) = edges else { return };
 
@@ -428,7 +428,7 @@ const fn read_pad_buttons() -> u16 {
 /// Keyboard edge for the optional chord.
 ///
 /// Both bits of `GetAsyncKeyState` are used and the low one is not optional: it means "pressed
-/// since the previous call ON THIS THREAD", so it catches a press that happened and was released
+/// since the previous call on this thread", so it catches a press that happened and was released
 /// between two frames. This runs on the game's menu thread, which is the only place the call is
 /// reliable under Wine/Proton -- a dedicated poll thread measured 1089 polls for 5 observed
 /// key-downs.
@@ -479,7 +479,7 @@ unsafe fn resolve_tracker(base: usize) -> Option<usize> {
         .filter(|&tracker| tracker != 0)
 }
 
-/// Every item id the game would accept a replenish state for, read from the LIVE param tables.
+/// Every item id the game would accept a replenish state for, read from the live param tables.
 ///
 /// Live rather than a table generated offline, so a modded regulation stays correct. `rows()`
 /// PANICS on a table that has not streamed in yet -- `get_param_file` does
@@ -569,7 +569,7 @@ unsafe fn run_cycle(
     let set_state: SetStateFn = unsafe { std::mem::transmute(set_state_addr) };
 
     // Ask the game, rather than reading entries: `ShouldReplenishItem` applies the per-type
-    // defaults for an item that has no entry at all (type 2 defaults ON, type 1 OFF), so it is the
+    // defaults for an item that has no entry at all (type 2 defaults on, type 1 off), so it is the
     // only answer that matches what the storage box would show.
     let mut currently_on = 0u32;
     for id in &ids {
@@ -650,7 +650,7 @@ unsafe fn run_cycle(
         }
     }
 
-    // Repaint. The rows were built BEFORE the write, so without this they keep showing the old
+    // Repaint. The rows were built before the write, so without this they keep showing the old
     // icons and the whole feature reads as inert -- which is exactly how it presented the first
     // time it was tested live. Vanilla calls the same function after its own single-item toggle,
     // so any cursor movement this causes is the game's own behaviour rather than something new.
@@ -681,7 +681,7 @@ unsafe fn tracker_count(tracker: usize) -> u64 {
 /// Set `autoReplenish` on an entry that is already in the vector. False when there is none.
 ///
 /// A linear scan rather than the game's binary search: 2048 entries is nothing next to a frame,
-/// and reimplementing `FindItem`'s comparison (which is over UNSIGNED ids, and whose end sentinel
+/// and reimplementing `FindItem`'s comparison (which is over unsigned ids, and whose end sentinel
 /// carries an alignment fudge) would be a second place for that subtlety to be got wrong.
 unsafe fn flip_existing_entry(tracker: usize, item_id: i32, state: bool) -> bool {
     let count = unsafe { tracker_count(tracker) };
@@ -704,7 +704,7 @@ fn wait_for_task_instance() -> Option<&'static eldenring::cs::CSTaskImp> {
     // `instance()` comes from this trait, not from the type.
     use fromsoftware_shared::FromStatic;
 
-    // BOUNDED (2026-08-29). This was `loop { yield_now() }`. On 1.17 the singleton did not turn
+    // Bounded (2026-08-29). This was `loop { yield_now() }`. On 1.17 the singleton did not turn
     // up promptly and two such loops starved the wineserver: the game reached 104 CPU ticks in
     // three minutes while these threads burned 19,000 each, half of it system time. See
     // er_game_base::wait for the measurement.
@@ -720,7 +720,7 @@ pub(crate) fn spawn(_module_base: usize) {
         .name("er-refill-all".to_owned())
         .spawn(move || {
             let mut attempts = 0u64;
-            // BOUNDED (2026-08-29): an unbounded `loop { yield_now() }` in two other shells starved the
+            // Bounded (2026-08-29): an unbounded `loop { yield_now() }` in two other shells starved the
             // wineserver and hung a whole boot -- see er_game_base::wait. Same shape, same fix.
             let found = er_game_base::wait::poll_until(|| match game_module_base() {
                 Ok(base) => Some(base),

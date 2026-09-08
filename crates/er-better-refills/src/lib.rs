@@ -6,10 +6,10 @@
 //! state is enabled, calls the game's own refill routine immediately. That preserves the game's
 //! item eligibility, stack/capacity, storage removal, and unlimited-consumables gates.
 
-// HOST-BUILD HYGIENE. This crate is a windows `cdylib`: on a non-windows host every item
+// Host-build hygiene. This crate is a windows `cdylib`: on a non-windows host every item
 // whose only consumer is `DllMain` or a hook reads as dead, and `[workspace.lints.rust]
 // warnings = "deny"` promotes that to a hard compile ERROR -- so `cargo test -p er-better-refills`
-// failed outright, and its unit tests had therefore never executed in ANY gate. Same fix,
+// failed outright, and its unit tests had therefore never executed in any gate. Same fix,
 // same reason, as er-save-suppress / er-seamless-bugfixes / er-armament-icons. The shipping
 // target is unaffected: this allow does not exist there.
 #![cfg_attr(not(windows), allow(dead_code, unused_imports))]
@@ -48,7 +48,7 @@ const BONFIRE_FIRST_LVUP_RVA: usize = 0x59c1e0;
 /// `CS::EquipGameData::GetEquipInventoryData(equipGameData)` -> main `EquipInventoryData*`.
 /// Declared once in `er-game-base`; a second crate now needs the same address.
 use er_game_base::rva::GET_EQUIP_INVENTORY_DATA_RVA;
-// THE STORAGE-BOX TRANSFER SET, moved to `er-game-base::rva` on 2026-08-31:
+// The storage-box transfer set, moved to `er-game-base::rva` on 2026-08-31:
 //
 //   GetMainPlayerStorageBoxInventory()                                    -> box inventory
 //   EquipInventoryData::GetItemInventoryIdx(inventory, int *itemId)
@@ -57,7 +57,7 @@ use er_game_base::rva::GET_EQUIP_INVENTORY_DATA_RVA;
 //   TransferItemBetweenInventoryDatas(itemIdx, src, dst, qty, reassignQuickSlot)
 //   CS::EquipGameData::UpdateTrophyStats(equipGameData, int *itemId)
 //
-// This crate deposits INTO the box on first grace; `er-build-import-runtime` now pulls back OUT
+// This crate deposits into the box on first grace; `er-build-import-runtime` now pulls back out
 // of it and deposits pot-group members to free capacity for an imported build. Two crates, one
 // set of addresses, and a second literal copy of each is exactly the alias drift
 // `check-rva-alias-drift.py` refuses. The 1.16.2 values stay pinned by this crate's own
@@ -122,9 +122,9 @@ pub unsafe extern "system" fn DllMain(
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
         // One sink for this DLL's hook + address lines. Without it a refused address is
-        // silent HERE, because every cdylib links its own copy of er-hook/er-game-base.
+        // silent here, because every cdylib links its own copy of er-hook/er-game-base.
         // A rust_panic in a cdylib loaded into the game is otherwise anonymous: the message goes to a
-        // stderr nobody reads, and what survives is a 0xe06d7363 record naming the MODULE and nothing
+        // stderr nobody reads, and what survives is a 0xe06d7363 record naming the module and nothing
         // else. Two boots were lost to one before this existed. See er_game_base::panic_report.
         er_game_base::panic_report::report_panics_to("er-better-refills", log_message);
         er_hook::set_hook_logger(log_message);
@@ -150,7 +150,7 @@ fn spawn_better_refills_task(module_base: usize) {
                 unsafe { crashlog::force_crash_for_smoke() };
             }
             let mut attempts = 0_u64;
-            // BOUNDED (2026-08-29): an unbounded `loop { yield_now() }` in two other shells starved the
+            // Bounded (2026-08-29): an unbounded `loop { yield_now() }` in two other shells starved the
             // wineserver and hung a whole boot -- see er_game_base::wait. Same shape, same fix.
             let found = er_game_base::wait::poll_until(|| match game_module_base() {
                 Ok(base) => Some(base),
@@ -211,11 +211,11 @@ fn install_better_refills_hooks(base: usize) {
         ),
     ];
 
-    // ONE REFUSED HOOK MUST NOT TAKE THE OTHERS DOWN WITH IT.
+    // One refused hook must not take the others down with it.
     //
     // This loop used to `return` on the first failure. That is much worse than it looks: the
-    // failure happens at `MhHook::new`, BEFORE `MH_ApplyQueued`, so bailing there leaves the
-    // hooks that DID queue successfully queued and never applied. The mod does not degrade, it
+    // failure happens at `MhHook::new`, before `MH_ApplyQueued`, so bailing there leaves the
+    // hooks that did queue successfully queued and never applied. The mod does not degrade, it
     // goes completely inert -- and it says nothing, because the only log line is about the one
     // that failed. Measured on 1.17: `OnEvent_BonfireFirstLvUp` is third in this list and its
     // address was refused, so `SetItemReplenishState` and `MoveMapStep::UpdatePlayerInfo` were
@@ -504,7 +504,7 @@ fn deposit_inventory_item_to_storage(raw_item_id: i32) -> DepositBackResult {
         unsafe extern "system" fn(i32, usize, usize, i32, bool);
     type UpdateTrophyStatsFn = unsafe extern "system" fn(usize, *mut i32);
 
-    // All seven through the 1.17 gate, resolved together and BEFORE any of them runs: this
+    // All seven through the 1.17 gate, resolved together and before any of them runs: this
     // function moves items between inventories, so half a deposit is worse than none.
     let (
         Ok(get_main_inventory_addr),

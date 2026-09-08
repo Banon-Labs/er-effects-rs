@@ -1,23 +1,23 @@
 use crate::prelude::*;
 
-// Portrait consume WORKER (loading-screen readback-stall offload, step 1, 2026-07-06).
+// Portrait consume worker (loading-screen readback-stall offload, step 1, 2026-07-06).
 // (This file is `include!`d into the gpu_readback module, so it uses `//` block comments, not `//!`.)
 //
-// The loading-screen portrait readback used to run its ENTIRE cost on the game RENDER THREAD:
-// resolve+copy+WAIT+de-swizzle (all D3D12, synchronous) PLUS the pure-CPU MASK+CLASSIFY+PUBLISH
-// (~17.5 ms/frame over ~250 frames == ~4.4 s of load-time stall at 1542x1542). This module moves ONLY
+// The loading-screen portrait readback used to run its entire cost on the game render THREAD:
+// resolve+copy+wait+de-swizzle (all D3D12, synchronous) plus the pure-CPU mask+classify+publish
+// (~17.5 ms/frame over ~250 frames == ~4.4 s of load-time stall at 1542x1542). This module moves only
 // the mask/classify/publish (pure CPU over plain `Vec<u8>`/`Vec<f32>`) onto a dedicated worker thread.
-// The render thread KEEPS the D3D12 resolve+copy+WAIT+de-swizzle unchanged (so the game RT is released
+// The render thread keeps the D3D12 resolve+copy+wait+de-swizzle unchanged (so the game RT is released
 // synchronously -- there is no async game-resource lifetime hazard).
 //
-// Threading contract: the worker ONLY ever touches plain `Vec<u8>`/`Vec<f32>` + atomics/Mutexes. It
-// NEVER dereferences a game pointer or a D3D12 object -- every game-derived value the consume needs is
+// Threading contract: the worker only ever touches plain `Vec<u8>`/`Vec<f32>` + atomics/Mutexes. It
+// never dereferences a game pointer or a D3D12 object -- every game-derived value the consume needs is
 // snapshotted into the job on the render thread. Backpressure is a bounded channel (capacity 2): if the
-// worker falls behind the render thread DROPS the frame (never blocks) and bumps a dropped counter.
+// worker falls behind the render thread drops the frame (never blocks) and bumps a dropped counter.
 
-/// A portrait frame handed from the render thread to the consume worker. ALL plain data -- no game
+/// A portrait frame handed from the render thread to the consume worker. All plain data -- no game
 /// pointer and no D3D12 object crosses the thread boundary. Step 2: the render thread has already
-/// resolved + copied + WAITED (so the game RT is released), leaving the raw copy in ring `slot`'s
+/// resolved + copied + waited (so the game RT is released), leaving the raw copy in ring `slot`'s
 /// staging buffers;
 /// the worker maps that slot and de-swizzles color + depth itself from the footprint metadata here.
 pub struct PortraitFrameJob {
@@ -53,25 +53,25 @@ pub struct PortraitFrameJob {
 /// Bounded (capacity 2) job channel to the consume worker; lazily created on first submit.
 static PORTRAIT_JOB_TX: std::sync::OnceLock<std::sync::mpsc::SyncSender<PortraitFrameJob>> =
     std::sync::OnceLock::new();
-/// Lazy one-time worker spawn. NOT done in DllMain -- spawning a thread touches the loader lock.
+/// Lazy one-time worker spawn. Not done in DllMain -- spawning a thread touches the loader lock.
 static PORTRAIT_WORKER_SPAWN: std::sync::Once = std::sync::Once::new();
 /// In-flight consume jobs: incremented on a successful submit, decremented at the end of each consume
 /// (even on panic). `loading_portrait_window_reset` bounded-drains on this so late telemetry lands in the
 /// correct window. Exposed as telemetry.
 pub static PORTRAIT_JOB_INFLIGHT: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
-/// Jobs DROPPED by backpressure (bounded channel full). This is intended -- the render thread must never
+/// Jobs dropped by backpressure (bounded channel full). This is intended -- the render thread must never
 /// block on the worker -- exposed as telemetry.
 pub static PORTRAIT_JOB_DROPPED: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
-/// Hand a portrait frame to the consume worker, spawning it lazily on first call (std::sync::Once, NOT in
-/// DllMain). Backpressure: if the bounded channel is full the job is DROPPED (the render thread never
+/// Hand a portrait frame to the consume worker, spawning it lazily on first call (std::sync::Once, not in
+/// DllMain). Backpressure: if the bounded channel is full the job is dropped (the render thread never
 /// blocks) and the dropped counter is bumped.
 pub fn portrait_worker_submit(job: PortraitFrameJob) {
     PORTRAIT_WORKER_SPAWN.call_once(|| {
-        // Channel capacity == the ring size: a job only exists after its ring slot was claimed BUSY, and
-        // at most RB_COH_RING slots are BUSY at once, so try_send below never actually fills up (the ring
+        // Channel capacity == the ring size: a job only exists after its ring slot was claimed busy, and
+        // at most RB_COH_RING slots are busy at once, so try_send below never actually fills up (the ring
         // backpressures first). The drop path stays as defence in depth.
         let (tx, rx) = std::sync::mpsc::sync_channel::<PortraitFrameJob>(RB_COH_RING);
         let _ = PORTRAIT_JOB_TX.set(tx);
@@ -84,12 +84,12 @@ pub fn portrait_worker_submit(job: PortraitFrameJob) {
                     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         consume_portrait_frame(job);
                     }));
-                    // FREE the ring slot AFTER the consume (even on panic) so the ring never wedges: a
-                    // panic mid-de-swizzle would otherwise leave the slot BUSY forever. Only after this
+                    // Free the ring slot after the consume (even on panic) so the ring never wedges: a
+                    // panic mid-de-swizzle would otherwise leave the slot busy forever. Only after this
                     // store can the render thread reuse the slot (its buffers are unmapped by now on the
                     // happy path; a panic leaks at most one Map ref, harmless on a process-lifetime static).
                     RB_COH_SLOT_STATE[slot].store(RB_SLOT_FREE, Ordering::SeqCst);
-                    // Decrement AFTER the consume (even on panic) so the window-reset drain is accurate.
+                    // Decrement after the consume (even on panic) so the window-reset drain is accurate.
                     PORTRAIT_JOB_INFLIGHT.fetch_sub(1, Ordering::SeqCst);
                 }
             });
@@ -101,7 +101,7 @@ pub fn portrait_worker_submit(job: PortraitFrameJob) {
     };
     PORTRAIT_JOB_INFLIGHT.fetch_add(1, Ordering::SeqCst);
     if let Err(e) = tx.try_send(job) {
-        // Channel full (or disconnected) -- should not happen (capacity == ring). DROP the job: FREE the
+        // Channel full (or disconnected) -- should not happen (capacity == ring). Drop the job: Free the
         // claimed slot (else the ring wedges), undo the in-flight increment, and count the drop.
         let dropped = match e {
             std::sync::mpsc::TrySendError::Full(j) => j,
@@ -113,10 +113,10 @@ pub fn portrait_worker_submit(job: PortraitFrameJob) {
     }
 }
 
-/// Map ring `slot`'s color + depth staging buffers and de-swizzle them into plain Vecs on the WORKER
+/// Map ring `slot`'s color + depth staging buffers and de-swizzle them into plain Vecs on the worker
 /// thread (Step 2): color -> tightly-packed RGBA8 (swapping R/B for BGRA formats), depth -> `Vec<f32>`.
 /// Map/Unmap on an `ID3D12Resource` is free-threaded and the staging buffers are process-lifetime statics,
-/// so this is legal off the render thread; NO game object is touched (only OUR staging buffers). `None` on
+/// so this is legal off the render thread; No game object is touched (only our staging buffers). `None` on
 /// a map failure (the frame is skipped; the worker loop still frees the slot).
 fn deswizzle_staged_slot(job: &PortraitFrameJob) -> Option<(Vec<u8>, Vec<f32>)> {
     let cb_raw = RB_COH_CBUF[job.slot].load(Ordering::SeqCst) as *mut c_void;
@@ -210,7 +210,7 @@ fn deswizzle_staged_slot(job: &PortraitFrameJob) -> Option<(Vec<u8>, Vec<f32>)> 
     Some((color, depth))
 }
 
-/// Run the MASK+CLASSIFY+PUBLISH for one portrait frame on the worker thread. Moved verbatim from the
+/// Run the mask+classify+publish for one portrait frame on the worker thread. Moved verbatim from the
 /// render-thread draw tick (`profile_lookat_realtime_draw_tick`); every game-pointer read it used has been
 /// resolved to a job field snapshotted on the render thread. Touches only plain Vecs + atomics/Mutexes.
 fn consume_portrait_frame(job: PortraitFrameJob) {
@@ -218,9 +218,9 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
     let ch = job.ch;
     let rt_cand = job.rt_cand;
     let color_from_bundle = job.color_from_bundle;
-    // MAP + DE-SWIZZLE (moved off the render thread in Step 2). The render thread already resolved + copied
-    // + WAITED, so this slot's staging buffers hold the raw copy; map them and de-swizzle color +
-    // reinterpret depth into plain Vecs here. Time it HERE now (the GPU-WAIT timer stays on the render
+    // Map + de-SWIZZLE (moved off the render thread in Step 2). The render thread already resolved + copied
+    // + waited, so this slot's staging buffers hold the raw copy; map them and de-swizzle color +
+    // reinterpret depth into plain Vecs here. Time it here now (the GPU-wait timer stays on the render
     // thread). On a map failure, skip -- the worker loop still frees the slot after we return.
     let rb_deswizzle_t0 = std::time::Instant::now();
     let Some((mut cpx, depth)) = deswizzle_staged_slot(&job) else {
@@ -243,14 +243,14 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
         PROFILE_PUBLISH_SKIPPED_UNPAIRED.fetch_add(1, Ordering::SeqCst);
     }
     if !is_checker && color_from_bundle {
-        // WINDOW-GEN GUARD (worker-offload switch safety, 2026-07-06): a
+        // Window-GEN guard (worker-offload switch safety, 2026-07-06): a
         // window reset bumped PORTRAIT_PIPELINE_GEN while this frame was in
-        // flight on the worker, so pinning/publishing it would drop a STALE
-        // head into the NEXT window. Discard before the RT-pin swap + publish.
+        // flight on the worker, so pinning/publishing it would drop a stale
+        // head into the next window. Discard before the RT-pin swap + publish.
         if PORTRAIT_PIPELINE_GEN.load(Ordering::SeqCst) != job.pipeline_gen {
             return;
         }
-        // PIN the confirmed-head content RT candidate: subsequent scans prefer it
+        // Pin the confirmed-head content RT candidate: subsequent scans prefer it
         // outright, so the publish source can never flip to another slot's
         // same-size RT mid-load (the cross-slot swap). A switch after first latch
         // means the RT was genuinely recreated -- counted as the swap tripwire.
@@ -259,13 +259,13 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
         let prev = PROFILE_RT_PIN.swap(rt_cand, Ordering::SeqCst);
         if prev != 0 && prev != rt_cand {
             let n = PROFILE_RT_PIN_SWITCHES.fetch_add(1, Ordering::SeqCst);
-            // NEW MODEL came in (the content RT was recreated -- e.g. a System Quit
+            // New model came in (the content RT was recreated -- e.g. a System Quit
             // character switch): invalidate the depth masking plane so the cutout
             // recomputes for this model instead of reusing the previous character's
             // cached silhouette.
             invalidate_portrait_depth_mask();
             // Also drop the motion-metric history: a model switch produces a giant
-            // one-off silhouette diff that is NOT animation (run 20260703-074216:
+            // one-off silhouette diff that is not animation (run 20260703-074216:
             // metric max 51049 was pin-move contamination, not motion).
             if let Ok(mut g) = PORTRAIT_MOTION_PREV_PLANES.lock() {
                 *g = None;
@@ -281,8 +281,8 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
         LOADING_BG_PORTRAIT_NONBLACK.store(nb as usize, Ordering::SeqCst);
         LOADING_BG_PORTRAIT_IS_CHECKER.store(0, Ordering::SeqCst);
         LOADING_BG_PORTRAIT_DIMS.store(((cw as usize) << 16) | (ch as usize), Ordering::SeqCst);
-        // ALPHA DIAGNOSTIC (one-shot, for the "full-alpha background" goal): sample
-        // the RT (R8G8B8A8) at a BACKGROUND corner vs the HEAD center, plus the
+        // Alpha diagnostic (one-shot, for the "full-alpha background" goal): sample
+        // the RT (R8G8B8A8) at a background corner vs the head center, plus the
         // alpha min/max across the frame. This decides the alpha path: if corner
         // alpha==0 and center alpha==255 the RT already carries a clean per-pixel
         // cutout (honor alpha in the composite -> transparent bg is nearly free); if
@@ -325,15 +325,15 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
                 ));
             }
         }
-        // DEPTH-KEYED TRANSPARENT BACKGROUND (restored 2026-07-03 after the
+        // Depth-KEYED transparent background (restored 2026-07-03 after the
         // scene-alpha probe): the alpha-0 clear alone cannot key the RT
-        // because the backdrop is LIVE scene content redrawn every frame by
+        // because the backdrop is live scene content redrawn every frame by
         // the model submit (FUN_1409e9ac0 walks the model's 27-slot node
         // array +0x28..+0x100; run 7eefdbd: alpha0_clears=556, every frame
         // still opaque, clean=0 -- overlay starved, no animation). Scene-
         // alpha keying resumes once the backdrop NODE is identified (see
-        // the one-shot model-parts enumerator) and nulled on OUR model.
-        // STALL-SPLIT diagnostic: time the mask/key CPU pass (stays on the
+        // the one-shot model-parts enumerator) and nulled on our model.
+        // Stall-split diagnostic: time the mask/key CPU pass (stays on the
         // render thread even with an async readback).
         let rb_mask_t0 = std::time::Instant::now();
         apply_depth_alpha_key(
@@ -348,11 +348,11 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
         PORTRAIT_RB_MASK_US_SUM
             .fetch_add(rb_mask_t0.elapsed().as_micros() as usize, Ordering::SeqCst);
         PORTRAIT_RB_MASK_COUNT.fetch_add(1, Ordering::SeqCst);
-        // PIXEL-MOTION + FLICKER oracles (before the publish move). The
-        // lighting changes every frame (user 2026-07-03), so MOTION is judged
-        // on the depth-keyed ALPHA silhouette (lighting-immune: alpha comes
+        // Pixel-motion + flicker oracles (before the publish move). The
+        // lighting changes every frame (user 2026-07-03), so motion is judged
+        // on the depth-keyed alpha silhouette (lighting-immune: alpha comes
         // from the depth buffer, applied to cpx above) and only across frames
-        // that BOTH carry a real cutout; the LUMA delta on the same grid is
+        // that both carry a real cutout; the LUMA delta on the same grid is
         // kept as the flicker gauge, not a motion oracle.
         {
             const GW: usize = 32;
@@ -423,15 +423,15 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
             }
         }
         // The whole live-drive block is gated on the stable target-only state above,
-        // so this readback is the loaded character only. KEYED-GATE (never render
+        // so this readback is the loaded character only. KEYED-gate (never render
         // an unmasked model, user 2026-07-03): only publish/freeze when the depth
         // mask actually cut out background (a transparent pixel exists). An unmasked
         // fail-open frame (all alpha 255, mask not ready yet) is skipped, so the
         // display never freezes on an opaque IBL box -- and the make-before-break
-        // bridge keeps the PRIOR masked head (PROFILE_HAVE_KEYED_FRAME) on screen
-        // until THIS model produces its own masked frame, which then replaces it.
-        // MASK-FRACTION FLOOR (er-effects-rs-hi2, user saw a displayed head
-        // with NO mask): "any transparent pixel" let a PARTIAL mask through
+        // bridge keeps the prior masked head (PROFILE_HAVE_KEYED_FRAME) on screen
+        // until this model produces its own masked frame, which then replaces it.
+        // Mask-fraction floor (er-effects-rs-hi2, user saw a displayed head
+        // with no mask): "any transparent pixel" let a partial mask through
         // -- a frame that is 99% opaque IBL box with a few cut pixels passed
         // keyed and displayed as unmasked. A real portrait mask cuts a
         // substantial background fraction, so require a minimum transparent
@@ -455,19 +455,19 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
         } else if partial_mask {
             PROFILE_LOWMASK_SHARE_MAX.fetch_max(share_pct, Ordering::SeqCst);
         }
-        // TORN-READBACK gate (user 2026-07-03): the offscreen readback has no
+        // Torn-READBACK gate (user 2026-07-03): the offscreen readback has no
         // cross-queue sync vs the game's render of the RT, so a per-frame capture
         // can be torn (scanline garbage) even though it is keyed. Score the
-        // vertical luma tearing over the masked head; publish only a CLEAN frame,
+        // vertical luma tearing over the masked head; publish only a clean frame,
         // else hold the prior clean head via the bridge (never flash garbage).
         let tear = portrait_tear_score(&cpx, cw as usize, ch as usize);
         PROFILE_TEAR_SCORE_LAST.store(tear, Ordering::SeqCst);
         PROFILE_TEAR_SCORE_MAX.fetch_max(tear, Ordering::SeqCst);
-        // ADAPTIVE TEAR BASELINE (runs 6-7: speckled/stone-textured
-        // characters score a CONSTANT ~39-40 on every honest frame -- the
+        // Adaptive tear baseline (runs 6-7: speckled/stone-textured
+        // characters score a constant ~39-40 on every honest frame -- the
         // vertical-luma metric reads their legitimate texture, and the
         // absolute threshold starved whole windows, e.g. slot8 torn=149
-        // with 76%-share masks). Baseline = EMA of ACCEPTED frames only (a
+        // with 76%-share masks). Baseline = EMA of accepted frames only (a
         // real tear never feeds it; a window's first frame is capped at 5x the
         // absolute threshold. The steady-state limit intentionally allows small
         // score steps above the smooth-character EMA (observed valid animated
@@ -489,9 +489,9 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
             };
             PROFILE_TEAR_EMA.store(next, Ordering::SeqCst);
         }
-        // MASK-CORRECTNESS gate (user 2026-07-03: frames displayed whose
+        // Mask-correctness gate (user 2026-07-03: frames displayed whose
         // backdrop was not keyed out right -- the share floor checks how
-        // MUCH the mask cut, this checks WHERE): the mask/head IoU of THIS
+        // much the mask cut, this checks where): the mask/head IoU of this
         // frame (apply_depth_alpha_key ran just above) must clear the
         // gross-mismatch bar or the frame holds on the bridge.
         let iou_ok =
@@ -500,7 +500,7 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
             PROFILE_TEAR_SCORE_CLEAN_MIN.fetch_min(tear, Ordering::SeqCst);
             PROFILE_PUBLISH_CLEAN.fetch_add(1, Ordering::SeqCst);
             PROFILE_PUBLISH_CLEAN_WINDOW.fetch_add(1, Ordering::SeqCst);
-            // WHEN, not just how many. This is the last moment the head on screen actually changed,
+            // When, not just how many. This is the last moment the head on screen actually changed,
             // and it is the only way to say whether the portrait animated for as long as it was
             // visible or froze partway through the cover. See the counter's own doc.
             er_telemetry_core::counters::PORTRAIT_LAST_PUBLISH_MS.store(
@@ -508,7 +508,7 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
                 Ordering::SeqCst,
             );
             // First-keyed latency (er-effects-rs-hi2): stamp the display-frame
-            // index of this window's FIRST published frame -- how long the
+            // index of this window's first published frame -- how long the
             // bridge held the prior head before the new one took over.
             let _ = PROFILE_WINDOW_FIRST_KEYED_DISPLAY.compare_exchange(
                 usize::MAX,
@@ -524,7 +524,7 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
                     *g = Some((cw, ch, cpx));
                 }
                 LOADING_BG_PORTRAIT_RGBA_VERSION.fetch_add(1, Ordering::SeqCst);
-                // PUBLISH IDENTITY TAG (bd er-effects-rs-dpf6 Phase 1): record which character this
+                // Publish identity tag (bd er-effects-rs-dpf6 Phase 1): record which character this
                 // head belongs to next to the bridge. The worker may not read game memory, so it
                 // copies the atomics the game thread stamped at the build kick (slot+1 key + the
                 // ProfileSummary name hash); the pipeline-gen guard above keeps them window-coherent.
@@ -536,7 +536,7 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
                     PORTRAIT_TARGET_NAME_HASH.load(Ordering::SeqCst),
                     Ordering::SeqCst,
                 );
-                // CONFIRM->PUBLISH LATENCY (Phase 1): first publish after a switch confirm consumes
+                // Confirm->publish latency (Phase 1): first publish after a switch confirm consumes
                 // the RETARGET timestamp; the value persists as the last-measured latency oracle.
                 let confirm_ms = PORTRAIT_CONFIRM_MS.swap(0, Ordering::SeqCst);
                 if confirm_ms != 0 {
@@ -567,15 +567,15 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
             } // end readiness gate (reject neutral/too-small transients)
             PORTRAIT_LAST_SKIP_CLASS.store(0, Ordering::SeqCst);
         } else if keyed && clean {
-            // Mask cut ENOUGH but in the WRONG PLACE (IoU below the gross-
+            // Mask cut enough but in the wrong place (IoU below the gross-
             // mismatch bar): the stale-silhouette / wrong-side masks the
             // user saw displayed as un-keyed backdrops. Held on the bridge.
             PROFILE_PUBLISH_SKIPPED_BADIOU.fetch_add(1, Ordering::SeqCst);
             PORTRAIT_LAST_SKIP_CLASS.store(3, Ordering::SeqCst);
         } else if keyed {
-            // Keyed but TORN (offscreen RT read mid-GPU-write -- no cross-queue
-            // sync): SKIP so the garbage never displays; the make-before-break
-            // bridge holds the last CLEAN head. Validated safe as the product fix
+            // Keyed but torn (offscreen RT read mid-GPU-write -- no cross-queue
+            // sync): Skip so the garbage never displays; the make-before-break
+            // bridge holds the last clean head. Validated safe as the product fix
             // (run autostep10m): clean frames score 1-7 and land constantly
             // (1957 published), torn frames are rare (one at tear=80) -- so the
             // skip catches them without ever starving the display. Regressions
@@ -591,7 +591,7 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
             }
         } else if partial_mask {
             // Mask exists but cuts almost nothing (< floor): the frame the
-            // user previously SAW as an unmasked head. Held on the bridge.
+            // user previously saw as an unmasked head. Held on the bridge.
             PROFILE_PUBLISH_SKIPPED_LOWMASK.fetch_add(1, Ordering::SeqCst);
             PORTRAIT_LAST_SKIP_CLASS.store(4, Ordering::SeqCst);
         } else {

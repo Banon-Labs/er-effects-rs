@@ -13,7 +13,7 @@ reported as their own entries, which is what the audits want.
 import re
 
 def mask_source(src: str) -> str:
-    """Parallel string with comments/string/char literal CONTENT blanked, offsets preserved."""
+    """Parallel string with comments/string/char literal content blanked, offsets preserved."""
     out = []
     i = 0
     n = len(src)

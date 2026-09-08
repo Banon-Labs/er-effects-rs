@@ -1,10 +1,10 @@
-//! Answer the game's OWN menu-code query, instead of writing an input device by hand.
+//! Answer the game's own menu-code query, instead of writing an input device by hand.
 //!
 //! # Why this layer and not another device write
 //!
 //! `CS::GridControl`'s pager (vtable slot 2) never touches a pad device directly. Every direction it
 //! tests goes through `FUN_14075d970` (1.16.2), which gates on a predicate and then invokes a lambda
-//! carrying a MENU CODE at `+0x08` and a mode byte at `+0x0c`; the lambda asks the input provider at
+//! carrying a menu code at `+0x08` and a mode byte at `+0x0c`; the lambda asks the input provider at
 //! `*(CSEzMenuViewerPad+0x10)`, vtable `+0x28`, whether that code is pressed. So "press list-down" is
 //! not a byte in an array -- it is this function returning non-zero for code `0x2c`.
 //!
@@ -17,7 +17,7 @@
 //! | binding table | list up/down are codes `0x2c`/`0x2d` with `kb=0xffffffff` -- unbound by design |
 //! | mouse, 36-point sweep | no transition on any live `GridControl` |
 //! | `padDevices[dev]+0x88` | inert: the menu's device is resolved through `padMaps`, not `padDevices` |
-//! | the menu's own device | CRASHED the game -- that object is live-owned, not a scratch array |
+//! | the menu's own device | crashed the game -- that object is live-owned, not a scratch array |
 //!
 //! Answering the query is also the only one of those that does not fabricate state the game did not
 //! ask for: the game asks a question every frame, and this returns a different answer for exactly one
@@ -25,7 +25,7 @@
 //!
 //! # Two hooks, because the address is genuinely ambiguous
 //!
-//! Mapping 1.16.2 `0x14075d970` to 1.17 yields TWO candidates with the same prologue and near-equal
+//! Mapping 1.16.2 `0x14075d970` to 1.17 yields two candidates with the same prologue and near-equal
 //! bodies (`0x14075e7c0` at 179/192 bytes identical, `0x14075e880` at 177/192). Byte scoring cannot
 //! separate near-identical siblings, and picking the higher score would be a guess dressed as a
 //! measurement. Both are hooked; each logs its own hit count and the codes it is asked about, so one
@@ -82,7 +82,7 @@ fn query(orig: &AtomicUsize, hits: &AtomicUsize, a: usize, b: usize, c: usize, d
     let code = unsafe { read_usize(b + FUNC_CODE_OFFSET) }.map_or(NO_FORCED_CODE, |v| v as u32);
     note_code(code);
     if code != NO_FORCED_CODE && code == FORCED_CODE.load(Ordering::Relaxed) {
-        // ANSWER, DO NOT SKIP. Returning 1 is the same value the original returns for a held
+        // Answer, do not skip. Returning 1 is the same value the original returns for a held
         // button, so the caller's own logic runs unchanged -- nothing downstream can tell this from
         // a real press, which is the point.
         return 1;

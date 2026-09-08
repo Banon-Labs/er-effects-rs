@@ -2,26 +2,26 @@
 //!
 //! # The shape of the problem this solves
 //!
-//! Some diagnostics sit on a POLLED path: the game asks the same question every frame and
+//! Some diagnostics sit on a polled path: the game asks the same question every frame and
 //! the hook answers it identically every frame. Measured on run `br-20260831-160354-2513`
 //! (8m39s), `combined_load_67b940` was entered 8,639 times with `slot=-1 arg1=0 arg2=1`
-//! every single time, from ONE caller stack, and the 8,639 `ENTER` lines had exactly
+//! every single time, from one caller stack, and the 8,639 `ENTER` lines had exactly
 //! **seven** distinct contents between them. The trace cost 5.43 MB (37 MB/h) to carry
 //! seven facts.
 //!
-//! # What is memoised, and what is NOT
+//! # What is memoised, and what is not
 //!
 //! The suppression predicate is **full-message byte equality against the previous message
-//! under the same key** -- the VALUE, not a label. This is the same governing rule as the
+//! under the same key** -- the value, not a label. This is the same governing rule as the
 //! address-translation memo (bd
 //! `memoise-on-the-value-not-the-label-one-label-covered-9-addresses-2026-08-30`), where
 //! keying on the human-readable label would have suppressed 8 of 9 genuinely different
-//! addresses that shared one label. Here the key selects only WHICH SLOT remembers the last
+//! addresses that shared one label. Here the key selects only which slot remembers the last
 //! message; it is never itself the thing compared.
 //!
 //! That distinction is what makes a key collision harmless. Two families that hash to one
 //! slot interleave, their messages differ, nothing matches, and both are emitted -- the
-//! filter FAILS OPEN into today's behaviour. The only case where a collision suppresses
+//! filter fails open into today's behaviour. The only case where a collision suppresses
 //! anything is two call sites emitting byte-identical text back to back, and byte-identical
 //! text carries no distinct fact. There is no input for which this filter drops information
 //! that the surviving lines plus their counts do not carry.
@@ -35,7 +35,7 @@
 //!
 //! # Cost
 //!
-//! Formatting the message and taking one mutex per line. That is deliberately NOT the shape
+//! Formatting the message and taking one mutex per line. That is deliberately not the shape
 //! chosen for the address path, which was 145,006 events and got a lock-free bitset; this
 //! one replaces an `open()`+`write()`+`close()` per line, so a mutex is orders of magnitude
 //! cheaper than what it removes. It is not for per-frame paths that currently do no I/O.
@@ -61,7 +61,7 @@ pub enum Verdict {
 }
 
 struct Slot {
-    /// Printable family name, kept so a report line can say WHICH family repeated.
+    /// Printable family name, kept so a report line can say which family repeated.
     key: String,
     message: String,
     /// Occurrences of `message` in a row, including the one that was emitted.
@@ -133,7 +133,7 @@ impl RepeatFilter {
         }
 
         if slots.len() >= self.capacity {
-            // Fail OPEN. Evicting would strand a live run whose exact total is only ever
+            // Fail open. Evicting would strand a live run whose exact total is only ever
             // reported when that run ends.
             return Verdict::Emit { note: None };
         }
@@ -297,7 +297,7 @@ mod tests {
     use super::*;
 
     /// The load-bearing property: a run of identical lines collapses, and the count of
-    /// OCCURRENCES survives so a reader never mistakes emitted lines for calls.
+    /// occurrences survives so a reader never mistakes emitted lines for calls.
     #[test]
     fn an_identical_run_collapses_but_its_total_is_reported() {
         let filter = RepeatFilter::new();
@@ -331,7 +331,7 @@ mod tests {
         );
     }
 
-    /// A run that never ends -- the process dies mid-poll -- still has to put its MAGNITUDE in
+    /// A run that never ends -- the process dies mid-poll -- still has to put its magnitude in
     /// the log, or a reader who sees one line concludes one call. Without this, a filter that
     /// simply never restates passes every other test here.
     #[test]
@@ -353,8 +353,8 @@ mod tests {
         );
     }
 
-    /// NON-VACUITY: the same assertion must go red against a filter that suppresses on the
-    /// KEY rather than on the message. That is the failure mode the address-translation memo
+    /// Non-VACUITY: the same assertion must go red against a filter that suppresses on the
+    /// key rather than on the message. That is the failure mode the address-translation memo
     /// was written about, and this test is the only thing stopping it coming back here.
     #[test]
     fn a_changed_message_under_one_key_is_never_suppressed() {

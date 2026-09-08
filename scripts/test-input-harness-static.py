@@ -13,15 +13,15 @@ READINESS_WATCH = REPO_ROOT / "scripts/er-readiness-watch.py"
 def test_pad_inject_stamps_the_pad_device_not_the_padmaps_cs_ingame_pad() -> None:
     """The virtual-key array is a field of `FD4::FD4PadDevice`, reached through padDevices.
 
-    THIS ASSERTION USED TO PIN THE DEFECT, twice over. Until 2026-08-31 it required the padMaps
+    This assertion used to pin the defect, twice over. Until 2026-08-31 it required the padMaps
     TypeID tree-walk -- `CS_INGAME_PAD_TYPEID_RVAS`, `for target in targets`, and a write through
     the `CS::CSInGamePad_UserInput1` the walk returned. That object does not own the array. The
     only function that writes it (1.16.2 0x1426634a0, `mov byte [rcx+rdx*2+0x88],1`, bound
     `cmp eax,0x50` on id-1000) has exactly four call sites -- 0x140240e70, 0x140241130,
-    0x140e321b0, 0x140e32470 -- and EVERY one of them computes `rcx` as
+    0x140e321b0, 0x140e32470 -- and every one of them computes `rcx` as
     `*(manager + 0x18 + dev*8)`, i.e. `FD4PadManager::padDevices[dev]`. `FD4PadManager::Init`
     fills that array with `HeapAlloc(0x3c0)` + `FD4PadDevice::FD4PadDevice` +
-    `FD4PadDevice::vftable`; the CSInGamePad merely HOLDS the device at its own +0x10.
+    `FD4PadDevice::vftable`; the CSInGamePad merely holds the device at its own +0x10.
 
     The tree-walk was not merely useless. The CSInGamePad is `HeapAlloc(0x98)` = 152 bytes, so
     `0x88 + (id-1000)*2` leaves the object at id 1008 and every id above wrote past the end of a
@@ -53,10 +53,10 @@ def test_pad_inject_stamps_the_pad_device_not_the_padmaps_cs_ingame_pad() -> Non
 
 
 def test_pad_inject_says_so_when_it_cannot_resolve_a_device() -> None:
-    """A drive that resolves nothing must SAY so, exactly once.
+    """A drive that resolves nothing must say so, exactly once.
 
     This carries forward the concern of a sibling assertion that this file lost when the padMaps
-    tree-walk went away (it required the TypeID needles to be RESOLVED rather than `base + rva`,
+    tree-walk went away (it required the TypeID needles to be resolved rather than `base + rva`,
     because every `.data` global moved on 1.17 and an unresolved needle matched no node). That
     specific check is unsatisfiable now -- there are no needles -- but the failure it was written
     for is not about needles: the drive went inert for six weeks with no fault, no refusal line and
@@ -100,7 +100,7 @@ def test_pad_inject_direct_stamp_writes_are_enabled() -> None:
 def _prose(src: str) -> str:
     """Comment prose with markers stripped and whitespace collapsed.
 
-    The assertions below are about what the file SAYS, not how it is wrapped. An earlier version
+    The assertions below are about what the file says, not how it is wrapped. An earlier version
     matched a literal `"all ids\n/// 1000..1080 ..."` including the line break, so re-flowing the
     paragraph -- which is what happened when the retired raw-pad cluster was deleted 2026-08-21 and
     the finding moved onto `set_vk_id` -- broke the gate while the documented fact was intact and in
@@ -113,7 +113,7 @@ def test_pad_inject_id_map_todo_is_burned_down_without_speculative_ids() -> None
     src = (REPO_ROOT / "crates/er-input-harness/src/pad_inject.rs").read_text()
     prose = _prose(src)
     assert "TO" + "DO(id-map)" not in src
-    # The NEGATIVE finding must stay written down: the full 1000..1080 sweep produced no response.
+    # The negative finding must stay written down: the full 1000..1080 sweep produced no response.
     # Without it, a later pass re-runs a sweep this repo has already paid for.
     assert "1000..1080" in prose
     assert "reproducible job/flags/tab/return-title response" in prose
@@ -122,9 +122,9 @@ def test_pad_inject_id_map_todo_is_burned_down_without_speculative_ids() -> None
     assert "const VK_ID_MAX: u32 = 1080;" in src
     # The old `PadButton::TabRight => 0` assertion is deliberately gone. It pinned one arm of a
     # `PadButton -> vk id` map whose every variant returned 0 -- a placeholder holding no recovered
-    # id, deleted 2026-08-21. The concern it guarded (a SPECULATIVE id being written in) cannot
+    # id, deleted 2026-08-21. The concern it guarded (a speculative id being written in) cannot
     # recur through a map that no longer exists; what guards it now is the sentence above.
-    # Match the TYPE, not the word: the surviving doc comment explains that a typed `PadButton`
+    # Match the type, not the word: the surviving doc comment explains that a typed `PadButton`
     # wrapper used to sit in front of this raw-id API and why it went. Forbidding the string would
     # forbid recording the removal, which is the opposite of what this repo wants kept.
     assert "enum PadButton" not in src and "PadButton::" not in src, (
@@ -193,7 +193,7 @@ def test_continue_and_boot_view_timing_oracles_exist() -> None:
 
     # The oracle emission is a 29-line spine plus per-subsystem include files (the split that
     # brought write_game_module_oracles.rs under the 3200-line limit on 2026-08-30). Read the
-    # WHOLE directory rather than one filename: what these assertions care about is that the
+    # whole directory rather than one filename: what these assertions care about is that the
     # field is emitted somewhere in the emission, not which file it lives in. Pinning the
     # filename made a pure refactor look like a deleted oracle.
     game_oracles = "\n".join(

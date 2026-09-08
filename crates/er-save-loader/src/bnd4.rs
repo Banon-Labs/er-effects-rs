@@ -1,6 +1,6 @@
 //! Minimal BND4 reader for Elden Ring PC `.sl2` save files.
 //!
-//! ER PC saves are a **plaintext** BND4 container (NOT encrypted — see
+//! ER PC saves are a **plaintext** BND4 container (not encrypted — see
 //! `docs/bnd4-save-format.md`, proven by MD5). Each `USER_DATA00N` entry is
 //! `[16-byte MD5 of the body][plaintext body]`. The 10 character slots
 //! (`USER_DATA000`..`USER_DATA009`) each have a `0x280000`-byte body — exactly
@@ -27,12 +27,12 @@ pub const SLOT_ENTRY_LEN: usize = ENTRY_MD5_LEN + SLOT_BODY_LEN; // 0x280010
 /// Body-relative offset of the slot's saved `BlockId` (the packed map id that becomes
 /// `GameMan.stayInMultipleAreaBlockId`, a.k.a. the runtime `c30`).
 ///
-/// **This is `0x04`, NOT `0x14`** — re-verified against the 1.16.2 Ghidra dump 2026-08-02
+/// **This is `0x04`, not `0x14`** — re-verified against the 1.16.2 Ghidra dump 2026-08-02
 /// and again 2026-08-03, both directions:
 ///
 /// * SERIALIZER `FUN_14067dc00` builds the 16-byte body header as
 ///   `local_150 = CONCAT44(BVar3, GetGameDataVersion()); Write(&local_150, 0x10)` — little-endian,
-///   so the data version lands at body+0x00 and the `BlockId` at body+0x04. It then writes FOUR
+///   so the data version lands at body+0x00 and the `BlockId` at body+0x04. It then writes four
 ///   `CS::CSRandXorshift::NextInt` dwords as the *next* 0x10 bytes, so **body+0x10..0x20 is random
 ///   noise** and body+0x14 is merely the second random dword.
 /// * DESERIALIZER `FUN_14067bd70` mirrors it: `ReadBytes(&local_50, 0x10)` then
@@ -48,7 +48,7 @@ pub const SLOT_ENTRY_LEN: usize = ENTRY_MD5_LEN + SLOT_BODY_LEN; // 0x280010
 /// (uniform garbage). Across 726 active corpus slots every body+0x04 areaId lands in
 /// `0x0a..=0x3d`, while only 9% of body+0x14 words do.
 ///
-/// The DLL's `SAVE_SLOT_MAP_OFFSET` is a re-export of THIS constant, so there is exactly one
+/// The DLL's `SAVE_SLOT_MAP_OFFSET` is a re-export of this constant, so there is exactly one
 /// literal: the `0x14` that shipped previously wrote a random dword into the live
 /// `CS::ProfileSummary` record at +0x30 and made the portrait identity semaphore fire on noise.
 /// Same off-by-0x10 as the sibling steam-id field below, which was already correct.
@@ -278,9 +278,9 @@ pub fn active_character_slots(data: &[u8]) -> Result<Vec<CharacterSlotInfo>, Bnd
 ///
 /// `Some(false)` means the container was read and that slot holds nothing. `Some(true)` means it
 /// holds one. `None` means the question could not be answered -- unreadable file, parse refusal,
-/// out-of-range slot -- and a caller must NOT treat that as a "no".
+/// out-of-range slot -- and a caller must not treat that as a "no".
 ///
-/// WHY THIS LIVES HERE RATHER THAN IN THE DLL. The autoload path needs to know, before it spends
+/// Why this lives here rather than in the DLL. The autoload path needs to know, before it spends
 /// any patience on a Continue slot, whether the slot can ever fill. The live ProfileSummary cannot
 /// answer: it reads empty both while it is still filling and when the slot is genuinely vacant, so
 /// the boot waits out a long empty-tick budget to tell those apart. The container on disk already
@@ -288,7 +288,7 @@ pub fn active_character_slots(data: &[u8]) -> Result<Vec<CharacterSlotInfo>, Bnd
 /// [`active_character_slots`], which applies the `USER_DATA010.active_slot` bitmap rather than
 /// trusting a body that a deleted character leaves behind.
 ///
-/// MEASURED 2026-09-03: `er-quickload.toml` named `slot = 1`; Seamless was loaded, so the game read
+/// Measured 2026-09-03: `er-quickload.toml` named `slot = 1`; Seamless was loaded, so the game read
 /// `ER0000.co2`, whose only character is slot 0. Slot 1 could never fill, and the boot reached the
 /// intro cutscene before its 1800-tick budget was spent -- losing the session.
 pub fn container_holds_character(path: &std::path::Path, slot: usize) -> Option<bool> {
@@ -497,13 +497,13 @@ fn slot_pgd_score(body: &[u8], offset: usize) -> usize {
 
 /// Locate a slot body's serialized `PlayerGameData`.
 ///
-/// TWO CANDIDATE SOURCES, ONE ACCEPTANCE TEST. The acceptance test is unchanged
+/// Two candidate sources, one acceptance test. The acceptance test is unchanged
 /// (`slot_pgd_core_plausible` + best `slot_pgd_score`); what changed is where candidates come from.
 ///
 /// The original source was the `0xa000..=0xa600` window before each of the leading `FACE` magics.
-/// That window is an OBSERVATION of one save's layout, not an invariant, and it is too narrow:
-/// across the ten characters of `~/Downloads/ER0000.co2` the true PGD->FACE delta ran
-/// `0x9d14..=0xa05c`, and on the live default container it was `0x959c`, so the window matched ONE
+/// That window is an observation of one save's layout, not an invariant, and it is too narrow:
+/// across the ten characters of `~/Downloads/ER0000.co2` the true PGD->face delta ran
+/// `0x9d14..=0xa05c`, and on the live default container it was `0x959c`, so the window matched one
 /// character out of eleven. Everything downstream read that as "these slots are empty" -- the
 /// System>Quit "Load Character from File" preview showed a single row of ten
 /// (`slot_mask=0x8`), and `save_bytes_have_any_character` called the live default save a
@@ -512,12 +512,12 @@ fn slot_pgd_score(body: &[u8], offset: usize) -> usize {
 /// 2026-08-25 with `scripts/er-save-active-slots.py --deep`.
 ///
 /// So the Rune Level invariant -- eight attributes in `1..=99` summing to `level + 79`, which
-/// nothing but a real attribute block satisfies -- is now a candidate source too. It is ADDITIVE
+/// nothing but a real attribute block satisfies -- is now a candidate source too. It is additive
 /// and ordered after the window: a body the window already resolved keeps the exact offset it had,
 /// because an equal score does not displace the incumbent.
 ///
 /// `pub(crate)` since 2026-09-01 because the dependency also runs the other way: when the Rune
-/// Level identity REFUSES a real character (a stored level that disagrees with its own attribute
+/// Level identity refuses a real character (a stored level that disagrees with its own attribute
 /// sum -- measured, see `stats::slot_stats_from_body`), `stats` falls back to this locator. Only
 /// [`crate::stats::located_stat_block_offset`] is called from here, so the two directions cannot
 /// recurse.
@@ -564,7 +564,7 @@ pub(crate) fn slot_player_game_data_offset(body: &[u8]) -> Option<usize> {
 /// The offset of a slot body's eight-attribute stat block, in the vocabulary
 /// `crate::stats` uses (the first attribute word, i.e. runtime `PlayerGameData + 0x3c`).
 ///
-/// THE TWO MODULES ANCHOR THE SAME STRUCT EIGHT BYTES APART, which is why this exists
+/// The two modules anchor the same STRUCT eight bytes apart, which is why this exists
 /// rather than a caller adding an offset. `bnd4` addresses the SL2.bt `PlayerGameData`,
 /// whose struct is `CS::PlayerGameData + 0x8` (stat base `+0x34`, level `+0x60`, name
 /// `+0x94`); `stats` addresses the runtime base (`+0x3c`, `+0x68`, `+0x9c`). Handing a
@@ -976,7 +976,7 @@ mod tests {
     use super::*;
 
     /// Root of the local save corpus. Game-derived bytes are never versioned, so every test that
-    /// reads one SKIPS when the root is absent. Env-overridable (`ER_SAVE_CORPUS_ROOT`) so the
+    /// reads one skips when the root is absent. Env-overridable (`ER_SAVE_CORPUS_ROOT`) so the
     /// suite is not pinned to one machine's layout; defaults to the repo's `save-files/`.
     fn corpus_root() -> std::path::PathBuf {
         std::env::var_os("ER_SAVE_CORPUS_ROOT")
@@ -1031,7 +1031,7 @@ mod tests {
     /// character's do, and one of the two candidate sources is exactly that invariant.
     fn synthetic_slot_body(pgd: usize, face_delta: usize) -> Vec<u8> {
         const LEVEL: u32 = 21;
-        // Eight attributes summing to LEVEL + 79 = 100.
+        // Eight attributes summing to level + 79 = 100.
         const ATTRIBUTES: [u32; SAVE_PGD_STAT_COUNT] = [30, 10, 10, 10, 10, 10, 10, 10];
         let mut body = vec![0u8; pgd + face_delta + SAVE_FACE_MAGIC.len() + 0x100];
         let put_u32 = |body: &mut Vec<u8>, at: usize, value: u32| {
@@ -1069,8 +1069,8 @@ mod tests {
         assert_eq!(slot_player_game_data_offset(&body), Some(pgd));
     }
 
-    /// THE REGRESSION. Measured on the user's own container (2026-08-25): nine of its ten
-    /// characters had a PGD->FACE delta in `0x9d14..=0x9fcc`, just under the window's low bound, and
+    /// The regression. Measured on the user's own container (2026-08-25): nine of its ten
+    /// characters had a PGD->face delta in `0x9d14..=0x9fcc`, just under the window's low bound, and
     /// the locator called all nine empty -- so the "Load Character from File" preview offered one
     /// row of ten. The live default container's only character sat at `0x959c` and read as a
     /// characterless save. Both are found by the Rune Level invariant.
@@ -1252,7 +1252,7 @@ mod tests {
         };
         let source = 76_561_198_055_502_948u64;
         let target = 76_561_197_986_456_766u64;
-        // ~/Downloads is a transient location: this test's fixture is one SPECIFIC
+        // ~/Downloads is a transient location: this test's fixture is one specific
         // foreign-SteamID save (source id embedded exactly 12 times). Any other save
         // landing at that path (observed 2026-07-29: a save already owned by the
         // target id) is "fixture absent", not a failure -- skip like the other
@@ -1342,7 +1342,7 @@ mod tests {
         // c30 (saved map) candidate = body+4, proven 0x1c000000 for this save
         let c30 = u32::from_le_bytes([body[4], body[5], body[6], body[7]]);
         assert_eq!(c30, 0x1c00_0000, "slot 0 c30/map dword");
-        // ...and that literal body+4 IS what the accessor returns. This is the anti-drift pin for
+        // ...and that literal body+4 is what the accessor returns. This is the anti-drift pin for
         // `SLOT_BODY_MAP_OFFSET`: the DLL's `SAVE_SLOT_MAP_OFFSET` / `SerializedSaveSlot::saved_map`
         // are re-exports of this constant and this function, so a silent return to the old `0x14`
         // (which read a `CSRandXorshift` dword and wrote it into the live ProfileSummary record)
@@ -1360,8 +1360,8 @@ mod tests {
     }
 
     /// Corpus-wide shape check for [`SLOT_BODY_MAP_OFFSET`]. A packed `BlockId` is
-    /// `{indexId, regionId, blockId, areaId}` little-endian, so the areaId is the HIGH byte; every
-    /// real ER area id observed across the corpus sits in `0x0a..=0x3d`. The word at the OLD
+    /// `{indexId, regionId, blockId, areaId}` little-endian, so the areaId is the high byte; every
+    /// real ER area id observed across the corpus sits in `0x0a..=0x3d`. The word at the old
     /// offset (body+0x14) is one of four `CSRandXorshift::NextInt` dwords, so it clears that
     /// range only by chance. Requiring body+0x04 to pass on every active slot while body+0x14
     /// passes on a small minority is a structural, machine-checkable statement of which offset
@@ -1407,7 +1407,7 @@ mod tests {
             }
         }
         assert!(active > 0, "corpus present but held no active slots");
-        // The old offset must be visibly WORSE, not merely different: if body+0x14 ever passed as
+        // The old offset must be visibly worse, not merely different: if body+0x14 ever passed as
         // often as body+0x04 this discriminator would be worthless and the pin above would be the
         // only guard left.
         assert!(

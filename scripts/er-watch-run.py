@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """Follow one `er-run-branch.py` run and print only the lines that decide something.
 
-WHY THIS EXISTS. A run's evidence is spread across three files that answer different questions --
+Why this exists. A run's evidence is spread across three files that answer different questions --
 `er-quickload-autoload-debug.log` (what the product's ending-request machinery did),
 `er-input-harness.log` (whether the harness actually drove, or stood down `passive`), and
 `er-quickload-telemetry.json` (the RAM oracles: which character, which map, is the player up).
 Tailing any one of them alone has repeatedly produced a wrong reading of a run.
 
-IT ALSO ENDS. A boot deadlock (bd er-effects-rs-1742) leaves the process alive, 60+ threads,
+It also ends. A boot deadlock (bd er-effects-rs-1742) leaves the process alive, 60+ threads,
 ~0 CPU, and the DLL log simply stops -- indistinguishable from "still loading" unless something
-watches for the SILENCE. `--stall-seconds` of no growth prints `WEDGED` and exits, so a hung run
+watches for the silence. `--stall-seconds` of no growth prints `WEDGED` and exits, so a hung run
 ends the wait instead of consuming it.
 
-Window placement is reported by CLASS ONLY (`steam_app_1245620`), never by enumerating clients:
+Window placement is reported by class only (`steam_app_1245620`), never by enumerating clients:
 AGENTS.md forbids dumping the user's window list.
 """
 import argparse
@@ -63,7 +63,7 @@ def er_window():
 
 
 # Lines after which nothing about this run can change, so the watcher exits instead of burning
-# live game minutes. `sq-repro` either arms the switch (the run proceeds and this list must NOT
+# live game minutes. `sq-repro` either arms the switch (the run proceeds and this list must not
 # match) or states it will not arm -- and the can-move verdict it gates on is terminal by
 # construction, forced after exactly one inject-on/inject-off interval.
 TERMINAL_DECISIONS = (
@@ -88,7 +88,7 @@ def main() -> int:
     quick_log = os.path.join(run_dir, "er-quickload-autoload-debug.log")
     harness_log = os.path.join(run_dir, "er-input-harness.log")
     telemetry = os.path.join(run_dir, "er-quickload-telemetry.json")
-    # One watch on the DIRECTORY (not the individual logs): the DLL rotates `<name>.log` to
+    # One watch on the directory (not the individual logs): the DLL rotates `<name>.log` to
     # `<name>.log.prev` at startup, so a watch pinned to an inode goes deaf at exactly the
     # moment the interesting run begins. `er_run_lib` already owns this ctypes block.
     watch = er_run_lib.DirectoryWatch(pathlib.Path(run_dir))
@@ -146,7 +146,7 @@ def main() -> int:
                 return 0
         except OSError:
             pass
-        # inotify, not a sleep: readiness here is an EVENT (the DLL appending to its log), and
+        # inotify, not a sleep: readiness here is an event (the DLL appending to its log), and
         # `scripts/check-no-timeouts.py` bans a sleep standing in for one. `wait` returns the instant
         # the directory changes and otherwise at the bound, which is exactly the stall accounting
         # above -- a quiet POLL_SECONDS is what `stalled` is counting.

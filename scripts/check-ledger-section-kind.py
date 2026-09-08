@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
-"""Refuse a 1.16.2 -> 1.17 ledger that names the wrong KIND of memory.
+"""Refuse a 1.16.2 -> 1.17 ledger that names the wrong kind of memory.
 
-WHAT THIS CATCHES, AND WHAT IT ALREADY CAUGHT
+What this catches, and what it already caught
 ---------------------------------------------
 Every address ledger `er-game-base/build.rs` reads licenses one of two operations, and the two
 need opposite kinds of address. The function ledgers say "this FUNCTION moved here" -- callable,
 and for the two that reach `detourable_pairs`, a place MinHook may write five bytes -- which is
-only meaningful in EXECUTABLE memory. `rva-map-1162-to-1170.data.tsv` says "this GLOBAL moved
-here", which is only meaningful OUTSIDE it. Nothing in the tree checked either claim against the
+only meaningful in EXECUTABLE memory. `rva-map-1162-to-1170.data.tsv` says "this global moved
+here", which is only meaningful outside it. Nothing in the tree checked either claim against the
 image's own section table until 2026-08-31.
 
 Measured that day on `docs/recon/rva-1170-detour-audited.tsv`, since deleted. As it stood in HEAD:
-444 promoted rows, of which 87 named NON-EXECUTABLE destinations -- 61 in `.data`, 26 in `.rdata`
+444 promoted rows, of which 87 named non-EXECUTABLE destinations -- 61 in `.data`, 26 in `.rdata`
 -- each carrying a prologue verdict like `6B relocatable`. Of the 85 promoted on its "unwindless
-leaf" clause, ALL 85 were non-executable, so that clause never once fired on a real leaf.
+leaf" clause, all 85 were non-executable, so that clause never once fired on a real leaf.
 Regenerating the file from its own current inputs added four more rows of exactly that shape,
 taking it to 448 / 91 / 89.
 
 The cause is structural and not a bug in its decoder: `.pdata` declares no function containing a
 `.data` global for exactly the same reason it declares none containing an unwindless leaf, so "no
-enclosing function" cannot separate the two. Those four added rows are 24 bytes of ZEROS in BOTH
+enclosing function" cannot separate the two. Those four added rows are 24 bytes of zeros in both
 images, decoded as `add [rax], al` three times and reported `6B relocatable`.
 
 The live ledgers were clean when this gate was written, and that is the point of writing it: 103
@@ -27,17 +27,17 @@ The live ledgers were clean when this gate was written, and that is the point of
 and 116 `data.tsv` rows are 100% `.data`/`.rdata`. A gate that arrives green on 1047 rows and
 would have been red on 87 is a gate that separates, not one that fires on everything.
 
-TWO RULES
+Two rules
 --------
-  R1  CODE LEDGER    a row naming a FUNCTION -- callable, and for two of the three ledgers
+  R1  code ledger    a row naming a function -- callable, and for two of the three ledgers
                      hookable -- must name a destination in an EXECUTABLE section. Applied to
-                     EVERY pair row, not only the rows `build.rs` currently admits as detourable:
+                     every pair row, not only the rows `build.rs` currently admits as detourable:
                      a superset, so no admission logic is transcribed here and none can drift out
                      of sync with build.rs.
-  R2  DATA LEDGER    a row in the globals ledger must name a NON-EXECUTABLE destination. A code
+  R2  data ledger    a row in the globals ledger must name a non-EXECUTABLE destination. A code
                      address filed as a global is how a `read` becomes a call to the wrong thing.
 
-THERE WAS A THIRD RULE, AND ITS REMOVAL IS THE POINT
+There was a third rule, and its removal is the point
 -----------------------------------------------------
 R3 was a TOMBSTONE: `docs/recon/rva-1170-detour-audited.tsv` must not exist. It was enforcement
 standing in for a removal that this gate's own change did not own -- `audit-1170-hook-targets.py
@@ -47,22 +47,22 @@ its two helpers were deleted on 2026-08-31, so R3 was deleted with them. A rule 
 against a command nobody can run is not spare coverage; it is a line that reads as coverage while
 matching nothing, which is the exact failure mode the rest of this file exists to refuse.
 
-HOW THE LEDGERS ARE FOUND
+How the LEDGERS are found
 -------------------------
 Parsed out of `crates/er-game-base/build.rs`, never transcribed, exactly as
 `check-no-duplicate-ledger-rows.py` does it and for the same reason: a copied literal is how nine
 audits in this repo printed a confident zero. A ledger constant found there that the table below
-does not classify STOPS THE RUN (exit 2). A partial view reporting zero violations is this defect
+does not classify stops the run (exit 2). A partial view reporting zero violations is this defect
 class wearing a green tick.
 
-THE IMAGE IS GITIGNORED
+The image is GITIGNORED
 -----------------------
 `eldenring-deobf-1.17.bin` is game-derived and not committed, so R1/R2 can only run where it
-exists. When it does not, they are SKIPPED OUT LOUD, in a line that refuses the words OK and
-PASS, and the summary names what was not checked. `--selftest` builds its own synthetic image and
+exists. When it does not, they are skipped out loud, in a line that refuses the words OK and
+pass, and the summary names what was not checked. `--selftest` builds its own synthetic image and
 therefore runs everywhere, which is what `check.sh` wires.
 
-USAGE
+Usage
     python3 scripts/check-ledger-section-kind.py             # the gate
     python3 scripts/check-ledger-section-kind.py --rows      # also print the per-ledger tally
     python3 scripts/check-ledger-section-kind.py --selftest  # positive controls, synthetic image
@@ -84,7 +84,7 @@ BASE = 0x140000000
 
 # What kind of memory a ledger's destination column is allowed to name.
 CODE = "code"  # rows that can license a five-byte patch: must be executable
-DATA = "data"  # globals: must NOT be executable
+DATA = "data"  # globals: must not be executable
 NO_PAIRS = "no-pairs"  # single-column (`quarantined()` reads column 0); there is no destination
 
 # Keyed on BASENAME, because build.rs spells the paths relative to its own crate dir.
@@ -109,13 +109,13 @@ class Refuse(Exception):
 # the image's own section table
 # --------------------------------------------------------------------------------------------
 def sections(blob: bytes) -> list[tuple[str, int, int, bool]]:
-    """`[(name, rva, size, executable)]` from the PE headers of a FLAT image.
+    """`[(name, rva, size, executable)]` from the PE headers of a flat image.
 
     Flat means file offset == RVA for every section, so the headers sit where the loader would
     have put them and no raw-pointer mapping is applied. Size is `max(virtual, raw)`: the 1.17
     `.data` declares 0xd51bc4 virtual against 0x249e00 raw, and the zero-filled tail beyond the
     raw size is exactly where the deleted ledger's four all-zero "leaf functions" lived. Taking
-    the raw size alone would place them OUTSIDE every section and lose the finding.
+    the raw size alone would place them outside every section and lose the finding.
     """
     if len(blob) < 0x40:
         raise Refuse("image is too short to carry a PE header")
@@ -144,7 +144,7 @@ def sections(blob: bytes) -> list[tuple[str, int, int, bool]]:
 def classify(secs, va: int) -> tuple[str, bool]:
     """`(section name, executable)` for a VA, or `('<outside>', False)`.
 
-    An address in no section is reported and treated as a violation for BOTH kinds: it is not
+    An address in no section is reported and treated as a violation for both kinds: it is not
     executable, and it is not a global either -- it is not in the image at all.
     """
     rva = va - BASE
@@ -343,7 +343,7 @@ def selftest() -> int:
         expect("sens/R1-names-the-address", "0x140002040" in (findings[0] if findings else ""), True)
         write(code_path, [good_code])
 
-        # R1 again: a destination in NO section at all is not executable either.
+        # R1 again: a destination in no section at all is not executable either.
         write(code_path, [good_code, "0x140001040\t0x140099000\tIDENTICAL-WHOLE\t1.0\t9\tY\tB\tP\n"])
         findings, _ = check(image, build_rs)
         expect("sens/R1-outside-every-section", len(findings), 1)
@@ -364,7 +364,7 @@ def selftest() -> int:
             expect("sens/unclassified-ledger-refuses", "NEW_MAP" in str(exc), True)
         write_build_rs()
 
-        # A missing image must SKIP, not silently pass R1/R2 with a green tick.
+        # A missing image must skip, not silently pass R1/R2 with a green tick.
         write(code_path, [good_code, "0x140001040\t0x140002040\tIDENTICAL-WHOLE\t1.0\t9\tY\tB\tP\n"])
         findings, notes = check(os.path.join(tmp, "absent.bin"), build_rs)
         expect("spec/absent-image-skips-loudly", (len(findings), len(notes)), (0, 1))

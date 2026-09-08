@@ -1,7 +1,7 @@
 //! The list the picker shows: every creature the mod can wear, with a name on it.
 //!
-//! Two shipped tables joined on chr id. `moveset.tbl` says what a creature can DO and is the set
-//! of ids the possession engine will accept; `chrnames.tbl` says what to CALL it. The join is
+//! Two shipped tables joined on chr id. `moveset.tbl` says what a creature can do and is the set
+//! of ids the possession engine will accept; `chrnames.tbl` says what to call it. The join is
 //! left on the moveset table, so the catalogue and the engine agree on membership by
 //! construction -- a name with no moveset row is not a creature you can become and does not
 //! appear, and a moveset row with no name appears as `cNNNN` rather than being hidden.
@@ -78,11 +78,11 @@ impl Creature {
     /// under, uppercased, with everything non-alphabetic collapsed to `#`.
     ///
     /// PRECONDITION, held by the sort rather than by this function: every group key must occupy
-    /// ONE contiguous run of the sorted catalogue, because
+    /// one contiguous run of the sorted catalogue, because
     /// [`crate::picker::model`]'s group jump treats the run around an index as the whole group.
     /// It holds today -- every shipped name is ASCII with an alphabetic initial, and the three
     /// unnamed rows label as `(unnamed)`, which sorts under `(` (0x28) below `A` and so forms one
-    /// run at the top. A future name beginning with something that uppercases ABOVE `Z` (`_`,
+    /// run at the top. A future name beginning with something that uppercases above `Z` (`_`,
     /// a backtick, a non-ASCII letter) would split `#` into two runs and strand rows the jump
     /// cannot reach. `walking_the_group_axis_visits_every_group_of_the_shipped_catalogue` is the
     /// guard that would catch it.
@@ -94,9 +94,9 @@ impl Creature {
     }
 
     /// True when this creature has nothing to fire -- a variant that owns a model but declares
-    /// no animations of its own. TWENTY of the 408, written `<id> -` in `moveset.tbl`: zero
+    /// no animations of its own. Twenty of the 408, written `<id> -` in `moveset.tbl`: zero
     /// moves and zero denials, because there was nothing to classify rather than everything
-    /// being withheld. (Not to be confused with the THREE that have no NAME; different set,
+    /// being withheld. (Not to be confused with the three that have no name; different set,
     /// different reason.)
     pub(crate) const fn is_mute(&self) -> bool {
         self.moves == 0
@@ -113,7 +113,7 @@ impl Creature {
         if label.chars().count() <= LABEL_MAX_CHARS {
             return label.to_owned();
         }
-        // CHARACTER boundaries, not bytes: the shipped names are ASCII today and nothing
+        // Character boundaries, not bytes: the shipped names are ASCII today and nothing
         // guarantees the next generation will be, and slicing a `str` mid-codepoint panics
         // rather than producing a shorter name.
         let mut out: String = label.chars().take(LABEL_MAX_CHARS - 1).collect();
@@ -152,7 +152,7 @@ const BUCKET_TAGS: [&str; 4] = ["L", "H", "R", "M"];
 /// Borrowed out of the compiled-in text rather than owned, so a `Creature` is `Copy` and the
 /// whole catalogue is one allocation.
 fn parse_names(text: &'static str) -> Vec<(u32, &'static str)> {
-    // A VERSION THIS PARSER DOES NOT KNOW YIELDS NO NAMES, rather than names read under the wrong
+    // A version this PARSER does not know yields no names, rather than names read under the wrong
     // rules. Every row then draws as `(unnamed)` beside its id, which is a picker that still
     // works and a failure nobody could mistake for correct -- and the host test
     // `almost_every_creature_has_a_name` goes red the moment it happens, which is where a
@@ -188,7 +188,7 @@ fn declared_names_version(text: &str) -> Option<u32> {
 
 /// Join the two tables and sort the result for display.
 ///
-/// Sort key is the LABEL, case-folded -- the thing on screen -- so the group jump lands where a
+/// Sort key is the label, case-folded -- the thing on screen -- so the group jump lands where a
 /// reader expects. Ties break on chr id so two creatures sharing a name (Rennala is `2030` and
 /// `2031`) keep a stable, reproducible order rather than whatever the parse happened to produce.
 fn build(moveset_text: &'static str, names_text: &'static str) -> Vec<Creature> {
@@ -220,7 +220,7 @@ fn build(moveset_text: &'static str, names_text: &'static str) -> Vec<Creature> 
             buckets,
         });
     }
-    // DECORATE-SORT-UNDECORATE, because `sort_by` calls its comparator O(n log n) times and a
+    // Decorate-sort-UNDECORATE, because `sort_by` calls its comparator O(n log n) times and a
     // comparator that case-folds would allocate two Strings on every one of them. Keying once
     // per row is 408 allocations instead of ~7000.
     let mut decorated: Vec<(String, Creature)> = out
@@ -261,7 +261,7 @@ pub(crate) fn index_of(chr_id: u32) -> Option<usize> {
     creatures().iter().position(|c| c.chr_id == chr_id)
 }
 
-/// What to CALL a chr id, or `""` when nothing here names it.
+/// What to call a chr id, or `""` when nothing here names it.
 ///
 /// `""` rather than `"(unnamed)"` because the caller is not always a list row: the attack-set
 /// panel puts the name beside the id and drops it entirely when there is none, which reads better
@@ -287,7 +287,7 @@ mod tests {
         assert_eq!(declared_names_version(NAMES_TEXT), Some(NAMES_VERSION));
     }
 
-    /// The join is LEFT on the moveset table. Every creature the engine will accept has a row,
+    /// The join is left on the moveset table. Every creature the engine will accept has a row,
     /// and no row exists for an id the engine would refuse -- if these two drift apart the
     /// picker offers something that cannot be possessed, which looks like the possession being
     /// broken rather than the list being wrong.
@@ -441,7 +441,7 @@ mod tests {
         assert_eq!(mute.shape(), "no moves");
     }
 
-    /// A table written by a generator this parser does not know yields NO names rather than names
+    /// A table written by a generator this parser does not know yields no names rather than names
     /// read under the wrong rules. Every row then shows its id, which is usable and unmistakable.
     #[test]
     fn a_name_table_from_a_future_generator_yields_no_names_at_all() {
@@ -456,7 +456,7 @@ mod tests {
     /// purpose -- see the module docs -- so the flag has to be reachable.
     #[test]
     fn creatures_with_no_fireable_move_are_flagged_rather_than_dropped() {
-        // Sorted, because the catalogue is ordered by LABEL and these come out interleaved by
+        // Sorted, because the catalogue is ordered by label and these come out interleaved by
         // name. The set is what is being asserted, not the display order.
         let mut mute: Vec<u32> = creatures()
             .iter()
@@ -464,7 +464,7 @@ mod tests {
             .map(|c| c.chr_id)
             .collect();
         mute.sort_unstable();
-        // EXACT, not `!is_empty()`. The count is quoted in this module's docs and in the panel's
+        // Exact, not `!is_empty()`. The count is quoted in this module's docs and in the panel's
         // detail line, and a loose assertion is how "three" survived in those two places while
         // the table said twenty.
         assert_eq!(

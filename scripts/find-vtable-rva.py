@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Locate a C++ class's vtable in an ELDEN RING image, by RTTI, in BOTH builds at once.
+"""Locate a C++ class's vtable in an ELDEN RING image, by RTTI, in both builds at once.
 
-WHY THIS EXISTS
+Why this exists
 ---------------
-The 1.16.2 -> 1.17 migration has a gate for CODE addresses (`er_game_base::game_build`, fed by
+The 1.16.2 -> 1.17 migration has a gate for code addresses (`er_game_base::game_build`, fed by
 `docs/recon/rva-map-1162-to-1170.needed-verified.tsv`). It does not cover VTABLE and other `.rdata`
 addresses, and those moved too. Measured 2026-08-29: `TITLE_OWNER_VTABLE_RVA = 0x2b63bb0`, hard
 coded in three crates, is `CS::TitleStep` in 1.16.2 and is not a vtable at all in 1.17. The scans
@@ -11,7 +11,7 @@ that use it are read-only and fault-safe, so nothing crashes -- they silently fi
 features behind them are quietly dead. A silent wrong answer is worse than a refusal, which is why
 this exists as a tool rather than a note.
 
-HOW IT WORKS (MSVC x64 RTTI)
+How it works (MSVC x64 RTTI)
     vtable[-1]  -> RTTICompleteObjectLocator (absolute VA)
     COL + 0x0c  -> pTypeDescriptor, an image-relative RVA
     TD  + 0x10  -> the mangled name, NUL-terminated, e.g. ".?AVCSFadeImp@CS@@"
@@ -19,7 +19,7 @@ HOW IT WORKS (MSVC x64 RTTI)
 Both images are FLAT: file offset == RVA, VA = 0x140000000 + offset. So the scan is a single pass
 over the file looking for qwords that point at a COL whose type descriptor carries the wanted name.
 
-USAGE
+Usage
     python3 scripts/find-vtable-rva.py CSFadeImp
     python3 scripts/find-vtable-rva.py TitleStep TitleTopDialog
     python3 scripts/find-vtable-rva.py --rva 0x2b63bb0      # inverse: what lives here?
@@ -80,7 +80,7 @@ def class_name_at_vtable(image: bytes, vtable_rva: int) -> str | None:
 def find_vtables(image: bytes, wanted: str) -> list[int]:
     """Every vtable rva in the image whose RTTI name contains `wanted`.
 
-    Driven from the TYPE DESCRIPTORS rather than by testing all ~12M qwords: find the descriptors
+    Driven from the type DESCRIPTORS rather than by testing all ~12M qwords: find the descriptors
     whose name matches, then the COLs that reference them, then the vtables that reference those.
     Three narrow passes instead of one enormous one.
     """
@@ -114,11 +114,11 @@ def find_vtables(image: bytes, wanted: str) -> list[int]:
 def vtables_holding(image: bytes, func_rva: int) -> list[tuple[int, int, str | None]]:
     """`(vtable rva, slot index, class name)` for every vtable whose slot holds `func_rva`.
 
-    THE ONLY WAY TO CARRY A VIRTUAL METHOD THAT CHANGED.
+    The only way to carry a virtual method that changed.
 
     Two other mappers exist and neither can do this. A body-signature mapper identifies a function
     by what it looks like, so it goes silent exactly when the body was rewritten. Caller voting
-    fixes that -- but only for a DIRECT call, and a virtual method has no direct caller to vote:
+    fixes that -- but only for a direct call, and a virtual method has no direct caller to vote:
     the game reaches it through `[vtable + n]`. Measured 2026-08-29: the now-loading helper's
     `Update` (1.16.2 0x2a2c40) was absent from the 128,603-row function map, unresolvable by
     masked signature, and reported "no usable caller" -- while the game refused its address 1,513
@@ -133,7 +133,7 @@ def vtables_holding(image: bytes, func_rva: int) -> list[tuple[int, int, str | N
     at = image.find(needle)
     while at >= 0:
         if at % 8 == 0:
-            # Walk back and TEST each candidate start, rather than walking until the preceding
+            # Walk back and test each candidate start, rather than walking until the preceding
             # qword stops looking like a code pointer. That heuristic overshoots every time: the
             # qword before a vtable is its CompleteObjectLocator, which is also an in-image
             # pointer, so the walk sails past the start it was looking for and lands somewhere
@@ -152,11 +152,11 @@ def vtables_holding(image: bytes, func_rva: int) -> list[tuple[int, int, str | N
 
 
 def pointers_to(image: bytes, func_rva: int) -> list[int]:
-    """Every 8-byte-aligned qword in the WHOLE image that holds `BASE + func_rva`.
+    """Every 8-byte-aligned qword in the whole image that holds `BASE + func_rva`.
 
     Wider than `vtables_holding`, which requires the run to carry an RTTI name. A function can be
     reached from a plain function-pointer table, a task registration array, or a jump table with
-    no class attached, and none of those is a vtable. When a function has zero direct callers AND
+    no class attached, and none of those is a vtable. When a function has zero direct callers and
     zero rip-relative references, this says whether it is reachable from data at all -- which is
     the difference between "look in a table" and "this needs a live process".
     """
@@ -184,7 +184,7 @@ def selftest() -> int:
     got = class_name_at_vtable(images["1.16.2"], 0x2B63BB0)
     if got != ".?AVTitleStep@CS@@":
         failures.append(f"1.16.2 0x2b63bb0: got {got!r}, want '.?AVTitleStep@CS@@'")
-    # The whole point: that rva is NOT the same vtable in 1.17.
+    # The whole point: that rva is not the same vtable in 1.17.
     if class_name_at_vtable(images["1.17"], 0x2B63BB0) == ".?AVTitleStep@CS@@":
         failures.append("1.17 0x2b63bb0 still resolves to TitleStep -- the premise of this tool is wrong")
     for line in failures:

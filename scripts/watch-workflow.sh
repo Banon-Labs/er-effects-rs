@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Open a NEW kitty TAB tailing a dynamic-workflow run with color/formatting.
+# Open a new kitty tab tailing a dynamic-workflow run with color/formatting.
 #
 # Usage: scripts/watch-workflow.sh [RUNID|latest|/abs/run/dir] [--full]
 #   RUNID   a wf_... id (default: latest run under this project)

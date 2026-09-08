@@ -7,7 +7,7 @@
 //! `TITLE_05_000_TEXT_SUPPRESSED_GFX`; the same fingerprint is what the
 //! in-game `oracle_title_05_000_runtime_strip_output_validated` telemetry
 //! checks). The derivation tests read the real vanilla movie from the
-//! extraction corpus (see [`common::corpus_root`]) and SKIP, like
+//! extraction corpus (see [`common::corpus_root`]) and skip, like
 //! `roundtrip.rs`, when it is absent; the failure-path garbage test always
 //! runs. For byte-level debugging of a fingerprint mismatch, regenerate the
 //! expected asset with `scripts/gfx_tag_diff.py --emit-rust` and compare
@@ -44,7 +44,7 @@ fn strip_of_vanilla_matches_validated_fingerprint() {
     assert_eq!(fnv1a64(&out), STRIPPED_FNV1A64);
 }
 
-/// The edit set must NOT apply to a movie it wasn't derived for: stripping an
+/// The edit set must not apply to a movie it wasn't derived for: stripping an
 /// already-stripped movie has to fail all-or-nothing (the removed placements
 /// are gone, so the first missing match aborts the whole application).
 #[test]

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Headless (offscreen gamescope) REAL gold-load: stages the gold save and runs the
+# Headless (offscreen gamescope) real gold-load: stages the gold save and runs the
 # zero-input autoload with splash-skip + input-block active. Used to validate
 # in-process oracles (e.g. oracle_splash_skip_armed) without putting the game on
 # the user's monitor. Watcher-bounded; save-safe (isolated staged copy).

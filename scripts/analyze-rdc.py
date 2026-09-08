@@ -4,7 +4,7 @@
 Answers GPU-vs-CPU for the reload-fps question (total GPU time vs the ~50ms frame) and ranks the
 heaviest passes so a vanilla-reload capture can be diffed against a product-reload capture.
 
-Run under WINDOWS qrenderdoc (which bundles the `renderdoc` python module). qrenderdoc's argv passing is
+Run under Windows qrenderdoc (which bundles the `renderdoc` python module). qrenderdoc's argv passing is
 unreliable, so config comes from a JSON file at $RDC_ANALYZE_CONFIG (default C:/temp/rdc-analyze.json):
     {"rdc": "C:/.../er_cap_frame0.rdc", "log": "C:/.../rdc-summary.txt", "top": 20}
 

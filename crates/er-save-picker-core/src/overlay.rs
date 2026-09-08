@@ -5,9 +5,9 @@
 // come from `er-loading-bar-core`, matching the boot bar's glyphs and rectangles.
 
 // The keyboard hook, the OS input polling and the window geometry reads below are
-// `#[cfg(windows)]`, so a HOST build compiles their helpers, key constants and imports with
+// `#[cfg(windows)]`, so a host build compiles their helpers, key constants and imports with
 // every caller cfg'd out. `dead_code` / `unused_imports` there describe the cfg, not real
-// debt; the SHIPPING target (x86_64-pc-windows-msvc) carries the full deny with no allows.
+// debt; the shipping target (x86_64-pc-windows-msvc) carries the full deny with no allows.
 #![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
 use std::sync::Mutex;
@@ -35,7 +35,7 @@ const BOOT_VIEW_TEXT_BASE_SCALE: usize = 2;
 const BOOT_VIEW_GLYPH_ADV: usize = er_loading_bar_core::GLYPH_ADV;
 const BOOT_VIEW_GLYPH_H: usize = er_loading_bar_core::GLYPH_H;
 
-// The boot view's text and rects ARE the shared raster primitives -- these local names are
+// The boot view's text and rects are the shared raster primitives -- these local names are
 // aliases, not wrappers, so the picker and the boot bar cannot drift apart visually. Aliasing
 // rather than forwarding also keeps the upstream arity out of this crate's own signatures.
 use er_loading_bar_core::draw_text_rgb as boot_draw_text_rgb;
@@ -55,7 +55,7 @@ pub use er_telemetry_core::counters::SAVE_PICKER_OVERLAY_PICK_COUNT;
 pub use er_telemetry_core::counters::SAVE_PICKER_OVERLAY_PICK_REJECT_COUNT;
 /// Diagnostics for the "inputs eaten during load" report: total input polls the dedicated thread ran
 /// (proves the thread is alive and at cadence, independent of the ~4 fps Present redraw), and polls
-/// where ANY navigation key/button was down (proves the background thread can actually READ OS input
+/// where any navigation key/button was down (proves the background thread can actually read OS input
 /// under Wine/Proton -- if this stays ~0 while the user mashes, a background thread cannot see the
 /// keys and input must move back to a pumped thread).
 pub use er_telemetry_core::counters::SAVE_PICKER_OVERLAY_POLL_COUNT;
@@ -117,7 +117,7 @@ pub fn save_picker_overlay_process_completion() {
             save_picker_overlay_disarm("picked");
         }
         MissingSaveSelectionOutcome::Rejected(message) => {
-            // Validation failed at commit: keep the character picker in place and name WHY, so the
+            // Validation failed at commit: keep the character picker in place and name why, so the
             // rejection cannot be mistaken for Back/navigation.
             MISSING_SAVE_PICKER_SELECTED_SLOT.store(usize::MAX, Ordering::SeqCst);
             SAVE_PICKER_OVERLAY_PICK_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
@@ -262,18 +262,18 @@ fn resolve_xinput_get_state() -> Option<XInputGetStateFn> {
 
 /// Sample keyboard + gamepad. Returns `(held_now, pressed_this_poll)`.
 ///
-/// Keyboard "pressed" uses the LOW bit of `GetAsyncKeyState` ("pressed since our previous call"), so
-/// a press is caught even when it happened AND was released between two of the slow (~4 fps)
+/// Keyboard "pressed" uses the low bit of `GetAsyncKeyState` ("pressed since our previous call"), so
+/// a press is caught even when it happened and was released between two of the slow (~4 fps)
 /// boot-frame polls -- polling only the high bit drops those, which is why deliberate navigation felt
 /// eaten. Gamepad has no such bit, so it edge-detects the button state vs the previous poll.
 ///
-/// MUST be called on the game's render thread (the Present hook). `GetAsyncKeyState` does not report
+/// Must be called on the game's render thread (the Present hook). `GetAsyncKeyState` does not report
 /// the user's keys from a background thread under Wine/Proton -- measured: a dedicated poll thread ran
 /// 1089 polls yet saw only 5 key-downs while the user mashed, and completed 0 picks.
 fn save_picker_sample() -> (usize, usize) {
     let mut held = 0usize;
     let mut pressed = 0usize;
-    // Keyboard: only when the event-driven low-level hook is NOT active. The hook (when installed)
+    // Keyboard: only when the event-driven low-level hook is not active. The hook (when installed)
     // owns keyboard so every press registers regardless of this poll's ~4fps boot rate; polling it
     // here too would double-apply. This branch is the fallback if the hook failed to install.
     if !SAVE_PICKER_KBD_HOOK_ACTIVE.load(Ordering::SeqCst)
@@ -385,12 +385,12 @@ fn save_picker_mouse_click() -> Option<MouseClick> {
     None
 }
 
-/// The IN-GAME arm of the missing-save boot picker: open the overlay's model for the pending
+/// The in-game arm of the missing-save boot picker: open the overlay's model for the pending
 /// no-save boot if not already armed. Idempotent, and safe from any thread (Mutex state plus a
 /// directory enumeration; it touches no game pointer).
 ///
 /// Reached through [`open_picker_for_intent`] like every other picker open, so
-/// `os_native_save_picker` decides between this and the OS dialog in ONE place. It is also the
+/// `os_native_save_picker` decides between this and the OS dialog in one place. It is also the
 /// fallback the OS arm hands the pick to when comdlg32 cannot be used, which is why it is callable
 /// on its own rather than only from the router.
 ///
@@ -400,10 +400,10 @@ pub fn arm_boot_picker() -> bool {
     save_picker_overlay_active()
 }
 
-/// Stage an already-validated container into the CHARACTER sub-picker, arming the overlay's file
-/// browser at that container's own folder so the sub-picker's BACK lands somewhere real.
+/// Stage an already-validated container into the character sub-picker, arming the overlay's file
+/// browser at that container's own folder so the sub-picker's back lands somewhere real.
 ///
-/// Exists for the OS boot arm: comdlg32 chooses a FILE and has no character list, but
+/// Exists for the OS boot arm: comdlg32 chooses a file and has no character list, but
 /// `native_fullread_slot()` needs the slot the sub-picker records or it falls through to slot 0 and
 /// the save watchdog aborts on a container whose slot 0 is empty. This is the same tail the
 /// in-game file stage runs after its own pick -- deliberately the same code path, so the two
@@ -420,7 +420,7 @@ pub fn boot_stage_picked_save_for_character_choice(path: std::path::PathBuf) -> 
         SAVE_PICKER_OVERLAY_PICK_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
         return false;
     }
-    // Arm the browser at the picked file's folder BEFORE switching stages, so a BACK out of the
+    // Arm the browser at the picked file's folder before switching stages, so a back out of the
     // character list finds a populated listing instead of an empty panel.
     if let Some(parent) = path.parent() {
         save_picker_overlay_arm_at(parent);
@@ -608,16 +608,16 @@ fn picker_character_row_hit(
 }
 
 /// One input poll for the startup overlay picker. Reads OS keyboard/gamepad directly (independent of
-/// the game's blocked input) and captures presses. MUST run on the game's render thread -- it is
+/// the game's blocked input) and captures presses. Must run on the game's render thread -- it is
 /// driven from the D3D12 Present hook, which is the only thread that can read `GetAsyncKeyState`
 /// under Wine/Proton. Present starves to ~4 fps while the boot streams assets, so a press could fall
 /// between two polls; [`save_picker_sample`] uses the GetAsyncKeyState "pressed-since-last-call" bit
 /// so those presses are still caught (that dropping was the "inputs eaten" symptom). Navigation is
-/// applied here (pure Mutex state); the one-shot pick COMPLETION (redirect + MinHook install) is
+/// applied here (pure Mutex state); the one-shot pick completion (redirect + MinHook install) is
 /// deferred to [`save_picker_overlay_process_completion`] on the game-task thread. No-op unless the
 /// overlay is active.
 pub fn save_picker_overlay_input_tick() {
-    // The host owns the OPEN decision by calling `arm_boot_picker()` only after its surface router
+    // The host owns the open decision by calling `arm_boot_picker()` only after its surface router
     // decides this overlay owns the boot pick. This tick only drives/drops an already-armed overlay;
     // arming here would bypass the OS-native boot surface again.
     if !save_picker_overlay_active() {
@@ -703,7 +703,7 @@ static SAVE_PICKER_KBD_HOOK_ACTIVE: std::sync::atomic::AtomicBool =
 /// One-shot spawn guard for the hook thread.
 static SAVE_PICKER_KBD_HOOK_STARTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
-/// Telemetry: key-down events the LL hook applied (proves event-driven capture fires under Wine).
+/// Telemetry: key-down events the ll hook applied (proves event-driven capture fires under Wine).
 pub use er_telemetry_core::counters::SAVE_PICKER_KBD_HOOK_HITS;
 
 /// WH_KEYBOARD_LL callback: every keystroke arrives here as an OS event, independent of the game's
@@ -723,7 +723,7 @@ unsafe extern "system" fn save_picker_ll_keyboard_proc(
         let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
         let act = picker_action_for_vk(kb.vkCode as i32);
         let msg = wparam.0 as u32;
-        // Apply on EVERY key-down (including OS auto-repeat). A held-key guard that cleared only on
+        // Apply on every key-down (including OS auto-repeat). A held-key guard that cleared only on
         // key-up swallowed the user's repeated taps whenever the up event was missed (measured: 10
         // edges for many more presses). A distinct tap is a single KEYDOWN, so tapping stays 1:1; only
         // holding a key repeats, which is acceptable for a picker.
@@ -737,7 +737,7 @@ unsafe extern "system" fn save_picker_ll_keyboard_proc(
     unsafe { CallNextHookEx(None, ncode, wparam, lparam) }
 }
 
-/// Spawn the picker's low-level keyboard hook + message pump ONCE while a missing-save pick is
+/// Spawn the picker's low-level keyboard hook + message pump once while a missing-save pick is
 /// pending. Uninstalls and exits once the pick resolves. Falls back to the render-thread poll if the
 /// hook fails to install.
 #[cfg(windows)]
@@ -780,7 +780,7 @@ pub fn ensure_save_picker_keyboard_hook() {
                 if !missing_save_selection_pending() && !save_picker_overlay_active() {
                     break;
                 }
-                // Bounded OS message wait (~50ms): the LL hook callback fires during it; then drain
+                // Bounded OS message wait (~50ms): the ll hook callback fires during it; then drain
                 // the queue so the pump stays alive. Not a sleep -- a message wait with a wake mask.
                 let _ = unsafe {
                     MsgWaitForMultipleObjectsEx(None, POLL_MS, QS_ALLINPUT, MWMO_INPUTAVAILABLE)
@@ -817,7 +817,7 @@ pub fn ensure_save_picker_keyboard_hook() {}
 /// slots and switch to the character sub-picker (the redirect + load are deferred until a
 /// character is chosen).
 fn save_picker_file_stage_input(pressed: usize) {
-    // Set when SELECT resolved to something that is NOT a pickable file. That path used to
+    // Set when select resolved to something that is not a pickable file. That path used to
     // return silently -- no log, no status line, no counter -- so confirming on the drive-selector
     // row or a directory produced literally no feedback anywhere. It cost a live run to
     // diagnose: three SELECTs applied, nothing happened, and nothing said why.
@@ -833,7 +833,7 @@ fn save_picker_file_stage_input(pressed: usize) {
         if pressed & PICKER_ACT_DOWN != 0 {
             model.move_cursor(true);
         }
-        // Left/right cycle the DRIVE when the highlight is on the top drive-selector row, else
+        // Left/right cycle the drive when the highlight is on the top drive-selector row, else
         // page through the current listing.
         if pressed & PICKER_ACT_LEFT != 0 {
             if model.cursor_on_drive_selector() {
@@ -1033,7 +1033,7 @@ fn save_picker_apply_character_act(act: CharacterAct) {
         CharacterAct::Pick(path, slot) => {
             // Defer the actual redirect activation + MinHook install to the game-task thread (via
             // this request): it runs the risky install off the render thread, and the game task is
-            // alive at pick time (the boot is still HELD -- loading only starts once the pick
+            // alive at pick time (the boot is still held -- loading only starts once the pick
             // releases the hold). Record the chosen slot now so the character list stays selected.
             MISSING_SAVE_PICKER_SELECTED_SLOT.store(slot, Ordering::SeqCst);
             *save_picker_complete_request_lock() = Some((path, slot));
@@ -1076,10 +1076,10 @@ fn picker_fit_text(text: &str, max_px: usize) -> String {
     out
 }
 
-/// Draw the file browser onto an EXISTING full-frame buffer (`w*h` RGBA8) that already holds the
+/// Draw the file browser onto an existing full-frame buffer (`w*h` RGBA8) that already holds the
 /// boot loading bar at the bottom. The picker occupies a bounded panel in the upper region so the
 /// game's own loading-bar language (bottom strip) stays visible underneath -- the picker is
-/// composited WITH the bar, not in place of it. Reads the live model; render-thread safe (pure
+/// composited with the bar, not in place of it. Reads the live model; render-thread safe (pure
 /// read + CPU raster). Returns false if there is no model.
 pub fn overlay_save_picker_onto(buf: &mut [u8], w: usize, h: usize) -> bool {
     let scale = BOOT_VIEW_TEXT_BASE_SCALE;
@@ -1383,7 +1383,7 @@ mod mouse_hit_tests {
     use super::*;
 
     /// This module's namespace inside the crate-wide [`crate::picker_scratch_dir`], which is
-    /// what keys the directory to this PROCESS as well as to `tag`. The prefix is all that is
+    /// what keys the directory to this process as well as to `tag`. The prefix is all that is
     /// left here: one implementation of the wipe-and-create, so the pid cannot be present in one
     /// module and missing in the next.
     fn scratch_dir(tag: &str) -> std::path::PathBuf {

@@ -2,14 +2,14 @@
 //!
 //! # The constraint that shapes all of this
 //!
-//! It must work against ANY author's DLL. A third-party mod exports nothing you can query, has no
+//! It must work against any author's DLL. A third-party mod exports nothing you can query, has no
 //! config you can parse and will never cooperate. The only general mechanism left is to sit on the
 //! APIs everybody has to call and record who called them -- so this DLL hooks the input functions
 //! and attributes each call to the module it came from.
 //!
 //! # Passive means passive
 //!
-//! Every detour here has the same body: call the rest of the chain FIRST, then record what was
+//! Every detour here has the same body: call the rest of the chain first, then record what was
 //! asked for, then return the chain's value byte for byte. Nothing is swallowed, nothing is
 //! altered, nothing is injected, and no buffer is written. The bookkeeping cannot even delay the
 //! call, because it happens after the value is already in hand.
@@ -122,7 +122,7 @@ static KEYBOARD_SNAPSHOT: Mutex<[u8; KEYBOARD_STATE_BYTES]> = Mutex::new([0; KEY
 static SNAPSHOT_UPDATES: AtomicUsize = AtomicUsize::new(0);
 
 thread_local! {
-    /// True while THIS DLL is the one calling an input API -- the periodic physical-key scan the
+    /// True while this DLL is the one calling an input API -- the periodic physical-key scan the
     /// consumption check needs. Without it the scan would observe itself and the census would
     /// report this DLL as a mod that binds every key on the keyboard.
     static IN_SELF_PROBE: Cell<bool> = const { Cell::new(false) };
@@ -179,7 +179,7 @@ pub fn mark_reported() {
     REPORTED.store(true, Ordering::Relaxed);
 }
 
-/// Take a copy of the tally for folding. The tally is NOT cleared: attribution depends on the
+/// Take a copy of the tally for folding. The tally is not cleared: attribution depends on the
 /// longest common prefix over every chain seen, so a later report must be able to reconsider
 /// earlier calls under a better-informed prefix.
 pub fn snapshot_tally() -> RawTally {
@@ -200,7 +200,7 @@ pub fn keyboard_snapshot() -> Option<[u8; KEYBOARD_STATE_BYTES]> {
 }
 
 // ============================================================================
-// THE DETOURS. Every one: chain, then record, then return the chain's value untouched.
+// the DETOURS. Every one: chain, then record, then return the chain's value untouched.
 // ============================================================================
 
 macro_rules! chain {
@@ -301,7 +301,7 @@ unsafe extern "system" fn hook_set_windows_hook_a(a: usize, b: usize, c: usize, 
 
 /// `IDirectInputDevice8::GetDeviceState(this, cbData, lpvData)`.
 ///
-/// The device class is decided by the BUFFER SIZE, not by which slot was hooked: devices of
+/// The device class is decided by the buffer size, not by which slot was hooked: devices of
 /// different classes can share one vtable implementation, so a mouse arrives at the keyboard slot
 /// with a 16-byte `DIMOUSESTATE`. Reading scancode offsets out of one finds noise.
 fn observe_device_state(hr: usize, size: usize, data: usize) {
@@ -354,7 +354,7 @@ unsafe extern "system" fn hook_xinput_get_state(a: usize, b: usize, c: usize, d:
 }
 
 // ============================================================================
-// INSTALLATION
+// installation
 // ============================================================================
 
 /// Which surfaces are armed, in the order they are attempted. Reported verbatim so a reader can
@@ -370,7 +370,7 @@ static XINPUT_DONE: AtomicBool = AtomicBool::new(false);
 /// [`crate::attribution`] has to strip exactly that frame -- clause 2 of its rule.
 ///
 /// `er_hook` knows the same name privately for its own module probe; this is the one place it has
-/// to be spelled twice, because [`HookRoute`] says WHICH union answered and not what it is called.
+/// to be spelled twice, because [`HookRoute`] says which union answered and not what it is called.
 const PRODUCT_MODULE_NAME: &str = "er_effects_rs.dll";
 
 /// Set when a detour was taken by the product's union rather than by this DLL's own.
@@ -592,7 +592,7 @@ pub fn try_install_dinput() -> bool {
         return false;
     };
     DINPUT_DONE.store(true, Ordering::SeqCst);
-    // WRITTEN OUT RATHER THAN ROUTED THROUGH `arm`, deliberately. This is the one prologue three
+    // Written out rather than routed through `arm`, deliberately. This is the one prologue three
     // other shells in this workspace also detour, so the registration it uses is a declared fact
     // recorded in the `[[shared]]` rows of scripts/me3-dll-conflicts.toml -- and
     // `check-shared-hook-rvas.py` proves the claim by looking for the registrar beside the

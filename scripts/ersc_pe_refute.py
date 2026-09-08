@@ -1,7 +1,7 @@
 """Independent read-only PE reader for ersc.dll (Seamless Co-op).
 
 Written to re-derive claims about the Steam matchmaking callback path from raw
-bytes without reusing another agent's helper modules. READ ONLY: never writes to
+bytes without reusing another agent's helper modules. Read ONLY: never writes to
 the DLL.
 """
 import struct

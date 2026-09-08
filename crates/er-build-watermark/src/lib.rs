@@ -23,7 +23,7 @@ use std::sync::Once;
 #[cfg(windows)]
 const DLL_PROCESS_ATTACH: u32 = 1;
 
-/// `DllMain` must return TRUE or the loader unloads us.
+/// `DllMain` must return true or the loader unloads us.
 #[cfg(windows)]
 const DLL_MAIN_SUCCESS: i32 = 1;
 
@@ -77,8 +77,8 @@ pub unsafe extern "system" fn DllMain(
                     // slept six seconds to yield the imgui context to a module with a richer UI;
                     // that sleep was removed for being synchronization, which
                     // `scripts/check-no-timeouts.py` rightly rejects, on the strength of a
-                    // measurement that said both overlays rendered side by side. THAT
-                    // MEASUREMENT WAS WRONG. On 2026-08-25 the user's live session had this
+                    // measurement that said both overlays rendered side by side. That
+                    // measurement was wrong. On 2026-08-25 the user's live session had this
                     // shell logging `first render display_width=3840 rows=14` while
                     // `er-net-effects` sat at `hudhook_render_count = 0` -- installed, never
                     // rendered, no error logged anywhere -- and their interactive bar had been
@@ -86,7 +86,7 @@ pub unsafe extern "system" fn DllMain(
                     // process really do double-hook `Present`, and the second one loses.
                     //
                     // Neither the sleep nor the eager claim is needed now: `overlay_host` makes
-                    // whoever arrives first the HOST and everyone else a GUEST that draws through
+                    // whoever arrives first the host and everyone else a guest that draws through
                     // it, so the outcome no longer depends on which DLL me3 mapped first.
                     // hudhook tolerates being installed before the swapchain exists; it hooks
                     // `Present` and waits for the game to call it.
@@ -111,7 +111,7 @@ pub extern "C" fn er_build_watermark_host_stub() -> i32 {
     1
 }
 
-// Same reason as every other overlay module: if THIS shell wins the context, guests have to be
+// Same reason as every other overlay module: if this shell wins the context, guests have to be
 // able to find it by name.
 #[cfg(windows)]
 er_build_watermark_core::export_overlay_host!();

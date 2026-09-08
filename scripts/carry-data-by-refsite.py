@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
-"""Carry a 1.16.2 DATA address onto 1.17 by the BYTE OFFSET of its reference inside a mapped
-function -- the fallback for when the instruction INDEX has shifted.
+"""Carry a 1.16.2 data address onto 1.17 by the byte offset of its reference inside a mapped
+function -- the fallback for when the instruction index has shifted.
 
-WHAT THIS FIXES
+What this fixes
 ---------------
 `map-data-rvas-1162-to-1170.py` locates a reference by counting instructions from the function
-entry, then reads the displacement of the instruction at the same INDEX in the 1.17 function.
+entry, then reads the displacement of the instruction at the same index in the 1.17 function.
 That is exact when the two bodies decode to the same instruction stream and useless the moment
 one extra instruction is inserted ahead of the reference: the index then names a different
 instruction and the tool reports `no displacement there`, which is how a global with a perfectly
-good reference ends up in the UNUSED list.
+good reference ends up in the unused list.
 
 Measured case: `MENU_PUMP_KICK_PTR_RVA 0x3b37c98`.  Its single reference sits at 1.16.2 `0x9b2c59`
-inside `0x9b24e0`, and the function map pairs `0x9b24e0 -> 0x9b3730`.  By INDEX (#485) the 1.17
-instruction has no displacement.  By BYTE OFFSET the reference sits at `+0x779` in both bodies --
+inside `0x9b24e0`, and the function map pairs `0x9b24e0 -> 0x9b3730`.  By index (#485) the 1.17
+instruction has no displacement.  By byte offset the reference sits at `+0x779` in both bodies --
 the same offset, the same mnemonic, the same operand shape -- and its 1.17 displacement reaches
 `0x3b3bca8`.
 
-WHY BYTE OFFSET IS SAFE HERE AND INDEX IS NOT
+Why byte offset is safe here and index is not
 ---------------------------------------------
 Neither is safe alone, which is why this asks for agreement rather than trusting the offset:
-the instruction found at the same byte offset must have the SAME MNEMONIC and the SAME OPERAND
-SHAPE as the 1.16.2 one, and it must be an instruction boundary in a decode started from the
+the instruction found at the same byte offset must have the same MNEMONIC and the same OPERAND
+shape as the 1.16.2 one, and it must be an instruction boundary in a decode started from the
 function's own entry -- not a byte picked out of the middle of a longer instruction.  When those
 hold, the two references are the same reference and its displacement is the answer.  When they
 do not, this reports nothing.  It never falls back to a delta.

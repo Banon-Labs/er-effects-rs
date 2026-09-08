@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Route every read of a game global through the build gate, mechanically.
 
-A stale CALL announces itself -- 1.16.2's `0x1405eefb0` is mid-instruction on 1.17 and the
-process dies on the spot. A stale READ does not. Every `.data` global moved between the
-builds, so `safe_read_usize(base + FOO_RVA)` SUCCEEDS on 1.17 and returns whatever now
+A stale call announces itself -- 1.16.2's `0x1405eefb0` is mid-instruction on 1.17 and the
+process dies on the spot. A stale read does not. Every `.data` global moved between the
+builds, so `safe_read_usize(base + FOO_RVA)` succeeds on 1.17 and returns whatever now
 occupies the old slot. Two of those were measured: a garbage repository pointer that made
 `CreateTpfResCap` divide by zero 894ms into boot, and a stale swapchain root that left a
 live process behind a black screen for twenty seconds.
@@ -13,53 +13,53 @@ already fault-tolerant and already have a "this global is not there" branch.
 `game_data_addr` returns 0 on refusal, the read fails, and the existing branch runs. So the
 rewrite is uniform and this script does it.
 
-It deliberately does NOT touch call sites. Zero is a safe address to fail a read at and a
+It deliberately does not touch call sites. Zero is a safe address to fail a read at and a
 fatal one to jump to; a `transmute` needs its author to say what refusing means.
 
-WHAT IT COULD NOT SEE UNTIL 2026-08-30, and why "0 sites" was not the same as "none left"
+What it could not see until 2026-08-30, and why "0 sites" was not the same as "none left"
 -----------------------------------------------------------------------------------------
-`check-stale-rva-calls.py` -- the gate that COUNTS what this tool CONVERTS -- was widened
+`check-stale-rva-calls.py` -- the gate that counts what this tool converts -- was widened
 three times that day, each time because a real ungated read had been standing in a spelling
 its regex did not admit. This sweeper was never widened with it, so the two diverged: the
 gate could see a site and the sweeper could not rewrite it, while the sweeper's own summary
 line said `would rewrite 0 read site(s)` -- which reads as "there is nothing left to do".
-Measured on this tree the same day: the widened pattern finds EIGHT reads the narrow one
+Measured on this tree the same day: the widened pattern finds eight reads the narrow one
 misses, in six crates. The narrow shape demanded, and the widening dropped:
 
-  A NAME.        `[A-Z0-9_]*RVA[A-Z0-9_]*` required the constant to be spelled `*RVA*`. What
-                 makes a read stale is the ARITHMETIC -- a module base plus a compile-time
+  A name.        `[A-Z0-9_]*RVA[A-Z0-9_]*` required the constant to be spelled `*RVA*`. What
+                 makes a read stale is the arithmetic -- a module base plus a compile-time
                  constant -- and the arithmetic does not care what the constant is called.
                  All eight sites this now sees are named `PE_*_LFANEW_OFFSET`, and see the
-                 value gate below for why they are then EXCLUDED rather than rewritten.
-  A LITERAL BASE `own_stepper_idx10_fallbacks!` hands the module base to its body as a macro
+                 value gate below for why they are then excluded rather than rewritten.
+  A literal base `own_stepper_idx10_fallbacks!` hands the module base to its body as a macro
                  metavariable, so every read inside reads `$base + FOO_RVA`. One `$` hid a
                  live 1.17 defect from the sibling gate.
-  NO QUALIFIER.  `jp::GAME_MAN_GLOBAL_RVA` and `ProfileLoadMenuRva::Slot as usize` are both
+  No qualifier.  `jp::GAME_MAN_GLOBAL_RVA` and `ProfileLoadMenuRva::Slot as usize` are both
                  `base + <constant>`; neither is a bare SCREAMING_SNAKE token.
 
-AND IT READ PROSE. The old matcher ran over RAW file text, so a `//` paragraph or a `///`
+And it read prose. The old matcher ran over raw file text, so a `//` paragraph or a `///`
 doc comment quoting `safe_read_usize(base + FOO_RVA)` was a rewrite target -- this tool
-EDITS, so a false positive here does not merely inflate a count, it rewrites an English
+edits, so a false positive here does not merely inflate a count, it rewrites an English
 sentence into code that describes nothing. `gate-stale-rva-calls.py`, its sibling, was
 measured doing exactly that on 2026-08-30 (two hits, both comments, one of them inside the
 paragraph explaining the hazard). Comments and string bodies are now blanked -- through the
-SHARED `rva_symbols.code_only`, so there is one dialect rather than a fourth -- and the
+shared `rva_symbols.code_only`, so there is one dialect rather than a fourth -- and the
 rewrite is spliced into the original text at the offsets that reader reports, which it can
 do because the blanking preserves offsets exactly.
 
-THE VALUE GATE, and why widening without it would have CORRUPTED six crates
+The value gate, and why widening without it would have corrupted six crates
 ---------------------------------------------------------------------------
 Dropping the name filter admits `safe_read_u32(base + PE_DOS_LFANEW_OFFSET)`: the DOS
 header's `0x3c` field, read to find the NT header. That is `base + constant` arithmetic and
 it does match. It is also not an address the game map knows: routing it through
-`game_data_addr` gets a REFUSAL, `game_data_addr` returns 0, and the crash logger's PE walk
+`game_data_addr` gets a refusal, `game_data_addr` returns 0, and the crash logger's PE walk
 reads offset 0x3c of nothing. Eight sites across six crates, every one of them a working PE
 header read, and the widened pattern hits all eight.
 
-So the exclusion is by VALUE -- below `.text`'s 0x1000, therefore fixed by the PE format and
+So the exclusion is by value -- below `.text`'s 0x1000, therefore fixed by the PE format and
 unable to move between builds -- and never by name, which is the same discipline
 `check-stale-rva-calls.py` applies to the same eight constants. A constant whose value cannot
-be resolved is REWRITTEN rather than skipped, because a read is fault-tolerant by
+be resolved is rewritten rather than skipped, because a read is fault-tolerant by
 construction: the failure mode of gating one that did not need it is a refusal, and the
 failure mode of skipping one that did is the silent wrong pointer this tool exists to remove.
 
@@ -77,9 +77,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-# ONE DIALECT, NOT FOUR. `code_only` lives in `scripts/rva_symbols.py` so this sweeper, its
+# One dialect, not four. `code_only` lives in `scripts/rva_symbols.py` so this sweeper, its
 # call-site sibling and both gates blank comments and string bodies the same way. A tool that
-# EDITS source must never match inside prose, and a local copy is how the four drift apart.
+# edits source must never match inside prose, and a local copy is how the four drift apart.
 try:  # noqa: E402 - repo-local; the sys.path line above is what makes it work
     from rva_symbols import code_only
     import rva_symbols
@@ -95,12 +95,12 @@ except ImportError as missing:  # a shared reader that cannot load must stop the
 # headers, whose layout the PE specification fixes and no game patch can move.
 PE_HEADER_LIMIT = 0x1000
 
-# THE BASE. `\$?` because a macro body spells it `$base`; the `$` is punctuation, and one of them
+# The base. `\$?` because a macro body spells it `$base`; the `$` is punctuation, and one of them
 # was enough to hide a live 1.17 crash from the sibling gate.
 BASE_EXPR = r"\$?(?:base|module_base|game_base|image_base)"
-# THE CONSTANT, whole, so the rewrite can put it back verbatim. `expr` keeps any module path and
+# The constant, whole, so the rewrite can put it back verbatim. `expr` keeps any module path and
 # any trailing `as usize` (the constant may be a `u32`, and dropping the cast is a type error);
-# `name` is the LAST path segment, which is what the log label should say.
+# `name` is the last path segment, which is what the log label should say.
 CONSTANT = (
     r"(?P<expr>(?:[A-Za-z_][A-Za-z0-9_]*\s*::\s*)*(?P<name>[A-Z][A-Za-z0-9_]*)"
     r"(?:\s+as\s+usize)?)"
@@ -112,11 +112,11 @@ READ = re.compile(
     r"\(\s*(?P<base>" + BASE_EXPR + r")\s*\+\s*" + CONSTANT + r"\s*(?P<tail>[,)])"
 )
 
-# THE MATCHER THIS REPLACED, frozen as a LITERAL. The controls in `--selftest` have to prove each
+# The MATCHER this replaced, frozen as a literal. The controls in `--selftest` have to prove each
 # widening is load-bearing, and a control the old pattern also catches would pass on the broken
 # tool and prove nothing.
 #
-# SPELLED OUT, NOT COMPOSED FROM `BASE_EXPR`/`CONSTANT`. A frozen control assembled from the live
+# Spelled out, not composed from `BASE_EXPR`/`CONSTANT`. A frozen control assembled from the live
 # pieces is not frozen: it widens whenever they widen, so "the old pattern misses this" silently
 # becomes "the new pattern misses this", which is the opposite claim. That is precisely how
 # `check-stale-rva-calls.py`'s controls nearly stopped proving anything.
@@ -148,7 +148,7 @@ def constant_values() -> dict:
 
 
 def is_finding(constant: str, values: dict) -> bool:
-    """Is `base + constant` a stale-address read? Unresolvable means YES -- see the module doc."""
+    """Is `base + constant` a stale-address read? Unresolvable means yes -- see the module doc."""
     value = values.get(constant)
     return value is None or value >= PE_HEADER_LIMIT
 
@@ -157,7 +157,7 @@ def rewrite(text: str, in_game_base: bool, values: dict | None = None) -> tuple[
     """`(rewritten text, sites rewritten, sites excluded by value)`.
 
     Matching runs over the comment/string-blanked view and the replacement is spliced into the
-    ORIGINAL text at the same offsets, which `code_only` guarantees are the same offsets. Doing
+    original text at the same offsets, which `code_only` guarantees are the same offsets. Doing
     it the other way round -- substituting into the blanked text -- would return a file with its
     documentation deleted, and doing it over the raw text rewrites the documentation instead.
     """
@@ -199,9 +199,9 @@ def selftest() -> int:
     check("a transmute call site was rewritten; only reads are safe to zero", rewrite(call, False)[1] == 0)
     check("rewriting is not idempotent", rewrite(want, False)[1] == 0)
 
-    # ---------------------------------------------------------------- POSITIVE CONTROLS
+    # ---------------------------------------------------------------- Positive controls
     # Each one is a spelling that stood in this tree, or in its sibling gate, while the narrow
-    # matcher reported nothing. Each is asserted VISIBLE to the current pattern and INVISIBLE to
+    # matcher reported nothing. Each is asserted visible to the current pattern and invisible to
     # the frozen legacy one -- a control both catch would pass on the broken tool.
 
     # 1 -- a constant that never carried the `_RVA` suffix. All eight sites the widening newly
@@ -211,7 +211,7 @@ def selftest() -> int:
     check("...control is vacuous unless the OLD name-filtered pattern misses it",
           LEGACY_READ.findall(unsuffixed) == [])
 
-    # 2 -- a MACRO BODY. One `$` hid a live 1.17 defect from `check-stale-rva-calls.py`.
+    # 2 -- a macro body. One `$` hid a live 1.17 defect from `check-stale-rva-calls.py`.
     macro_body = "let g = unsafe { safe_read_usize($base + WORLD_CHR_MAN_RVA) };"
     check("must see a read written against a macro metavariable base", len(READ.findall(macro_body)) == 1)
     check("...control is vacuous unless the OLD `$`-blind pattern misses it",
@@ -231,7 +231,7 @@ def selftest() -> int:
           n == 1
           and "game_data_addr(base, jp::GAME_MAN_GLOBAL_RVA, \"GAME_MAN_GLOBAL_RVA\")" in rewritten)
 
-    # 4 -- an ENUM VARIANT with an `as usize`, which is how er-title-flow spells most addresses.
+    # 4 -- an ENUM variant with an `as usize`, which is how er-title-flow spells most addresses.
     # The cast must survive: the discriminant is a `u32` and dropping it is a type error.
     enum_variant = "let g = unsafe { safe_read_usize(base + MenuTraceRva::MenuJobWait as usize) };"
     check("must see a read whose address is an enum variant", len(READ.findall(enum_variant)) == 1)
@@ -241,9 +241,9 @@ def selftest() -> int:
     check("the `as usize` cast survives the rewrite",
           n == 1 and "MenuTraceRva::MenuJobWait as usize," in rewritten)
 
-    # ---------------------------------------------------------------- PROSE
-    # A tool that EDITS must never match inside a comment or a string. This control runs the other
-    # way round from the four above: the OLD matcher CATCHES it (and would have rewritten an
+    # ---------------------------------------------------------------- Prose
+    # A tool that edits must never match inside a comment or a string. This control runs the other
+    # way round from the four above: the old matcher catches it (and would have rewritten an
     # English sentence), the new one must not. `gate-stale-rva-calls.py` was measured doing this.
     prose = (
         "/// Every global here used to be a bare `safe_read_usize(base + SOME_RVA)`.\n"
@@ -259,8 +259,8 @@ def selftest() -> int:
     check("the doc comment survives the rewrite byte for byte",
           n == 1 and "used to be a bare `safe_read_usize(base + SOME_RVA)`" in rewritten)
 
-    # ---------------------------------------------------------------- THE VALUE GATE
-    # A PE header field is excluded because of WHAT IT IS -- below `.text`, fixed by the file
+    # ---------------------------------------------------------------- The value gate
+    # A PE header field is excluded because of what it is -- below `.text`, fixed by the file
     # format -- and never because of what it is called. Without this the widening above would
     # have rewritten eight working PE walks into refusals across six crates.
     values = {"PE_DOS_LFANEW_OFFSET": 0x3C, "CSDLC_SINGLETON_RVA": 0x3D86BD8, "AMBIGUOUS": None}
@@ -273,9 +273,9 @@ def selftest() -> int:
     check("a PE header read is SEEN but not rewritten",
           n == 0 and out == header_read and [e[0] for e in excluded] == ["PE_DOS_LFANEW_OFFSET"])
 
-    # ---------------------------------------------------------------- NON-VACUITY, of the INPUTS
+    # ---------------------------------------------------------------- Non-VACUITY, of the inputs
     # Every set this tool reasons from is asserted non-empty and of the right order of magnitude
-    # BEFORE anything is concluded from it. `would rewrite 0 site(s)` is the goal state of a
+    # before anything is concluded from it. `would rewrite 0 site(s)` is the goal state of a
     # migration and a bug in a walk, and only one of those is good news; without these two the
     # summary line cannot tell them apart.
     repo = Path(__file__).resolve().parent.parent
@@ -329,7 +329,7 @@ def main() -> int:
     verb = "rewrote" if args.apply else "would rewrite"
     print(f"{verb} {total} read site(s) across {len(touched)} file(s)")
     if excluded:
-        # NOT a footnote. These are `base + constant` reads the pattern SEES; saying only
+        # Not a footnote. These are `base + constant` reads the pattern sees; saying only
         # "would rewrite 0" would let a walk that found nothing and a tree with nothing left to
         # find print the same line.
         print(

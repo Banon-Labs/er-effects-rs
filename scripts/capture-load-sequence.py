@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""Capture a load SEQUENCE (load1 boot -> load2 -> load3 ...) and DIFF the per-load settled semaphores.
+"""Capture a load sequence (load1 boot -> load2 -> load3 ...) and diff the per-load settled semaphores.
 
-Purpose (user 2026-07-18): the freeze is DETERMINISTIC on the SECOND load and RECOVERS on the third
+Purpose (user 2026-07-18): the freeze is DETERMINISTIC on the second load and recovers on the third
 (load1 renders, load2 freezes, load3 renders). This is a stale-state/parity bug: load1 leaves some
 state stale that breaks load2's render handoff; load2's teardown clears it so load3 is fine. The
-render-gated proof monitor STOPS at the frozen load2, so it can never reach load3. This driver instead
-triggers each subsequent load on a TIMER (regardless of render success), snapshots the settled RAM
+render-gated proof monitor stops at the frozen load2, so it can never reach load3. This driver instead
+triggers each subsequent load on a timer (regardless of render success), snapshots the settled RAM
 semaphores at each load, and DIFFs consecutive loads -- the field(s) that differ between the frozen
 load2 and the good load3 name the stale element (the bug).
 
-It does NOT gate on render success and does NOT judge pass/fail -- it is a pure diagnostic capture.
+It does not gate on render success and does not judge pass/fail -- it is a pure diagnostic capture.
 Zero simulated input: switches are triggered by writing the next (file,)slot to the DLL control files,
 exactly like multi-load-proof-monitor.py's programmatic drive.
 
 Usage:
   capture-load-sequence.py --artifact-dir GAME_DIR --switch-slot-file F [--switch-file-override F]
       --slots "1,6" [--boot-timeout 120] [--per-load 55] [--report OUT.md]
-  # slots = the reload targets AFTER boot; e.g. "1,6" does boot -> load2(slot1) -> load3(slot6).
+  # slots = the reload targets after boot; e.g. "1,6" does boot -> load2(slot1) -> load3(slot6).
 """
 from __future__ import annotations
 
@@ -100,7 +100,7 @@ def main() -> int:
     files = [s.strip() for s in args.switch_files.split(",")] if args.switch_files.strip() else []
     snapshots = []  # (label, fields)
 
-    # LOAD 1 (boot): wait for the boot autoload to reach in-world, then settle.
+    # Load 1 (boot): wait for the boot autoload to reach in-world, then settle.
     t0 = time.time()
     while time.time() - t0 < args.boot_timeout:
         t = read_tel(telem)
@@ -111,7 +111,7 @@ def main() -> int:
     print(f"load1-boot settled: {snapshots[-1][1].get('oracle_char_name')} "
           f"render_ready={snapshots[-1][1].get('oracle_player_render_ready')}", flush=True)
 
-    # LOAD 2..N: trigger each on a timer regardless of render success, then settle + snapshot.
+    # Load 2..N: trigger each on a timer regardless of render success, then settle + snapshot.
     for i, slot in enumerate(slots):
         try:
             if args.switch_file_override is not None and i < len(files) and files[i]:
@@ -127,7 +127,7 @@ def main() -> int:
               f"mms={snap.get('oracle_stepfinish_mms_state')} "
               f"draw_group={snap.get('oracle_chr_draw_group_enabled')}", flush=True)
 
-    # DIFF consecutive loads (the frozen-vs-good comparison names the stale element).
+    # Diff consecutive loads (the frozen-vs-good comparison names the stale element).
     lines = ["# Load-sequence semaphore capture + diff", ""]
     lines.append("| field | " + " | ".join(lbl for lbl, _ in snapshots) + " |")
     lines.append("|---|" + "|".join(["---"] * len(snapshots)) + "|")

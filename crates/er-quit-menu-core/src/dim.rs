@@ -1,58 +1,58 @@
 // The screen dim that covers the game while the OS-native save picker is up.
 //
-// WHY THIS EXISTS AS A SEPARATE WINDOW AND NOT A GAME-RENDER-PATH OVERLAY. `save_picker_os_dialog`
-// calls `GetOpenFileNameW`/`GetSaveFileNameW` INLINE on the thread that owns the menu pump, and that
+// Why this exists as a separate window and not a game-render-path overlay. `save_picker_os_dialog`
+// calls `GetOpenFileNameW`/`GetSaveFileNameW` inline on the thread that owns the menu pump, and that
 // is deliberate (see the threading note at the top of that file). The consequence is measured, not
 // theorised: in the user's live run product-continue-direct-20260730-075054 the dialog was up for
-// 17.2 seconds (OPENED +35773ms -> CLOSED +53001ms, cancelled) and the game emitted ZERO game-side
-// log lines across the whole window -- one gap alone was 10472ms of nothing. Present is NOT called
+// 17.2 seconds (opened +35773ms -> closed +53001ms, cancelled) and the game emitted zero game-side
+// log lines across the whole window -- one gap alone was 10472ms of nothing. Present is not called
 // while the dialog is up. So there is no frame to draw into: a Present hook, a CSTask, a MenuJob and
 // every other per-frame game path are all frozen for the dialog's entire lifetime. An overlay that
-// can ANIMATE while that is true must live on a thread WE own, in a window WE own.
+// can animate while that is true must live on a thread we own, in a window we own.
 //
-// WHY GDI AND NOT A SECOND D3D12 DEVICE. `er-loading-portrait-core`'s `native_overlay` proves the window
+// Why GDI and not a second D3D12 device. `er-loading-portrait-core`'s `native_overlay` proves the window
 // half of this shape (topmost borderless, own swapchain), but it brings up a whole D3D12 device. Two
-// reasons not to copy that here. First, an opaque swapchain cannot DIM -- it can only replace, and
+// reasons not to copy that here. First, an opaque swapchain cannot dim -- it can only replace, and
 // the user asked to still see the game underneath. A layered window with per-pixel alpha composites
 // black at partial alpha, which is what "dim" actually means. Second, this overlay is created while
 // the game thread is parked inside comdlg32; standing up a vkd3d device at that exact moment adds
 // driver and allocator surface for no benefit. `UpdateLayeredWindow` over a DIB section is pure GDI,
 // needs no device, and the compositor does the blend.
 //
-// Z-ORDER (the requirement that is easiest to get backwards). We must sit ABOVE the game and BELOW
-// the dialog. That is why this window is NOT `WS_EX_TOPMOST`: the topmost band beats every ordinary
+// Z-order (the requirement that is easiest to get backwards). We must sit above the game and below
+// the dialog. That is why this window is not `WS_EX_TOPMOST`: the topmost band beats every ordinary
 // window, so a topmost dim would cover the very dialog the user has to click.
 //
-// THE ORDERING IS NOW OWNERSHIP, NOT TIMING (2026-07-31, user-reported: "the file picker must be on
+// The ordering is now ownership, not timing (2026-07-31, user-reported: "the file picker must be on
 // top of the blur", and "the blur must be attached to Elden Ring so I can't move it
 // independently"). The previous shape raised to `HWND_TOP` once and relied on comdlg32's window
-// being created AFTER that raise. That claim was never enforced by anything: `arm` published a
+// being created after that raise. That claim was never enforced by anything: `arm` published a
 // generation and returned immediately, the caller went straight into `GetOpenFileNameW`, and the
-// raise was issued by the OVERLAY thread up to a whole frame period (33 ms) later -- comfortably
-// long enough for the dialog to already exist, at which point the raise puts the cover ON TOP OF
+// raise was issued by the overlay thread up to a whole frame period (33 ms) later -- comfortably
+// long enough for the dialog to already exist, at which point the raise puts the cover on top of
 // the dialog. Two changes replace that race with window-manager invariants:
 //
-//  1. THE COVER IS AN OWNED POPUP OF THE ER WINDOW (`attach_to_game`). An owned window is always
+//  1. The cover is an owned POPUP of the ER window (`attach_to_game`). An owned window is always
 //     above its owner, so the cover can no longer fall behind the game whatever the z-order does;
 //     and Wine maps the owner onto the native transient/parent relation (X11 `WM_TRANSIENT_FOR`,
 //     Wayland `xdg_toplevel` parent), which is what tells a compositor this window belongs to the
 //     game rather than being something to drag around on its own.
-//  2. THE DIALOG IS OWNED BY THE COVER (`os_dialog_owner`), so the full chain is
+//  2. The dialog is owned by the cover (`os_dialog_owner`), so the full chain is
 //     game < cover < dialog and no raise of ours can get in front of comdlg32.
 //
-// NOT `WS_CHILD`, which would be the strongest "attached" of all -- genuinely clipped to and moved
-// with the parent. Two reasons it is the wrong tool here. `UpdateLayeredWindow` wants a TOP-LEVEL
-// layered window; layered CHILD windows are a much later and much thinner platform feature, and
+// Not `WS_CHILD`, which would be the strongest "attached" of all -- genuinely clipped to and moved
+// with the parent. Two reasons it is the wrong tool here. `UpdateLayeredWindow` wants a top-level
+// layered window; layered child windows are a much later and much thinner platform feature, and
 // this runs on Wine's reimplementation, not on Windows. And a GDI child window does not composite
 // over a D3D12 swapchain -- the parent presents straight past it. An owned popup keeps its own
 // surface, which is the thing that actually has to work, and still gets the attachment.
 //
-// `arm` now BLOCKS on an atomic handshake until the overlay thread reports the cover up at the
+// `arm` now blocks on an atomic handshake until the overlay thread reports the cover up at the
 // game's geometry, so "the cover exists and is positioned before comdlg32 is called" is true by
 // construction rather than by hope -- which also matters because comdlg32 centres the dialog on its
 // owner, and centring on a not-yet-positioned 1x1 window would drop the picker in the desktop's
 // top-left corner. `SAVE_PICKER_DIM_Z_*` still samples the resulting order every frame so the claim
-// stays checkable from telemetry instead of from a screenshot -- scored as TWO counters, never one,
+// stays checkable from telemetry instead of from a screenshot -- scored as two counters, never one,
 // because "the cover is behind the game" (invisible, cosmetic) and "the cover is in front of the
 // dialog" (the defect this whole ownership chain exists to remove) are opposite failures and a
 // single fused total reports neither. See `SAVE_PICKER_DIM_Z_BEHIND_GAME` for the run that proved
@@ -60,7 +60,7 @@
 //
 // The window is `WS_EX_NOACTIVATE | WS_EX_TRANSPARENT`, so it never takes focus and never eats a
 // click, and its class name starts with `ErEffects` so `game_main_window`'s finder keeps skipping
-// it -- which is what keeps the OWNER of the cover, and the input-drive target, the real game
+// it -- which is what keeps the owner of the cover, and the input-drive target, the real game
 // window even though the dialog's own owner is now the cover.
 
 /// Everything that owns the dim window lives in its own nested module: this code needs ~30
@@ -140,7 +140,7 @@ pub mod picker_dim {
     /// One blocking slice of the arm handshake, and how many of them [`arm`] will sit through
     /// before giving up and letting the dialog open with no cover to own it.
     ///
-    /// A BOUNDED COUNT OF CHANNEL RECEIVES, not a wall-clock deadline and emphatically not a spin.
+    /// A bounded count of channel receives, not a wall-clock deadline and emphatically not a spin.
     /// The arm returns the instant the overlay thread acknowledges -- one frame period plus the
     /// full-screen DIB fill, in the normal case -- because each slice is a `recv_timeout` that the
     /// acknowledgement wakes immediately. The count exists so a wedged or never-started overlay
@@ -161,7 +161,7 @@ pub mod picker_dim {
 
     /// Geometry the game thread captured from the ER window at arm time, published for the overlay
     /// thread. Packed as four separate atomics rather than a lock because the arming thread is about
-    /// to BLOCK inside comdlg32 -- it must not be able to hold anything the overlay thread needs.
+    /// to block inside comdlg32 -- it must not be able to hold anything the overlay thread needs.
     static DIM_X: AtomicUsize = AtomicUsize::new(0);
     static DIM_Y: AtomicUsize = AtomicUsize::new(0);
     static DIM_W: AtomicUsize = AtomicUsize::new(0);
@@ -174,21 +174,21 @@ pub mod picker_dim {
     /// The generation the overlay thread has finished SHOWING: window owned by the game, positioned
     /// over its rect, raised, and carrying a pushed layer. The arming thread waits on this.
     ///
-    /// This is the whole synchronisation between the two threads and it is deliberately ONE ATOMIC.
+    /// This is the whole synchronisation between the two threads and it is deliberately one atomic.
     /// The arming thread is about to park inside comdlg32, so it must not take a lock the overlay
     /// thread could need; and it must not make a cross-thread USER32 call either -- `SetWindowPos`
     /// or `EnableWindow` into a window another thread owns blocks until that thread pumps, which
-    /// with the cover now OWNED BY the game window (whose thread is the arming thread) is a
+    /// with the cover now owned by the game window (whose thread is the arming thread) is a
     /// deadlock shape. Reading an atomic can do neither.
     static DIM_SHOWN_GENERATION: AtomicUsize = AtomicUsize::new(usize::MAX);
 
     /// The overlay thread's acknowledgement channel: it sends each generation it has finished
     /// showing, and [`wait_for_cover`] receives.
     ///
-    /// STATE IS THE ATOMIC ABOVE; THIS IS ONLY THE WAKEUP, and that split is what makes the
+    /// State is the atomic above; This is only the WAKEUP, and that split is what makes the
     /// handshake correct rather than merely fast. A pure channel handshake loses an acknowledgement
     /// that lands before the arming thread starts listening; a pure polled flag is a sleep wearing a
-    /// hat. Checking `DIM_SHOWN_GENERATION` BEFORE every receive gets both properties: the arm
+    /// hat. Checking `DIM_SHOWN_GENERATION` before every receive gets both properties: the arm
     /// cannot miss an early ack, and it never busy-waits for a late one.
     ///
     /// Both halves sit behind their own `Mutex` because `Sender`/`Receiver` are `Send` but not
@@ -206,14 +206,14 @@ pub mod picker_dim {
 
     /// One-shot latch for the overlay thread.
     ///
-    /// The thread is brought up AT ATTACH by [`install`], not on the first arm, and then lives for
+    /// The thread is brought up at attach by [`install`], not on the first arm, and then lives for
     /// the process. Window + DIB creation is the expensive part, and doing it inside `arm` would put
     /// it on the critical path of the user's very first click -- the one case where the cover is
     /// most needed and least likely to be ready in time. `arm` still calls `start_thread_once` as a
     /// backstop so a session that somehow skipped install is degraded, not broken.
     static DIM_THREAD_STARTED: AtomicUsize = AtomicUsize::new(0);
 
-    /// Stand the overlay thread up. Idempotent, and a no-op for sessions running the IN-GAME picker,
+    /// Stand the overlay thread up. Idempotent, and a no-op for sessions running the in-game picker,
     /// which draws its own surface through the game's renderer and needs no cover at all.
     pub fn install() {
         if !crate::os_native_picker_active() {
@@ -222,7 +222,7 @@ pub mod picker_dim {
         start_thread_once();
     }
 
-    /// RAII bracket for the dim. Its `Drop` is the ONLY disarm path, which is what makes an unwind
+    /// RAII bracket for the dim. Its `Drop` is the only disarm path, which is what makes an unwind
     /// out of comdlg32 -- or any early `return` added to the dialog code later -- unable to strand a
     /// fullscreen dim over a game the user can still play.
     pub struct PickerDimGuard {
@@ -267,7 +267,7 @@ pub mod picker_dim {
             ));
             return None;
         }
-        // GEOMETRY IS THE ER WINDOW, NEVER THE DESKTOP. Covering the whole desktop would dim the
+        // Geometry is the ER window, never the desktop. Covering the whole desktop would dim the
         // user's other monitors and any application they have open next to the game.
         DIM_X.store(rect.left as isize as usize, Ordering::SeqCst);
         DIM_Y.store(rect.top as isize as usize, Ordering::SeqCst);
@@ -275,7 +275,7 @@ pub mod picker_dim {
         DIM_H.store(height, Ordering::SeqCst);
         SAVE_PICKER_DIM_GAME_HWND.store(hwnd.0 as usize, Ordering::SeqCst);
         start_thread_once();
-        // BASELINE THE CUMULATIVE FRAME COUNT so the disarm can report THIS arm rather than the
+        // Baseline the cumulative frame count so the disarm can report this arm rather than the
         // process total. Taken before the generation bump, which is the only point at which the
         // overlay thread is guaranteed not to have pushed a frame belonging to the new arm yet.
         SAVE_PICKER_DIM_FRAMES_AT_ARM.store(
@@ -288,8 +288,8 @@ pub mod picker_dim {
         let guard = PickerDimGuard {
             armed_at: Instant::now(),
         };
-        // WAIT FOR THE COVER BEFORE RETURNING, because the caller's very next act is to block
-        // inside comdlg32 -- and comdlg32 both stacks the dialog against its owner and CENTRES it
+        // Wait for the cover before returning, because the caller's very next act is to block
+        // inside comdlg32 -- and comdlg32 both stacks the dialog against its owner and centres it
         // on that owner. Returning early is what left the two unordered.
         let ready = wait_for_cover(generation);
         crate::append_autoload_debug(format_args!(
@@ -309,7 +309,7 @@ pub mod picker_dim {
     /// Block until the overlay thread acknowledges `generation`, or until the deadline. `true` when
     /// the cover is genuinely up (owned, positioned over the game, layer pushed).
     ///
-    /// The guard is constructed BEFORE this runs, so an early return or a panic here still disarms.
+    /// The guard is constructed before this runs, so an early return or a panic here still disarms.
     fn wait_for_cover(generation: usize) -> bool {
         let started = Instant::now();
         let record = |started: &Instant| {
@@ -336,7 +336,7 @@ pub mod picker_dim {
                 return false;
             }
             // Blocks until the overlay thread acknowledges a generation or the slice expires. The
-            // VALUE is ignored on purpose -- it is a wakeup, and the loop re-reads the authoritative
+            // value is ignored on purpose -- it is a wakeup, and the loop re-reads the authoritative
             // atomic above, so a stale ack from a previous arm costs one extra iteration and cannot
             // be mistaken for this one.
             let _ = acks.recv_timeout(ARM_COVER_SLICE);
@@ -353,7 +353,7 @@ pub mod picker_dim {
         false
     }
 
-    /// The cover's window when it is ACTUALLY UP for the current arm -- the handle a blocking OS
+    /// The cover's window when it is actually up for the current arm -- the handle a blocking OS
     /// dialog should take as its `hwndOwner`, because an owned window is always above its owner.
     ///
     /// Null when there is no cover to own the dialog to: never armed (the missing-save boot arm
@@ -380,7 +380,7 @@ pub mod picker_dim {
         }
         SAVE_PICKER_DIM_TEARDOWN_REASON.store(reason, Ordering::SeqCst);
         SAVE_PICKER_DIM_DISARM_COUNT.fetch_add(1, Ordering::SeqCst);
-        // PER-ARM, NOT CUMULATIVE. `SAVE_PICKER_DIM_FRAMES` counts the whole process, and printing
+        // Per-arm, not cumulative. `SAVE_PICKER_DIM_FRAMES` counts the whole process, and printing
         // it raw here made every disarm line overstate its own arm -- a four-open run logged
         // 108/241/362/423 for arms that had pushed 108/133/121/61. Subtracting the arm-time
         // baseline is what makes "with N frames pushed" true of the interval the line describes.
@@ -519,7 +519,7 @@ pub mod picker_dim {
     /// Composite the golden mark at `intensity` on top of the dim, as PREMULTIPLIED BGRA.
     ///
     /// `UpdateLayeredWindow` with `AC_SRC_ALPHA` blends `out = src + dst * (1 - alpha)`, and it reads
-    /// the colour channels as ALREADY multiplied by alpha. Getting that wrong is invisible in code
+    /// the colour channels as already multiplied by alpha. Getting that wrong is invisible in code
     /// review and shows up as a bright halo box around the indicator, so the algebra is pinned here:
     /// at `intensity == 0` the result is exactly the flat dim, at `intensity == 1` it is opaque gold,
     /// and in between the alpha rises from the dim's toward opaque so the glow adds light rather than
@@ -537,24 +537,24 @@ pub mod picker_dim {
         )
     }
 
-    /// Make the cover an OWNED POPUP of the ER window, and PROVE it took.
+    /// Make the cover an owned POPUP of the ER window, and prove it took.
     ///
-    /// For a `WS_POPUP`, `GWLP_HWNDPARENT` sets the OWNER, not a parent -- the window keeps its own
+    /// For a `WS_POPUP`, `GWLP_HWNDPARENT` sets the owner, not a parent -- the window keeps its own
     /// top-level surface (which `UpdateLayeredWindow` needs) and gains two relations we want:
     /// the window manager keeps an owned window above its owner, and Wine translates the owner into
     /// the native transient/parent relation a compositor uses to treat one window as belonging to
     /// another rather than as a free-floating application window the user may drag away.
     ///
-    /// Called from the OVERLAY thread on the OVERLAY's own window, while that window is still
+    /// Called from the overlay thread on the overlay's own window, while that window is still
     /// hidden. Both halves matter: a same-thread `SetWindowLongPtrW` cannot block the game thread
     /// that is about to park in comdlg32, and Wine reads the owner when it maps the surface, so
     /// setting it before the first show is what gets the relation onto the native window.
     ///
-    /// `SetWindowLongPtrW` returns the PREVIOUS value, and `0` means both "there was no owner" and
-    /// "the call failed" -- so the result is established by READING THE OWNER BACK, never from the
+    /// `SetWindowLongPtrW` returns the previous value, and `0` means both "there was no owner" and
+    /// "the call failed" -- so the result is established by reading the owner back, never from the
     /// return. Idempotent: a no-op once the owner already matches.
     fn attach_to_game(hwnd: HWND, game: HWND) {
-        // A window that owns ITSELF is a cycle in the z-order graph, and the cheapest place to make
+        // A window that owns itself is a cycle in the z-order graph, and the cheapest place to make
         // that impossible is here. It should already be impossible -- `game_main_window` skips every
         // class beginning with `ErEffects`, which is exactly why this window's class is named that
         // way -- but "should already be" is what that filter said before it was the only thing
@@ -618,16 +618,16 @@ pub mod picker_dim {
         current != target
     }
 
-    /// Record the furthest bring-up stage reached. A HIGH-WATER mark rather than a plain store: the
+    /// Record the furthest bring-up stage reached. A high-water mark rather than a plain store: the
     /// render loop re-enters the surface-build branch on every size change, and a plain store there
-    /// made a perfectly healthy run report a stage BELOW the one it had already passed.
+    /// made a perfectly healthy run report a stage below the one it had already passed.
     fn stage_at_least(stage: usize) {
         SAVE_PICKER_DIM_STAGE.fetch_max(stage, Ordering::SeqCst);
     }
 
     /// Top-down z-order ordinal of `target`, or `usize::MAX` if it is not in the chain.
     ///
-    /// Deliberately records ONLY the ordinals of the three handles we already know (ours, the game's,
+    /// Deliberately records only the ordinals of the three handles we already know (ours, the game's,
     /// the dialog's). It never reads a title or a class off anything else, so it cannot leak what
     /// else the user has open.
     fn z_index_of(target: HWND) -> usize {
@@ -660,7 +660,7 @@ pub mod picker_dim {
     /// below the dialog" -- no screenshot, and no human looking at one.
     ///
     /// `since_arm_ms` is how long this arm's cover has been up, and it is recorded with the first
-    /// break of each kind so a reader can see the PHASE of the failure inside the arm rather than
+    /// break of each kind so a reader can see the phase of the failure inside the arm rather than
     /// only a total.
     fn sample_z_order(self_hwnd: HWND, game_hwnd: HWND, since_arm_ms: usize) {
         let foreground = unsafe { GetForegroundWindow() };
@@ -679,7 +679,7 @@ pub mod picker_dim {
         SAVE_PICKER_DIM_Z_SELF.store(self_z, Ordering::SeqCst);
         SAVE_PICKER_DIM_Z_GAME.store(game_z, Ordering::SeqCst);
         SAVE_PICKER_DIM_Z_FOREIGN.store(foreign_z, Ordering::SeqCst);
-        // Score the contract EVERY frame and keep the failures, because the three fields above only
+        // Score the contract every frame and keep the failures, because the three fields above only
         // survive one frame -- and the frame that survives is the one sampled as the dialog is
         // already tearing down, which is the least representative moment of the whole run.
         score_z_sample(
@@ -690,7 +690,7 @@ pub mod picker_dim {
         );
     }
 
-    /// The five telemetry fields describing ONE half of the stacking contract: how many frames
+    /// The five telemetry fields describing one half of the stacking contract: how many frames
     /// broke it, and the first sample that did.
     ///
     /// Bundled into a struct so the scoring is one function that takes both halves symmetrically
@@ -722,9 +722,9 @@ pub mod picker_dim {
 
     /// Score one z-order sample into the two records.
     ///
-    /// SCORED AS TWO INDEPENDENT FAILURES, never fused into one total: they are opposite defects
+    /// Scored as two independent failures, never fused into one total: they are opposite defects
     /// (an invisible cover vs. a cover over the dialog) and one number can report neither. A frame
-    /// that breaks BOTH increments BOTH -- see `SAVE_PICKER_DIM_Z_BEHIND_GAME` for the run that
+    /// that breaks both increments both -- see `SAVE_PICKER_DIM_Z_BEHIND_GAME` for the run that
     /// proved the fused shape unusable.
     fn score_z_sample(
         behind_game: &ZBreakRecord,
@@ -742,15 +742,15 @@ pub mod picker_dim {
     }
 
     impl ZBreakRecord {
-        /// Count this break and, if it is the FIRST of its kind, latch the sample and its phase.
+        /// Count this break and, if it is the first of its kind, latch the sample and its phase.
         ///
-        /// FIRST-WINS AND UNOVERWRITABLE, which is the whole point: the interesting sample is the
-        /// one that shows the transition INTO failure, and a plain store would decay into the same
+        /// First-wins and UNOVERWRITABLE, which is the whole point: the interesting sample is the
+        /// one that shows the transition into failure, and a plain store would decay into the same
         /// tear-down-moment snapshot the counters exist to avoid. `first_self` is the claim ticket
         /// -- its `compare_exchange` off the `usize::MAX` sentinel succeeds exactly once, and only
         /// that winner writes the other three fields, so the four can never describe different
         /// frames. The sentinel cannot collide with a real value because every break requires a
-        /// KNOWN `self_z`.
+        /// known `self_z`.
         fn record(&self, (self_z, game_z, foreign_z): (usize, usize, usize), since_arm_ms: usize) {
             self.count.fetch_add(1, Ordering::SeqCst);
             if self
@@ -767,14 +767,14 @@ pub mod picker_dim {
     }
 
     /// How one z-order sample breaks the cover's contract, as the two answers SEPARATELY:
-    /// `(behind_the_game, covering_the_dialog)`. The dim must be ABOVE the game and BELOW the
+    /// `(behind_the_game, covering_the_dialog)`. The dim must be above the game and below the
     /// dialog (smaller ordinal = nearer the front), and the two ways to get that wrong are opposite
     /// defects: behind the game the cover is merely invisible, in front of the dialog it hides the
-    /// control the user has to click. They are returned apart -- rather than OR'd into one verdict,
+    /// control the user has to click. They are returned apart -- rather than or'd into one verdict,
     /// which is what this function used to do -- because a caller that fuses them cannot tell a
     /// cosmetic miss from the failure the ownership chain exists to prevent.
     ///
-    /// Unknown ordinals (`usize::MAX`) are not violations of EITHER half -- a window legitimately
+    /// Unknown ordinals (`usize::MAX`) are not violations of either half -- a window legitimately
     /// drops out of the chain while it is being created or destroyed, and counting that would drown
     /// the two failures that actually matter. Note this excludes the benign reading of a non-zero
     /// count: a frame before the dialog exists scores `foreign_z == usize::MAX` and is not counted,
@@ -909,7 +909,7 @@ pub mod picker_dim {
             hwnd.0 as usize
         ));
 
-        // BRING-UP SELF-TEST. `UpdateLayeredWindow` is the one call in this feature that a Wine build
+        // Bring-up self-test. `UpdateLayeredWindow` is the one call in this feature that a Wine build
         // could plausibly not support the way we need, and the moment we find out must not be the
         // moment a user's dialog opens. Push a single fully-transparent 1x1 layer now, while the
         // window is still hidden: invisible, harmless, and it turns "we hope layered windows work
@@ -954,7 +954,7 @@ pub mod picker_dim {
         let mut bitmap: Option<DimBitmap> = None;
         let mut surface: Option<DimSurface> = None;
         let mut shown = false;
-        // The next push must upload the WHOLE cover: set whenever there is new content everywhere
+        // The next push must upload the whole cover: set whenever there is new content everywhere
         // (first frame after a show, or after a size change rebuilt the surface).
         let mut full_push = true;
         let mut acted_generation = DIM_GENERATION.load(Ordering::SeqCst);
@@ -980,7 +980,7 @@ pub mod picker_dim {
                 continue;
             }
 
-            // FOLLOW THE GAME, don't trust the arm-time snapshot. The user's report is that the
+            // Follow the game, don't trust the arm-time snapshot. The user's report is that the
             // cover can be dragged away and "the game stays in place", so the target rect has to be
             // re-read from the ER window every frame rather than frozen at arm: that way a cover
             // the compositor moved is measurably off-target and gets snapped back below, and a game
@@ -1020,15 +1020,15 @@ pub mod picker_dim {
             };
 
             if !shown || generation != acted_generation {
-                // OWN FIRST, THEN SHOW. Wine reads the owner when it maps the surface, so the
+                // Own first, then show. Wine reads the owner when it maps the surface, so the
                 // attachment has to be in place before the window is made visible or the native
                 // transient/parent relation is never established for this show.
                 attach_to_game(
                     hwnd,
                     HWND(SAVE_PICKER_DIM_GAME_HWND.load(Ordering::SeqCst) as *mut c_void),
                 );
-                // ONE z-order raise, and only here. `arm` blocks until this frame acknowledges, so
-                // this genuinely does run before comdlg32's window exists -- which it did NOT
+                // One z-order raise, and only here. `arm` blocks until this frame acknowledges, so
+                // this genuinely does run before comdlg32's window exists -- which it did not
                 // before the handshake, and re-raising per frame would in any case jump us back
                 // above the dialog the moment it opened.
                 let _ = unsafe {
@@ -1047,11 +1047,11 @@ pub mod picker_dim {
                 shown_at = Instant::now();
                 acted_generation = generation;
             } else {
-                // PIN IT TO THE GAME. Ownership is what a window manager is supposed to honour, but
+                // Pin it to the game. Ownership is what a window manager is supposed to honour, but
                 // a Wayland compositor with a move-modifier can still drag any toplevel, and the
                 // user reported doing exactly that. Snap back whenever our own rect has drifted off
                 // the ER window's -- with SWP_NOZORDER, so a correction can never lift the cover
-                // back above the dialog, and only when it HAS drifted, because re-issuing
+                // back above the dialog, and only when it has drifted, because re-issuing
                 // `SetWindowPos` every frame is how a cover starts to flicker.
                 let mut own = RECT::default();
                 if unsafe { GetWindowRect(hwnd, &mut own) }.is_ok()
@@ -1113,10 +1113,10 @@ pub mod picker_dim {
                 SourceConstantAlpha: 255,
                 AlphaFormat: AC_SRC_ALPHA as u8,
             };
-            // COST. A full push re-uploads the whole cover -- on the measured 3846x2172 window that
+            // Cost. A full push re-uploads the whole cover -- on the measured 3846x2172 window that
             // is 33 MB per frame, and it held the pulse to ~9fps in the first live run. Only the
             // indicator's small box actually changes between frames, so animation frames push just
-            // that rectangle via `prcDirty` and the FULL surface is uploaded only when there is
+            // that rectangle via `prcDirty` and the full surface is uploaded only when there is
             // genuinely new content everywhere: the first frame after a show or a size change.
             let dirty = RECT {
                 left: x0 as i32,
@@ -1159,14 +1159,14 @@ pub mod picker_dim {
                 SAVE_PICKER_DIM_UPDATE_FAILS.fetch_add(1, Ordering::SeqCst);
             }
             // `shown_at` is re-stamped by the show branch above on every arm, so its elapsed time
-            // is the offset INTO THIS ARM -- which is what makes a recorded first break placeable
+            // is the offset into this arm -- which is what makes a recorded first break placeable
             // as a bring-up transient or as a stacking that never took.
             sample_z_order(
                 hwnd,
                 HWND(SAVE_PICKER_DIM_GAME_HWND.load(Ordering::SeqCst) as *mut c_void),
                 shown_at.elapsed().as_millis().min(usize::MAX as u128) as usize,
             );
-            // ACK THE ARM. Published only here -- AFTER the window is owned, positioned, raised and
+            // ACK the arm. Published only here -- After the window is owned, positioned, raised and
             // carrying a pushed layer -- because that is exactly the state `arm` is waiting to be
             // able to promise comdlg32: an owner that already exists at the game's geometry.
             // Published whether or not the push succeeded: a cover that cannot draw is a cosmetic
@@ -1191,7 +1191,7 @@ pub mod picker_dim {
         use super::*;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
-        /// At zero intensity the indicator must composite to EXACTLY the flat dim, and at full
+        /// At zero intensity the indicator must composite to exactly the flat dim, and at full
         /// intensity to opaque gold. If the first fails the mark leaves a visible rectangle of
         /// slightly-wrong dim around itself; if the second fails it never reads as a light source.
         #[test]
@@ -1220,7 +1220,7 @@ pub mod picker_dim {
             }
         }
 
-        /// The cover must never become MORE transparent than the flat dim: the indicator adds light,
+        /// The cover must never become more transparent than the flat dim: the indicator adds light,
         /// it does not punch a hole through which the game is brighter than its surroundings.
         #[test]
         fn the_cover_never_thins_below_the_dim() {
@@ -1230,7 +1230,7 @@ pub mod picker_dim {
             }
         }
 
-        /// The pulse has to actually MOVE -- that is the entire point of the feature -- and it must
+        /// The pulse has to actually move -- that is the entire point of the feature -- and it must
         /// never reach zero, because an indicator that blinks out reads as "it died".
         #[test]
         fn the_pulse_breathes_without_ever_going_dark() {
@@ -1265,7 +1265,7 @@ pub mod picker_dim {
         }
 
         /// The stacking contract, which is the requirement most likely to be silently inverted:
-        /// the cover belongs ABOVE the game and BELOW the OS dialog. Being behind the game makes the
+        /// the cover belongs above the game and below the OS dialog. Being behind the game makes the
         /// feature invisible; being in front of the dialog hides the control the user must click.
         #[test]
         fn the_cover_must_sit_between_the_dialog_and_the_game() {
@@ -1275,7 +1275,7 @@ pub mod picker_dim {
             assert_eq!(z_order_violations(2, 3, usize::MAX), (false, false));
         }
 
-        /// BEING BEHIND THE GAME IS ITS OWN FAILURE and must be reported on its own axis: the cover
+        /// Being behind the game is its own failure and must be reported on its own axis: the cover
         /// is invisible, which is cosmetic, and it must never be able to masquerade as the far more
         /// serious "the cover is over the dialog" (or be masked by it).
         #[test]
@@ -1287,27 +1287,27 @@ pub mod picker_dim {
                 (true, false),
                 "level pegging with the game is still not in front of it"
             );
-            // The GAME ordinal is this half's second operand: unknown means unscoreable, not innocent
+            // The game ordinal is this half's second operand: unknown means unscoreable, not innocent
             // and not guilty. Counting it would bury the real breaks in windows that had merely
             // dropped out of the z-chain while being created or destroyed.
             assert_eq!(z_order_violations(4, usize::MAX, 1), (false, false));
-            // And an unknown SELF disqualifies this half too -- there is nothing to compare.
+            // And an unknown self disqualifies this half too -- there is nothing to compare.
             assert_eq!(z_order_violations(usize::MAX, 3, 1), (false, false));
         }
 
-        /// COVERING THE DIALOG IS THE DEFECT THE OWNERSHIP CHAIN EXISTS TO ELIMINATE. A non-zero
+        /// Covering the dialog is the defect the ownership chain exists to eliminate. A non-zero
         /// count of this half means the fix is incomplete and the user is looking at a dim laid
         /// over the controls they have to click, so it must be scored strictly on its own.
         #[test]
         fn the_cover_in_front_of_the_dialog_scores_only_that_half() {
             // Cover 1, game 3, dialog 2: we are nearer the front than comdlg32.
             assert_eq!(z_order_violations(1, 3, 2), (false, true));
-            // No dialog in the chain yet. THIS IS THE EXCLUSION THAT MAKES A NON-ZERO COUNT
+            // No dialog in the chain yet. This is the exclusion that makes a non-zero count
             // MEANINGFUL: every frame before comdlg32 exists scores `usize::MAX` here and is not
             // counted, so a recorded break is never just "the dialog had not been created".
             assert_eq!(z_order_violations(2, 3, usize::MAX), (false, false));
             assert_eq!(z_order_violations(1, 3, usize::MAX), (false, false));
-            // An unknown SELF disqualifies this half as well.
+            // An unknown self disqualifies this half as well.
             assert_eq!(z_order_violations(usize::MAX, 3, 2), (false, false));
             // Both operands unknown: nothing to say about either half.
             assert_eq!(
@@ -1316,7 +1316,7 @@ pub mod picker_dim {
             );
         }
 
-        /// BOTH HALVES CAN BREAK ON THE SAME FRAME, and when they do EACH COUNTER MUST TAKE ITS OWN
+        /// Both halves can break on the same frame, and when they do each counter must take its own
         /// INCREMENT. The fused predecessor collapsed this case into a single tick, which is how a
         /// run could report 130 breaks and still not say whether the serious half had ever fired.
         /// Checked through the real scoring function, over this test's own statics, so it is the
@@ -1326,7 +1326,7 @@ pub mod picker_dim {
             static BEHIND: ZBreakCells = new_cells();
             static COVERING: ZBreakCells = new_cells();
             let (behind, covering) = (test_record(&BEHIND), test_record(&COVERING));
-            // Cover 5, game 2, dialog 9: behind the game AND in front of the dialog at once -- the
+            // Cover 5, game 2, dialog 9: behind the game and in front of the dialog at once -- the
             // cover is sandwiched in the middle of a chain that is inverted end to end.
             assert_eq!(z_order_violations(5, 2, 9), (true, true));
             score_z_sample(&behind, &covering, (5, 2, 9), 40);
@@ -1341,7 +1341,7 @@ pub mod picker_dim {
             }
         }
 
-        /// A frame that breaks only one half must leave the other half's counter AND its whole
+        /// A frame that breaks only one half must leave the other half's counter and its whole
         /// first-sample record untouched, or the split has bought nothing: a reader would still be
         /// unable to say the cosmetic failure never fired.
         #[test]
@@ -1361,7 +1361,7 @@ pub mod picker_dim {
             assert_eq!(behind.first_ms.load(Ordering::SeqCst), usize::MAX);
         }
 
-        /// The first-sample record is FIRST-WINS: later frames keep counting but must not overwrite
+        /// The first-sample record is first-WINS: later frames keep counting but must not overwrite
         /// the sample that showed the transition into failure. A last-wins record would decay into
         /// the tear-down-moment snapshot the counters were introduced to replace.
         #[test]
@@ -1388,7 +1388,7 @@ pub mod picker_dim {
         /// because the production ones are process-lifetime telemetry, so a test supplies its own
         /// function-scoped statics -- one pair per test, never shared, because `cargo test` runs
         /// these on parallel threads and a shared counter would make them flake against each other.
-        /// The point is that the tests drive the REAL scoring path rather than a re-implementation.
+        /// The point is that the tests drive the real scoring path rather than a re-implementation.
         type ZBreakCells = [AtomicUsize; 5];
 
         const fn new_cells() -> ZBreakCells {
@@ -1409,7 +1409,7 @@ pub mod picker_dim {
             }
         }
 
-        /// The snap-back must fire when the cover has been moved off the game and must NOT fire
+        /// The snap-back must fire when the cover has been moved off the game and must not fire
         /// when it is already exactly there. Both halves are load-bearing: without the first the
         /// user can drag the blur away from a game that stays put (reported 2026-07-31), and
         /// without the second every frame re-issues a `SetWindowPos` for nothing, which is how a

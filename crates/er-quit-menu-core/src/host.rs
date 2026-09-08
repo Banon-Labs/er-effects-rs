@@ -1,15 +1,15 @@
 //! The dependency-injection seam between this feature crate and its host DLL.
 //!
 //! Same pattern as `er_loading_portrait_core::host`: function pointers installed once at DLL
-//! attach, neutral defaults until then, crate-internal wrappers bearing the EXACT names
+//! attach, neutral defaults until then, crate-internal wrappers bearing the exact names
 //! the moved code already calls.
 //!
 //! This seam is larger than `er-save-picker-core`'s because the quit menu genuinely shares
 //! state with the rest of the product: the ProfileSummary save-swap ledger is read by the
 //! loading-cover slot resolution, the portrait slot is read by the loading-screen
 //! pipeline, and the save-suppression bypass belongs to `er-save-suppress`. Every field
-//! below is one MEASURED cross-call with a consumer OUTSIDE the quit-menu feature -- a
-//! cross-call whose only consumers are inside the feature is a MOVE, not a seam entry, per
+//! below is one measured cross-call with a consumer outside the quit-menu feature -- a
+//! cross-call whose only consumers are inside the feature is a move, not a seam entry, per
 //! the 2026-07-30 rule that no extracted crate reaches back into `er-quickload`.
 //!
 //! Fields land per slice: this scaffold carries the entries that cross with std/primitive
@@ -55,13 +55,13 @@ pub struct QuitMenuHost {
     pub system_quit_profile_summary_ptr: unsafe fn() -> usize,
     /// The loaded character's save slot (collapsed form; 0 when unknown).
     pub portrait_loaded_slot: fn() -> i32,
-    /// The loaded slot ONLY when a real source names it; `None` otherwise.
+    /// The loaded slot only when a real source names it; `None` otherwise.
     pub portrait_loaded_slot_confirmed: fn() -> Option<i32>,
-    /// The slot the loading-screen pipeline should TARGET (selection-aware).
+    /// The slot the loading-screen pipeline should target (selection-aware).
     pub portrait_target_slot: fn() -> i32,
     /// Rebuild the profile render table for a loading screen, if the state calls for it.
     pub maybe_build_profile_table_for_loading: unsafe fn(usize) -> bool,
-    /// Drive one profile-renderer tick for `slot`. PRODUCT-owned: the loading-screen
+    /// Drive one profile-renderer tick for `slot`. Product-owned: the loading-screen
     /// profile-model render drive is called from the task registration and the title tick,
     /// so it stays behind even though the quit menu also calls it.
     pub force_profile_render_tick: unsafe fn(usize, i32),
@@ -69,13 +69,13 @@ pub struct QuitMenuHost {
     pub native_loading_screen_active: unsafe fn(usize) -> bool,
 
     // --- input ownership (owner: experiments::input_block, stays in product) -----------
-    /// The GAME's main top-level window (dialog owner, dim geometry source). 0 = none.
+    /// The game's main top-level window (dialog owner, dim geometry source). 0 = none.
     pub game_main_window: fn() -> usize,
     /// Release the input block immediately, before an irreversible quit.
     pub release_input_block_now: fn(),
 
     // --- save suppression (owner: er-save-suppress, already its own crate) ------------
-    /// Take the one-shot bypass token that makes the Save Game row the ONLY path whose
+    /// Take the one-shot bypass token that makes the Save Game row the only path whose
     /// save enqueue is really forwarded. False when no token was available.
     pub take_save_write_bypass: fn(&'static str) -> bool,
 
@@ -174,7 +174,7 @@ fn default_windows_path_for_log(path: &str) -> String {
 
 impl QuitMenuHost {
     /// Neutral defaults: no-op logging, no save source, no summary, no slots, no window,
-    /// and NO save-write bypass -- an un-hosted crate must never be able to authorise a
+    /// and no save-write bypass -- an un-hosted crate must never be able to authorise a
     /// real save.
     pub const fn defaults() -> Self {
         Self {
@@ -221,7 +221,7 @@ impl Default for QuitMenuHost {
 static DEFAULT_HOST: QuitMenuHost = QuitMenuHost::defaults();
 static HOST: OnceLock<QuitMenuHost> = OnceLock::new();
 
-/// Install the host seam ONCE, at DLL attach, BEFORE any hook install or task spawn can
+/// Install the host seam once, at DLL attach, before any hook install or task spawn can
 /// run moved code. Returns false (and changes nothing) if a host was already installed.
 pub fn install_host(host: QuitMenuHost) -> bool {
     HOST.set(host).is_ok()
@@ -231,7 +231,7 @@ fn host() -> &'static QuitMenuHost {
     HOST.get().unwrap_or(&DEFAULT_HOST)
 }
 
-// --- crate-internal wrappers bearing the EXACT original product names -----------------
+// --- crate-internal wrappers bearing the exact original product names -----------------
 
 #[allow(dead_code)]
 pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {

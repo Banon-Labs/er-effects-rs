@@ -1,6 +1,6 @@
 //! World-map invasion-spawn warp targets (bd `er-effects-rs-5es`).
 //!
-//! The feature is a LOCAL exploration surface. Elden Ring already ships a table of fixed
+//! The feature is a local exploration surface. Elden Ring already ships a table of fixed
 //! auto-invasion spawn coordinates (`other:/AutoInvadePoint.aipbnd`, loaded into the
 //! `CSAutoInvadePoint` singleton). This crate turns that table into stable Rust records so
 //! the world-map warp UI can offer them as selectable targets and warp locally by
@@ -9,9 +9,9 @@
 //! # Hard boundary
 //!
 //! Nothing here fakes an invasion, starts or spoofs multiplayer/session state, or touches
-//! host/guest behaviour. `CSAutoInvadePoint` is a coordinate table and is read ONLY. The
+//! host/guest behaviour. `CSAutoInvadePoint` is a coordinate table and is read only. The
 //! engine's own consumer of that table (`CSBreakInPointManager` /
-//! `CS::QuickmatchManager`) is deliberately NOT called: that path is where session state
+//! `CS::QuickmatchManager`) is deliberately not called: that path is where session state
 //! lives. The coordinate math here was read out of it statically and reimplemented, so no
 //! multiplayer code is entered.
 //!
@@ -23,12 +23,12 @@
 //! * [`aip`] -- the on-disk `.aip` record decoder, reverse-engineered from
 //!   `CS::CSAutoInvadePoint::AddForBlockId`. Lets the catalog be validated against the local
 //!   extraction corpus offline, with no game running.
-//! * [`live_read`] -- the FAIL-CLOSED walk of the live singleton's red-black tree. Every
+//! * [`live_read`] -- the fail-closed walk of the live singleton's red-black tree. Every
 //!   pointer is plausibility-checked and read through a fault-tolerant primitive, and the walk
 //!   carries a hard visit budget, because this runs inside the user's game where a crash or a
 //!   hung game thread is a far worse outcome than a missing oracle.
 //! * [`sampler`] -- the driver that keeps re-reading until the totals settle, so a catalog
-//!   caught mid-load is never reported as the final answer, and ORACLE 1 lands.
+//!   caught mid-load is never reported as the final answer, and oracle 1 lands.
 //! * [`param_row`] -- the DLL-owned synthetic `BonfireWarpParam` row a pin needs behind it: the
 //!   row constructor reads the entity id, icon, category bits and all 8 labels out of one.
 //! * [`map_surface`] -- which invasion points become world-map pins, and the private
@@ -46,7 +46,7 @@
 //! `eldenring-deobf.bin` (`python3 scripts/check-dump-deobf-identity.py <va>`); see
 //! `docs/plans/world-map-invasion-warp.md` for the evidence table.
 
-/// The address to call for a 1.16.2 `rva` on the RUNNING build, or `None` when there is none.
+/// The address to call for a 1.16.2 `rva` on the running build, or `None` when there is none.
 ///
 /// Every game call in this crate used to be a bare `transmute(base + SOME_RVA)`. On a build the
 /// RVAs were not derived against that is not a wrong answer, it is a dead process: on 1.17,
@@ -90,7 +90,7 @@ pub mod lobby_pool;
 pub mod local_invasion;
 pub mod local_invasion_config;
 
-/// What destination a SEAMLESS invasion actually chose, read out of `CSGameMan` after the fact.
+/// What destination a seamless invasion actually chose, read out of `CSGameMan` after the fact.
 /// Not re-exported: it carries its own reading type, and Seamless's placement path has nothing
 /// to do with the `.aip`/MSB tables the rest of this crate reads.
 pub mod seamless_invade_probe;

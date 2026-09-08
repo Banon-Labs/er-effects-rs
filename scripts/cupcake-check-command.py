@@ -9,7 +9,7 @@ Bash tool call line.
 Usage:
     python3 scripts/cupcake-check-command.py '<command>'
 
-Prints ALLOW or DENY plus the reason (if any), using the real `cupcake` binary
+Prints allow or deny plus the reason (if any), using the real `cupcake` binary
 compiled to WASM in production -- not the `opa` interpreter that `opa test`
 and `opa eval` use.
 """

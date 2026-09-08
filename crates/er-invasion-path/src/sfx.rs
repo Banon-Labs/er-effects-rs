@@ -6,7 +6,7 @@
 //! SFX manager is a real effect in the world -- correct depth, correct lighting, the look the
 //! game already has.
 //!
-//! # This is the one thing here that CHANGES the game
+//! # This is the one thing here that changes the game
 //!
 //! The rest of this crate reads. This spawns. It is a real engine object with a real lifetime,
 //! and the module-level claim that this DLL does nothing to the game stops being true the moment
@@ -19,7 +19,7 @@
 
 #![cfg(windows)]
 
-/// The fire-and-forget wrapper `FUN_140d929f0` is deliberately NOT used.
+/// The fire-and-forget wrapper `FUN_140d929f0` is deliberately not used.
 ///
 /// It resolves the singleton, spawns, and then throws the control block away -- which is why the
 /// first version of this feature could place stones and never take them back. Everything here
@@ -80,12 +80,12 @@ fn transform_at(position: [f32; 3]) -> WorldTransform {
 #[repr(C, align(16))]
 struct WorldTransform([f32; 16]);
 
-/// Resolve a game function by RVA for the RUNNING build, refusing what it cannot place.
+/// Resolve a game function by RVA for the running build, refusing what it cannot place.
 ///
 /// The doc comment here used to make this claim while the body only added the base -- it checked
 /// nothing. It now delegates to the shared resolver, which returns the translated address on a
 /// build that moved the code and `None` when no mapping is verified. That matters more here than
-/// almost anywhere: these addresses are transmuted into function pointers and CALLED, so a stale
+/// almost anywhere: these addresses are transmuted into function pointers and called, so a stale
 /// one transfers control into whatever now occupies those bytes.
 fn function(rva: u32) -> Option<usize> {
     let module_base = er_game_base::mem::game_module_base().ok()?;
@@ -105,8 +105,8 @@ const CTRL_BYTES: usize = 0x440;
 /// control block is an effect that can never be removed.
 const SPAWN_FFX_INSTANCE_RVA: u32 = 0xd9_5280;
 
-/// `FUN_1420b6370(ctrl) -> bool` -- the engine's OWN liveness check, and it is two levels deep:
-/// the instance pointer at `ctrl+0x08` must be non-null AND `FUN_1420b6280` must report that
+/// `FUN_1420b6370(ctrl) -> bool` -- the engine's own liveness check, and it is two levels deep:
+/// the instance pointer at `ctrl+0x08` must be non-null and `FUN_1420b6280` must report that
 /// instance still alive. That second level is why this crate no longer reads `+0x08` itself and
 /// has no constant for it.
 ///
@@ -121,11 +121,11 @@ const CTRL_PUSH_PARAMS_RVA: u32 = 0x20b_6ac0;
 const CTRL_FINALISE_RVA: u32 = 0x20b_63c0;
 /// `FUN_141c92f30(ctrl + 0x20)` -- tear down the control's second sub-object.
 const CTRL_SUBOBJECT_RELEASE_RVA: u32 = 0x1c9_2f30;
-/// `FUN_1420b5c40(ctrl)` -- unlink the control from the instance's observer list. NOT a kill:
+/// `FUN_1420b5c40(ctrl)` -- unlink the control from the instance's observer list. Not a kill:
 /// on its own this only unregisters, which is why the stop above has to happen first.
 const CTRL_UNLINK_RVA: u32 = 0x20b_5c40;
 
-/// Offsets inside the control block, all from the SAME base -- the pointer handed to
+/// Offsets inside the control block, all from the same base -- the pointer handed to
 /// `SpawnFfxInstance` as its out-parameter.
 ///
 /// Deriving them from one base is not pedantry. The sign code this recipe came from reaches them
@@ -139,9 +139,9 @@ mod ctrl {
     pub(super) const PARAMS: usize = 0x30;
     /// Length of that block, as `FUN_1420b6ac0` is told.
     pub(super) const PARAMS_LEN: i32 = 0x3e0;
-    /// The STOP flag (block offset `0x3d4`).
+    /// The stop flag (block offset `0x3d4`).
     ///
-    /// One byte below the AUTO-RELEASE flag at `0x405` that `FUN_141c93450` sets. Setting that
+    /// One byte below the AUTO-release flag at `0x405` that `FUN_141c93450` sets. Setting that
     /// one instead hands the effect to the engine to manage and it can never be removed -- which
     /// is exactly the bug being fixed here, so the two are named rather than spelled inline.
     pub(super) const STOP_FLAG: usize = 0x404;
@@ -168,11 +168,11 @@ type CtrlVoidFn = unsafe extern "C" fn(*mut u8);
 /// FXR's **external value** table.
 ///
 /// This was documented as an unproven lead that fed "time-of-day and weather, not colour". That
-/// was wrong in a way worth spelling out: they ARE that table, and the mapping is exact.
+/// was wrong in a way worth spelling out: they are that table, and the mapping is exact.
 /// `FUN_140d94af0` (RVA `0xd94af0`) builds nine entries with keys
 /// `{0, 1, 2, 1000, 2000, 2100, 2200, 3000, 10000}` — key 1 is the current hour and key 2 the
 /// wetness from the active `WEATHER_PARAM`, which is where the earlier description came from, but
-/// the three arguments below land on three OTHER keys:
+/// the three arguments below land on three other keys:
 ///
 /// | field | spawn arg | external value |
 /// |---|---|---|
@@ -228,7 +228,7 @@ const _: () = {
     assert!(ctrl::PARAMS + ctrl::PARAMS_LEN as usize <= CTRL_BYTES);
 };
 
-/// Spawn an effect and KEEP the handle, so it can be despawned later.
+/// Spawn an effect and keep the handle, so it can be despawned later.
 ///
 /// # Safety
 ///
@@ -268,7 +268,7 @@ pub(crate) unsafe fn spawn_tracked(
             variant.c,
         );
     }
-    // Did the id actually resolve? `FUN_1420dda60` returns 0 and spawns NOTHING when an id is
+    // Did the id actually resolve? `FUN_1420dda60` returns 0 and spawns nothing when an id is
     // unresolvable or not resident, so an unusable id is indistinguishable from a usable one that
     // happens to be invisible -- unless the control block is asked. It is asked here, once, at
     // spawn: bound means the engine accepted the id and built an instance.
@@ -321,7 +321,7 @@ pub(crate) unsafe fn despawn(mut marker: Marker) {
         )
     };
 
-    // Ask the engine whether this control still has a LIVE instance, rather than reading the
+    // Ask the engine whether this control still has a live instance, rather than reading the
     // pointer and hoping. A marker held for a few seconds -- which every real trail marker is --
     // can have its effect finish on its own in the meantime, and pushing parameters into a
     // finished instance is how this crashed a live session on 2026-08-25.
@@ -364,9 +364,9 @@ unsafe fn sfx_singleton() -> Option<usize> {
     let module_base = er_game_base::mem::game_module_base().ok()?;
     // SAFETY: fault-tolerant read; None rather than a fault if the page is not mapped.
     //
-    // RESOLVED, not `module_base + RVA`. Every `.data` global moved between 1.16.2 and 1.17 --
-    // this one 0x3d839b8 -> 0x3d87a28 -- and a stale READ does not announce itself the way a
-    // stale CALL does: `safe_read_usize` SUCCEEDS and hands back whatever now occupies the old
+    // Resolved, not `module_base + RVA`. Every `.data` global moved between 1.16.2 and 1.17 --
+    // this one 0x3d839b8 -> 0x3d87a28 -- and a stale read does not announce itself the way a
+    // stale call does: `safe_read_usize` succeeds and hands back whatever now occupies the old
     // slot, which the heap-alignment screen below cannot tell from a real CSSfx pointer.
     let singleton = unsafe {
         er_game_base::mem::safe_read_usize(er_game_base::mem::game_data_addr(
@@ -401,7 +401,7 @@ mod tests {
         }
     }
 
-    /// The stop flag and the auto-release flag are ADJACENT bytes. Setting the wrong one leaves
+    /// The stop flag and the auto-release flag are adjacent bytes. Setting the wrong one leaves
     /// the effect running forever under the engine's own management, which is the exact bug the
     /// despawn exists to fix, so the distance between them is asserted rather than trusted.
     #[test]

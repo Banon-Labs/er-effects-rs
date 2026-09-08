@@ -1,4 +1,4 @@
-// Portrait FRAMING oracles: the frozen crop envelope and the applied orbit camera.
+// Portrait framing oracles: the frozen crop envelope and the applied orbit camera.
 //
 // These live in their own include file rather than inline in `write_game_module_oracles.rs` only
 // because that file sits within ~20 lines of the 3200-line hard gate
@@ -11,20 +11,20 @@
 // neither exported a single value, only derived summaries and "it ran" counters.
 
 fn write_portrait_framing_oracles(body: &mut String) {
-    // CROP ENVELOPE (portrait_overlay.rs): the head's alpha bounding box, unioned over the first
-    // PORTRAIT_CROP_SEED_N frames and then FROZEN; the crop is rescaled so its height is 80% of the
+    // CROP envelope (portrait_overlay.rs): the head's alpha bounding box, unioned over the first
+    // PORTRAIT_CROP_SEED_N frames and then frozen; the crop is rescaled so its height is 80% of the
     // screen, which makes this rect -- not the camera alone -- the last word on apparent portrait size.
-    // Only the derived AREA (`oracle_portrait_alpha_cover_pct`, emitted just above) was exported, and a
-    // percentage cannot say WHERE the rect is or what shape it has, so two characters' framing could not
+    // Only the derived area (`oracle_portrait_alpha_cover_pct`, emitted just above) was exported, and a
+    // percentage cannot say where the rect is or what shape it has, so two characters' framing could not
     // be compared and an implausible percentage could not be attributed. The four bounds do both.
     //
     // Reading them: minx/miny start at `usize::MAX` and maxx/maxy at 0, so a run that never seeded
     // reports exactly that sentinel pair rather than a plausible-looking rect. `seed_frames` counts the
-    // frames FOLDED INTO the envelope and saturates at PORTRAIT_CROP_SEED_N (until 2026-08-22 it counted
+    // frames folded into the envelope and saturates at PORTRAIT_CROP_SEED_N (until 2026-08-22 it counted
     // every composited frame and a live run read 324 against a window of 40, so it could not answer the one
     // question it exists for); at the cap the rect can no longer move, so a bad rect at that point is
     // permanent for the rest of the loading screen. `growth_events` is how many of those folds actually
-    // MOVED a bound -- i.e. how many visible size steps the settle took, since apparent head size is
+    // moved a bound -- i.e. how many visible size steps the settle took, since apparent head size is
     // `dst_h / crop_h`. The per-event detail (which bound, by how much, resulting crop_h) is in the autoload
     // debug log as `portrait-crop[sN/40]` lines; only the DLL can see it, because the seed window is under a
     // second and this file is a point-in-time latch with no history. A rect covering
@@ -60,14 +60,14 @@ fn write_portrait_framing_oracles(body: &mut String) {
         "oracle_portrait_crop_growth_events",
         PORTRAIT_CROP_GROWTH_EVENTS.load(Ordering::SeqCst),
     );
-    // APPLIED ORBIT CAMERA (lookat_stage_camera.rs `apply_profile_camera_override`): the seven values
+    // Applied orbit camera (lookat_stage_camera.rs `apply_profile_camera_override`): the seven values
     // the last successful apply wrote into the renderer. The neighbouring `oracle_profile_cam_*`
     // counters say the override ran, on which slot, and that the matrix came out finite -- none of them
-    // says what the camera WAS, so "every character gets the same portrait camera" was a static-dump
+    // says what the camera was, so "every character gets the same portrait camera" was a static-dump
     // inference (`MenuOffscrRendParam` row 20 for all ten slots) that no run could confirm or refute.
     // With these, two characters' artifacts either carry identical numbers or they do not.
     //
-    // These are the APPLIED values, i.e. the engine baseline after PROFILE_CAM_DISTANCE_SCALE /
+    // These are the applied values, i.e. the engine baseline after PROFILE_CAM_DISTANCE_SCALE /
     // _PITCH_DELTA_RAD / _YAW_DELTA_RAD / _FOV_SCALE, because that is what the render actually used;
     // the untransformed baseline goes to the autoload debug log at its latch site. Angles are radians.
     // All-zero means no apply has succeeded yet, which `oracle_profile_cam_apply_calls == 0` also says.
@@ -84,7 +84,7 @@ fn write_portrait_framing_oracles(body: &mut String) {
         cam(&PROFILE_CAM_LAST_YAW_BITS),
         cam(&PROFILE_CAM_LAST_FOV_BITS),
     ));
-    // UNMASKED-FRAME REFUSALS (mask gate, 2026-08-21). Both counters now have real writers, so they
+    // UNMASKED-frame REFUSALS (mask gate, 2026-08-21). Both counters now have real writers, so they
     // are emitted here rather than held back by `scripts/check-oracle-writers.py`.
     //
     // `draw_refused_unmasked` counts frames the compositor declined to blit because the published
@@ -97,7 +97,7 @@ fn write_portrait_framing_oracles(body: &mut String) {
     //   * bake > 0, draw == 0 -- the capture side produced an unmasked frame and the publish gate ate
     //     it. Expected on the live path: the bake fires at FrameBegin before the depth-keyed worker has
     //     a frame to publish. The head appears when the worker publishes; nothing wrong.
-    //   * draw > 0 -- an unmasked buffer got PAST publish and only the compositor stopped it. That is a
+    //   * draw > 0 -- an unmasked buffer got past publish and only the compositor stopped it. That is a
     //     publish-side hole, not a compositor one; find the writer.
     //   * both 0 with `oracle_portrait_alpha_cover_pct` near 100 -- the gate is not catching what it was
     //     built for. The percentage and the refusals disagreeing is the signal, which is exactly why a

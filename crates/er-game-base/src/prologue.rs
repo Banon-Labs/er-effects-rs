@@ -1,5 +1,5 @@
 //! Tier A: compare a live function prologue against a generated pin, ignoring the operand bytes
-//! that a game patch is GUARANTEED to re-encode.
+//! that a game patch is guaranteed to re-encode.
 //!
 //! # The failure this exists to stop
 //!
@@ -12,16 +12,16 @@
 //! correctly translated addresses, and all three gates disarmed -- on four bytes that could not
 //! have survived. The features were silently off, and the log line blamed the game build.
 //!
-//! So the pin has to test instruction SHAPE at those four bytes and exact identity everywhere
+//! So the pin has to test instruction shape at those four bytes and exact identity everywhere
 //! else. The mask that says which is which is derived at build time from the same named
 //! `iced-x86` instructions the pin itself is assembled from (`build-support/prologue_build.rs`),
 //! so it cannot drift away from the bytes it describes and nobody hand-marks an offset.
 //!
-//! # What this deliberately does NOT do
+//! # What this deliberately does not do
 //!
 //! It does not make a pin lenient. A masked byte is only ever a RIP-relative displacement; the
 //! opcode, the ModRM byte, register-base displacements (the struct field offsets that are the
-//! ONLY difference between the `+0xb72` and `+0xb73` retractions), immediates and relative branch
+//! only difference between the `+0xb72` and `+0xb73` retractions), immediates and relative branch
 //! targets are all still compared exactly. A target that is a different instruction still fails.
 
 /// Mask byte meaning "this position must match exactly". Mirrors
@@ -92,7 +92,7 @@ mod tests {
     /// mapped address. Read out of `eldenring-deobf.bin` / `eldenring-deobf-1.17.bin` by
     /// `scripts/verify-aob-patterns-1170.py --section prologues`; they are the shape of the
     /// problem, not a synthetic one.
-    // Not a prologue: test INPUT. These are the bytes as they exist in the two images, fed to
+    // Not a prologue: test input. These are the bytes as they exist in the two images, fed to
     // `prologue_matches` to prove the comparison notices the RIP displacement changing. Nothing
     // here is ever written into the game or compared against a hook site, so there is no
     // assembler for a build.rs to get one byte wrong.
@@ -148,7 +148,7 @@ mod tests {
         ));
     }
 
-    /// NEGATIVE CONTROL. Mutating the OPCODE of the masked instruction must still disarm: the
+    /// Negative control. Mutating the OPCODE of the masked instruction must still disarm: the
     /// mask covers the operand, never the identity of the instruction carrying it.
     #[test]
     fn a_changed_opcode_still_disarms() {
@@ -163,7 +163,7 @@ mod tests {
         }
     }
 
-    /// The other half of the negative control: the tail after the masked field is what says WHICH
+    /// The other half of the negative control: the tail after the masked field is what says which
     /// function this is. `+0xb72` vs `+0xb73` differ in exactly one byte there, and the masked
     /// pin must keep telling them apart.
     #[test]

@@ -3,13 +3,13 @@
 //! # What this does, in one sentence
 //!
 //! It stops ELDEN RING from ever *enqueueing* a save-write job, and then answers the
-//! game's own "did my save finish?" question with the code that means SUCCESS -- so no
+//! game's own "did my save finish?" question with the code that means success -- so no
 //! byte is ever written, no backup is copied or deleted, and every native observer of
 //! the save lifecycle sees exactly the state a real successful save leaves behind.
 //!
 //! # Shared core, one host DLL per process
 //!
-//! This crate is the suppression core linked by BOTH the standalone
+//! This crate is the suppression core linked by both the standalone
 //! `er-save-disable` (census/proof DLL) and the product `er-quickload` cdylib
 //! (save-game-flow WP1). The host DLL wires the seams before `install`:
 //!
@@ -20,7 +20,7 @@
 //!   census snapshot writer through the witness reentrancy guard; the product wires a
 //!   no-op because its periodic telemetry writer exports the counters on its own cadence.
 //!
-//! NEVER load `er_save_disable.dll` alongside `er_quickload.dll` in one me3 profile:
+//! Never load `er_save_disable.dll` alongside `er_quickload.dll` in one me3 profile:
 //! each carries its own MinHook instance and both would detour `0x140e6fb50` /
 //! `0x140e6e430`, corrupting each other's trampolines.
 //!
@@ -31,7 +31,7 @@
 //! next SL save enqueue consumes it and is forwarded to the real trampoline (real
 //! submit, real write). Everything else keeps being swallowed.
 //!
-//! That bypassed save then has to be OBSERVED to completion, and there are three ways it
+//! That bypassed save then has to be observed to completion, and there are three ways it
 //! can end, all of them funnelled into the one latch [`take_bypass_final_status`] reads:
 //!
 //!   * the SL worker's job body returns -- [`adopt_completed_save_job_as_final_status`],
@@ -97,11 +97,11 @@
 //!
 //! It is tempting to blame a Save Game that never wrote on the lie -- "we told the game a
 //! save is in progress, so it declined to start another". The decompile rules that out.
-//! The lie only ever rewrites `4` (no request) to `0` (SUCCESS); it never produces `1`
+//! The lie only ever rewrites `4` (no request) to `0` (success); it never produces `1`
 //! (in flight). The gate that decides whether a new save may be dispatched is
 //! `FUN_14067a080`, which is exactly `GameMan.saveState == 0` -- and the only writers of
 //! `saveState` on the poll path, `FUN_140679510` and `FUN_1406794b0`, set it to **0**
-//! whenever the status is not `1`. So the lie can only ever OPEN that gate, never close
+//! whenever the status is not `1`. So the lie can only ever open that gate, never close
 //! it. When a fired request sits latched with `saveState == 0` and no submit appears, the
 //! refusal is downstream of the gate and upstream of the enqueue -- see the save-dispatch
 //! observers below, which exist to name which link it was.
@@ -118,11 +118,11 @@
 //! within one `CSFeManImp::Update`. No field is forged and no state is poked.
 
 // Windows-only items are dead code on the host, and the workspace denies warnings -- so
-// `cargo test -p er-save-suppress` did not COMPILE here and every `#[cfg(test)]` test in this
-// crate had never once run, including the pure classifiers that exist SO THAT the device logic
+// `cargo test -p er-save-suppress` did not compile here and every `#[cfg(test)]` test in this
+// crate had never once run, including the pure classifiers that exist so that the device logic
 // can be checked with no game attached. Scoped to non-Windows, so the shipping build keeps full
 // strictness; an inner attribute rather than per-item gates because one unused constant
-// (`QUIT_PHASE_SETTLE_SIG`) lives in a GENERATED file that cannot carry a `cfg`.
+// (`QUIT_PHASE_SETTLE_SIG`) lives in a generated file that cannot carry a `cfg`.
 #![cfg_attr(not(windows), allow(dead_code))]
 
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
@@ -136,12 +136,12 @@ use er_game_base::mem::{game_rva, read_bytes};
 use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook, UnionFn, register_union_hook};
 
 // ============================================================================
-// HOST-DLL SEAMS. The core has no log file, no telemetry file and no clock of its own;
+// host-DLL seams. The core has no log file, no telemetry file and no clock of its own;
 // the one DLL that links it installs the sinks before `install`. Same fn-pointer-in-atomic
 // pattern as `er_hook::set_hook_logger`. Uninstalled sinks are silent no-ops so the
 // pure decision logic stays host-testable with no wiring.
 //
-// A fourth seam, the CLOCK, lives in `save_wedge_birth.rs` beside its only consumer; a
+// A fourth seam, the clock, lives in `save_wedge_birth.rs` beside its only consumer; a
 // fifth, the caller-RVA stack walk, in `save_state_witness.rs` beside its.
 // ============================================================================
 
@@ -208,11 +208,11 @@ const SL_STATUS_NO_REQUEST: u32 = 4;
 /// to the only arm that advances `GameMan+0xbc4` 2 -> 3.
 const SL_STATUS_SUCCESS: u32 = 0;
 /// The status code for a still-running save job. The bypass completion watch skips it:
-/// the first post-allow poll result that is NOT this value is the terminal outcome.
+/// the first post-allow poll result that is not this value is the terminal outcome.
 #[cfg(windows)]
 const SL_STATUS_IN_FLIGHT: u32 = 1;
 
-/// `FUN_14067a980` -- the ONLY code that moves `GameMan+0xbc4` from 2 to 3, i.e. the
+/// `FUN_14067a980` -- the only code that moves `GameMan+0xbc4` from 2 to 3, i.e. the
 /// moment the quit-to-title wait job is released. Its whole body is
 /// `if (bc4 == 2) bc4 = 3;`.
 #[cfg(windows)]
@@ -220,7 +220,7 @@ const QUIT_PHASE_SETTLE_RVA: usize = 0x67a980;
 
 // Opening bytes of every hooked target as they appear in the 1.16.2 image, checked at install
 // time: if the bytes do not match, the address means something else in this build and the hook
-// is refused rather than crash-installed. Every one is ASSEMBLED from named instructions by this
+// is refused rather than crash-installed. Every one is assembled from named instructions by this
 // crate's `build.rs` -- which also compares them against `eldenring-deobf.bin` when a copy is
 // present -- because a hand-typed prologue that is one byte wrong disarms its own hook silently.
 include!(concat!(
@@ -229,11 +229,11 @@ include!(concat!(
 ));
 
 // ============================================================================
-// THE SL REQUEST SLOT. The one set of numbers that decides whether a save that never
+// the SL request slot. The one set of numbers that decides whether a save that never
 // reached the enqueue was refused by the submit builder's precondition, and if so by
 // which operand.
 //
-// `FUN_140e6ef60` -- the submit builder the COMBINED lane `FUN_14067b940` calls -- opens
+// `FUN_140e6ef60` -- the submit builder the combined lane `FUN_14067b940` calls -- opens
 // with a single conjunction (1.16.2 decompile, shift 0):
 //
 // ```text
@@ -242,7 +242,7 @@ include!(concat!(
 //   return 0;                                   // AL = 0: "no submit"
 // ```
 //
-// Its ONLY caller passes `FUN_140e6ef60(FUN_140e6e060(), pvVar4, param_1, buffer, 10, ..)`
+// Its only caller passes `FUN_140e6ef60(FUN_140e6e060(), pvVar4, param_1, buffer, 10, ..)`
 // and has already proven four of those six operands:
 //
 //   * `buf`  (`pvVar4`, the 0x280000 MainHeap block) -- `if (pvVar4 == 0) return 0;`
@@ -252,20 +252,20 @@ include!(concat!(
 //                                                       so the builder only ever sees < 10
 //   * `kind`                                         -- the literal 10 at the call site
 //
-// So when that lane declines AFTER a successful serialization, the guard can only have
+// So when that lane declines after a successful serialization, the guard can only have
 // failed on `iodev+0x10` or `iodev+0x20`. There is no third possibility, and the two are
 // different bugs. `FUN_140e6ec70` (the char-only and system-only lanes' builder) gates on
 // the same two fields plus `buf != 0`.
 //
 // The remaining non-guard exit is the `HeapAlloc(0x298)`/`SLSaveContent::SLSaveContent`
 // pair; it stores its result into `iodev+0x10` before testing it, so a failure there
-// leaves the slot CLEAR and is distinguishable from a guard bail by exactly this sample.
+// leaves the slot clear and is distinguishable from a guard bail by exactly this sample.
 //
-// WHY BOTH FIELDS AND NOT JUST `+0x10`: `iodev+0x20` is a SHARED job slot. The LOAD
+// Why both fields and not just `+0x10`: `iodev+0x20` is a shared job slot. The load
 // builders `FUN_140e6f430`/`FUN_140e6f5b0` write `param_1[4]`, which is `iodev+0x20`, and
 // gate on `iodev+0x18 == 0 && iodev+0x20 == 0`. A load that completed but was never
 // consumed therefore blocks every subsequent save through the same conjunction -- and
-// `FUN_140e6e080` case 0x14 deliberately does NOT release on a successful load, deferring
+// `FUN_140e6e080` case 0x14 deliberately does not release on a successful load, deferring
 // that to the consumer `FUN_14067b100` -> `FUN_140e6e380` -> `FUN_140e6f200`. Sampling
 // `+0x18` alongside `+0x20` separates "a stale save request" from "a stale load request",
 // which the guard itself cannot.
@@ -286,17 +286,17 @@ const SL_IODEV_GLOBAL_RVA: usize = er_game_base::rva::SL_IODEV_GLOBAL_RVA;
 #[cfg(windows)]
 const SL_IODEV_SAMPLE_BYTES: usize = 0x38;
 
-/// `iodev+0x10` -- the `SLSaveContent` of an outstanding SAVE request. First operand of
+/// `iodev+0x10` -- the `SLSaveContent` of an outstanding save request. First operand of
 /// the submit builders' precondition.
 const SL_IODEV_SAVE_CONTENT_OFFSET: usize = 0x10;
 /// `iodev+0x18` -- the load-side content object. Not a save-guard operand, but a non-zero
-/// value beside a non-zero `+0x20` identifies the job as a LOAD's.
+/// value beside a non-zero `+0x20` identifies the job as a load's.
 const SL_IODEV_LOAD_CONTENT_OFFSET: usize = 0x18;
-/// `iodev+0x20` -- the in-flight job, SHARED by the save and load lanes. Second operand of
+/// `iodev+0x20` -- the in-flight job, shared by the save and load lanes. Second operand of
 /// the submit builders' precondition.
 const SL_IODEV_JOB_OFFSET: usize = 0x20;
 /// `iodev+0x28` -- an `FD4FileCap` still loading. Not a guard operand: when it is set the
-/// builders DEFER (store the opcode at `+0x30`, return 1) instead of declining, and
+/// builders defer (store the opcode at `+0x30`, return 1) instead of declining, and
 /// `FUN_140e6e430` routes the poll to `FUN_140e6f370`.
 const SL_IODEV_FILE_CAP_OFFSET: usize = 0x28;
 /// `iodev+0x30` -- the opcode parked by a deferred build, replayed by `FUN_140e6f370`.
@@ -310,7 +310,7 @@ pub struct SlRequestSlot {
     pub save_content: usize,
     /// `iodev+0x18`, the outstanding load request's content.
     pub load_content: usize,
-    /// `iodev+0x20`, the in-flight job (save OR load).
+    /// `iodev+0x20`, the in-flight job (save or load).
     pub job: usize,
     /// `iodev+0x28`, a file capability still being loaded.
     pub file_cap: usize,
@@ -320,12 +320,12 @@ pub struct SlRequestSlot {
 
 impl SlRequestSlot {
     /// True when the submit builders' `iodev+0x10 == 0 && iodev+0x20 == 0` precondition
-    /// holds -- i.e. a save COULD be built from this slot.
+    /// holds -- i.e. a save could be built from this slot.
     pub fn admits_a_save(&self) -> bool {
         self.save_content == 0 && self.job == 0
     }
 
-    /// True when the LOAD builders' `iodev+0x18 == 0 && iodev+0x20 == 0` precondition holds
+    /// True when the load builders' `iodev+0x18 == 0 && iodev+0x20 == 0` precondition holds
     /// -- i.e. no load request occupies the device. `FUN_140e6f430` opens with
     /// `if (param_1[3] != 0 || param_1[4] != 0) return 0;` and `FUN_140e6f5b0` with
     /// `if (param_1[3] == 0 && param_1[4] == 0) { ...build... }`; `param_1[3]`/`[4]` are
@@ -458,12 +458,12 @@ impl SlotSampleCell {
     }
 }
 
-/// The slot as it stood when the lane last DECLINED -- the sample that names the culprit, but only
+/// The slot as it stood when the lane last declined -- the sample that names the culprit, but only
 /// once [`dispatch_refusal_is_the_mutex`] has said the builder was reached at all.
 static DECLINE_SLOT: SlotSampleCell = SlotSampleCell::new();
-/// The slot as it stood immediately BEFORE the last swallow's `FUN_140e6f200` call.
+/// The slot as it stood immediately before the last swallow's `FUN_140e6f200` call.
 static SWALLOW_SLOT_BEFORE: SlotSampleCell = SlotSampleCell::new();
-/// The slot as it stood immediately AFTER it. If this is not clear, our release is the bug.
+/// The slot as it stood immediately after it. If this is not clear, our release is the bug.
 static SWALLOW_SLOT_AFTER: SlotSampleCell = SlotSampleCell::new();
 /// Reason code (`SL_BAIL_*`) for the most recent decline.
 static DECLINE_BAIL_REASON: AtomicUsize = AtomicUsize::new(SL_BAIL_UNSAMPLED);
@@ -477,10 +477,10 @@ static SWALLOW_IODEV_MISMATCH: AtomicU64 = AtomicU64::new(0);
 static SLOT_READ_FAILURES: AtomicU64 = AtomicU64::new(0);
 
 // ============================================================================
-// THE LOAD CONSUMER. The other half of the shared `iodev+0x20` job slot, and the reason a
+// the load consumer. The other half of the shared `iodev+0x20` job slot, and the reason a
 // save can be refused forever by something that is not a save at all.
 //
-// A completed LOAD is NOT released where it completes. `FUN_140e6e080` case 0x14 with a
+// A completed load is not released where it completes. `FUN_140e6e080` case 0x14 with a
 // zero `param_2` reads the job's result, finds success, and returns 0 having called
 // nothing -- deliberately, because the payload has not been handed to anyone yet. The
 // release is owed by the CONSUMER:
@@ -498,12 +498,12 @@ static SLOT_READ_FAILURES: AtomicU64 = AtomicU64::new(0);
 // cause is a load: [`SL_BAIL_LOAD_JOB_LATCHED`].
 //
 // Anything that stands in for `FUN_14067b100` therefore inherits its debt to the device.
-// The helpers below let such a substitution PROVE that the debt was paid, by sampling the
+// The helpers below let such a substitution prove that the debt was paid, by sampling the
 // slot on both sides of whatever it did and classifying the transition. They deliberately
 // do not release anything themselves: releasing from here would mean re-deriving the
 // native guard (`FUN_14240a180`/`FUN_14240a1f0` on the job) in our own code, and a guard
 // we re-derive is a guard that can disagree with the game about whether a load is still
-// in flight. Running the game's own consumer and MEASURING it cannot disagree.
+// in flight. Running the game's own consumer and measuring it cannot disagree.
 // ============================================================================
 
 /// No load-consumer call has been classified yet.
@@ -514,7 +514,7 @@ pub const LOAD_CONSUMER_UNREADABLE: usize = 1;
 pub const LOAD_CONSUMER_NOTHING_HELD: usize = 2;
 /// A load request was held and the slot came back clear: the consumer ran and released it.
 pub const LOAD_CONSUMER_RELEASED: usize = 3;
-/// A load request was held and is STILL held: the native guard declined, which is what it
+/// A load request was held and is still held: the native guard declined, which is what it
 /// does while the job has not reached its terminal state. Nothing was taken from a live
 /// load -- but if the caller now swallows the read, this request is stranded.
 pub const LOAD_CONSUMER_STILL_HELD: usize = 4;
@@ -562,15 +562,15 @@ static LOAD_CONSUMER_RELEASES: AtomicU64 = AtomicU64::new(0);
 static LOAD_CONSUMER_STILL_HELD_COUNT: AtomicU64 = AtomicU64::new(0);
 /// Calls where the device could not be sampled.
 static LOAD_CONSUMER_UNREADABLE_COUNT: AtomicU64 = AtomicU64::new(0);
-/// Calls that ended with a load request still latched AND the caller going on to substitute
+/// Calls that ended with a load request still latched and the caller going on to substitute
 /// the payload -- i.e. a request this process has now stranded. Non-zero is the regression
 /// signature of the post-switch save refusal: every later save fails `iodev+0x20 == 0`.
 static LOAD_CONSUMER_STRANDED: AtomicU64 = AtomicU64::new(0);
 /// Outcome code of the most recent load-consumer call.
 static LOAD_CONSUMER_LAST_OUTCOME: AtomicUsize = AtomicUsize::new(LOAD_CONSUMER_UNSAMPLED);
-/// The slot as it stood immediately BEFORE the last load-consumer call.
+/// The slot as it stood immediately before the last load-consumer call.
 static LOAD_CONSUMER_SLOT_BEFORE: SlotSampleCell = SlotSampleCell::new();
-/// The slot as it stood immediately AFTER it.
+/// The slot as it stood immediately after it.
 static LOAD_CONSUMER_SLOT_AFTER: SlotSampleCell = SlotSampleCell::new();
 
 /// Sample the SL device's request slot for a caller outside this crate.
@@ -618,7 +618,7 @@ pub fn note_load_consumer(
             LOAD_CONSUMER_STILL_HELD_COUNT.fetch_add(1, Ordering::SeqCst);
             if payload_substituted {
                 // Unthrottled: this is a latch, not a rate. From here on every save in the
-                // process is refused by a job WE left in the shared slot.
+                // process is refused by a job we left in the shared slot.
                 let stranded = LOAD_CONSUMER_STRANDED.fetch_add(1, Ordering::SeqCst) + 1;
                 log_message(format_args!(
                     "suppress: BUG -- load consumer at {origin} did NOT release the shared job \
@@ -695,9 +695,9 @@ include!("save_state_writers.rs");
 include!("save_submit_latch.rs");
 
 // ============================================================================
-// SAVE-DISPATCH OBSERVERS. Pure observation of the three native save-dispatch lanes and
+// save-dispatch observers. Pure observation of the three native save-dispatch lanes and
 // the character serializer that gates two of them. They change nothing; they exist so a
-// save that never reaches the enqueue can be attributed in ONE run instead of three.
+// save that never reaches the enqueue can be attributed in one run instead of three.
 //
 // Why they are needed (1.16.2 decompile, `FUN_140aff640` = MoveMapStep step 18, the
 // steady in-world step -- its step-table entry sits at MoveMapStep+0x378, and the table
@@ -706,14 +706,14 @@ include!("save_submit_latch.rs");
 //
 //   FUN_140aff640 (every in-world frame)
 //     -> DoSaveStuff              polls the SL status while GameMan.saveState == 1
-//     -> FUN_140afb880            the save DISPATCHER
+//     -> FUN_140afb880            the save dispatcher
 //          gate: !BOOL_143d856a0, (ShouldSave() || b73 || slotLoad != -1),
 //                and FUN_14067a080() == (GameMan.saveState == 0)
 //          lane: b72 && b73 -> FUN_14067b940   (combined: char slot + system)
 //                b72        -> FUN_14067b750   (char slot only)
 //                       b73 -> FUN_14067b570   (system only)
 //
-// The two CHARACTER lanes only build a submit when `FUN_14067dc00` (the character
+// The two character lanes only build a submit when `FUN_14067dc00` (the character
 // serializer) returns non-zero:
 //
 //   cVar2 = FUN_14067dc00(GameMan, buf, 0x280000, 0);
@@ -729,13 +729,13 @@ include!("save_submit_latch.rs");
 //
 // The serializer's own first gate is
 //   `buf == 0 || GameMan+0xcb1 != 0 || GameMan+0xcb2 != 0 || [0x143d68078] == 0`
-// and it is the ONE exit that returns without writing the byte counter `_DAT_143d69920`.
+// and it is the one exit that returns without writing the byte counter `_DAT_143d69920`.
 // That gate is PROVEN UNREACHABLE in this scenario, so the byte counter is written on
 // every exit we can actually observe -- see `SAVE_SERIALIZE_BYTES_RVA` for the proof and
 // `serialize_fail_step_label` for the decode.
 // ============================================================================
 
-/// `FUN_14067b940` -- combined save dispatcher, taken when b72 AND b73 are set. This is
+/// `FUN_14067b940` -- combined save dispatcher, taken when b72 and b73 are set. This is
 /// the lane the Save Game commit deliberately produces (it fires both request setters).
 #[cfg(windows)]
 const SAVE_DISPATCH_COMBINED_RVA: usize = er_game_base::rva::SAVE_DISPATCH_COMBINED_RVA;
@@ -744,22 +744,22 @@ const SAVE_DISPATCH_COMBINED_RVA: usize = er_game_base::rva::SAVE_DISPATCH_COMBI
 /// Same address as `SAVE_WRITE_TO_SLOT_RVA` in er-quickload and er-save-loader, where it
 /// was called `CONTINUE_LOAD_RVA` until 2026-08-01. This crate's name was the correct one:
 /// the 1.16.2 dump shows it writes a save (serializes via `SAVE_SERIALIZE_CHAR_RVA` below,
-/// then submits through the IO device and sets `saveState = 1`). Deliberately NOT renamed to
+/// then submits through the IO device and sets `saveState = 1`). Deliberately not renamed to
 /// match the others -- the `_COMBINED` / `_CHAR` / `_SYSTEM` family here encodes the b72/b73
 /// lane distinction, which a generic "write to slot" name would lose.
 #[cfg(windows)]
 const SAVE_DISPATCH_CHAR_RVA: usize = 0x67b750;
 /// `FUN_14067b570` -- system-slot-only dispatcher (b73 set, b72 clear). Unlike the two
-/// character lanes it does NOT consult `FUN_14067dc00`; it always submits.
+/// character lanes it does not consult `FUN_14067dc00`; it always submits.
 #[cfg(windows)]
 const SAVE_DISPATCH_SYSTEM_RVA: usize = er_game_base::rva::SAVE_DISPATCH_SYSTEM_RVA;
-/// `FUN_14067dc00` -- the character serializer. Its return value is the SOLE gate on the
+/// `FUN_14067dc00` -- the character serializer. Its return value is the sole gate on the
 /// submit call in both character lanes.
 #[cfg(windows)]
 const SAVE_SERIALIZE_CHAR_RVA: usize = 0x67dc00;
 /// `_DAT_143d69920` -- bytes the character serializer produced on its last call.
 ///
-/// Written exactly ONCE per call, at the merge point after the sub-serializer cascade:
+/// Written exactly once per call, at the merge point after the sub-serializer cascade:
 ///
 /// ```text
 ///   14067e0aa  CALL 0x141ede890        ; RAX = stream->capacity   (`return *(u64*)(this+0x18)`)
@@ -795,14 +795,14 @@ pub const SAVE_LANE_SYSTEM: usize = 2;
 /// `FUN_14067b940`, the combined lane the Save Game commit fires.
 pub const SAVE_LANE_COMBINED: usize = 3;
 
-/// [`serialize_last_fail_bytes`] when the byte counter could not be READ -- its address
-/// never resolved, or the read faulted. It is NOT a game-state outcome.
+/// [`serialize_last_fail_bytes`] when the byte counter could not be read -- its address
+/// never resolved, or the read faulted. It is not a game-state outcome.
 ///
 /// This used to mean "the counter did not move across the failing call, so the serializer
 /// was rejected by its first gate". That reading was wrong twice over. The gate is
 /// unreachable (see `SAVE_SERIALIZE_BYTES_RVA`), so it was a predicted-impossible outcome;
 /// and the before/after comparison that produced it fired on the ordinary case instead --
-/// a serializer that aborts at the SAME step every frame stores the SAME count every
+/// a serializer that aborts at the same step every frame stores the same count every
 /// frame, so "unmoved" was the reading for nearly every real failure. The counter is now
 /// read once, after the call, and decoded by [`serialize_fail_step_label`].
 pub const SAVE_SERIALIZE_BYTES_UNREADABLE: u64 = u64::MAX;
@@ -827,7 +827,7 @@ pub const SAVE_SERIALIZE_STEP_AFTER_OUTPUT: &str = "step3plus-after-output";
 ///
 /// The serializer is a straight-line cascade -- each step runs only if the previous one
 /// returned true -- and the byte counter is stored once, at the merge point, so the count
-/// IS the stream position where the cascade stopped. Cumulative boundaries therefore name
+/// is the stream position where the cascade stopped. Cumulative boundaries therefore name
 /// the failing step, but only as far as the steps have statically fixed sizes:
 ///
 /// | bytes | exit |
@@ -925,7 +925,7 @@ static ORIG_SAVE_DISPATCH_SYSTEM: AtomicUsize = AtomicUsize::new(0);
 static ORIG_SAVE_SERIALIZE_CHAR: AtomicUsize = AtomicUsize::new(0);
 
 /// The two detours that actually suppress: the submit swallow and the status rewrite.
-/// The quit-settle observer is deliberately NOT one of them -- it changes nothing and a
+/// The quit-settle observer is deliberately not one of them -- it changes nothing and a
 /// failure to install it must not read as a partial suppression.
 pub const SUPPRESSOR_HOOKS: usize = 2;
 
@@ -938,7 +938,7 @@ static SUBMITS_SWALLOWED: AtomicU64 = AtomicU64::new(0);
 static SUBMITS_PASSED_THROUGH: AtomicU64 = AtomicU64::new(0);
 static STATUS_FAKED: AtomicU64 = AtomicU64::new(0);
 /// Of [`STATUS_FAKED`], the rewrites issued while `GameMan.saveState == 0` -- i.e. the game
-/// had NO save in flight, so the rewrite retired nothing. See [`status_faked_idle`].
+/// had no save in flight, so the rewrite retired nothing. See [`status_faked_idle`].
 static STATUS_FAKED_IDLE: AtomicU64 = AtomicU64::new(0);
 static STATUS_PASSED_THROUGH: AtomicU64 = AtomicU64::new(0);
 static RELEASE_UNAVAILABLE: AtomicU64 = AtomicU64::new(0);
@@ -964,10 +964,10 @@ static SERIALIZE_BYTES_ADDR: AtomicUsize = AtomicUsize::new(0);
 static BYPASS_DECLINE_REPORTED: AtomicUsize = AtomicUsize::new(0);
 
 // ============================================================================
-// ONE-SHOT BYPASS (save-game-flow WP1). A single-use token that lets exactly one SL
+// one-shot bypass (save-game-flow WP1). A single-use token that lets exactly one SL
 // save enqueue through to the real trampoline. Armed by the product's Save Game commit
 // path immediately before it fires the forced native request pair; consumed by the
-// FIRST enqueue that arrives afterwards; expired by the product's watchdog if that
+// first enqueue that arrives afterwards; expired by the product's watchdog if that
 // enqueue never comes, so a stranded token can never leak onto some later native save.
 // ============================================================================
 
@@ -982,7 +982,7 @@ static BYPASS_ALLOWED_FAILED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BYPASS_EXPIRED_TOTAL: AtomicU64 = AtomicU64::new(0);
 /// Latched terminal status of the last bypassed save (0 = success; see the poll's
 /// jump-table codes). Holds [`BYPASS_FINAL_STATUS_NONE`] until the first capture and is
-/// re-sentineled on every arm, so telemetry always shows the CURRENT commit's outcome.
+/// re-sentineled on every arm, so telemetry always shows the current commit's outcome.
 static BYPASS_FINAL_STATUS: AtomicU32 = AtomicU32::new(BYPASS_FINAL_STATUS_NONE);
 /// Handshake flag: set with each fresh [`BYPASS_FINAL_STATUS`] capture, consumed by
 /// [`take_bypass_final_status`] so the caller's state machine sees each outcome once
@@ -992,7 +992,7 @@ static BYPASS_FINAL_STATUS_FRESH: AtomicUsize = AtomicUsize::new(0);
 /// Sentinel for "no terminal status captured yet".
 pub const BYPASS_FINAL_STATUS_NONE: u32 = 0xffff_ffff;
 
-/// Arm the one-shot bypass: the NEXT SL save enqueue is forwarded for real instead of
+/// Arm the one-shot bypass: the next SL save enqueue is forwarded for real instead of
 /// swallowed. Returns false (and arms nothing) when suppression is not armed -- with no
 /// swallow in place every save already writes, so a token would be meaningless -- or
 /// when a token is already pending. Logged and published unconditionally: arming is a
@@ -1054,7 +1054,7 @@ pub fn expire_bypass_if_pending() -> bool {
 
 /// Peek at the freshness handshake without consuming it.
 ///
-/// A caller that must do something fallible BEFORE it may consume the outcome -- the save flow
+/// A caller that must do something fallible before it may consume the outcome -- the save flow
 /// has to score the destination file first, and that scoring can be deferred while the native
 /// writer is still inside a job body -- needs to know a status is waiting without taking it. A
 /// consumed status that is then dropped on a deferral would be an outcome nobody ever reports.
@@ -1063,7 +1063,7 @@ pub fn bypass_final_status_fresh() -> bool {
 }
 
 /// Consume the freshly-captured terminal status of the last bypassed save, if one has
-/// been captured since the last arm. The latched value itself is NOT cleared (telemetry
+/// been captured since the last arm. The latched value itself is not cleared (telemetry
 /// keeps reporting it); only the freshness handshake is consumed, so a state machine
 /// polling this sees each outcome exactly once.
 pub fn take_bypass_final_status() -> Option<u32> {
@@ -1128,14 +1128,14 @@ pub fn bypass_expired_total() -> u64 {
 }
 
 /// `GameMan+0xbc4 == 2`: the return-to-title save was submitted and the wait job is
-/// still spinning. This is the ONLY state from which `FUN_14067a980` does anything.
+/// still spinning. This is the only state from which `FUN_14067a980` does anything.
 #[cfg(windows)]
 const QUIT_PHASE_SAVE_SUBMITTED: usize = 2;
 /// Highest return-to-title phase ever observed. A secondary diagnostic only: it says
-/// how FAR the quit got (1 = requested, 2 = save submitted), which is useful for
+/// how far the quit got (1 = requested, 2 = save submitted), which is useful for
 /// locating a hang, but it cannot certify success -- see `QUIT_PHASE_SETTLE_EVENTS`.
 static QUIT_PHASE_MAX_SEEN: AtomicUsize = AtomicUsize::new(0);
-/// Times the 2 -> 3 transition actually executed, counted as an EVENT at the only
+/// Times the 2 -> 3 transition actually executed, counted as an event at the only
 /// function that performs it.
 ///
 /// Sampling the field could never prove this. `bc4 == 3` is TRANSIENT: `FUN_14067a980`
@@ -1215,7 +1215,7 @@ pub fn counters() -> [(&'static str, u64); 44] {
             "suppress_prologue_mismatches",
             PROLOGUE_MISMATCHES.load(Ordering::SeqCst) as u64,
         ),
-        // How far the quit got. NOT a success oracle: a healthy quit ends here at 2,
+        // How far the quit got. Not a success oracle: a healthy quit ends here at 2,
         // because 3 is transient. Read it only to locate a hang.
         (
             "quit_phase_bc4_max_seen",
@@ -1227,7 +1227,7 @@ pub fn counters() -> [(&'static str, u64); 44] {
             "quit_phase_settle_events",
             QUIT_PHASE_SETTLE_EVENTS.load(Ordering::SeqCst),
         ),
-        // SL REQUEST SLOT. `swallow_release_left_dirty` is the self-incrimination oracle:
+        // SL request slot. `swallow_release_left_dirty` is the self-incrimination oracle:
         // non-zero means our own swallow left the submit precondition failing and every
         // later save in the process is refused because of us.
         (
@@ -1246,7 +1246,7 @@ pub fn counters() -> [(&'static str, u64); 44] {
             "save_dispatch_last_decline_bail_reason",
             DECLINE_BAIL_REASON.load(Ordering::SeqCst) as u64,
         ),
-        // THE LOAD CONSUMER. `load_consumer_stranded` is the regression oracle for the
+        // The load consumer. `load_consumer_stranded` is the regression oracle for the
         // post-switch save refusal: non-zero means a completed load kept the shared
         // `iodev+0x20` job and no save can be built again. `load_consumer_releases` is its
         // positive counterpart -- proof the slot was freed, by the native consumer, at the
@@ -1273,7 +1273,7 @@ pub fn counters() -> [(&'static str, u64); 44] {
             "save_load_consumer_last_outcome",
             LOAD_CONSUMER_LAST_OUTCOME.load(Ordering::SeqCst) as u64,
         ),
-        // THE WRITE-COMPLETION EVENT. `save_job_starts`/`save_job_completions` are the SL
+        // The write-completion event. `save_job_starts`/`save_job_completions` are the SL
         // worker actually picking up and finishing a save; `save_job_last_result` is the
         // game's own verdict on it (0 = success). `save_job_observer_installed == 0` means
         // none of the three can be trusted as absence-of-write, because nothing is watching.
@@ -1294,7 +1294,7 @@ pub fn counters() -> [(&'static str, u64); 44] {
             "save_job_no_trampoline",
             SAVE_JOB_NO_TRAMPOLINE.load(Ordering::SeqCst),
         ),
-        // WHICH observation completed each commit. Their sum should equal the number of
+        // Which observation completed each commit. Their sum should equal the number of
         // successful commits; a shortfall is commits that only the watchdog ended.
         (
             "save_bypass_completed_via_job",
@@ -1304,7 +1304,7 @@ pub fn counters() -> [(&'static str, u64); 44] {
             "save_bypass_completed_via_poll",
             BYPASS_COMPLETED_VIA_POLL_TOTAL.load(Ordering::SeqCst),
         ),
-        // WHICH WRITE BRANCH RAN. Read the installed count FIRST: at 0 the two call counters
+        // Which write branch ran. Read the installed count FIRST: at 0 the two call counters
         // can only be 0 and that is "nothing was watching", not "nothing was written". At 2,
         // both reading 0 means no save was written at all during the run.
         (
@@ -1323,9 +1323,9 @@ pub fn counters() -> [(&'static str, u64); 44] {
             "save_write_branch_no_trampoline",
             WRITE_BRANCH_NO_TRAMPOLINE.load(Ordering::SeqCst),
         ),
-        // THE FORGOTTEN SAVE REQUEST. `detections` counts the state in which saving is dead
+        // The forgotten save request. `detections` counts the state in which saving is dead
         // for the rest of the process; `released` counts the times the game's own poll brought
-        // it back. detections > 0 with released == 0 is a run that LOST the save system.
+        // it back. detections > 0 with released == 0 is a run that lost the save system.
         (
             "save_orphan_detections",
             SAVE_ORPHAN_DETECTIONS.load(Ordering::SeqCst),
@@ -1350,7 +1350,7 @@ pub fn counters() -> [(&'static str, u64); 44] {
             "save_orphan_poll_unavailable",
             SAVE_ORPHAN_POLL_UNAVAILABLE_COUNT.load(Ordering::SeqCst),
         ),
-        // THE LOAD LANE'S HALF OF THE SAME SHARED DEVICE. `refusals` counts the times a load
+        // The load lane'S half of the same shared device. `refusals` counts the times a load
         // submit was about to be offered a device that would have refused it -- the state that
         // arms an unsatisfiable drain -- and `repairs` counts the times the game's own poll
         // opened it again. refusals > 0 with repairs == 0 is a load the device blocked and
@@ -1382,19 +1382,19 @@ pub fn status_faked() -> u64 {
     STATUS_FAKED.load(Ordering::SeqCst)
 }
 
-/// Of [`status_faked`], the rewrites that answered a poll made while the game had NO save
+/// Of [`status_faked`], the rewrites that answered a poll made while the game had no save
 /// in flight (`GameMan.saveState == 0`).
 ///
-/// Read the pair, never `status_faked` alone. The rewrite is what retires a SWALLOWED save
+/// Read the pair, never `status_faked` alone. The rewrite is what retires a swallowed save
 /// (`saveState == 1`), and only those rewrites did anything; an idle rewrite is a no-op for
 /// every consumer that matters, because `FUN_140679510`/`FUN_1406794b0` treat 4 and 0
 /// identically (both are "not 1") and the only callers that distinguish them --
 /// `DoSaveStuff` and the "saving..." MenuJob `FUN_14082a0f0` -- are not running when there
 /// is nothing to retire. A large `status_faked` with `status_faked_idle` almost equal to it
-/// therefore says the suppressor did NOTHING that run, which is exactly the reading a bare
+/// therefore says the suppressor did nothing that run, which is exactly the reading a bare
 /// `status_faked = 207` against 2 swallows failed to give.
 ///
-/// The lie itself is deliberately NOT narrowed to an outstanding swallow. Narrowing it
+/// The lie itself is deliberately not narrowed to an outstanding swallow. Narrowing it
 /// risks answering a poll with the raw 4, and 4 is catastrophic in the other direction:
 /// `FUN_14082a0f0` maps it to `MenuJobResult::Failed` and `DoSaveStuff` maps it to a silent
 /// no-op that never calls `FUN_14067a980`, so `GameMan+0xbc4` never reaches 3 and
@@ -1417,7 +1417,7 @@ pub fn dispatch_declines() -> u64 {
 }
 
 /// Dispatch declines observed while a one-shot bypass token was pending. Non-zero means
-/// the user's Save Game request DID reach the native dispatcher and the dispatcher refused
+/// the user's Save Game request did reach the native dispatcher and the dispatcher refused
 /// it -- the failure is upstream of the enqueue and upstream of this crate.
 pub fn dispatch_declines_with_bypass() -> u64 {
     DISPATCH_DECLINES_WITH_BYPASS.load(Ordering::SeqCst)
@@ -1458,7 +1458,7 @@ pub fn serialize_last_fail_step() -> &'static str {
 }
 
 /// Number of dispatch/serializer observers bound (0..=4). Zero means the attribution
-/// counters above can only ever read 0 and a harness must NOT read that as "no dispatch".
+/// counters above can only ever read 0 and a harness must not read that as "no dispatch".
 pub fn dispatch_observers_installed() -> usize {
     DISPATCH_OBSERVERS_INSTALLED.load(Ordering::SeqCst)
 }
@@ -1474,7 +1474,7 @@ pub fn settle_events() -> u64 {
 }
 
 /// Swallows that ran with no resolved `FUN_140e6f200` address and were therefore passed
-/// through to the real enqueue -- each one is a save that was WRITTEN.
+/// through to the real enqueue -- each one is a save that was written.
 ///
 /// `install` refuses to arm without that address, so this should be structurally
 /// unreachable; it is exported because "unreachable" is a claim about code that has never
@@ -1484,7 +1484,7 @@ pub fn release_unavailable() -> u64 {
     RELEASE_UNAVAILABLE.load(Ordering::SeqCst)
 }
 
-/// Swallows whose `FUN_140e6f200` release did NOT restore the submit builders'
+/// Swallows whose `FUN_140e6f200` release did not restore the submit builders'
 /// `iodev+0x10 == 0 && iodev+0x20 == 0` precondition.
 ///
 /// This is the direct test of "does our swallow leave the request slot dirty". Zero with
@@ -1514,12 +1514,12 @@ pub fn decline_slot() -> Option<SlRequestSlot> {
     DECLINE_SLOT.snapshot()
 }
 
-/// The SL request slot immediately BEFORE the last swallow's release call.
+/// The SL request slot immediately before the last swallow's release call.
 pub fn swallow_slot_before() -> Option<SlRequestSlot> {
     SWALLOW_SLOT_BEFORE.snapshot()
 }
 
-/// The SL request slot immediately AFTER the last swallow's release call. Every field
+/// The SL request slot immediately after the last swallow's release call. Every field
 /// should be zero; `save_content` or `job` non-zero is a self-inflicted stuck slot.
 pub fn swallow_slot_after() -> Option<SlRequestSlot> {
     SWALLOW_SLOT_AFTER.snapshot()
@@ -1527,7 +1527,7 @@ pub fn swallow_slot_after() -> Option<SlRequestSlot> {
 
 /// Reason code (`SL_BAIL_*`) for the most recent dispatch decline. Pair it with
 /// [`sl_bail_reason_label`] for the name. Read [`decline_save_state`] FIRST: this code only names
-/// the cause when the refusing `saveState` was IDLE.
+/// the cause when the refusing `saveState` was idle.
 pub fn decline_bail_reason() -> usize {
     DECLINE_BAIL_REASON.load(Ordering::SeqCst)
 }
@@ -1566,7 +1566,7 @@ fn prologue_matches(actual: &[u8], expected: &[u8], mask: &[u8]) -> bool {
 
 /// Whether occurrence `count` of a repeating event earns a log line.
 ///
-/// The justification is that a repeat carries no information, NOT that saves are
+/// The justification is that a repeat carries no information, not that saves are
 /// enormously frequent. Measured rate is 7-25 swallowed submits per session, so the
 /// throttle saves tens of lines, not thousands. (An earlier version of this comment
 /// claimed the rune-counter widget drives a save on every rune change and implied
@@ -1638,25 +1638,25 @@ fn verify(rva: usize, expected: &[u8], mask: &[u8], name: &str) -> Option<usize>
 }
 
 /// [`verify`] for an address about to be DETOURED: same prologue verification, but what comes back
-/// is the UNRESOLVED `base + rva`.
+/// is the unresolved `base + rva`.
 ///
 /// # Why this is not just [`verify`]
 ///
-/// Most callers of [`verify`] `transmute` the result into a function pointer and CALL it, and a
+/// Most callers of [`verify`] `transmute` the result into a function pointer and call it, and a
 /// call needs the resolved address. A detour does not: `er_hook::MhHook::new` and
-/// `register_union_hook` resolve what they are handed, and they must be the ONE resolve that
+/// `register_union_hook` resolve what they are handed, and they must be the one resolve that
 /// decides where MinHook writes.
 ///
 /// Resolving the same 1.16.2 input twice is harmless -- that is what happens here, once to read the
-/// prologue and once inside the hook API, both landing on the same address. Resolving the OUTPUT is
-/// the bug: an address can be both a 1.17 destination of one row and the 1.16.2 SOURCE of another
+/// prologue and once inside the hook API, both landing on the same address. Resolving the output is
+/// the bug: an address can be both a 1.17 destination of one row and the 1.16.2 source of another
 /// (a region shift equal to the local function spacing, `B - A == C - B`), and the second resolve
 /// then silently returns a third, unrelated function -- three live detours were measured doing
 /// exactly that on 2026-08-30. `scripts/check-double-resolved-hook-targets.py` gates the shape.
 ///
-/// Note the two also consult DIFFERENT tables: [`verify`] resolves through the CALL map, while the
+/// Note the two also consult different tables: [`verify`] resolves through the call map, while the
 /// hook API resolves through the detour-audited one. A row good enough to call that has not been
-/// audited as a detour target is now REFUSED by the hook API with a log line, instead of being
+/// audited as a detour target is now refused by the hook API with a log line, instead of being
 /// waved through by the already-translated shortcut.
 #[cfg(windows)]
 fn verify_for_hook(rva: usize, expected: &[u8], mask: &[u8], name: &str) -> Option<usize> {
@@ -1668,7 +1668,7 @@ fn verify_for_hook(rva: usize, expected: &[u8], mask: &[u8], name: &str) -> Opti
 ///
 /// `disarm_for_census` is the standalone DLL's positive-control lever: true skips the
 /// install entirely (saves write normally so the census can observe them). The env-var
-/// consultation that used to live here moved OUT to that caller -- the product passes
+/// consultation that used to live here moved out to that caller -- the product passes
 /// `false` unconditionally, so no env var can alter product behavior.
 ///
 /// All-or-nothing on purpose. Binding only the submit detour would leave every save
@@ -1723,7 +1723,7 @@ pub fn install(disarm_for_census: bool) -> usize {
     };
     SL_RELEASE_REQUEST.store(release, Ordering::SeqCst);
     // The forgotten-save-request drain calls this address when nothing has detoured it, and
-    // the trampoline when something has. Stored from the SAME prologue-verified resolution
+    // the trampoline when something has. Stored from the same prologue-verified resolution
     // the suppressor uses, so the repair can never be pointed at a different function than
     // the one the signature proved.
     SL_POLL_SAVE_STATUS_ADDR.store(poll, Ordering::SeqCst);
@@ -1795,13 +1795,13 @@ pub fn install(disarm_for_census: bool) -> usize {
         }
     }
 
-    // OBSERVERS, applied as a SECOND batch so none of them can abort suppression. They
+    // Observers, applied as a second batch so none of them can abort suppression. They
     // call their originals and only count; losing one costs evidence, whereas losing a
     // suppressor would hang System->Quit. (The quit-settle observer used to ride the
     // suppressor batch, where an `MhHook::new` failure on it returned 0 and disarmed
     // everything -- the opposite of what its own comment promised.)
     install_observers(settle);
-    // Also on the ARMED path, and not only in `install_observers_only`: that function early-returns
+    // Also on the armed path, and not only in `install_observers_only`: that function early-returns
     // when `is_armed()`, so a run that arms suppression first would otherwise have no witness at all
     // -- exactly the configuration in which an abandoned save is hardest to attribute.
     install_save_state_witness();
@@ -1810,14 +1810,14 @@ pub fn install(disarm_for_census: bool) -> usize {
     SUPPRESSOR_HOOKS
 }
 
-/// Bind ONLY the read-only observers, leaving suppression disarmed.
+/// Bind only the read-only observers, leaving suppression disarmed.
 ///
-/// WHY THIS EXISTS (2026-08-04). The observers are pure diagnostics -- every one of them calls its
+/// Why this exists (2026-08-04). The observers are pure diagnostics -- every one of them calls its
 /// original and only counts -- but they were reachable solely from [`install`], which arms
 /// suppression. Suppression is default-off in product (`save_suppression_enabled` in
 /// `er-quickload.toml`), so in every normal run `dispatch_observers_installed()` reported 0 and
 /// `oracle_save_dispatch_last_decline_reason` reported `unsampled`. That is the one field that names
-/// WHY the save lane refused, and it was unavailable in exactly the configuration users run.
+/// why the save lane refused, and it was unavailable in exactly the configuration users run.
 ///
 /// It cost a wasted launch. The epoch-1 reload parks with `GameMan+0xb72`/`+0xb73` latched -- measured
 /// `[+195245ms] gm-snap: save_requested=true ... b73=1`, still set at `+196171ms`, the last change-
@@ -1859,7 +1859,7 @@ pub fn install_observers_only() -> usize {
     ) {
         SL_RELEASE_REQUEST.store(release, Ordering::SeqCst);
     }
-    // Observers-only is the PRODUCT configuration, so this is the resolution that matters:
+    // Observers-only is the product configuration, so this is the resolution that matters:
     // without it `save_orphan_poll_unavailable` climbs and a forgotten save request stays
     // forgotten. Nothing detours `FUN_140e6e430` on this path, so the address is called
     // directly.
@@ -1878,12 +1878,12 @@ pub fn install_observers_only() -> usize {
         "QuitPhaseSettle",
     );
     install_observers(settle);
-    // Default-on in the PRODUCT configuration, because that is the only one that can be running
+    // Default-on in the product configuration, because that is the only one that can be running
     // when a save is abandoned. It forwards every call unchanged and writes no game memory; the
     // cost is two device samples per wrapper call, and the stack walk happens only on a finding.
     install_save_state_witness();
     install_save_state_writers();
-    // The vantage point the writer witnesses cannot reach: which SUBMIT latched the device, and
+    // The vantage point the writer witnesses cannot reach: which submit latched the device, and
     // whether its lane accepted. Observer-only and non-fatal, like the two above.
     install_save_submit_latch();
     dispatch_observers_installed()
@@ -1948,7 +1948,7 @@ fn install_observers(settle: Option<usize>) {
     };
     SETTLE_OBSERVER_INSTALLED.store(usize::from(settle_queued), Ordering::SeqCst);
 
-    // Dispatch attribution goes through the SHARED HOOK UNION, not a private `MhHook`.
+    // Dispatch attribution goes through the shared hook union, not a private `MhHook`.
     // The product DLL already detours all three lanes for its menu/continue trace, and a
     // second `MhHook::new` on an address the same MinHook instance already owns returns
     // ALREADY_CREATED -- whichever install thread lost the race would silently have no
@@ -2006,11 +2006,11 @@ fn install_observers(settle: Option<usize>) {
     }
     DISPATCH_OBSERVERS_INSTALLED.store(dispatch_bound, Ordering::SeqCst);
 
-    // THE WRITE-COMPLETION OBSERVER (see `save_job_completion.rs`): the event that says a
+    // The write-completion observer (see `save_job_completion.rs`): the event that says a
     // bypassed save finished writing, without anything having to poll for it.
     let job_body_bound = install_save_job_body_observer();
 
-    // WHICH WRITE BRANCH RAN. Deliberately NOT folded into `dispatch_bound` above: that
+    // Which write branch ran. Deliberately not folded into `dispatch_bound` above: that
     // count is exported as `dispatch_observers_installed()` and documented as 0..=4, and
     // widening it would silently change what an existing oracle means.
     let write_branch_bound = install_write_branch_observers();
@@ -2032,7 +2032,7 @@ fn install_observers(settle: Option<usize>) {
 /// with the serialized blocks. Default (no token): we do not enqueue it. We hand it
 /// straight to the game's own teardown -- the exact call the native code makes when the
 /// enqueue fails -- and then report success, which is the one thing the native failure
-/// path does not do. With a bypass token armed: the FIRST enqueue consumes the token
+/// path does not do. With a bypass token armed: the first enqueue consumes the token
 /// and is forwarded to the real trampoline, so the game performs a genuine submit and a
 /// genuine write; the completion watch then tells the poll detour to latch the outcome.
 ///
@@ -2063,7 +2063,7 @@ unsafe extern "system" fn enqueue_save_job_hook(iodev: usize, opcode: u32) -> u8
         return unsafe { original(iodev, opcode) };
     }
 
-    // ONE-SHOT BYPASS: consume a pending token and forward this submit for REAL. This
+    // One-shot BYPASS: consume a pending token and forward this submit for real. This
     // is the sanctioned Save Game write -- the only save that is allowed to reach disk.
     // Logged and published unconditionally: it is a rare, user-initiated event, and
     // its failure modes must never be quieter than its success (noise rule 3).
@@ -2071,7 +2071,7 @@ unsafe extern "system" fn enqueue_save_job_hook(iodev: usize, opcode: u32) -> u8
         .compare_exchange(1, 0, Ordering::SeqCst, Ordering::SeqCst)
         .is_ok()
     {
-        // Baseline the worker's completion counter BEFORE the submit, so the adopter can
+        // Baseline the worker's completion counter before the submit, so the adopter can
         // only ever accept a job that finished after this call.
         arm_save_job_completion_watch();
         BYPASS_COMPLETION_WATCH.store(1, Ordering::SeqCst);
@@ -2133,9 +2133,9 @@ unsafe extern "system" fn enqueue_save_job_hook(iodev: usize, opcode: u32) -> u8
         return unsafe { original(iodev, opcode) };
     }
 
-    // Sample the request slot on BOTH sides of the release. The swallow's whole contract
+    // Sample the request slot on both sides of the release. The swallow's whole contract
     // is "leave the device exactly as the native enqueue-failure path would", and the
-    // consequence of getting that wrong is not a lost save but a PERMANENT one: the submit
+    // consequence of getting that wrong is not a lost save but a permanent one: the submit
     // builders gate on `iodev+0x10 == 0 && iodev+0x20 == 0`, so a field left populated
     // refuses every later save forever. Measuring it is two `ReadProcessMemory` calls per
     // swallow, and swallows are rare.
@@ -2161,7 +2161,7 @@ unsafe extern "system" fn enqueue_save_job_hook(iodev: usize, opcode: u32) -> u8
     if left_dirty {
         let dirty = SWALLOW_RELEASE_LEFT_DIRTY.fetch_add(1, Ordering::SeqCst) + 1;
         // Unthrottled on purpose. This is not a rate, it is a latch: from here on every
-        // save in the process is refused by a precondition WE left failing.
+        // save in the process is refused by a precondition we left failing.
         log_message(format_args!(
             "suppress: BUG -- FUN_140e6f200 did not clear the request slot (#{dirty}); \
              before {}, after {} -- the submit precondition `iodev+0x10 == 0 && \
@@ -2173,14 +2173,14 @@ unsafe extern "system" fn enqueue_save_job_hook(iodev: usize, opcode: u32) -> u8
     }
 
     let count = SUBMITS_SWALLOWED.fetch_add(1, Ordering::SeqCst) + 1;
-    // Swallowing is the EXPECTED steady state, not an event. It is counted in telemetry
+    // Swallowing is the expected steady state, not an event. It is counted in telemetry
     // (`suppress_submits_swallowed`), which is what a harness reads; the log only needs
     // to show that it started, that it kept happening, and any new kind of save.
     let novel = note_opcode(opcode);
     if should_report(count, novel) {
         // The old form of this line asserted "request released" as a fixed string, which
         // read like evidence and was not: it printed identically whether the slot had been
-        // cleared or left populated. Print the MEASURED post-release state instead -- a
+        // cleared or left populated. Print the measured post-release state instead -- a
         // reader chasing a permanently-refusing save needs to know which it was.
         log_message(format_args!(
             "suppress: swallowed save submit #{count} (iodev=0x{iodev:x}, opcode={opcode}) \
@@ -2188,7 +2188,7 @@ unsafe extern "system" fn enqueue_save_job_hook(iodev: usize, opcode: u32) -> u8
             describe_slot(after)
         ));
         // Publish on the same schedule. A snapshot per swallow meant a full JSON
-        // re-serialize, `fs::write` and `fs::rename` on the GAME thread for every save
+        // re-serialize, `fs::write` and `fs::rename` on the game thread for every save
         // request -- this detours `FUN_140e6fb50`, whose callers are the per-frame
         // dispatchers, strictly above the `FUN_14240ae10` worker boundary -- and each of
         // those can re-enter the host DLL's own file-API detours. Every counter a
@@ -2226,7 +2226,7 @@ unsafe extern "system" fn poll_save_status_hook(iodev: usize) -> u32 {
             .compare_exchange(1, 0, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
     {
-        // RAW, never the rewritten value: `decide_status` turns a 4 ("no request") into a
+        // Raw, never the rewritten value: `decide_status` turns a 4 ("no request") into a
         // 0 ("success") for the game's benefit, and adopting that here would report a
         // commit whose request had already vanished as a successful save.
         BYPASS_FINAL_STATUS.store(raw, Ordering::SeqCst);
@@ -2244,7 +2244,7 @@ unsafe extern "system" fn poll_save_status_hook(iodev: usize) -> u32 {
         STATUS_PASSED_THROUGH.fetch_add(1, Ordering::SeqCst);
     } else {
         STATUS_FAKED.fetch_add(1, Ordering::SeqCst);
-        // Split off the rewrites that retired nothing. The rewrite only DOES something
+        // Split off the rewrites that retired nothing. The rewrite only does something
         // when the game believes a save is in flight (`saveState != 0`, which only the
         // dispatcher's commit tail sets, i.e. only after a swallow); every other rewrite
         // answers an idle poll where 4 and 0 are equivalent to the caller. Without this
@@ -2259,7 +2259,7 @@ unsafe extern "system" fn poll_save_status_hook(iodev: usize) -> u32 {
     decided
 }
 
-/// Observer on `FUN_14067b940`, the COMBINED (b72 && b73) save dispatch lane -- the lane the
+/// Observer on `FUN_14067b940`, the combined (b72 && b73) save dispatch lane -- the lane the
 /// Save Game commit deliberately produces by firing both native request setters.
 #[cfg(windows)]
 unsafe extern "system" fn save_dispatch_combined_hook(
@@ -2288,7 +2288,7 @@ unsafe extern "system" fn save_dispatch_system_hook(
     unsafe { observe_dispatch(&ORIG_SAVE_DISPATCH_SYSTEM, SAVE_LANE_SYSTEM, a, b, c, d) }
 }
 
-/// Shared body of the three dispatch observers: forward verbatim, count, and say ONCE per
+/// Shared body of the three dispatch observers: forward verbatim, count, and say once per
 /// armed bypass when the lane refuses.
 ///
 /// A refusal (`AL == 0`) is the failure this instrument exists for. The lane touches
@@ -2320,9 +2320,9 @@ unsafe fn observe_dispatch(
         return 0;
     }
     let original: UnionFn = unsafe { core::mem::transmute(orig) };
-    // Taken on the way IN, because a latch is closed by the lane call that produced it: if
+    // Taken on the way in, because a latch is closed by the lane call that produced it: if
     // `SUBMIT_LATCHES` moves across this call, the submit the builder observers just recorded is
-    // THIS lane's, and its return plus the `saveState` it leaves behind are the accept. See
+    // this lane's, and its return plus the `saveState` it leaves behind are the accept. See
     // `save_submit_latch.rs`; no extra hook and no extra read on the frames where nothing latched.
     let latches_before = submit_latches();
     let ret = unsafe { original(a, b, c, d) };
@@ -2336,9 +2336,9 @@ unsafe fn observe_dispatch(
     }
     let declines = DISPATCH_DECLINES.fetch_add(1, Ordering::SeqCst) + 1;
     // Sample the SL request slot at the decline. The lane touched nothing on this path, so
-    // what we read here IS what the submit builder's precondition saw -- and since the
+    // what we read here is what the submit builder's precondition saw -- and since the
     // builder's other four operands are statically guaranteed by the call site (see the
-    // SL REQUEST SLOT block), `iodev+0x10` and `iodev+0x20` are the only two operands that
+    // SL request slot block), `iodev+0x10` and `iodev+0x20` are the only two operands that
     // can have failed. One decline therefore names the culprit outright.
     let slot = read_sl_slot();
     store_slot_sample(slot, &DECLINE_SLOT);
@@ -2346,7 +2346,7 @@ unsafe fn observe_dispatch(
     DECLINE_SAVE_STATE.store(refusing_state.unwrap_or(u32::MAX), Ordering::SeqCst);
     let reason = classify_sl_bail(slot);
     DECLINE_BAIL_REASON.store(reason, Ordering::SeqCst);
-    // FIRST occurrence, not last -- see the BIRTH OF THE WEDGE block on the statics. Same sample,
+    // First occurrence, not last -- see the birth of the wedge block on the statics. Same sample,
     // no extra read, no extra hook.
     if dispatch_sample_is_wedged(slot, refusing_state) {
         note_wedged_dispatch(slot, lane, calls);
@@ -2388,22 +2388,22 @@ unsafe fn observe_dispatch(
             describe_slot(slot)
         ));
     }
-    // THE ONE PLACE THIS CRATE CHANGES ANYTHING, and it changes it by asking the GAME to.
+    // The one place this crate changes anything, and it changes it by asking the game to.
     // A decline is the only moment a forgotten save request can be observed from inside the
-    // process AND still be worth repairing: the request that was just refused is still
+    // process and still be worth repairing: the request that was just refused is still
     // latched in `GameMan+0xb72`/`+0xb73`, so the dispatcher re-enters this lane next frame
-    // and the user's save is built one frame late instead of never. See the ORPHANED SAVE
-    // REQUEST block for why the poll is safe to run here and what it refuses to touch.
+    // and the user's save is built one frame late instead of never. See the orphaned save
+    // request block for why the poll is safe to run here and what it refuses to touch.
     drain_orphaned_save_request("save dispatch decline");
     ret
 }
 
 /// Observer on `FUN_14067dc00`, the character serializer.
 ///
-/// Its return value is the SOLE gate on the submit call in both character lanes, so a zero
+/// Its return value is the sole gate on the submit call in both character lanes, so a zero
 /// here is a character save that produced no submit at all.
 ///
-/// The byte counter `_DAT_143d69920` is read ONCE, after the call, and decoded into a step
+/// The byte counter `_DAT_143d69920` is read once, after the call, and decoded into a step
 /// name. It is not compared against a pre-call sample: the serializer's only exit that
 /// leaves the counter untouched is a first gate proven unreachable here, and a pre/post
 /// comparison actively misreads the normal case -- the lane is re-entered every frame while
@@ -2468,23 +2468,23 @@ fn read_serialize_bytes() -> Option<usize> {
 /// body exactly `if (bc4 == 2) bc4 = 3;` -- so the zero-argument detour signature is
 /// correct and the original is called before any of our code can clobber a register.
 ///
-/// It counts the TRANSITION, not the call, and that distinction is the whole value of
+/// It counts the transition, not the call, and that distinction is the whole value of
 /// the instrument. `DoSaveStuff` calls this function from case 0 and from cases 3, 7 and
 /// 9 of its switch on the *save status* -- nothing there tests `bc4` -- and the menu job
 /// `FUN_1407ecf20` calls it from *its own* state 3. So it runs on every ordinary save
 /// completion, when `bc4` is 0 and the body is a no-op.
 ///
 /// Counting entries would therefore make `quit_phase_settle_events` non-zero from the
-/// first rune the player picked up, on a run where no quit ever happened -- a FALSE PASS
+/// first rune the player picked up, on a run where no quit ever happened -- a false pass
 /// on the one oracle that exists to catch the quit deadlock. That is the same "the
 /// instrument does not measure what it claims" failure as sampling the transient value,
 /// one level further in, and in the more dangerous direction.
 ///
-/// A failed read fails CLOSED (no count): under-counting yields a loud false FAIL that
+/// A failed read fails closed (no count): under-counting yields a loud false fail that
 /// gets investigated, while over-counting would ship a hang as a pass.
 #[cfg(windows)]
 unsafe extern "system" fn quit_phase_settle_hook() {
-    // Read BEFORE the original runs: afterwards the 2 is gone and the transition is
+    // Read before the original runs: afterwards the 2 is gone and the transition is
     // indistinguishable from having arrived already-3.
     let settles = read_quit_phase() == Some(QUIT_PHASE_SAVE_SUBMITTED);
     let orig = ORIG_QUIT_PHASE_SETTLE.load(Ordering::SeqCst);
@@ -2510,7 +2510,7 @@ unsafe extern "system" fn quit_phase_settle_hook() {
 
 /// Sample `GameMan+0xbc4` from the save-status poll detour.
 ///
-/// Driven ONLY from the poll, which is rare and already save-related. It was once
+/// Driven only from the poll, which is rare and already save-related. It was once
 /// driven from the census `CreateFileW` detour as well, on the theory that sampling
 /// more often would eventually catch `bc4 == 3`. That was wrong twice over: each call
 /// costs a `GetModuleHandleA` plus two `ReadProcessMemory` syscalls, paid on *every
@@ -2647,7 +2647,7 @@ mod tests {
     }
 
     /// Every byte compared -- the mask every prologue with no RIP-relative operand gets.
-    // Not a prologue: a comparison MASK, not machine code. 0xff means "this byte must match";
+    // Not a prologue: a comparison mask, not machine code. 0xff means "this byte must match";
     // it is never assembled, written, or byte-checked against the game.
     const EXACT_3: &[u8] = &[0xff, 0xff, 0xff];
 
@@ -2709,7 +2709,7 @@ mod tests {
 
     #[test]
     fn a_novel_event_is_reported_however_late_it_appears() {
-        // A save opcode never seen before is a different KIND of save reaching the
+        // A save opcode never seen before is a different kind of save reaching the
         // choke point -- exactly what the census exists to discover. Throttling must
         // never be able to hide one.
         assert!(should_report(9_999, true));
@@ -2718,7 +2718,7 @@ mod tests {
 
     #[test]
     fn throttling_stays_sublinear_at_measured_save_volumes() {
-        // Calibrated on the MEASURED rate: live runs report 7-25 swallowed submits per
+        // Calibrated on the measured rate: live runs report 7-25 swallowed submits per
         // session. Anchored at the top of that range rather than an invented one.
         let lines = (1..=25_u64).filter(|n| should_report(*n, false)).count();
         assert_eq!(lines, 5, "25 swallows should cost 5 lines, not 25");
@@ -2825,7 +2825,7 @@ mod tests {
 
     #[test]
     fn a_missing_write_trampoline_reports_failure_not_success() {
-        // The whole point of `SAVE_WRITE_FAILED_RESULT`: the job body treats 0 as SUCCESS
+        // The whole point of `SAVE_WRITE_FAILED_RESULT`: the job body treats 0 as success
         // (`FUN_14240d8d0(job) == 0` is its continue condition), so a degraded observer must
         // never return 0 -- that would certify a write that never happened.
         assert_ne!(SAVE_WRITE_FAILED_RESULT, 0);
@@ -2866,7 +2866,7 @@ mod tests {
             serialize_fail_step_label(0x280000),
             SAVE_SERIALIZE_STEP_AFTER_OUTPUT
         );
-        // The sentinel is a read failure, NOT the largest byte count.
+        // The sentinel is a read failure, not the largest byte count.
         assert_eq!(
             serialize_fail_step_label(SAVE_SERIALIZE_BYTES_UNREADABLE),
             SAVE_SERIALIZE_STEP_UNREADABLE
@@ -2909,9 +2909,9 @@ mod tests {
 
     #[test]
     fn bypass_token_lifecycle() {
-        // ONE serial test on purpose: the bypass statics are process-global and the
+        // One serial test on purpose: the bypass statics are process-global and the
         // test harness runs tests concurrently; splitting these assertions across
-        // tests would race. No other test touches ARMED or the bypass statics.
+        // tests would race. No other test touches armed or the bypass statics.
         ARMED.store(1, Ordering::SeqCst);
         assert!(!bypass_pending());
 
@@ -2954,8 +2954,8 @@ mod tests {
 
     /// The submit builders' precondition, transcribed from the 1.16.2 decompile of
     /// `FUN_140e6ef60`: `iodev+0x10 == 0 && iodev+0x20 == 0`. Neither `+0x18` nor `+0x28`
-    /// is an operand of it -- `+0x18` only tells us WHO owns a latched `+0x20`, and a
-    /// non-zero `+0x28` makes the builder DEFER (return 1) rather than decline.
+    /// is an operand of it -- `+0x18` only tells us who owns a latched `+0x20`, and a
+    /// non-zero `+0x28` makes the builder defer (return 1) rather than decline.
     #[test]
     fn a_save_is_admitted_by_exactly_the_two_guard_operands() {
         let clear = SlRequestSlot::default();
@@ -3124,7 +3124,7 @@ mod tests {
         );
     }
 
-    /// A save-side request left behind is a DIFFERENT bug from a load-side one, and the
+    /// A save-side request left behind is a different bug from a load-side one, and the
     /// load-consumer oracle must not claim credit for clearing `+0x10`. Only `+0x18`/`+0x20`
     /// are its debt; a lingering `+0x10` still fails the save builders and is reported by
     /// `classify_sl_bail`, not by this one.

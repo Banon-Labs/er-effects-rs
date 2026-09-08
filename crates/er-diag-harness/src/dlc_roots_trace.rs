@@ -1,35 +1,35 @@
-// DLC VIRTUAL ROOT BLANK/REFILL TRACE -- why the reload's roots stay empty.
+// DLC virtual root BLANK/REFILL trace -- why the reload's roots stay empty.
 //
-// MOVED VERBATIM out of the product DLL's
+// Moved verbatim out of the product DLL's
 // `crates/er-quickload/src/experiments/startup_hooks/diagnostics/dlc_roots_trace.rs` on
-// 2026-08-25. There all three detours were installed UNCONDITIONALLY at process attach for a log
+// 2026-08-25. There all three detours were installed unconditionally at process attach for a log
 // nothing in the product read back. The bodies, the sampling order and every log string are
 // unchanged; only the sink moved and the counters are now this crate's own.
 //
-// ONE SOFT COUPLING SURVIVES THE MOVE, and it is deliberate. `er-title-flow`'s DLC-root self-heal
+// One soft coupling survives the move, and it is deliberate. `er-title-flow`'s DLC-root self-heal
 // (`crates/er-title-flow/src/dlc_roots_self_heal.rs`) prefers `DLC_ROOTS_REFILL_ORIG` -- the
-// trampoline THIS trace used to store -- over resolving the refill's RVA, so that the heal does not
+// trampoline this trace used to store -- over resolving the refill's RVA, so that the heal does not
 // re-enter our own detour. Rust statics are per-DLL, so with the trace in a second image the
 // product's copy stays 0 and the heal takes its existing fallback: `game_rva(DLC_ROOTS_REFILL_RVA)`.
 // In a product-only profile that is the un-detoured native and the behaviour is identical. In a
 // product + harness profile the heal enters this detour, which samples the roots and forwards to
-// its own trampoline -- one extra log line, no recursion, and the trace now also SEES the heal's
+// its own trampoline -- one extra log line, no recursion, and the trace now also sees the heal's
 // refill, which is strictly more informative than the old arrangement.
 //
 // The reload softlock is a blanked DLC virtual root: at the stall `mapstudio_dlc2` is `""` while the
 // base-game `mapstudio` still resolves, so the m28 msb read returns 0 bytes (bd
 // `PROVEN-reload-softlock-is-blanked-dlc-virtual-root-mapstudio-dlc2-empty-2026-07-30`).
 //
-// Two functions own that state, and this traces BOTH so one run says which ran and which did not:
+// Two functions own that state, and this traces both so one run says which ran and which did not:
 //
-//   BLANK   FUN_140e06490(CSDlcImp*, true) -- re-registers the 13 `*_dlc2` aliases with root L"" and
+//   Blank   FUN_140e06490(CSDlcImp*, true) -- re-registers the 13 `*_dlc2` aliases with root L"" and
 //           clears ~50 DLC ownership flags. Sole code caller: the title start-game flow FUN_1409b24e0.
-//   REFILL  FUN_140e05fb0(CSDlcImp*, true) -- re-queries Steam DLC ownership and calls
+//   Refill  FUN_140e05fb0(CSDlcImp*, true) -- re-queries Steam DLC ownership and calls
 //           CSDlcImp::AddVirtualFileRoots, restoring mapstudio_dlc2 -> "map_dlc2:/mapstudio".
 //
-// WHY THE REFILL ENTRY AND NOT ITS CALLERS: FUN_140e05fb0 has two callers --
+// Why the refill entry and not its CALLERS: FUN_140e05fb0 has two callers --
 // CS::MoveMapListStep::STEP_LoadListWait and the title-flow job body FUN_1408371e0 -- and a measured
-// run has already shown STEP_LoadListWait executes ZERO times, even on a load that SUCCEEDS. So the
+// run has already shown STEP_LoadListWait executes zero times, even on a load that succeeds. So the
 // live refill arrives via the title-flow job, and hooking the shared entry counts every refill
 // attempt regardless of path, with no need to guess which. It also avoids FUN_1408371e0's
 // rip-relative prologue (`mov rcx,[rip+...]` at +4).
@@ -39,7 +39,7 @@
 // relocates safely.
 //
 // These are TRACES: they forward unconditionally and write only our own counters. Roots are sampled
-// BEFORE and AFTER each call, so a single line shows the transition (`ok -> EMPTY` for the blank,
+// before and after each call, so a single line shows the transition (`ok -> EMPTY` for the blank,
 // `EMPTY -> ok` for a refill that worked, `EMPTY -> EMPTY` for one that ran but achieved nothing --
 // which would move the blame to the DLC ownership re-query rather than to dispatch).
 
@@ -61,20 +61,20 @@ use crate::{
 
 /// One-shot install guard for the DLC virtual-root blank/refill traces.
 static DLC_ROOTS_TRACE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-/// Trampoline for the DLC-root BLANK (`FUN_140e06490`). 0 = not hooked.
+/// Trampoline for the DLC-root blank (`FUN_140e06490`). 0 = not hooked.
 static DLC_ROOTS_BLANK_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-/// Trampoline for the DLC-root REFILL (`FUN_140e05fb0`). 0 = not hooked.
+/// Trampoline for the DLC-root refill (`FUN_140e05fb0`). 0 = not hooked.
 static DLC_ROOTS_REFILL_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-/// Trampoline for the DLC-root refill JOB BODY (`FUN_140836f30`). 0 = not hooked.
+/// Trampoline for the DLC-root refill job body (`FUN_140836f30`). 0 = not hooked.
 static DLC_ROOTS_JOB_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 /// Times the DLC virtual roots were blanked to `L""`. Read from the `dlc-roots-BLANK` log lines.
 static DLC_ROOTS_BLANK_CALLS: AtomicUsize = AtomicUsize::new(0);
-/// Times the DLC virtual-root refill ran. IF THIS TRAILS THE BLANK COUNT ACROSS A RELOAD, the roots
+/// Times the DLC virtual-root refill ran. If this trails the blank count across a reload, the roots
 /// were emptied and never restored -- which is the softlock.
 static DLC_ROOTS_REFILL_CALLS: AtomicUsize = AtomicUsize::new(0);
-/// Times the refill JOB BODY ran. THIS IS THE FORK: the job body sits one level above the refill
+/// Times the refill job body ran. This is the FORK: the job body sits one level above the refill
 /// (body -> FUN_14082e230 -> FUN_14082eb60 -> FUN_14082dbf0 -> FUN_14082faf0 -> ... -> the refill).
-/// If this fires on a reload whose roots stay empty, the job runs and diverges INSIDE, so a native
+/// If this fires on a reload whose roots stay empty, the job runs and diverges inside, so a native
 /// fix exists. If it stays flat, the job was never enqueued -- and its creator is a dynamically
 /// built `std::function` with no static registration, so there is no call site to patch.
 static DLC_ROOTS_JOB_CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -107,26 +107,26 @@ pub(crate) fn install_dlc_roots_trace() {
     install_shared_dlc_roots_job_hook();
 }
 
-/// Register the JOB-BODY trace (`0x836f30`) on the process's SINGLE MinHook instance.
+/// Register the job-body trace (`0x836f30`) on the process's single MinHook instance.
 ///
-/// WHY THIS ONE IS NOT `install_one_dlc_roots_hook`. `er-reload-trace` detours the same prologue
+/// Why this one is not `install_one_dlc_roots_hook`. `er-reload-trace` detours the same prologue
 /// (`HookSpec { name: "map_request_do_836f30", rva: 0x836f30, .. }`, its `lib.rs`), and both shells
 /// are co-loaded by hand-written profiles -- `~/Elden/group-1170.me3` carries `er_quickload`,
 /// `er_diag_harness`, `er_reload_trace` and `er_armament_icons` together. A bare `MhHook` here is a
-/// SECOND MinHook instance on that prologue: each instance is a per-DLL static, so neither can see
+/// second MinHook instance on that prologue: each instance is a per-DLL static, so neither can see
 /// the other's `MH_CreateHook`, and the second writes its five-byte JMP over the first's. The loser
 /// reports installed, never fires, and its counter reads 0 forever -- indistinguishable from a
 /// feature that was never enabled. That is the measured 2026-08-23 failure (product +
 /// `er-armament-icons` on `TITLE_SCALEFORM_FILE_OPEN_RVA`), re-created on a different address.
 ///
 /// `register_shared_hook` is the repo's answer: it resolves `er_quickload.dll`'s
-/// `er_effects_union_register` export and CHAINS this handler onto the product's one instance,
+/// `er_effects_union_register` export and chains this handler onto the product's one instance,
 /// falling back to this DLL's own union when the product is absent (a standalone
 /// `sweep-er-diag-harness.me3` run is therefore unchanged). Install order stops deciding who runs.
 ///
 /// The address is handed over UNTRANSLATED on purpose. `game_rva` resolves 1.16.2 -> the running
 /// build, and so does `register_shared_hook`; passing an already-resolved address would translate
-/// TWICE, and a 1.17 destination can itself be another row's 1.16.2 source (see
+/// twice, and a 1.17 destination can itself be another row's 1.16.2 source (see
 /// `er_hook::register_shared_hook_with_budget`'s own note). So this passes `base + rva` and lets the
 /// registrar own the single resolve -- exactly what `er-reload-trace`'s `install_one` does.
 fn install_shared_dlc_roots_job_hook() {
@@ -191,7 +191,7 @@ fn trace_dlc_roots_transition(kind: &str, n: usize, arg: u8, body: impl FnOnce()
     diag_log!("dlc-roots-{kind} #{n}: enable={arg} before=[{before}] after=[{after}]");
 }
 
-/// Trace detour for `FUN_140e06490` -- the DLC-root BLANK. Forwards unconditionally.
+/// Trace detour for `FUN_140e06490` -- the DLC-root blank. Forwards unconditionally.
 ///
 /// # Safety
 /// Called by the game; the trampoline is invoked with the arguments unchanged.
@@ -206,17 +206,17 @@ pub(crate) unsafe extern "system" fn dlc_roots_blank_trace_hook(csdlc: usize, en
     });
 }
 
-/// Trace detour for `FUN_140836f30` -- the JOB BODY that ultimately reaches the refill. Forwards
+/// Trace detour for `FUN_140836f30` -- the job body that ultimately reaches the refill. Forwards
 /// unconditionally.
 ///
 /// This is the fork in the road. The chain below it is
 /// `FUN_140836f30 -> FUN_14082e230 -> FUN_14082eb60 -> FUN_14082dbf0 -> FUN_14082faf0` (which builds
 /// the functor whose `_Do_call` is `FUN_1408371e0`, the refill wrapper). A reload that fires this but
-/// never reaches `FUN_140e05fb0` means the job RUNS and diverges inside -- a fixable native path. A
+/// never reaches `FUN_140e05fb0` means the job runs and diverges inside -- a fixable native path. A
 /// reload that never fires it means the job was never enqueued, and its creator is a dynamically
 /// built `std::function` with no static registration, so no call site can be patched.
 ///
-/// FOUR ARGUMENTS, AND ALL FOUR ARE FORWARDED -- which is a bug fix, not only a mechanism change.
+/// Four arguments, and all four are forwarded -- which is a bug fix, not only a mechanism change.
 ///
 /// This used to be declared `(this, arg2) -> usize` and forward `f(this, arg2)`, on the reasoning
 /// that "the native is `(this, rdx)`". The 1.16.2 decompile says otherwise:
@@ -231,13 +231,13 @@ pub(crate) unsafe extern "system" fn dlc_roots_blank_trace_hook(csdlc: usize, en
 /// function body last left in `r8`/`r9` was handed to the native instead -- silently, on every
 /// call. The four-argument shape carries them verbatim.
 ///
-/// It is also exactly [`er_hook::UnionFn`], which is what lets this handler CHAIN rather than own a
+/// It is also exactly [`er_hook::UnionFn`], which is what lets this handler chain rather than own a
 /// second MinHook instance. `er-hook`'s constraint is "<=4 integer/pointer args, no floats", and
 /// this target is four integer args returning an integer -- inside it with nothing to spare.
 ///
 /// # Safety
-/// Called by the game (or by the previous handler in the union chain). `orig` may hold the NEXT
-/// HANDLER rather than the game trampoline, so it is called through the same four-argument
+/// Called by the game (or by the previous handler in the union chain). `orig` may hold the next
+/// handler rather than the game trampoline, so it is called through the same four-argument
 /// signature -- never through the native's narrower one -- and its result is returned verbatim.
 pub(crate) unsafe extern "system" fn dlc_roots_job_trace_hook(
     this: usize,
@@ -262,7 +262,7 @@ pub(crate) unsafe extern "system" fn dlc_roots_job_trace_hook(
     0
 }
 
-/// Trace detour for `FUN_140e05fb0` -- the DLC-root REFILL. Forwards unconditionally.
+/// Trace detour for `FUN_140e05fb0` -- the DLC-root refill. Forwards unconditionally.
 ///
 /// # Safety
 /// Called by the game, and (in a product + harness profile) by `er-title-flow`'s DLC-root self-heal

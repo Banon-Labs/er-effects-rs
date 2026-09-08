@@ -1,13 +1,13 @@
-//! PASSIVE CONTROLLER-INPUT TRACE (`er-quickload-input-trace.txt` / `ER_QUICKLOAD_INPUT_TRACE`).
+//! Passive controller-input trace (`er-quickload-input-trace.txt` / `ER_QUICKLOAD_INPUT_TRACE`).
 //!
-//! Diagnostic recorder for USER-DRIVEN runs: capture every REAL XInput slot-0 pad state the game
+//! Diagnostic recorder for user-driven runs: capture every real XInput slot-0 pad state the game
 //! polls (buttons + triggers + sticks), edge-detect it into discrete "press"/"release" events, and
 //! stamp every event with a snapshot of the same RAM semaphores the self-drive harness gates on
 //! (menu window latches, GameMan save/load fields, InGameStep request code, loading-screen triple,
 //! switch oracle). An offline analyzer can then derive "the user waited for semaphore X before
 //! pressing Y" and the zero-input driver can adopt those gates verbatim.
 //!
-//! STRICTLY read-only: never blocks, never fabricates, never confines the cursor. The only side
+//! Strictly read-only: never blocks, never fabricates, never confines the cursor. The only side
 //! effect is installing the existing XInput detour in pure pass-through mode (no harness gate
 //! armed, `BLOCK_INPUT_ACTIVE` clear) so the real pad bytes become observable at the poll source.
 //!
@@ -23,7 +23,7 @@ use er_game_base::fnv1a::{fnv1a64, fnv1a64_mix};
 use std::io::Write as _;
 use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
-// ENV-GATE RATIONALE: ER_QUICKLOAD_INPUT_TRACE is an explicit diagnostic/runtime probe switch; default
+// ENV-gate RATIONALE: ER_QUICKLOAD_INPUT_TRACE is an explicit diagnostic/runtime probe switch; default
 // behavior remains off unless the operator intentionally stages the gate (marker file or env).
 pub(crate) fn input_trace_enabled() -> bool {
     matches!(
@@ -35,10 +35,10 @@ pub(crate) fn input_trace_enabled() -> bool {
         .exists()
 }
 
-/// Trace output path: explicitly the GAME dir (exe dir) like the profiler JSONL, NOT CWD-relative --
+/// Trace output path: explicitly the game dir (exe dir) like the profiler JSONL, not CWD-relative --
 /// launch wrappers set me3's CWD to arbitrary Windows dirs, and the trace must land where the
 /// markers/telemetry live so one artifact dir holds the whole run.
-// ENV-GATE RATIONALE: ER_QUICKLOAD_INPUT_TRACE_PATH is a diagnostic output-path override only; it
+// ENV-gate RATIONALE: ER_QUICKLOAD_INPUT_TRACE_PATH is a diagnostic output-path override only; it
 // never changes behavior, and the default path is used on every normal run.
 fn input_trace_path() -> PathBuf {
     std::env::var_os("ER_QUICKLOAD_INPUT_TRACE_PATH")
@@ -53,7 +53,7 @@ fn input_trace_path() -> PathBuf {
 /// Read by the XInput detour every slot-0 poll (Relaxed): 1 = capture, 0 = skip. Written per frame
 /// by `input_trace_tick` so the hook never touches the filesystem gate itself.
 pub(crate) use er_telemetry_core::counters::INPUT_TRACE_ARMED;
-/// Last synthesized button word seen by the HOOK (edge detector). usize::MAX = no poll yet.
+/// Last synthesized button word seen by the hook (edge detector). usize::MAX = no poll yet.
 pub(crate) use er_telemetry_core::counters::TRACE_HOOK_LAST_SYNTH;
 /// Latest real pad state, packed for lock-free cross-thread hand-off (hook writes, task reads).
 /// Word A: wButtons u16 | bLeftTrigger u8 <<16 | bRightTrigger u8 <<24 | sThumbLX u16 <<32 | sThumbLY u16 <<48.
@@ -61,7 +61,7 @@ pub(crate) use er_telemetry_core::counters::TRACE_HOOK_LAST_SYNTH;
 /// consistent; A/B may tear across concurrent polls (acceptable: sticks are advisory context).
 pub(crate) use er_telemetry_core::counters::TRACE_PAD_WORD_A;
 pub(crate) use er_telemetry_core::counters::TRACE_PAD_WORD_B;
-/// Total REAL successful slot-0 polls captured (hook-side, Relaxed hot counter).
+/// Total real successful slot-0 polls captured (hook-side, Relaxed hot counter).
 pub(crate) use er_telemetry_core::counters::TRACE_REAL_POLLS;
 /// SPSC-ish edge ring: hook pushes on synth-word change, game task drains once per frame. Entry:
 /// bit 63 = valid, bits 32..62 = dwPacketNumber (low 31 bits), bits 0..31 = synth button word.
@@ -72,10 +72,10 @@ pub(crate) use er_telemetry_core::counters::TRACE_DRAIN_PREV;
 pub(crate) use er_telemetry_core::counters::TRACE_DROPPED;
 /// Trace-local frame counter (ticks only while armed) and one-shot header latch.
 pub(crate) use er_telemetry_core::counters::TRACE_FRAME;
-/// 1 while the GAME is accepting input this frame (the DLUID+0x88d input-accept byte ER clears
+/// 1 while the game is accepting input this frame (the DLUID+0x88d input-accept byte ER clears
 /// each frame it is not the active window; stay-active forces it 1). Published per frame by the
 /// tick, read by the hook: XInput polling is focus-agnostic, so without this gate the trace
-/// records pad presses the game itself discards while unfocused (observed session 4: two START
+/// records pad presses the game itself discards while unfocused (observed session 4: two start
 /// presses before the user focused the window).
 pub(crate) use er_telemetry_core::counters::TRACE_GAME_INPUT_ACCEPT;
 pub(crate) use er_telemetry_core::counters::TRACE_HDR_WRITTEN;
@@ -88,16 +88,16 @@ pub(crate) use er_telemetry_core::counters::TRACE_RING_SEQ;
 pub(crate) use er_telemetry_core::counters::TRACE_SEM_LAST_KEY;
 /// Monotonic event sequence for machine-diffable semaphore order within one process.
 pub(crate) use er_telemetry_core::counters::TRACE_SEM_SEQ;
-/// Edges observed while the game was NOT accepting input -- suppressed (no pad row), counted for
+/// Edges observed while the game was not accepting input -- suppressed (no pad row), counted for
 /// the heartbeat so the focus gate is RAM-verifiable.
 pub(crate) use er_telemetry_core::counters::TRACE_UNFOCUSED_EDGES;
 const TRACE_HB_INTERVAL_MS: u64 = 2000;
 
-/// WORLD-CLOCK-LIVE semaphore (user-directed 2026-07-19): GameDataMan::play_time (ms) advances only
-/// while the world simulation steps. Tracking how far it has risen BEYOND the value first seen this
+/// World-clock-live semaphore (user-directed 2026-07-19): GameDataMan::play_time (ms) advances only
+/// while the world simulation steps. Tracking how far it has risen beyond the value first seen this
 /// load epoch proves the world is genuinely ticking -- a distinct, earlier readiness stage than
 /// `can_move` (which needs control) and than "loading complete". Per load epoch (fresh_deser) the
-/// baseline resets, so `play_time_advanced_ms` is the clock's rise within THIS load; emitting it in the
+/// baseline resets, so `play_time_advanced_ms` is the clock's rise within this load; emitting it in the
 /// sem trace lets loadcmp-diff show exactly which checkpoint each load first has a live clock -- so the
 /// reload can be compared to where it occurs in the boot's chain.
 pub(crate) use er_telemetry_core::counters::PLAY_TIME_TRACE_EPOCH;
@@ -112,7 +112,7 @@ const TRACE_STICK_NAV_THRESHOLD: i32 = 16384;
 const TRACE_TRIGGER_PRESS_THRESHOLD: u8 = 128;
 
 /// Synthesized button word: raw XInput wButtons in bits 0..15, stick nav directions and trigger
-/// pulls as virtual buttons above, so ONE edge stream covers everything a menu reacts to.
+/// pulls as virtual buttons above, so one edge stream covers everything a menu reacts to.
 const SYNTH_LS_LEFT: u32 = 1 << 16;
 const SYNTH_LS_RIGHT: u32 = 1 << 17;
 const SYNTH_LS_UP: u32 = 1 << 18;
@@ -200,8 +200,8 @@ fn synth_button_names(mask: u32) -> String {
     out
 }
 
-/// HOOK-SIDE capture, called from `xinput_get_state_hook` on every REAL successful slot-0 poll,
-/// immediately after the trampoline returns and BEFORE any keepalive/fabrication can overwrite the
+/// Hook-side capture, called from `xinput_get_state_hook` on every real successful slot-0 poll,
+/// immediately after the trampoline returns and before any keepalive/fabrication can overwrite the
 /// caller's buffer. Runs on the game's input-poll thread: allocation-free, lock-free, a single
 /// Relaxed load when the trace is off. Never mutates the pad buffer.
 #[inline]
@@ -234,7 +234,7 @@ pub(crate) fn input_trace_record_real_poll(state: *const u8) {
     TRACE_REAL_POLLS.fetch_add(1, Ordering::Relaxed);
     let synth = synth_button_word(buttons, lt, rt, lx, ly, rx, ry);
     // Edge state always updates (even unfocused) so a button held across a focus gain never
-    // produces a spurious edge on refocus; only the RECORDING of the edge is focus-gated.
+    // produces a spurious edge on refocus; only the recording of the edge is focus-gated.
     let prev = TRACE_HOOK_LAST_SYNTH.swap(synth as usize, Ordering::Relaxed);
     if prev != synth as usize {
         if TRACE_GAME_INPUT_ACCEPT.load(Ordering::Relaxed) == 1 {
@@ -248,7 +248,7 @@ pub(crate) fn input_trace_record_real_poll(state: *const u8) {
 }
 
 /// True while the game is routing input: the DLUID input-accept byte (+0x88d) that ER clears each
-/// frame it is not the active window (and stay-active forces to 1) -- the game's OWN gate, so the
+/// frame it is not the active window (and stay-active forces to 1) -- the game's own gate, so the
 /// trace records exactly the presses the game would act on. Falls back to a foreground-window
 /// process check until the DLUID singleton resolves. Read chain mirrors the stay-active write
 /// (lifecycle.rs), fault-guarded.
@@ -489,9 +489,9 @@ fn input_trace_semaphores() -> TraceSem {
     } else {
         (-1, -1, -1, -1, -1, -1, -1, -1)
     };
-    // Finalize substate (MoveMapStep+0x12a): the inner sub-progression of the MOVE MAP (18) step,
-    // driven by the advancer FUN_140afa7c0. The warm reload parks at 7 (REMO/SAVE-DRAIN WAIT). Read the
-    // game-task-published switch-oracle atomic, NOT input_trace's own mms_ptr: at mms18 (in-world) the
+    // Finalize substate (MoveMapStep+0x12a): the inner sub-progression of the move map (18) step,
+    // driven by the advancer FUN_140afa7c0. The warm reload parks at 7 (REMO/SAVE-drain wait). Read the
+    // game-task-published switch-oracle atomic, not input_trace's own mms_ptr: at mms18 (in-world) the
     // title-owner-based mms_ptr resolution here goes stale and misreads 0x12a as 0, disagreeing with
     // the loading-bar/telemetry value (proven 2026-07-19). The atomic is the live MoveMapStep read.
     let mms_finalize12a = SWITCH_ORACLE_FINALIZE_12A.load(Ordering::SeqCst);
@@ -541,7 +541,7 @@ fn input_trace_semaphores() -> TraceSem {
     };
     let mms_raw = SWITCH_ORACLE_MMS_STEP.load(Ordering::SeqCst);
     let msgbox_raw = MSGBOX_TOTAL_BUILDS.load(Ordering::SeqCst);
-    // WORLD-CLOCK-LIVE: GameDataMan::play_time (ms). Reset the per-epoch baseline when the load epoch
+    // World-clock-LIVE: GameDataMan::play_time (ms). Reset the per-epoch baseline when the load epoch
     // changes, then measure the rise past it. Only baseline on a real (>=0) reading so a paused/-1 read
     // never fixes a bogus origin.
     let gdm_for_pt = game_data_man_ptr_or_null();
@@ -555,10 +555,10 @@ fn input_trace_semaphores() -> TraceSem {
     if PLAY_TIME_TRACE_EPOCH.swap(pt_epoch, Ordering::SeqCst) != pt_epoch {
         PLAY_TIME_TRACE_FIRST.store(-1, Ordering::SeqCst);
     }
-    // Baseline only on a LOADED-character playtime (> 0). A pre-load frame reads play_time == 0
+    // Baseline only on a loaded-character playtime (> 0). A pre-load frame reads play_time == 0
     // (no character resident yet); baselining there makes the delta explode to the whole save's
     // playtime once the character loads (observed on boot). Requiring > 0 latches the baseline at the
-    // character's real loaded playtime, so advanced_ms is the clock's rise within THIS load.
+    // character's real loaded playtime, so advanced_ms is the clock's rise within this load.
     if play_time_ms > 0
         && PLAY_TIME_TRACE_FIRST
             .compare_exchange(-1, play_time_ms, Ordering::SeqCst, Ordering::SeqCst)
@@ -648,7 +648,7 @@ fn input_trace_semaphores() -> TraceSem {
 }
 
 impl TraceSem {
-    /// Change-detection key: FNV-1a over the STABLE gate fields. Deliberately excludes per-frame
+    /// Change-detection key: FNV-1a over the stable gate fields. Deliberately excludes per-frame
     /// counters (`stable_frames`) and the advisory `mms_blocks` so sem rows fire on transitions,
     /// not every frame of a settled state.
     fn key(&self) -> u64 {
@@ -709,7 +709,7 @@ impl TraceSem {
         mix(self.mms_b7c1 as u32 as u64);
         mix(self.msgbox_builds as u64);
         mix(self.msgbox_dialog as u64);
-        // Only the LIVE transition keys a row (not the per-frame raw ms), so "world clock went live"
+        // Only the live transition keys a row (not the per-frame raw ms), so "world clock went live"
         // shows up as one checkpoint in the load1-vs-load2 diff, not a row every tick.
         mix(self.play_time_live as u64);
         // Key must never collide with the "none yet" sentinel 0.
@@ -802,7 +802,7 @@ impl TraceSem {
 /// Append one already-formatted JSONL line (with trailing newline). Cached handle, single
 /// `write_all` per line; errors ignored like every other telemetry writer (never fault the game).
 ///
-/// FRESH PER RUN: the handle is opened through `er_game_base::log`, which truncates the file on
+/// Fresh per RUN: the handle is opened through `er_game_base::log`, which truncates the file on
 /// this process's first line (previous run kept one generation as `.prev`). A trace is read by
 /// counting and diffing frames, so two runs concatenated is not a longer trace -- it is a wrong one.
 fn input_trace_append(line: &str) {
@@ -821,7 +821,7 @@ fn input_trace_append(line: &str) {
 
 /// Per-frame trace tick, called from `tick_before_player_lookup` on the recurring FrameBegin game
 /// task. Self-gated; a marker/env `.exists()` check per frame is the established gate convention
-/// (live arm/disarm). All file IO happens HERE, never in the hook.
+/// (live arm/disarm). All file IO happens here, never in the hook.
 pub(crate) fn input_trace_tick() {
     let enabled = input_trace_enabled();
     INPUT_TRACE_ARMED.store(usize::from(enabled), Ordering::Relaxed);
@@ -875,7 +875,7 @@ pub(crate) fn input_trace_tick() {
             sem.bar_frame,
         ));
     }
-    // Drain the hook's edge ring: one pad row per synthesized-button edge, stamped with THIS
+    // Drain the hook's edge ring: one pad row per synthesized-button edge, stamped with this
     // frame's semaphores (<= 1 frame stale relative to the poll instant; fine at human timescale).
     let seq_now = TRACE_RING_SEQ.load(Ordering::Acquire);
     let mut read = TRACE_RING_READ.load(Ordering::Relaxed);

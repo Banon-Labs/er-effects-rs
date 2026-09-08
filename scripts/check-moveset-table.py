@@ -6,7 +6,7 @@ updated when the corpus changes, and a hand-edit in it is invisible. So this re-
 `scripts/er-moveset-table-gen.py` over the local corpus and diffs the result against the committed
 file, byte for byte.
 
-SKIPS, loudly, when the corpus is not present -- the unpacked game assets are not in the repo and
+Skips, loudly, when the corpus is not present -- the unpacked game assets are not in the repo and
 never will be (no game-derived binaries), so CI and any machine without an extraction cannot run
 the real check. Skipping is reported as a skip, never as a pass.
 
@@ -29,7 +29,7 @@ TABLE = os.path.join(ROOT, 'crates', 'er-npc-possess', 'data', 'moveset.tbl')
 
 #: `<fired>[=<played>][w<chainCs>][g<victim>,<rangeDm>[+...]]:<bucket>:<rank>:<reach>[:<prefix>]`.
 #: The prefix column is optional and absent means `W_Event`, the field-write path. The `g`
-#: group is the THROW spec: which victim chr id and range each matching `ThrowParam` row
+#: group is the throw spec: which victim chr id and range each matching `ThrowParam` row
 #: demands. `g` on its own is rejected -- a grab with no row behind it is not a grab. The `w`
 #: group is the chain window in centiseconds -- the start of the animation's TAE cancel window
 #: -- and absent means the generator measured none, which the runtime reads as "committed for
@@ -111,7 +111,7 @@ def check_shape(text):
                         f'first frame')
             if match.group(4):
                 grabs += 1
-                # THE GRAB IS THE INITIATOR, NEVER THE THROW-RESULT CLIP. If a 4000-band id
+                # The grab is the INITIATOR, never the throw-result clip. If a 4000-band id
                 # ever shows up marked as a grab, the join has gone back to reading TimeAct
                 # event 304 -- which is the mistake that made `allow_grabs` gate nothing.
                 lo, hi = GEN_MODULE().ATTACK_BAND
@@ -142,8 +142,8 @@ def check_shape(text):
         problems.append(f'only {creatures} creatures')
     if moves < 2000:
         problems.append(f'only {moves} moves')
-    # THE REGRESSION THIS FILE EXISTS TO CATCH. The table shipped with ZERO grab-marked moves
-    # for a whole layer, because the marker was on the throw-RESULT clip (which nothing can
+    # The regression this file exists to catch. The table shipped with zero grab-marked moves
+    # for a whole layer, because the marker was on the throw-result clip (which nothing can
     # fire) instead of on the initiator. Zero here is not "this creature has no grabs"; it is
     # "the ThrowParam join is not running", and it makes `allow_grabs` a dead setting again.
     if grabs < 100:
@@ -151,7 +151,7 @@ def check_shape(text):
             f'only {grabs} grab-marked moves -- the corpus has 153 across 78 creatures; the '
             'AtkParam_Npc.throwTypeId -> ThrowParam join is not producing them')
     # The same shape of regression, one column along. The chain window is a TAE type-0 event
-    # with FlagType 86 -- the CREATURE cancel-into-attack flag. FlagType 4 is the PLAYER one and
+    # with FlagType 86 -- the creature cancel-into-attack flag. FlagType 4 is the player one and
     # covers 0.3% of non-player attack animations, so reading the wrong number would leave this
     # near zero while everything still parsed. Near zero is not "these creatures cannot combo";
     # it is "the runtime will make the player wait out every animation".
@@ -168,14 +168,14 @@ def corpus_present(root):
 
 
 def regenerate(root, jobs):
-    """Rebuild the whole table IN THIS PROCESS and return the text.
+    """Rebuild the whole table in this process and return the text.
 
     In-process rather than `subprocess.run(GENERATOR)` for two reasons. The repo bans a
     Python subprocess without a timeout of 30 seconds or less
     (`scripts/check-no-timeouts.py`, enforced by the pre-commit hook), and a full-corpus
     regeneration takes minutes -- so there is no timeout that is both legal and true. And
     calling the generator's own functions is the stronger check anyway: it compares the
-    committed file against what THIS tree's generator produces, with no room for a stale
+    committed file against what this tree's generator produces, with no room for a stale
     interpreter or a different working directory to change the answer.
     """
     # The generator narrates one line per creature on stderr, which is useful when a
@@ -191,14 +191,14 @@ def regenerate(root, jobs):
 
 
 def selftest():
-    """The check must FAIL on a table that does not match its own grammar."""
+    """The check must fail on a table that does not match its own grammar."""
     corruptions = [
         ('4500 3000:0:0:1 3000:0:1:1 !3000:3', 'offered and denied'),
         ('4500 6000:3:0:0:99', 'a prefix index the generator does not have'),
         ('4500 3000:0:0:1 3001:0:2:1', 'rank gap'),
         ('4500 3000:9:0:1', 'bucket out of range'),
         ('4500 nonsense', 'unparsable entry'),
-        # THE GRAB REGRESSIONS. A bare `g` is the pre-ThrowParam spelling and must not parse;
+        # The grab REGRESSIONS. A bare `g` is the pre-ThrowParam spelling and must not parse;
         # a grab on a 4000-band id means the marker went back onto the throw-result clip.
         ('4500 3000g:0:0:1', 'a grab with no ThrowParam row behind it'),
         ('4500 4100g0,100:0:0:1', 'a grab marked on a throw-result clip'),
@@ -212,7 +212,7 @@ def selftest():
         if not check_shape(text):
             print(f'SELFTEST FAILED: shape check accepted {why}: {corrupt!r}')
             return 1
-    # ...and PASS on a well-formed one.
+    # ...and pass on a well-formed one.
     # Exercises every part of the grammar at once: dense ranks in two buckets, the
     # plays-something-else spelling, both grab spellings (one victim and two), a two-digit
     # denial reason, and a plain denial.

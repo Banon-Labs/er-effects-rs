@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resolve a list of VAs to the functions that CONTAIN them, via the Ghidra MCP daemon.
+"""Resolve a list of VAs to the functions that contain them, via the Ghidra MCP daemon.
 
 The single most common follow-up to a byte scan: `find-deobf-bytes.py` prints a column of
 addresses, and the next question is always "which functions are those?". One call per address
@@ -11,7 +11,7 @@ Usage:
     python3 scripts/find-deobf-bytes.py '89??24c40000' | ... | python3 scripts/ghidra/resolve-vas.py -
 
 `-` reads whitespace-separated addresses from stdin. `GPORT` picks the daemon: 8765 is the
-1.16.2 NAMED dump (the default, and the only one with symbols), 8767 the 1.17 structure dump.
+1.16.2 named dump (the default, and the only one with symbols), 8767 the 1.17 structure dump.
 A VA inside no known function prints `-`, which is a real answer -- it usually means the scan
 landed in data rather than in code.
 """
@@ -43,7 +43,7 @@ def main() -> int:
             result = query("getFunctionByAddress", {"address": at}, port=port).get(
                 "result", {}
             )
-        except Exception as exc:  # noqa: BLE001 -- the daemon's failure IS the answer here
+        except Exception as exc:  # noqa: BLE001 -- the daemon's failure is the answer here
             print(f"{at}\tERROR\t{exc}")
             continue
         if not isinstance(result, dict) or result.get("error"):

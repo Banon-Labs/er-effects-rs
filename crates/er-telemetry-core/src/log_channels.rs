@@ -1,17 +1,17 @@
 //! log_channels: independently-marker-gated diagnostic log channels (Phase B decoupled diagnostics,
 //! bd decoupled-diagnostics-architecture-buildplan-2026-07-24).
 //!
-//! Each [`Channel`] is DEFAULT OFF: its own game-dir marker file must be present to enable it. Env
-//! vars do NOT propagate through me3/Proton to the game process, so a `.exists()` marker in the game
+//! Each [`Channel`] is default OFF: its own game-dir marker file must be present to enable it. Env
+//! vars do not propagate through me3/Proton to the game process, so a `.exists()` marker in the game
 //! directory is the reliable per-channel enable (same rationale as `read::marker_exists` and
-//! `renderdoc_slow_ms`). When a channel's marker is absent the [`log_channel!`] macro does ZERO file
+//! `renderdoc_slow_ms`). When a channel's marker is absent the [`log_channel!`] macro does zero file
 //! I/O -- a single cached atomic check, then return -- so a plain run (the A/B baseline) carries no
-//! per-line logging cost. Each channel reads ONLY its own marker, never a product-feature gate, so
+//! per-line logging cost. Each channel reads only its own marker, never a product-feature gate, so
 //! logging is fully decoupled from product behavior.
 //!
-//! This module lives in er-telemetry-core (NO product dependency); the product reroutes its own diagnostic
+//! This module lives in er-telemetry-core (no product dependency); the product reroutes its own diagnostic
 //! call sites through these channels as they migrate (the firehose->channel migration is Phase D).
-//! ONE channel is defined now: [`TITLE_REBUILD`].
+//! One channel is defined now: [`TITLE_REBUILD`].
 #![cfg_attr(not(windows), allow(dead_code))]
 
 use std::sync::OnceLock;
@@ -24,7 +24,7 @@ use std::sync::atomic::AtomicU8;
 pub struct Channel {
     /// Human name for the channel, used only in the one-time header banner.
     pub name: &'static str,
-    /// Game-dir marker file whose presence enables the channel. DEFAULT OFF when absent.
+    /// Game-dir marker file whose presence enables the channel. Default off when absent.
     pub marker: &'static str,
     /// Output log file (game-dir relative), truncated once per process on the first enabled write.
     pub out_file: &'static str,
@@ -89,7 +89,7 @@ fn line_prefix() -> String {
     format!("[+{ms}ms]")
 }
 
-/// Write one already-formatted line to `chan` IFF its marker is present. Does ZERO file I/O (a single
+/// Write one already-formatted line to `chan` IFF its marker is present. Does zero file I/O (a single
 /// cached atomic marker check, then return) when the marker is absent. Prefer the [`log_channel!`]
 /// macro over calling this directly.
 #[cfg(windows)]
@@ -124,7 +124,7 @@ pub fn write_channel(chan: &Channel, args: std::fmt::Arguments<'_>) {
 #[cfg(not(windows))]
 pub fn write_channel(_chan: &Channel, _args: std::fmt::Arguments<'_>) {}
 
-/// Log one formatted line to a channel IFF the channel's marker is present. ZERO file I/O (a single
+/// Log one formatted line to a channel IFF the channel's marker is present. Zero file I/O (a single
 /// cached atomic marker check, then return) when the marker is absent, so a plain A/B-baseline run
 /// pays nothing. Usage: `er_telemetry_core::log_channel!(er_telemetry_core::log_channels::TITLE_REBUILD,
 /// "rebuilt slot {slot} epoch={epoch}");`.
@@ -136,7 +136,7 @@ macro_rules! log_channel {
 }
 
 /// Title-rebuild diagnostic channel: marker `er-quickload-log-title-rebuild.txt` ->
-/// `er-quickload-title-rebuild.log`. DEFAULT OFF. Provided as the first channel now; rerouting the
+/// `er-quickload-title-rebuild.log`. Default off. Provided as the first channel now; rerouting the
 /// title-rebuild call sites through it is Phase D follow-up (this only defines the channel + macro).
 pub static TITLE_REBUILD: Channel = Channel::new(
     "title-rebuild",

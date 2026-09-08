@@ -36,17 +36,17 @@ DEFAULT_BASH_TIMEOUT_MS = 30000
 # 0.113s / 0.013s / 0.010s / 0.008s. Ten seconds is ~90x the slowest, and matches the value
 # check-no-timeouts.py already uses for its own fast `git ls-files` call.
 OPA_TEST_TIMEOUT_SECONDS = 10.0
-# WHY THIS FILE NO LONGER SHELLS OUT TO test-cupcake-delivered-shape.py (2026-08-31).
+# Why this file no longer shells out to test-cupcake-delivered-shape.py (2026-08-31).
 # It used to, and its docstring said why: "adding a line to check.sh was out of scope" for the
 # agent who wrote it. check.sh has carried those two lines at 421/422 since, so the gate ran
-# TWICE per suite -- ~13.5s of the two runs (0.66s --selftest + 11.5-12.9s live, measured at
-# loadavg ~9) duplicated for nothing. That duplication is also what pushed THIS script to 34.5s,
+# twice per suite -- ~13.5s of the two runs (0.66s --selftest + 11.5-12.9s live, measured at
+# loadavg ~9) duplicated for nothing. That duplication is also what pushed this script to 34.5s,
 # past the 30s per-command cap, where a foreground call is SIGKILLed and reads as a hang.
 # Removing it here leaves it a first-class enumerated step in check.sh, which times it, attributes
-# its failure to it by name, and classifies a kill as INCONCLUSIVE rather than burying it in an
+# its failure to it by name, and classifies a kill as inconclusive rather than burying it in an
 # AssertionError raised by an unrelated runner.
 #
-# COVERAGE, checked rather than assumed: when this call was removed, neither
+# Coverage, checked rather than assumed: when this call was removed, neither
 # `.github/workflows/check.yml` nor the pre-push hook ran check.sh, so simply deleting
 # it would have silently dropped delivered-shape coverage from CI. Both were given the gate
 # directly instead, in both its forms -- `--selftest` (proves it rejects a fictional fixture) and
@@ -56,7 +56,7 @@ OPA_TEST_TIMEOUT_SECONDS = 10.0
 # unrun in CI in the first place. Both now run check.sh (2026-09-03), so its copy is
 # still the only delivered-shape coverage there and must stay.
 
-# Assembled rather than written whole, so this FILE is not itself denied by the
+# Assembled rather than written whole, so this file is not itself denied by the
 # guard it tests when an agent edits it through a Bash command.
 ROOT_DELETE = " ".join(["rm", "-rf", "/"])
 
@@ -145,16 +145,16 @@ def run_case(case: PolicyCase) -> None:
         raise AssertionError(f"{case.name}: missing {case.expected_text!r}\n{output}")
 
 
-# Rego unit suites that had a test file and NO RUNNER. scripts/check.sh
+# Rego unit suites that had a test file and no runner. scripts/check.sh
 # enumerates its `opa test` invocations one line at a time, and these four were
 # never on the list: 86 assertions written, committed, and never executed once.
 # check.sh already carries a comment about this exact failure happening to two
 # other suites; running them from here is what stops it being three times.
 #
 # The protected-paths suite is the one that matters most, because
-# BUILTIN-PROTECTED-PATHS-PARENT and -WRAPPER are the rules standing between an
+# BUILTIN-protected-paths-parent and -wrapper are the rules standing between an
 # agent and a root delete, and until today nothing ran their tests at all.
-# It is also where a NEW suite belongs. check.sh lists its `opa test` invocations
+# It is also where a new suite belongs. check.sh lists its `opa test` invocations
 # one line at a time, so a suite added to .cupcake/tests/ without an edit to that
 # list is born orphaned -- which is how four of them accumulated 89 never-executed
 # assertions. `opa test .cupcake/` would run everything and no gate calls it.
@@ -203,21 +203,21 @@ def run_orphaned_rego_suites() -> None:
             )
 
 
-# THIS GATE DOES NOT RELIABLY FIT IN A 30-SECOND FOREGROUND SHELL. RUN IT IN THE BACKGROUND.
+# This gate does not reliably fit in a 30-second foreground shell. Run it in the background.
 #
 # Not a caveat -- a measurement. The work is 176 `cupcake eval` spawns costing ~237 CPU-seconds in
-# total, and `cupcake eval` takes ONE event on stdin per process (checked against `--help`: there is
+# total, and `cupcake eval` takes one event on stdin per process (checked against `--help`: there is
 # no batch or server mode), so that CPU cost is a floor, not an inefficiency. Wall clock is therefore
 # just that floor divided by however many cores the rest of the box leaves free, and on a machine six
-# agents share that is not a quantity this script controls. Three runs of THIS code, same day, same
+# agents share that is not a quantity this script controls. Three runs of this code, same day, same
 # tree: 20.4s at 1071% CPU, 23.4s at 1071%, 35.0s at 731%.
 #
 # An agent that runs this in a capped foreground shell gets SIGKILLed at 30 seconds, which is
 # indistinguishable from a hang -- and the conclusion an agent then draws ("the gate is broken", or
 # worse, "the policies are broken") is wrong in the dangerous direction. check.sh classifies such a
-# kill as INCONCLUSIVE rather than a pass for exactly this reason.
+# kill as inconclusive rather than a pass for exactly this reason.
 #
-# So the requirement announces ITSELF, on stdout, flushed, before any work starts: an agent that is
+# So the requirement announces itself, on stdout, flushed, before any work starts: an agent that is
 # about to be killed has already been told why. Being killed after reading this line is a correctly
 # reported environment limit; being killed without it is a mystery each agent has to re-solve.
 FOREGROUND_CAP_NOTICE = (
@@ -296,8 +296,8 @@ def main() -> int:
             "opa check .cupcake/system .cupcake/policies/claude/builtins/protected_paths.rego",
             True,
         ),
-        # BUILTIN-PROTECTED-PATHS-PARENT vs a Rust file authored through a heredoc
-        # (2026-08-31). These have to run HERE and not only under `opa test`: the
+        # BUILTIN-protected-paths-parent vs a Rust file authored through a heredoc
+        # (2026-08-31). These have to run here and not only under `opa test`: the
         # engine's `whitespace_normalization` enrichment replaces every newline in
         # the command with a space before any policy runs, so the heredoc body
         # arrives welded onto the `cat` that reads it and the policy's own
@@ -356,22 +356,22 @@ def main() -> int:
         ),
         # --- Destructive payloads inside a shell wrapper (2026-08-31) --------
         #
-        # Measured against this same live engine BEFORE the fix: all seventeen
-        # wrapper spellings below came back ALLOW. Two causes had to be answered
-        # together, which is why they must be pinned HERE and not only under
+        # Measured against this same live engine before the fix: all seventeen
+        # wrapper spellings below came back allow. Two causes had to be answered
+        # together, which is why they must be pinned here and not only under
         # `opa test`:
         #
-        #   * the verb is not in the OUTER command's command position, and
+        #   * the verb is not in the outer command's command position, and
         #     commands.has_verb could not see it either (its `(^|\s)` anchor
         #     never matched `"rm`);
-        #   * `affected_parent_directories` -- which the PARENT rule pairs its
+        #   * `affected_parent_directories` -- which the parent rule pairs its
         #     verb test with -- does not contain the payload's target. The
-        #     preprocessor reads the quoted payload as a PATH operand of `bash`,
+        #     preprocessor reads the quoted payload as a path operand of `bash`,
         #     so the event carries ["<cwd>/rm -rf "] and never "/". Only the
         #     live engine supplies that field, so an interpreter test cannot
         #     show whether the deny is reachable in production.
         #
-        # Assembled from parts so that editing THIS file through a Bash command
+        # Assembled from parts so that editing this file through a Bash command
         # does not hand the guards a literal root delete to read.
         PolicyCase(
             "deny-bash-c-double-quoted-root-delete",
@@ -445,7 +445,7 @@ def main() -> int:
             "inside a shell-wrapper payload",
         ),
         # ... and the over-approximations the rule must not make. A payload that
-        # destroys something OUTSIDE every protected path stays allowed: the
+        # destroys something outside every protected path stays allowed: the
         # ancestor `/` must not turn every absolute operand into a root
         # operation.
         PolicyCase("allow-wrapped-read-of-root", "bash -c 'ls /'", True),
@@ -465,12 +465,12 @@ def main() -> int:
         # held to a stricter standard than the command it wraps.
         PolicyCase("allow-wrapped-copy-into-home", "bash -c 'cp file ~'", True),
         # A benign wrapped build stays allowed. The example carries a `-p`
-        # because ER-EFFECTS-REQUIRE-SCOPED-CARGO (2026-09-02) denies an
+        # because ER-effects-require-SCOPED-cargo (2026-09-02) denies an
         # unscoped cargo invocation wherever it appears, `bash -c` payloads
         # included -- so the unscoped spelling this case used to carry now
         # fails for a reason that has nothing to do with what the case is
         # about. What it is about is the shell-wrapper rule not
-        # OVER-approximating: a harmless payload must survive being wrapped.
+        # over-approximating: a harmless payload must survive being wrapped.
         # Scoping the build keeps that the only thing under test.
         PolicyCase(
             "allow-wrapped-build",
@@ -478,11 +478,11 @@ def main() -> int:
             True,
         ),
         PolicyCase("allow-echo-of-a-root-delete", "echo '" + ROOT_DELETE + "'", True),
-        # --- KNOWN-OPEN RESIDUE, PINNED SO IT IS VISIBLE ---------------------
+        # --- Known-open residue, pinned so it is visible ---------------------
         #
-        # A guard that HALF-catches wrapper payloads is worse than one that
+        # A guard that half-catches wrapper payloads is worse than one that
         # visibly does not, because it invites reliance. Everything below is
-        # still ALLOWED after the 2026-08-31 wrapper rule, on purpose, and is
+        # still allowed after the 2026-08-31 wrapper rule, on purpose, and is
         # pinned here so the boundary is a test rather than a belief. If one of
         # these ever goes red, the rule got stronger and the pin should flip --
         # it must never be deleted to make the suite quiet.
@@ -492,7 +492,7 @@ def main() -> int:
         #    signal to narrow it: an opaque variable names no path at all.
         PolicyCase("known-open-opaque-wrapper-payload", "bash -c $CMD", True),
         PolicyCase("known-open-substituted-wrapper-payload", "bash -c $(echo hi)", True),
-        # 2. Three levels of ESCAPED nesting. shell_payloads_deep unrolls three
+        # 2. Three levels of escaped nesting. shell_payloads_deep unrolls three
         #    levels, but escaped quotes are stripped before the split, so the
         #    innermost payload loses its quoting and never becomes a text of its
         #    own -- the decomposition terminates (which is the property that
@@ -504,12 +504,12 @@ def main() -> int:
             True,
         ),
         # 3. `ssh host '<program>'` is not decomposed at all, and that is a
-        #    decision: the payload runs on ANOTHER machine, so denying it for
-        #    endangering THIS host's /etc would be a guard that is wrong on
+        #    decision: the payload runs on another machine, so denying it for
+        #    endangering this host's /etc would be a guard that is wrong on
         #    purpose.
         PolicyCase("known-open-remote-shell-payload", "ssh host '" + ROOT_DELETE + "'", True),
-        # 4. An interpreter payload that destroys the root WITHOUT naming a
-        #    configured protected path. BUILTIN-PROTECTED-PATHS-SCRIPT is
+        # 4. An interpreter payload that destroys the root without naming a
+        #    configured protected path. BUILTIN-protected-paths-script is
         #    mention-based by design, and widening it to ancestors would deny
         #    `python3 -c "print('/')"` -- the `/` sits between two quotes, which
         #    is a path boundary. Matching the existing precedent rather than
@@ -519,13 +519,13 @@ def main() -> int:
             "python3 -c \"import shutil; shutil.rmtree('/')\"",
             True,
         ),
-        # 5. A tilde or $HOME target, wrapped or not. The preprocessor does not
+        # 5. A tilde or $home target, wrapped or not. The preprocessor does not
         #    expand either, so the UNWRAPPED command is allowed too; the wrapper
         #    rule deliberately declines to be stricter than what it wraps.
         PolicyCase("known-open-wrapped-tilde-delete", "bash -c 'rm -rf ~'", True),
         PolicyCase("known-open-unwrapped-tilde-delete", "rm -rf ~", True),
         # `echo $(rm -rf /)` -- the OPA suite pinned this as denied and it was
-        # ALLOWED live, because the suite hand-fed affected_parent_directories
+        # allowed live, because the suite hand-fed affected_parent_directories
         # ["/"] while the real preprocessor reports ["<cwd>/$(rm", "/)"] and `/)`
         # is a parent of nothing. separator_trimmed_dir now trims `)` too.
         PolicyCase(
@@ -614,7 +614,7 @@ def main() -> int:
             True,
             extra_event={"signals": {"current_branch": "main\n"}},
         ),
-        # ... and every main DESTINATION stays denied through it. push_targets_main
+        # ... and every main destination stays denied through it. push_targets_main
         # is a separate blocked_push_context rule, so no exception can reach it.
         PolicyCase(
             "deny-git-push-refspec-to-refs-heads-main-from-main-session",
@@ -624,7 +624,7 @@ def main() -> int:
             extra_event={"signals": {"current_branch": "main\n"}},
         ),
         # `heads/main` resolves to refs/heads/main on the remote (verified against
-        # real repositories); from a FEATURE branch only push_targets_main can
+        # real repositories); from a feature branch only push_targets_main can
         # catch it, which is why it was added there.
         PolicyCase(
             "deny-git-push-refspec-to-heads-main-from-feature-branch",
@@ -657,13 +657,13 @@ def main() -> int:
         ),
         # --- Shell-wrapper payloads (2026-08-26, bd er-effects-rs-dt2e) ------
         #
-        # Measured against this same live engine BEFORE the fix: every one of the
-        # deny cases below came back ALLOW with zero denials. The four git guards
+        # Measured against this same live engine before the fix: every one of the
+        # deny cases below came back allow with zero denials. The four git guards
         # anchored their patterns on a separator class that contains `\n` but not
         # a quote, so a payload inside `bash -c '...'` had no command position --
         # and AGENTS.md tells agents to wrap commands exactly that way for fish.
         #
-        # The .rego unit tests run in the OPA INTERPRETER; these run the real
+        # The .rego unit tests run in the OPA interpreter; these run the real
         # binary, which compiles to WASM and has silently dropped whole guards
         # before. Both halves are needed.
         PolicyCase(
@@ -712,7 +712,7 @@ def main() -> int:
             "Do not push directly to main",
             extra_event={"signals": {"current_branch": "main\n"}},
         ),
-        # ... and the refspec-rename exception still works THROUGH a wrapper,
+        # ... and the refspec-rename exception still works through a wrapper,
         # which is what makes the decomposition symmetric rather than just stricter.
         PolicyCase(
             "allow-wrapped-refspec-rename-from-main-session",
@@ -768,14 +768,14 @@ def main() -> int:
             False,
             "are not permitted",
         ),
-        # --- Quoted TEXT is not an executed payload --------------------------
+        # --- Quoted text is not an executed payload --------------------------
         #
         # The mirror-image defect, and the reason widening the anchor class was
-        # not the fix: `\n` IS in that class, so a memory body, a commit message
-        # or a doc that merely QUOTED the guarded command on its own line was
+        # not the fix: `\n` is in that class, so a memory body, a commit message
+        # or a doc that merely quoted the guarded command on its own line was
         # denied -- with nothing executed. This one was measured live: writing a
-        # bd memory that documented this very hole was refused by BOTH
-        # ER-EFFECTS-BLOCK-MAIN-PUSH and ER-EFFECTS-BLOCK-MAIN-COMMIT. A guard
+        # bd memory that documented this very hole was refused by both
+        # ER-effects-block-main-push and ER-effects-block-main-commit. A guard
         # whose own documentation cannot be written in the repo that enforces it
         # is unwritable, so these are requirements, not niceties.
         PolicyCase(
@@ -803,7 +803,7 @@ def main() -> int:
             'echo "git push origin main"',
             True,
         ),
-        # A message that names the BYPASS FORM: splitting on `'` alone finds a
+        # A message that names the bypass FORM: splitting on `'` alone finds a
         # span whose preceding text ends in `bash -c `, so without a nesting
         # check the message body reads as an executed payload and the commit
         # describing the fix is denied by the fix. This is the exact shape of
@@ -853,22 +853,22 @@ def main() -> int:
             False,
             "Do not push directly to main",
         ),
-        # NOT KNOWN-OPEN ANY MORE -- but still ALLOWED HERE, and the difference
-        # is this runner, not the guard. CORRECTED 2026-08-31.
+        # Not known-open any more -- but still allowed here, and the difference
+        # is this runner, not the guard. Corrected 2026-08-31.
         #
         # The old note said production allowed this and no policy could change
-        # that. Production DENIES it, and has since the hook shim landed:
+        # that. Production denies it, and has since the hook shim landed:
         # scripts/cupcake-hook.sh sees the raw text before cupcake does, treats a
-        # heredoc a SHELL reads as a program rather than data, and rewrites its
+        # heredoc a shell reads as a program rather than data, and rewrites its
         # unquoted newlines to `; ` -- so the second line arrives with a
         # separator in front of it and the push guard fires. Measured both ways
         # on 2026-08-31: `bash scripts/cupcake-hook.sh` -> deny, `cupcake eval`
         # direct -> allow.
         #
-        # This runner calls `cupcake eval` DIRECTLY, so it never sees the
+        # This runner calls `cupcake eval` directly, so it never sees the
         # rewrite, and for every multi-line command it is asserting the verdict
         # of a path no command travels. The expectation below is therefore the
-        # DIRECT path's verdict, kept so the divergence stays visible rather than
+        # direct path's verdict, kept so the divergence stays visible rather than
         # being quietly "fixed" to the production answer this file cannot
         # observe. scripts/test-cupcake-delivered-shape.py runs the same command
         # through the shim and asserts the denial, and asserts this exact
@@ -967,8 +967,8 @@ def main() -> int:
             False,
             "blocked this Elden Ring launch command",
         ),
-        # Manual pgrep is HARD-BLOCKED with no escape hatch (block_manual_pgrep).
-        # On this WSL2 + Windows-Steam box pgrep FALSE-NEGATIVES: Steam and the
+        # Manual pgrep is hard-blocked with no escape hatch (block_manual_pgrep).
+        # On this WSL2 + Windows-Steam box pgrep false-NEGATIVES: Steam and the
         # game/EAC processes run as Windows processes visible only via
         # tasklist.exe, so `pgrep -x steam` reports "down" while it is up. Use
         # scripts/steam-running.sh for Steam / a WSL-aware check otherwise.
@@ -1039,7 +1039,7 @@ def main() -> int:
             ' allow-test keeps pgrep -x start_protected_game.exe detection green"',
             True,
         ),
-        # The ORIGINAL denied shape -- a chained bash -c batch of bd closes --
+        # The original denied shape -- a chained bash -c batch of bd closes --
         # stays denied by design (not a single bd invocation).
         PolicyCase(
             "deny-chained-bash-c-bd-close-batch-mentioning-pgrep",
@@ -1049,14 +1049,14 @@ def main() -> int:
             False,
             "manual pgrep is blocked",
         ),
-        # ... and a bd text command chained with a REAL pgrep still denies.
+        # ... and a bd text command chained with a real pgrep still denies.
         PolicyCase(
             "deny-bd-close-then-chained-pgrep",
             '$HOME/.local/bin/bd close er-effects-rs-aaa --reason "done" && pgrep -x steam',
             False,
             "manual pgrep is blocked",
         ),
-        # git records the commit MESSAGE, it never executes it. A commit whose
+        # git records the commit message, it never executes it. A commit whose
         # prose describes removing a raw process-name probe is documentation
         # (2026-08-12 false positive: `git commit -F - <<'EOF' ... EOF` was
         # denied for the message body, and the agent escape-hatched around the
@@ -1132,7 +1132,7 @@ def main() -> int:
             False,
             "manual pgrep is blocked",
         ),
-        # Word-boundary: a filename/word merely CONTAINING "pgrep" is not a pgrep
+        # Word-boundary: a filename/word merely containing "pgrep" is not a pgrep
         # command token and must not be denied.
         PolicyCase(
             "allow-mypgreptool-word-not-pgrep",
@@ -1163,13 +1163,13 @@ def main() -> int:
             False,
             "blocked this Elden Ring EAC launcher command",
         ),
-        # 2026-08-04 false positive: NAMING the EAC launcher as data was denied.
-        # The blocked command recorded a memory ABOUT the launcher (that
+        # 2026-08-04 false positive: Naming the EAC launcher as data was denied.
+        # The blocked command recorded a memory about the launcher (that
         # /proc/<pid>/comm truncates at 15 chars, so an exact-match entry for
         # the 24-char name could never match a process). The substring fallback
         # asked only "payload contains the name" plus a generic marker word,
         # and "bash" in prose is such a word; the bd text exemption could not
-        # rescue it because its shape did not anticipate a QUOTED binary path.
+        # rescue it because its shape did not anticipate a quoted binary path.
         # Deny now needs the name to occur somewhere it could be executed.
         PolicyCase(
             "allow-bd-remember-quoted-binary-path-naming-eac-launcher",
@@ -1195,7 +1195,7 @@ def main() -> int:
         ),
         # ... and naming-as-data must not become a launch bypass: an inert first
         # statement does not launder a launch in the second, and an inert head
-        # does not make a PIPE inert.
+        # does not make a pipe inert.
         PolicyCase(
             "deny-echo-prose-then-setsid-bare-launcher",
             "echo 'do not run start_protected_game.exe from bash'; setsid"
@@ -1209,7 +1209,7 @@ def main() -> int:
             False,
             "blocked this Elden Ring EAC launcher command",
         ),
-        # Read-only /proc comm scans may NAME the EAC launcher inside quoted
+        # Read-only /proc comm scans may name the EAC launcher inside quoted
         # string literals (2026-07-05 false positive: the sanctioned no-pgrep
         # process-detection heredoc was denied by the raw marker fallback).
         PolicyCase(
@@ -1263,11 +1263,11 @@ def main() -> int:
             "PY",
             True,
         ),
-        # Editing a repo file whose TEXT names the EAC launcher is not a launch
+        # Editing a repo file whose text names the EAC launcher is not a launch
         # (2026-08-04 false positive: removing one sentence from a module
         # docstring was denied because the raw marker fallback saw the name plus
         # the word "python" from the interpreter's own invocation). This repo
-        # deliberately writes refusal logic and safety docs that NAME the
+        # deliberately writes refusal logic and safety docs that name the
         # forbidden binary, so that text has to stay editable.
         PolicyCase(
             "allow-python-heredoc-editing-docstring-naming-eac-launcher",
@@ -1286,7 +1286,7 @@ def main() -> int:
             extra_tool_input={"description": "Drop the EAC refusal line from the docstring"},
         ),
         # ... but the exemption must not become a launch bypass. A pipe on the
-        # heredoc REDIRECTION LINE feeds the program's OUTPUT to a shell, so a
+        # heredoc REDIRECTION line feeds the program's output to a shell, so a
         # path the program merely prints really executes.
         PolicyCase(
             "deny-python-heredoc-edit-piped-into-shell",
@@ -1339,7 +1339,7 @@ def main() -> int:
             False,
             "blocked this Seamless Co-op DLL bundling command",
         ),
-        # git commit message text may MENTION ersc.dll (2026-07-07 false
+        # git commit message text may mention ersc.dll (2026-07-07 false
         # positive: a quoted -m body mentioning ersc.dll plus prose marker
         # substrings like "stage"/"target" was denied by the raw fallback).
         PolicyCase(
@@ -1369,7 +1369,7 @@ def main() -> int:
             "blocked this Seamless Co-op DLL bundling command",
         ),
         # 2026-07-28 false positive: the bundling rule denied a `bd remember`
-        # whose quoted memory body merely MENTIONS ersc.dll while documenting
+        # whose quoted memory body merely mentions ersc.dll while documenting
         # Seamless compatibility. Two defects: the bd text exemption matched only
         # a hard-coded /home/banon path (not the `$HOME/.local/bin/bd` form
         # AGENTS.md documents), and the fallback fired on "ersc.dll" plus any of
@@ -1417,7 +1417,7 @@ def main() -> int:
             False,
             "blocked this Seamless Co-op DLL bundling command",
         ),
-        # Restoring the USER's game-installed co-op DLL (same-path rename that
+        # Restoring the user's game-installed co-op DLL (same-path rename that
         # only strips the repo's .er-quickload-staged suffix) is the opposite of
         # bundling and is allowed (bd er-effects-rs-gkqa).
         PolicyCase(
@@ -1426,7 +1426,7 @@ def main() -> int:
             " '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll'",
             True,
         ),
-        # ... but the same staged source moved to any OTHER destination denies.
+        # ... but the same staged source moved to any other destination denies.
         PolicyCase(
             "deny-mv-staged-ersc-dll-into-target-bundle",
             "mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-quickload-staged'"
@@ -1434,7 +1434,7 @@ def main() -> int:
             False,
             "blocked this Seamless Co-op DLL bundling command",
         ),
-        # A read-only interpreter scan of the INSTALLED DLL with the path as an
+        # A read-only interpreter scan of the installed DLL with the path as an
         # unquoted operand is allowed (bd er-effects-rs-gkqa: arm (a) counted
         # python/bash as bundling verbs).
         PolicyCase(
@@ -1451,9 +1451,9 @@ def main() -> int:
             "blocked this Seamless Co-op DLL bundling command",
         ),
         # False positive fixed 2026-08-15 (arm (a')): neither the copy/archive
-        # verb list (a) nor the interpreter word list (a') required a WORD
+        # verb list (a) nor the interpreter word list (a') required a word
         # boundary after the matched token, so `[^;|&()]*` let the match start
-        # partway through an unrelated word whose PREFIX happened to equal one
+        # partway through an unrelated word whose prefix happened to equal one
         # of those tokens. `sha256sum` starts with `sh` (an (a') interpreter
         # token), so a read-only hash compare of two files -- one path staged
         # inside quotes, the other an unquoted game-install operand, piped
@@ -1480,7 +1480,7 @@ def main() -> int:
         ),
         # Chaining a second command onto the restore-rename deliberately
         # forfeits the same-path user-restore exemption -- the exemption's
-        # fail-closed shape requires the WHOLE command to be a single `mv`
+        # fail-closed shape requires the whole command to be a single `mv`
         # with exactly two quoted operands, so anything appended (even a
         # read-only `ls -la`) drops back to the plain file-moving arms, which
         # deny with no destination scoping. This is intentional and must not
@@ -1499,7 +1499,7 @@ def main() -> int:
             "echo 'do not run steam -applaunch 1245620'",
             True,
         ),
-        # bd only records text; forbidden-form MENTIONS in quoted issue text
+        # bd only records text; forbidden-form mentions in quoted issue text
         # must not deny even when generic executable marker words ("bash",
         # "python", ...) appear in the prose (2026-07-04 false positive).
         PolicyCase(
@@ -1621,9 +1621,37 @@ def main() -> int:
             include_timeout=False,
             tool_name="Write",
         ),
-        # AskUserQuestion (the multiple-choice questionnaire tool). CORRECTED 2026-08-15: the prior
+        # `ER-EFFECTS-COMMENT-CAPS-GUARD`, live. Its opa suite proves the logic; these two prove the
+        # policy survives cupcake's WASM runtime, which is the half that went inert for 36 days
+        # once already. The allow case is the load-bearing one: this guard refuses a write, so a
+        # false positive costs an author an edit they cannot make.
+        PolicyCase(
+            "deny-write-shouted-word-into-a-comment",
+            "",
+            False,
+            "shouted word going into a comment",
+            {
+                "file_path": str(REPO_ROOT / "crates" / "er-quickload" / "src" / "probe.rs"),
+                "content": "// this is NOT the same pointer\nfn f() {}\n",
+            },
+            include_timeout=False,
+            tool_name="Write",
+        ),
+        PolicyCase(
+            "allow-write-backticked-mnemonic-in-a-comment",
+            "",
+            True,
+            None,
+            {
+                "file_path": str(REPO_ROOT / "crates" / "er-quickload" / "src" / "probe.rs"),
+                "content": "// the x86 `NOT` instruction, quoted\nfn f() {}\n",
+            },
+            include_timeout=False,
+            tool_name="Write",
+        ),
+        # AskUserQuestion (the multiple-choice questionnaire tool). Corrected 2026-08-15: the prior
         # unconditional PreToolUse deny (block_askuserquestion) fired outside /goal work -- a legitimate
-        # design-interview question from the `grilling` skill was blocked while NOT in any /goal work.
+        # design-interview question from the `grilling` skill was blocked while not in any /goal work.
         # User verdict: "That cupcake policy is not triggered correctly." Re-investigation found no
         # reliable goal-active signal to gate a conditional deny on, and PreToolUse cannot carry a
         # non-blocking advisory in this build either (empirically confirmed: add_context/ask both no-op
@@ -1651,7 +1679,7 @@ def main() -> int:
         PolicyCase("allow-shellcheck-launcher-name", "shellcheck scripts/run-camera-smoke.sh", True),
     ])
 
-    # The GitHub attribution guard is MACHINE-GLOBAL (XDG config, Banon-Labs/cupcake-config), not
+    # The GitHub attribution guard is machine-global (XDG config, Banon-Labs/cupcake-config), not
     # repo-local, so CI checkouts do not have it and a footerless gh body is (correctly) allowed
     # there. Exercise its heredoc-substitution fallback only where that policy is installed.
     attribution_policy = (
@@ -1676,7 +1704,7 @@ def main() -> int:
                     'EOF\n)"',
                     True,
                 ),
-                # ... and the same form WITHOUT the footer must still deny (the raw
+                # ... and the same form without the footer must still deny (the raw
                 # command fallback must not weaken the guard).
                 PolicyCase(
                     "deny-gh-pr-edit-heredoc-substitution-body-without-footer",
@@ -1690,21 +1718,21 @@ def main() -> int:
         )
     else:
         print(f"skip: gh-attribution guard cases (no global policy at {attribution_policy})")
-    # 12, MEASURED, not guessed. 176 cases x ~1.3 CPU-seconds of `cupcake eval` each; the pool width
+    # 12, measured, not guessed. 176 cases x ~1.3 CPU-seconds of `cupcake eval` each; the pool width
     # is the only lever, since each case must spawn the real binary. Wall clock over the whole case
-    # list, taken 2026-08-31 on 16 cores under a DELIBERATELY hostile loadavg of ~100 (six agents
+    # list, taken 2026-08-31 on 16 cores under a deliberately hostile loadavg of ~100 (six agents
     # plus this probe), so these are worst-case rather than best-case numbers:
     #     8 workers 26.5s | 12 workers 20.4s | 16 workers 21.8s | 24 workers 21.6s
     # Scaling flattens past 12 and then reverses, so 12 is the floor of the curve, not the edge of
-    # it -- there is nothing to be won by going wider and contention to lose. This does NOT risk the
+    # it -- there is nothing to be won by going wider and contention to lose. This does not risk the
     # per-case timeout=30 below: a single case costs ~1.3s, so even the 100-loadavg run left it more
     # than an order of magnitude of margin. Widening the pool is safe here precisely because it does
-    # not change what any one case does; that is why the far slower delivered-shape gate is NOT
+    # not change what any one case does; that is why the far slower delivered-shape gate is not
     # folded in as a 177th unit of work but left as its own step in the callers.
-    # ...BUT NEVER WIDER THAN THE MACHINE THIS RUN IS ALLOWED. `12` was written against a free
+    # ...BUT never wider than the machine this run is allowed. `12` was written against a free
     # 16-core box; under scripts/lib/cpu-courtesy.sh a gate run is confined to an affinity mask of
     # half that, and 12 threads each spawning a `cupcake eval` subprocess onto 8 permitted cores is
-    # oversubscription, not parallelism. sched_getaffinity reports the MASK rather than the core
+    # oversubscription, not parallelism. sched_getaffinity reports the mask rather than the core
     # count, so this reads the same number the cap actually granted. Falls back to 12 on a platform
     # without affinity (never Linux, where this gate runs).
     try:

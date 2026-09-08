@@ -81,7 +81,7 @@ def find_dictionary(explicit: str | None, repo_root: Path) -> Path:
             / "File Dictionaries"
             / "ER-File-Dictionary.json",
             # This user's Smithbox install. The /mnt/d entry below it is the retired WSL2
-            # layout, kept LAST so a present install is never reported as missing.
+            # layout, kept last so a present install is never reported as missing.
             Path.home()
             / ".local/share/smithbox/app/Assets/File Dictionaries/ER-File-Dictionary.json",
             Path.home()
@@ -116,7 +116,7 @@ def find_witchy(explicit: str | None, repo_root: Path) -> Path:
             repo_root / ".." / "WitchyBND" / "WitchyBND",
             repo_root / ".." / "WitchyBND" / "WitchyBND.exe",
             # This user's Witchy install. The /mnt/d entry is the retired WSL2 layout, kept
-            # LAST so it cannot shadow a real install with "the tool is missing".
+            # last so it cannot shadow a real install with "the tool is missing".
             Path.home() / ".local/share/witchybnd/runtime/WitchyBND",
             Path("/mnt/d/Witchy BND/WitchyBND.exe"),
         ]

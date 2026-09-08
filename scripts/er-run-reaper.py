@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Wait for a launched run to end, then remove exactly what it staged.
 
-Runs DETACHED from whatever launched it (own session, no controlling terminal), because the
+Runs detached from whatever launched it (own session, no controlling terminal), because the
 game routinely outlives the shell -- and, in an agent session, the turn -- that started it. A
 reaper tied to that lifetime would be killed at the moment it became useful.
 
-It is the FAST path, not the guarantee. It can still be SIGKILLed, the machine can reboot, and
+It is the fast path, not the guarantee. It can still be SIGKILLed, the machine can reboot, and
 `scripts/er-stale-run-sentinel.sh` can tear the game down from a PostToolUse hook without ever
 telling it. The guarantee is that `er-run-branch.py` garbage-collects every dead run's state
 before staging a new one, so a leftover survives at most until the next launch. Both paths call
@@ -28,7 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-# Imported as a MODULE, not by-value: the selftest rebinds `er_run_lib.RUN_STATE_ROOT` to a
+# Imported as a module, not by-value: the selftest rebinds `er_run_lib.RUN_STATE_ROOT` to a
 # temp dir, and a from-import would keep pointing at the real one and clean the user's runs.
 import er_run_lib  # noqa: E402
 
@@ -71,8 +71,8 @@ def reap(
     """Wait for `run_id`'s launcher (and the game behind it) to exit, then clean its profile.
 
     `game_pids` is injected rather than called directly so this function can be exercised
-    without consulting the live machine. THE SELFTEST MUST PASS A STUB. With the real scan,
-    `reap` waits for ANY running `eldenring.exe` -- which is correct in production (me3 can
+    without consulting the live machine. The SELFTEST must pass a stub. With the real scan,
+    `reap` waits for any running `eldenring.exe` -- which is correct in production (me3 can
     exit before the game, and deleting a profile still in use would break the live run) and
     catastrophic in a gate: `scripts/check.sh` runs this selftest, so with a real game open
     the whole quality gate blocked forever on a process that has nothing to do with it, with
@@ -142,7 +142,7 @@ def selftest() -> int:
             )
             state.save()
 
-            # NO LIVE PROCESS SCAN. Every reap below is handed a stub that reports no game,
+            # No live process scan. Every reap below is handed a stub that reports no game,
             # so the selftest measures the reaper and not the machine it happens to run on.
             # The real scan would make this block until the user's open Elden Ring exits.
             no_game: Callable[[], list[int]] = list
@@ -158,7 +158,7 @@ def selftest() -> int:
                 "reaping an unknown run is a no-op",
             )
             # The regression itself, stated as a case: a reap whose launcher is gone but whose
-            # game scan still reports a live process must NOT be what a gate depends on. Proven
+            # game scan still reports a live process must not be what a gate depends on. Proven
             # by construction -- the two reaps above returned at all, which they could not have
             # done with the live scan while a game was up.
             check(

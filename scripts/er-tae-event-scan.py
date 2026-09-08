@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Offline scan of Elden Ring `.tae` (TimeAct) files for TAE events / JumpTable ids.
 
-CORRECTED 2026-09-01. The i-frame carrier is NOT "TAE event type 8". It is
+Corrected 2026-09-01. The i-frame carrier is not "TAE event type 8". It is
 **TAE event type 0 (JumpTable) with first param == 8**:
 
   * The master TAE event-type dispatcher is inside `ExecuteThreadOne`

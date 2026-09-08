@@ -3,17 +3,17 @@
 
 `CS::WorldMapAreaConverter::ConvertMsbCoordsToMapCoords` @ 0x140876140 first runs
 a block through `WorldMapLegacyConverter::ConvertLegacyDungeonPositionToOverworld
-PositionForMap` @ 0x1408775e0. On a tree MISS that callee returns without writing
-`blockIdOut`, so `blockIdOut` keeps the ORIGINAL (non-overworld) areaId and the
+PositionForMap` @ 0x1408775e0. On a tree miss that callee returns without writing
+`blockIdOut`, so `blockIdOut` keeps the original (non-overworld) areaId and the
 converter's `areaId ==` accept test fails -- no pin. The tree therefore decides
 which non-overworld blocks can carry a map marker at all.
 
 The tree is built by FUN_140876ce0 from `WORLD_MAP_LEGACY_CONV_PARAM_ST`
 (paramdef index 233, row stride 0x30). This script replicates that builder
-EXACTLY as disassembled:
+exactly as disassembled:
 
   * only rows whose `isBasePoint` bit (row byte +0x24, `& 1`) is set are used
-  * every base row inserts BOTH directions -- src->dst and dst->src -- because
+  * every base row inserts both directions -- src->dst and dst->src -- because
     FUN_140876ce0 calls FUN_1408776e0 twice with the operands swapped and the
     delta negated
   * FUN_1408776e0 ignores a key that is already present, and when the dst is not
@@ -110,7 +110,7 @@ def load_bnd4(path: str) -> bytes:
     fmt = dec[0x28:0x2C]
     if fmt != b"ZSTD":
         raise SystemExit(f"unsupported DCX compression {fmt!r}")
-    # DCX sizes are BIG endian.
+    # DCX sizes are big endian.
     uncompressed = struct.unpack_from(">I", dec, 0x1C)[0]
     compressed = struct.unpack_from(">I", dec, 0x20)[0]
     dca = dec.find(b"DCA\x00")

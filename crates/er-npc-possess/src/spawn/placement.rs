@@ -1,4 +1,4 @@
-//! HOW FAR IN FRONT OF THE PLAYER A SPAWNED CREATURE GOES, once its own size is known.
+//! How far in front of the player a spawned creature goes, once its own size is known.
 //!
 //! # The defect this exists to close
 //!
@@ -10,7 +10,7 @@
 //! possessions in that same session placed creatures whose capsules were 0.80-2.70 m tall and
 //! none of them overlapped; the one that did is the one the player did not walk away from.
 //!
-//! # `distance_m` is now a FLOOR, not the answer
+//! # `distance_m` is now a floor, not the answer
 //!
 //! The placed distance is `max(distance_m, creature_radius + player_radius + `[`CLEARANCE_M`]`)`,
 //! so a small creature still lands exactly where the file says and a large one is pushed out until
@@ -30,7 +30,7 @@
 //! run, which is long after `SpawnDynamicChr` returns -- so the radius cannot be read when the
 //! request is built. It does not need to be: the request's position field is not read on the
 //! creature path at all (see [`crate::possess::layout::chr_spawn_request`]), and the creature is
-//! actually PUT somewhere by `finish_spawn`, once it is drivable. That is 166-249 ms later on the
+//! actually put somewhere by `finish_spawn`, once it is drivable. That is 166-249 ms later on the
 //! nine spawns in the reference log, and by then the capsule reads. So this arithmetic runs at
 //! placement time, on the real number, and never on a guess.
 //!
@@ -146,7 +146,7 @@ pub(crate) fn place(
 mod tests {
     use super::*;
 
-    /// THE MEASURED CASE. c6310 `hitRadius` 4.00 m, the player's own capsule, and the shipped
+    /// The measured case. c6310 `hitRadius` 4.00 m, the player's own capsule, and the shipped
     /// `distance_m = 3.0` that put the creature on top of the player.
     #[test]
     fn the_fallingstar_beast_is_pushed_out_past_its_own_capsule() {
@@ -168,7 +168,7 @@ mod tests {
         assert!(placed.describe().contains("already clears"));
     }
 
-    /// The boundary is the whole point, so it is pinned: a creature whose capsule reaches EXACTLY
+    /// The boundary is the whole point, so it is pinned: a creature whose capsule reaches exactly
     /// to the configured distance is still pushed out, because touching is overlapping once the
     /// player has a radius of their own.
     #[test]
@@ -192,7 +192,7 @@ mod tests {
         }
     }
 
-    /// An unreadable PLAYER radius still clears the creature's own capsule. Losing the player's
+    /// An unreadable player radius still clears the creature's own capsule. Losing the player's
     /// half-width costs less than half a metre and the clearance covers it; refusing to widen at
     /// all would put the creature back inside them.
     #[test]
@@ -238,7 +238,7 @@ mod tests {
         assert!(biggest.widened);
         assert!((biggest.distance_m - (MAX_BELIEVABLE_RADIUS_M + 0.45 + CLEARANCE_M)).abs() < 1e-4);
         assert!(biggest.distance_m < MAX_DISTANCE_M);
-        // ...and a configured distance ABOVE the bound is itself clamped, so nothing can ask for a
+        // ...and a configured distance above the bound is itself clamped, so nothing can ask for a
         // spawn further away than the mod would ever search for one.
         assert!((place(1.0e6, Some(1.0), Some(0.45)).distance_m - MAX_DISTANCE_M).abs() < 1e-4);
     }

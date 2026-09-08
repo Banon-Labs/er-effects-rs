@@ -69,7 +69,7 @@ pub(crate) fn save_dest_verify_and_disarm(reason: &str) -> Option<SaveDestVerdic
 }
 
 /// Full teardown of the destination side of a save flow: target, commit/open latches, and any
-/// still-armed redirect window. Called whenever the flow returns to IDLE.
+/// still-armed redirect window. Called whenever the flow returns to idle.
 pub(crate) fn save_dest_reset(reason: &str) {
     er_quit_menu_core::save_dest_commit_runtime::save_dest_reset(reason, SAVE_JOB_OBSERVER)
 }

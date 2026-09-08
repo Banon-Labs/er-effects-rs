@@ -24,20 +24,20 @@ pub const FACE_DATA_BUFFER_TOTAL_SIZE: usize =
     FACE_DATA_BUFFER_PAYLOAD_OFFSET + FACE_DATA_BUFFER_PAYLOAD_SIZE;
 /// Native `FaceData::CopyFromBuffer` (mirrored from the native row builder `FUN_14025f9b0`): copies an
 /// inner `FaceDataBuffer` (`FACE` magic) into a live `FaceData` wrapper (e.g. a ProfileSummary record's
-/// +0x38 block). The SAVED wrapper header does NOT match the live one (2026-06-27 native row dumps), so
+/// +0x38 block). The saved wrapper header does not match the live one (2026-06-27 native row dumps), so
 /// records must be filled through this helper, never by memcpy'ing the saved wrapper.
 pub const FACE_DATA_COPY_FROM_BUFFER_RVA: usize = 0x00252f70;
 /// Native `ChrAsm` copy the row builder uses for a ProfileSummary record's equipment block (+0x1a8) --
 /// the source the profile renderer reads to dress the portrait model.
 ///
-/// NOT A MEMCPY (byte-verified 2026-07-31 at deobf 0x140245c00, 1.16.2 zero shift): it runs
+/// Not a MEMCPY (byte-verified 2026-07-31 at deobf 0x140245c00, 1.16.2 zero shift): it runs
 /// `GaitemHandle::copy` (0x140682580) 22 times over `+0x24`, i.e. a REFCOUNTING assign that
 /// increments the incoming handle and releases the previous occupant, and only then does a plain
-/// 22-entry u32 copy of `equipment_param_ids` at `+0x7c`. Feeding it a FOREIGN save's handles
+/// 22-entry u32 copy of `equipment_param_ids` at `+0x7c`. Feeding it a foreign save's handles
 /// therefore touches live refcount state on a `gaitemInsTable` this process owns -- which is why
 /// `SerializedSaveSlot::runtime_chr_asm_image` zeroes the handle array instead of copying it.
 ///
-/// It also copies `unk0` (+0x00), `unkd4` (+0xd4) and `unkd8` (+0xd8) VERBATIM (`field0_0x0 =
+/// It also copies `unk0` (+0x00), `unkd4` (+0xd4) and `unkd8` (+0xd8) verbatim (`field0_0x0 =
 /// *param_2; field5_0xd4 = param_2[0x35]; field6_0xd8 = param_2[0x36]`), and the profile pipeline
 /// runs it twice more (record +0x1a8 -> renderer +0x548 -> +0x33c -> +0x130). A wrong value in those
 /// three therefore reaches the model build unaltered -- see `CHR_ASM_OVERRIDE_ABSENT`.

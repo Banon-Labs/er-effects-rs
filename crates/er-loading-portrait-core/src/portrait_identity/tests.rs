@@ -2,26 +2,26 @@
 //!
 //! Split out of `portrait_identity.rs` for the file-size gate
 //! (`scripts/check-rust-file-sizes.py`), matching `er-save-picker-core/src/model/tests.rs`.
-//! Every test here replays a MEASURED run: the values in the assertions come from a debug log
+//! Every test here replays a measured run: the values in the assertions come from a debug log
 //! or a save container, not from what the rule was expected to do.
 
 use super::*;
 
 /// The defect the sign gate caused: a garbage word with bit31 set read as "not a real map" and
-/// turned the comparison OFF instead of failing it (2 of 6 logged FAILs). Both of these are
+/// turned the comparison off instead of failing it (2 of 6 logged FAILs). Both of these are
 /// real `CSRandXorshift` dwords lifted from one corpus slot's body+0x10..0x20 block.
 #[test]
 fn a_negative_word_is_rejected_as_implausible_not_treated_as_absent_evidence() {
     assert!(!packed_map_is_plausible(0xd139_52aau32 as i32)); // areaId 0xd1
     assert!(!packed_map_is_plausible(0xa504_8cb5u32 as i32)); // areaId 0xa5
-    // A POSITIVE piece of garbage must be rejected too -- the old `> 0` gate passed it.
+    // a positive piece of garbage must be rejected too -- the old `> 0` gate passed it.
     assert!(!packed_map_is_plausible(0x3e20_457cu32 as i32)); // areaId 0x3e, one past the max
 }
 
-/// HONEST LIMIT of the area predicate: it is a shape check, not an identity check. One in
+/// Honest limit of the area predicate: it is a shape check, not an identity check. One in
 /// roughly eleven random dwords lands in the valid area range (measured: 68 of 726 corpus
-/// body+0x14 words), so garbage CAN pass. That is precisely why the map term must also be
-/// gated on the record being one WE wrote -- the predicate alone cannot carry the comparison.
+/// body+0x14 words), so garbage can pass. That is precisely why the map term must also be
+/// gated on the record being one we wrote -- the predicate alone cannot carry the comparison.
 #[test]
 fn a_random_word_can_still_land_inside_the_area_range() {
     assert!(packed_map_is_plausible(0x0e6d_7b38u32 as i32)); // areaId 0x0e -- pure luck
@@ -159,7 +159,7 @@ fn no_valid_source_yields_none_not_slot_zero() {
     );
 }
 
-/// THE 2026-08-02 21:05 REGRESSION, replayed with that run's literal values. The user picked
+/// The 2026-08-02 21:05 regression, replayed with that run's literal values. The user picked
 /// slot 0; the pipeline latched and published slot 0; then the picker term expired and the
 /// sources started naming slot 9 (`save_slot` = ac0 = 9, `request_slot` = b78 = -1). Before
 /// the latch, kick #2 retargeted the live window to 9 and the face changed on screen.
@@ -172,14 +172,14 @@ fn a_window_that_committed_to_the_picked_slot_never_retargets_mid_load() {
     assert_eq!(target, Some(0));
     assert!(latching, "the first resolution of a window must latch");
 
-    // Kick #2, same window: picker spent, b78 disarmed, ac0 now 9. The SOURCES flip...
+    // Kick #2, same window: picker spent, b78 disarmed, ac0 now 9. The sources flip...
     let resolved_later = portrait_target_slot_from_sources(None, Some(-1), Some(9), 10);
     assert_eq!(
         resolved_later,
         Some(9),
         "precedence really does name slot 9 once the picker term is spent -- this is the input that caused the bug"
     );
-    // ...but the WINDOW does not.
+    // ...but the window does not.
     let (target_later, latching_later) = portrait_window_target_slot(target, resolved_later);
     assert_eq!(
         target_later,
@@ -189,7 +189,7 @@ fn a_window_that_committed_to_the_picked_slot_never_retargets_mid_load() {
     assert!(!latching_later);
 }
 
-/// The latch must not become a permanent pin: window close clears it, and the NEXT load is
+/// The latch must not become a permanent pin: window close clears it, and the next load is
 /// free to target a different character. Without this a System->Quit->Load switch would show
 /// the boot character's face forever -- the same defect in the opposite direction.
 #[test]
@@ -202,8 +202,8 @@ fn a_new_window_is_free_to_target_a_different_character() {
     assert!(latching);
 }
 
-/// THE 2026-08-26 REGRESSION, replayed with that run's literal values: a boot window that
-/// latched a GUESS must yield to the user's pick.
+/// The 2026-08-26 regression, replayed with that run's literal values: a boot window that
+/// latched a guess must yield to the user's pick.
 ///
 /// At +1061ms every source was invalid (`picker=None b78=None ac0=-1`), so the latch came from
 /// the autoload's default hint -- slot 0, i.e. from nothing. At +1084597ms the user picked slot
@@ -236,14 +236,14 @@ fn a_guessed_window_latch_yields_to_the_users_pick() {
     assert!(picked.latching);
     assert!(picked.promoted_by_pick);
 
-    // And the promotion is spent: the window is now committed FROM the pick and holds.
+    // And the promotion is spent: the window is now committed from the pick and holds.
     let after = portrait_window_target_slot_authoritative(picked.slot, true, Some(9), false);
     assert_eq!(after.slot, Some(1));
     assert!(!after.latching);
     assert!(!after.promoted_by_pick);
 }
 
-/// The exception must not reopen the 2026-08-02 defect: a latch that came FROM the pick never
+/// The exception must not reopen the 2026-08-02 defect: a latch that came from the pick never
 /// yields, not even to another pick-shaped resolution.
 #[test]
 fn a_picked_window_latch_never_yields() {
@@ -264,7 +264,7 @@ fn a_picked_window_latch_never_yields() {
     }
 }
 
-/// A pick that AGREES with the guessed latch is not a promotion -- nothing changed, so nothing
+/// A pick that agrees with the guessed latch is not a promotion -- nothing changed, so nothing
 /// should be counted or re-latched.
 #[test]
 fn a_pick_matching_the_guess_is_not_a_promotion() {
@@ -276,7 +276,7 @@ fn a_pick_matching_the_guess_is_not_a_promotion() {
     assert!(!same.promoted_by_pick);
 }
 
-/// A guessed latch still refuses every NON-pick source, which is the whole reason the latch
+/// A guessed latch still refuses every non-pick source, which is the whole reason the latch
 /// exists: only the user outranks it.
 #[test]
 fn a_guessed_window_latch_still_refuses_game_inferred_retargets() {
@@ -292,8 +292,8 @@ fn a_guessed_window_latch_still_refuses_game_inferred_retargets() {
     }
 }
 
-/// THE br-20260831-014208-b1d6 REGRESSION, replayed with that run's literal values: with every
-/// measured source invalid the window must commit to NOTHING, because the only thing left to
+/// The br-20260831-014208-b1d6 regression, replayed with that run's literal values: with every
+/// measured source invalid the window must commit to nothing, because the only thing left to
 /// commit to is a config hint.
 ///
 /// ```text
@@ -333,10 +333,10 @@ fn a_window_with_no_measured_source_commits_to_nothing() {
     assert_eq!(committed.source, Some(PortraitSlotSource::SaveSlot));
 }
 
-/// bd `er-effects-rs-fmy6`, replayed: a latch taken off a STALE `ac0` yields to the load
-/// REQUEST register, which by definition describes the load in flight.
+/// bd `er-effects-rs-fmy6`, replayed: a latch taken off a stale `ac0` yields to the load
+/// request register, which by definition describes the load in flight.
 ///
-/// Across save FILES the redirect swap leaves the slot registers momentarily stale, so at
+/// Across save files the redirect swap leaves the slot registers momentarily stale, so at
 /// +56125ms `ac0=0` was a real read of an obsolete value and the window latched slot 0. At
 /// +60296ms `b78`/`ac0` both named the real slot 1 and the retarget was refused, because the
 /// old rule could only ask "was it the pick", and it was not.
@@ -400,7 +400,7 @@ fn equal_or_weaker_evidence_never_moves_a_committed_window() {
     }
 }
 
-/// A resolution that AGREES with the held slot but carries stronger evidence upgrades the
+/// A resolution that agrees with the held slot but carries stronger evidence upgrades the
 /// latch's provenance without re-latching -- otherwise the user's confirmation of the slot
 /// already on screen would be forgotten and a later `b78` could still move it.
 #[test]
@@ -493,7 +493,7 @@ fn the_legacy_pair_form_is_unchanged() {
     assert_eq!(portrait_window_target_slot(None, None), (None, false));
 }
 
-/// THE PARENT-REQUESTED GATE: a picked slot N != 0 must produce slot N's stats.
+/// The parent-requested GATE: a picked slot N != 0 must produce slot N's stats.
 ///
 /// Composed end to end from the 2026-08-26 run's literal values so it fails on the real bug:
 /// boot window latches the autoload's guessed slot 0, the user picks slot 1, and the stats
@@ -585,7 +585,7 @@ const RUN_HELD_NAME_HASH: usize = 0x909a_2595_c413_a1b3;
 const RUN_RECORD_FACE_HASH: usize = 0xbbd2_ad40_6f84_9c65;
 const RUN_PREVIEW_FACE_HASH: usize = 0xc6af_b8c3_7ec7_b617;
 
-/// THE DEFECT, stated as a test: on a same-slot repeat the hold predicate agrees with itself.
+/// The defect, stated as a test: on a same-slot repeat the hold predicate agrees with itself.
 ///
 /// Both hashes are slot 0's ProfileSummary record read at two different times, so re-selecting
 /// the same slot makes them equal by construction -- even in the measured run where that record
@@ -602,7 +602,7 @@ fn the_same_slot_repeat_hold_matches_even_when_the_record_is_wrong() {
 /// The cases it still decides correctly, which is why it survives as the first filter.
 #[test]
 fn a_changed_name_or_slot_or_missing_head_still_clears() {
-    // Different character in the same slot -- the record's name DID change.
+    // Different character in the same slot -- the record's name did change.
     assert!(!same_identity_bridge_hold(true, 1, 0xaaaa, 1, 0xbbbb));
     // Different slot entirely.
     assert!(!same_identity_bridge_hold(true, 2, 0xaaaa, 1, 0xaaaa));
@@ -625,7 +625,7 @@ fn the_2026_08_22_face_mismatch_revokes_the_held_head() {
     assert!(verdict.revokes());
 }
 
-/// MAKE-BEFORE-BREAK MUST SURVIVE. Windows 1/2/4 of the same run held and then published
+/// Make-before-break must survive. Windows 1/2/4 of the same run held and then published
 /// 259-281 frames each; an intact record hands back `Unrefuted`, which drops nothing. A fix
 /// that revoked here would turn every legitimate same-character reload back into a flash of
 /// empty loading screen.
@@ -670,7 +670,7 @@ fn absent_or_unrelated_evidence_never_revokes() {
 /// tag has: without it a hold on slot 0 would be unrevokable.
 #[test]
 fn a_hold_on_slot_zero_is_not_read_as_no_hold() {
-    // Tag 1 IS slot 0. The whole measured failure sat on slot 0.
+    // Tag 1 is slot 0. The whole measured failure sat on slot 0.
     assert_eq!(
         bridge_hold_face_verdict(1, 0, RUN_RECORD_FACE_HASH, RUN_PREVIEW_FACE_HASH),
         BridgeHoldVerdict::Revoke
@@ -682,12 +682,12 @@ fn a_hold_on_slot_zero_is_not_read_as_no_hold() {
     );
 }
 
-// === The record must be a CHARACTER before the loading-screen stats panel reads it ==============
+// === The record must be a character before the loading-screen stats panel reads it ==============
 //
 // Every value below is one the user actually saw on a loading screen (run 2026-08-29) or one the
 // picker model demonstrably produces, not an invented example.
 
-/// THE REPORTED DEFECT. Both labels were on the user's loading screens beside `RL 0`, because the
+/// The reported defect. Both labels were on the user's loading screens beside `RL 0`, because the
 /// save picker had written its browse rows into the live ProfileSummary and the restore never ran.
 #[test]
 fn the_two_picker_labels_the_user_saw_are_not_characters() {
@@ -747,7 +747,7 @@ fn a_zeroed_record_is_not_a_character() {
     );
 }
 
-/// REAL CHARACTERS MUST STILL RENDER. These are the values the panel had on screen correctly in
+/// Real characters must still render. These are the values the panel had on screen correctly in
 /// the same run (the `ok-full` windows), plus the boot state of a character who has never left the
 /// tutorial: `DEFAULT_MAP_C30` is a legitimate map, not a refutation.
 #[test]
@@ -757,7 +757,7 @@ fn a_real_character_passes_including_a_brand_new_one() {
     assert!(profile_record_character_verdict("Tarnished", 1, DEFAULT_MAP_C30).is_character());
     // Map word not yet populated: absence of map evidence is not evidence of garbage.
     assert!(profile_record_character_verdict("Tarnished", 1, 0).is_character());
-    // A name that merely CONTAINS a bracket or a slash is fine -- only the ends carry the shape.
+    // A name that merely contains a bracket or a slash is fine -- only the ends carry the shape.
     assert!(profile_record_character_verdict("Ash[of]War", 60, 0x0c01_0000).is_character());
 }
 
@@ -776,7 +776,7 @@ fn a_populated_but_implausible_map_refutes_the_record() {
     );
 }
 
-/// A FILE row's label is a bare filename, which is shape-indistinguishable from a character name.
+/// A file row's label is a bare filename, which is shape-indistinguishable from a character name.
 /// Pinned so nobody "improves" the shape check into one that blanks real characters: the level
 /// term is what rejects file rows, and it does.
 #[test]
@@ -817,8 +817,8 @@ fn staged_row(name: &'static str) -> LiveRecordSample<'static> {
     }
 }
 
-/// THE CONTROL. A healthy three-character save: three occupied character records and seven zeroed,
-/// unoccupied slots. This is the shape of every ordinary boot, and it must read ZERO -- an oracle
+/// The control. A healthy three-character save: three occupied character records and seven zeroed,
+/// unoccupied slots. This is the shape of every ordinary boot, and it must read zero -- an oracle
 /// that is non-zero in the normal case teaches the reader to ignore it.
 #[test]
 fn a_healthy_save_container_reports_no_orphaned_records() {
@@ -842,14 +842,14 @@ fn a_healthy_save_container_reports_no_orphaned_records() {
     );
 }
 
-/// THE REPORTED DEFECT, EXACTLY AS THE PICKER LEAVES IT. `save_picker_write_row_records` zeroes all
+/// The reported defect, exactly as the PICKER leaves it. `save_picker_write_row_records` zeroes all
 /// ten records, writes a label into the first `visible` of them and marks those occupied, and marks
-/// every slot BEYOND the listing unoccupied. So during the defect not one slot holds a character.
+/// every slot beyond the listing unoccupied. So during the defect not one slot holds a character.
 ///
-/// THIS IS THE CASE THAT KILLED THE OBVIOUS GATE. A rule of "answer 0 unless this sample holds a
+/// This is the case that killed the obvious gate. A rule of "answer 0 unless this sample holds a
 /// character" -- written to stop an unread table being judged -- would return 0 here, i.e. blind
 /// the oracle in precisely the state it exists to report. `characters == 0` is reported instead,
-/// and the caller gates on a LATCH of having once seen a populated table.
+/// and the caller gates on a latch of having once seen a populated table.
 #[test]
 fn staged_browse_rows_left_behind_set_exactly_their_own_bits() {
     let table = [
@@ -876,7 +876,7 @@ fn staged_browse_rows_left_behind_set_exactly_their_own_bits() {
     );
 }
 
-/// A LABEL IN AN UNOCCUPIED SLOT IS NOT ON SCREEN. The native list builder appends a row only where
+/// A label in an UNOCCUPIED slot is not on screen. The native list builder appends a row only where
 /// `saveSlotsStates[slot]` is set, so an unoccupied slot's bytes describe nothing the user can see.
 /// Pinned because dropping the occupancy term is the obvious "simplification" and it would make the
 /// mask non-zero on every healthy boot with fewer than ten characters.
@@ -894,7 +894,7 @@ fn an_unoccupied_slot_never_contributes_a_bit() {
     assert_eq!(scan_live_records(table).orphaned_mask, 0);
 }
 
-/// The assembled-save case must NOT fire. `save-files/100-Lilbro` holds bodies copied between
+/// The assembled-save case must not fire. `save-files/100-Lilbro` holds bodies copied between
 /// files, so a record can describe whoever used to hold the slot -- a real character, wrong
 /// identity. That is a legitimate save the user plays, and this scan is deliberately blind to it:
 /// it answers "are these bytes a character", never "are they the RIGHT character".
@@ -917,11 +917,11 @@ fn an_empty_container_yields_neither_bits_nor_characters() {
     assert_eq!(scan.characters, 0);
 }
 
-/// THE CONFIGURED AUTOLOAD SLOT OUTRANKS THE HIGHEST-LEVEL SCAN (run br-20260903-204517-82d2).
+/// The configured AUTOLOAD slot OUTRANKS the highest-level scan (run br-20260903-204517-82d2).
 ///
 /// Slot 4 (`Hero` RL7) was the configured autoload slot and the one that loaded. For the 1.2s
 /// before the portrait window latched, `read_loading_screen_stats` had no switch selection and no
-/// window target, fell through to `BestActiveFallback`, and `best_active_slot()` -- "the ACTIVE
+/// window target, fell through to `BestActiveFallback`, and `best_active_slot()` -- "the active
 /// slot holding the most-progressed real character (highest level)" -- answered slot 0, `angrE`
 /// RL 100. The user watched a stats panel for a character that was not loading.
 #[test]
@@ -933,7 +933,7 @@ fn the_configured_autoload_slot_beats_the_highest_level_scan() {
         StatsSlotSource::ConfiguredAutoload(4),
         "the configured slot is the one the loader was told to use"
     );
-    // ...but only while nothing has OBSERVED a slot. Both stronger terms still win outright, so
+    // ...but only while nothing has observed a slot. Both stronger terms still win outright, so
     // the panel can never disagree with the face the window committed to.
     assert_eq!(
         loading_screen_stats_slot_source(SWITCH_UNSET, Some(2), Some(4), SLOTS),

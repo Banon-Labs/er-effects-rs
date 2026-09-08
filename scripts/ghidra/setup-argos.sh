@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Set up the OFFLINE neural MT engine (argostranslate + ja->en model) for autotranslate-jp.py.
+# Set up the offline neural MT engine (argostranslate + ja->en model) for autotranslate-jp.py.
 # Uses uv to create a local venv (no sudo, no system pip). One-time network download of the
 # model (~hundreds of MB); fully offline afterward. Run autotranslate with --engine argos using
 # this venv's python, e.g.:

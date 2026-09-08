@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Offline census of AMMUNITION in `EquipParamWeapon`, and of the ceiling the engine enforces.
+"""Offline census of ammunition in `EquipParamWeapon`, and of the ceiling the engine enforces.
 
-WHY AMMO NEEDS ITS OWN CENSUS
+Why AMMO needs its own census
 -----------------------------
 Arrows and bolts are **not** `EquipParamGoods`. They are `EquipParamWeapon` rows, which is why
 they equip into dedicated `ChrAsmSlot` positions rather than the quickbar -- and it is why
@@ -22,16 +22,16 @@ them. The engine routes them somewhere else entirely:
     take_it:
         movzbl 0x235(%rcx),%eax  ; maxArrowQuantity, u8   <-- the whole answer
 
-    Any other weapon row falls through to `mov $0x1,%eax` -- an armament's max quantity is ONE.
+    Any other weapon row falls through to `mov $0x1,%eax` -- an armament's max quantity is one.
 
-THE TWO OFFSETS, CONFIRMED ON BOTH IMAGES (this is the silent failure class)
+The two OFFSETS, confirmed on both images (this is the silent failure class)
 ---------------------------------------------------------------------------
 `weaponCategory` +0xE6 (u8) and `maxArrowQuantity` +0x235 (u8) are named by the 1.16.2 Ghidra
 dump's `_EQUIP_PARAM_WEAPON_ST` (struct size 664) and confirmed on 1.17 by reading the function
-that consumes them: the instruction bytes are IDENTICAL between builds --
+that consumes them: the instruction bytes are identical between builds --
 `0f b6 91 e6 00 00 00 / 80 fa 0d / 74 09 / 80 fa 0e / 0f 85 .. / 0f b6 81 35 02 00 00` at
 1.16.2 `0x140674887` and 1.17 `0x1406756d7`. This script is the third leg: it reads the values
-out of the INSTALLED regulation and checks they behave like the fields those names claim.
+out of the installed regulation and checks they behave like the fields those names claim.
 
 `wepType` (+0x1A6, u16) is read alongside because the exporter already classifies ammunition by
 it (81 Arrow / 83 Great Arrow / 85 Bolt / 86 Ballista Bolt). The two classifications must agree;

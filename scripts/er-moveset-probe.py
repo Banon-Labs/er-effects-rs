@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Ad-hoc inspector for one creature's moveset join -- the thing you run when a row in
-`crates/er-npc-possess/data/moveset.tbl` looks wrong and you need to see WHY.
+`crates/er-npc-possess/data/moveset.tbl` looks wrong and you need to see why.
 
 Prints, per in-band animation: whether the graph makes it fireable, which animation it
 actually plays, the TAE ability events it carries, and what each of those resolves to in

@@ -1,45 +1,45 @@
 #!/usr/bin/env python3
-"""Clear (or convict) a struct field offset PER NAMED OBJECT, per base register.
+"""Clear (or convict) a struct field offset per named object, per base register.
 
-THE RULE THIS TOOL EXISTS TO OBEY
+The rule this tool exists to OBEY
 ---------------------------------
 A field offset is a number, and the same number is a field in dozens of unrelated structures.
 `0x50`, `0x88`, `0x90`, `0xb8`, `0xd4` and `0xe0` are the repo's commonest small offsets, and one
 Wwise init function that shifted its settings block by a uniform +0x38 in 1.17 "moves" all six at
-once. Joining a repo constant to a drift row on the NUMBER therefore proves nothing, in either
+once. Joining a repo constant to a drift row on the number therefore proves nothing, in either
 direction: it neither convicts nor clears. Two discriminators built on 2026-08-30 did exactly
 that -- "a hooked function reads that number" cleared 484 of 553 constants and anonymous
 bracketing cleared all 48 -- and both had to be retracted.
 
 A clearance is valid only when all three of these hold at once:
-  * the OBJECT is named, and the same object is identified in BOTH images independently;
+  * the object is named, and the same object is identified in both images independently;
   * the witness instruction reaches the field through a base register that provably holds a
-    pointer to THAT object (`this`), not through some other pointer the same function walks;
+    pointer to that object (`this`), not through some other pointer the same function walks;
   * the two function bodies are otherwise instruction-for-instruction identical, so a
     displacement that did not change did not change because the code did not change.
 
-WHERE THE OBJECT IDENTITY COMES FROM
+Where the object identity comes from
 ------------------------------------
 MSVC RTTI. `vtable[-1]` is a CompleteObjectLocator, `COL+0x0c` a TypeDescriptor, `+0x10` its
 mangled class name -- FromSoft's own metadata, embedded in each image separately. So finding
-`.?AVMoveMapStep@CS@@` in 1.16.2 and again in 1.17 pairs the two vtables WITHOUT consulting the
+`.?AVMoveMapStep@CS@@` in 1.16.2 and again in 1.17 pairs the two vtables without consulting the
 content-matched function map at all. Two consequences that matter here:
 
-  ROUTE A (virtual methods).  Vtable slot N is the same virtual method of the same class in both
-      images, so slot N pairs two functions by OBJECT IDENTITY. This works for LEAF functions,
+  Route a (virtual methods).  Vtable slot N is the same virtual method of the same class in both
+      images, so slot N pairs two functions by object identity. This works for leaf functions,
       which MSVC gives no `.pdata` record and which the content map therefore cannot contain.
       In every such method `this` arrives in `rcx` by the x64 calling convention.
 
-  ROUTE B (constructors and other vtable users).  A function that stores the class's vtable into
+  Route B (constructors and other vtable users).  A function that stores the class's vtable into
       `[reg]` is constructing that object, and `reg` is `this`. Its 1.17 counterpart is taken
-      from the function map -- but is then INDEPENDENTLY CONFIRMED: the paired body must store
-      the 1.17 vtable of the SAME class at the corresponding instruction. A map pairing that
+      from the function map -- but is then independently CONFIRMED: the paired body must store
+      the 1.17 vtable of the same class at the corresponding instruction. A map pairing that
       happens to be wrong cannot satisfy that, because it would be storing some other class's
       vtable. Constructors touch many fields at once, so this is where the coverage is.
 
-WHICH REGISTER HOLDS `this`
+Which register holds `this`
 ---------------------------
-Tracked, not assumed. `rcx` at entry; a `mov r64, <alias>` in the PROLOGUE (before the first
+Tracked, not assumed. `rcx` at entry; a `mov r64, <alias>` in the prologue (before the first
 control-flow instruction, which is where MSVC parks `this` in a nonvolatile register) extends the
 alias set; any write to a register removes it, and a `call` removes every volatile. Extending the
 set is deliberately confined to the prologue: past the first branch a linear walk can pick up an
@@ -49,17 +49,17 @@ one is a write into a member the mod does not own.
 
 VERDICTS
 --------
-  CLEARED       the offset was read/written through `this` in >=1 otherwise-identical method pair
+  Cleared       the offset was read/written through `this` in >=1 otherwise-identical method pair
                 of this class, and the displacement is the same in 1.17.
-  MOVED         the same, but the displacement changed. Old, new, and the witness are printed.
-  UNKNOWN       no witness. NOT a clearance. Printed with the reason (no paired method touches
+  Moved         the same, but the displacement changed. Old, new, and the witness are printed.
+  Unknown       no witness. Not a clearance. Printed with the reason (no paired method touches
                 it / every method that does has a changed body).
 
-USAGE
+Usage
     --selftest
     --class CS::MoveMapStep [--offsets 0x4b8,0x50] [--routes ab]
-    --classes-from FILE        one `class [= offset,offset]` per line. The separator is `=`,
-                               NOT `:` -- a class name is full of colons. A line written with
+    --classes-from file        one `class [= offset,offset]` per line. The separator is `=`,
+                               not `:` -- a class name is full of colons. A line written with
                                `:` parses as one long class name, and every row then reports
                                `NO RTTI / class-not-in-rtti-join`, which reads exactly like
                                "this class does not exist in the images" (measured 2026-08-31,
@@ -82,7 +82,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 BASE = 0x140000000
 # Resolved by scripts/struct_drift_out.py, not spelled here: this used to be a literal
-# containing an agent SESSION UUID, which is correct for exactly one session and wrong for
+# containing an agent session UUID, which is correct for exactly one session and wrong for
 # every other one. `$ER_STRUCT_DRIFT_OUT` still overrides, and so does `--out-dir`.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import struct_drift_out  # noqa: E402 -- the path is set up on the line above
@@ -120,7 +120,7 @@ def _drift_module():
     Its `compare_bodies` encodes two corrections that cost real debugging: the DECODED leaf
     extent (guessing at the next `.pdata` start runs the decode through inter-function padding,
     which is `0xCC` in one build and `0x90` in the other, desynchronising the two sides and
-    manufacturing SHAPE-DIFFs), and the split between field displacements, stack slots,
+    manufacturing shape-DIFFs), and the split between field displacements, stack slots,
     rip-relative operands and image-base-relative globals. A second implementation of either
     would drift from the first and nobody would re-check it.
     """
@@ -180,7 +180,7 @@ def _writes(mnemonic: str, op_str: str) -> set[str]:
     if mnemonic not in ("mov", "lea", "movzx", "movsx", "movsxd"):
         # `xchg`, `div`, `mul`, the string ops and the shift-by-cl forms write more than their
         # first operand. Rather than model each one, treat every bare register they mention as
-        # clobbered: over-approximating a clobber can only LOSE a witness, while missing one
+        # clobbered: over-approximating a clobber can only lose a witness, while missing one
         # would keep a stale alias and hand back a wrong object.
         for token in re.findall(r"\b([a-z][a-z0-9]{1,3})\b", op_str):
             reg = _SUB.get(token)
@@ -200,7 +200,7 @@ def _transfer(insns, lo: int, hi: int, alias: set[str]) -> list[set[str]]:
             if m:
                 dst, src = _SUB.get(m.group(1)), _SUB.get(m.group(2))
                 if dst and src:
-                    # A COPY of a value already being tracked -- sound anywhere inside a block.
+                    # A copy of a value already being tracked -- sound anywhere inside a block.
                     if src in alias:
                         alias.add(dst)
                     else:
@@ -213,18 +213,18 @@ def _transfer(insns, lo: int, hi: int, alias: set[str]) -> list[set[str]]:
 def this_aliases(insns) -> list[set[str]]:
     """Per-instruction set of registers that provably hold `this`, by basic-block dataflow.
 
-    WHY NOT A LINEAR WALK. A linear walk over the instructions in address order is not sound in
-    the presence of branches, in BOTH directions. A forward jump can skip the very `mov rbx, rcx`
+    Why not a linear walk. A linear walk over the instructions in address order is not sound in
+    the presence of branches, in both directions. A forward jump can skip the very `mov rbx, rcx`
     the walk just believed, so at the merge point `rbx` holds whatever it held before. A backward
     jump can re-enter above a write the walk has not reached yet, so a register the walk still
     calls `this` was reassigned on the path that actually got there. Either one hands back a base
-    register pointing at some OTHER object, and a field cleared against the wrong object is
+    register pointing at some other object, and a field cleared against the wrong object is
     exactly the failure this whole exercise exists to prevent -- worse than no clearance, because
     nobody re-checks a clearance.
 
-    So: split on direct branch targets, propagate the alias set per block, and MEET AT MERGES BY
-    INTERSECTION -- a register is `this` at a join only if it is `this` on every incoming path.
-    A block with no known predecessor starts empty. If the function contains an INDIRECT jump (a
+    So: split on direct branch targets, propagate the alias set per block, and meet at MERGES by
+    intersection -- a register is `this` at a join only if it is `this` on every incoming path.
+    A block with no known predecessor starts empty. If the function contains an indirect jump (a
     jump table, which the step machines are full of) its targets are unknown, so nothing outside
     the entry block is trusted at all.
     """
@@ -299,7 +299,7 @@ def this_aliases(insns) -> list[set[str]]:
             result.extend(_transfer(insns, start, end, state))
         return result
 
-    # A MUST analysis, so the lattice top is "every register" and unreachable blocks stay there:
+    # A must analysis, so the lattice top is "every register" and unreachable blocks stay there:
     # a path that cannot execute must not remove an alias at a join it feeds into.
     ins_state = [set(ALL) for _ in bounds]
     out_state = [set(ALL) for _ in bounds]
@@ -331,7 +331,7 @@ def this_aliases(insns) -> list[set[str]]:
 
 
 def _transfer_exit(insns, lo: int, hi: int, alias: set[str]) -> None:
-    """`_transfer` for its side effect on `alias` -- the state AFTER the last instruction."""
+    """`_transfer` for its side effect on `alias` -- the state after the last instruction."""
     for k in range(lo, hi):
         _addr, _size, mnemonic, op_str = insns[k]
         if mnemonic == "mov":
@@ -393,8 +393,8 @@ class Evidence:
         self.skipped: collections.Counter = collections.Counter()
         self.witnesses: list[dict] = []
         # (function-pair tag, base register) -> the displacements held there. A bracket is only
-        # an argument INSIDE one of these: a field held below X and a field held above X, on the
-        # SAME base register in the SAME object, proves nothing was inserted between them. Held
+        # an argument inside one of these: a field held below X and a field held above X, on the
+        # same base register in the same object, proves nothing was inserted between them. Held
         # sets pooled across functions or across registers prove nothing at all -- that is the
         # anonymous bracketing that had to be retracted on 2026-08-30.
         self.spans: dict[tuple[str, str], set[int]] = collections.defaultdict(set)
@@ -421,8 +421,8 @@ VT_STORE_WINDOW = 24
 def stores_vtable_into_this(insns, aliases, lea_index: int) -> bool:
     """Does the `lea` at `lea_index` end up written to `[this + 0]`?
 
-    That store is what makes the function a CONSTRUCTOR OF `this` rather than a function that
-    merely mentions the class. `[this + 0x30]` is deliberately NOT accepted: that is an embedded
+    That store is what makes the function a CONSTRUCTOR of `this` rather than a function that
+    merely mentions the class. `[this + 0x30]` is deliberately not accepted: that is an embedded
     base or member sub-object, so the enclosing `this` is a different type and its other fields
     must not be attributed to this class.
     """
@@ -453,10 +453,10 @@ def harvest_pair(state, a_va: int, b_va: int, tag: str, ev: Evidence, depth: int
                  confirm: tuple[int, int, int] | None = None) -> list[tuple[int, int, str]]:
     """Compare one function pair, harvest displacements taken off `this`, return callee pairs.
 
-    `confirm` is `(vtable_1162, vtable_1170, insn_va)` for ROUTE B: the 1.17 body must reference
-    the 1.17 vtable of the SAME class at the instruction where the 1.16.2 body references the
+    `confirm` is `(vtable_1162, vtable_1170, insn_va)` for route B: the 1.17 body must reference
+    the 1.17 vtable of the same class at the instruction where the 1.16.2 body references the
     1.16.2 one. A function-map mispairing cannot satisfy that -- it would be pointing at a
-    different class's vtable -- so the map is used to PROPOSE the counterpart and RTTI to accept
+    different class's vtable -- so the map is used to propose the counterpart and RTTI to accept
     it.
     """
     drift, md = state["drift"], state["md"]
@@ -502,8 +502,8 @@ def harvest_pair(state, a_va: int, b_va: int, tag: str, ev: Evidence, depth: int
     for i, (addr, _sz, mnemonic, aop) in enumerate(insns):
         if mnemonic == "call" and depth > 0:
             # `this` is still argument 1 -> the callee's `rcx` is provably the same object, and
-            # the counterpart is the call at the SAME index of an otherwise-identical body. That
-            # is object identity propagated WITHOUT the function map.
+            # the counterpart is the call at the same index of an otherwise-identical body. That
+            # is object identity propagated without the function map.
             if "rcx" in aliases[i] and _DIRECT_CALL.match(aop.strip()):
                 b_op = b_insns[i][3].strip()
                 if _DIRECT_CALL.match(b_op):
@@ -718,10 +718,10 @@ def report_class(state, class_name: str, offsets: list[int] | None, routes: str,
             "witnesses": ev.witnesses[:40],
             "all_held": {f"{k:#x}": len(v) for k, v in sorted(ev.held.items())},
             "all_moved": {f"{k:#x}": [r["new"] for r in v] for k, v in sorted(ev.moved.items())},
-            # ROUTE A ONLY -- the class's OWN virtual methods (and what they call with `this`).
-            # This is the only evidence that is sound for a class other classes DERIVE from: a
+            # Route a only -- the class's own virtual methods (and what they call with `this`).
+            # This is the only evidence that is sound for a class other classes derive from: a
             # method of `C` may only touch `C`'s own members, whatever the dynamic type is,
-            # whereas a constructor reached by ROUTE B may well be a DERIVED class's ctor
+            # whereas a constructor reached by route B may well be a derived class's ctor
             # storing the base vtable on its way past -- in which case `this` is the derived
             # object and its later field writes are derived fields.
             "vslot_held": {f"{k:#x}": sum(1 for r in v if r["tag"].startswith("vslot"))
@@ -731,14 +731,14 @@ def report_class(state, class_name: str, offsets: list[int] | None, routes: str,
                             for k, v in sorted(ev.moved.items())
                             if any(r["tag"].startswith("vslot") for r in v)},
             # One entry per (function pair, base register): the displacements that held there.
-            # This is the ONLY shape in which a bracket argument is valid.
+            # This is the only shape in which a bracket argument is valid.
             "spans": [{"tag": tag, "base": base, "held": sorted(v)}
                       for (tag, base), v in sorted(ev.spans.items()) if len(v) > 1]}
 
 
 
 
-# A named consumer function may have been EDITED in 1.17 without its object changing shape:
+# A named consumer function may have been edited in 1.17 without its object changing shape:
 # `CS::MoveMapStep::STEP_MoveMap` gained exactly two instructions (`mov rcx, rbx; call ...`) and
 # is otherwise identical. Refusing the whole function over that discards 973 perfectly good
 # witness instructions, so the witness mode ALIGNS the two bodies and reads only the instructions
@@ -749,7 +749,7 @@ MIN_ALIGNED_FRACTION = 0.9
 
 
 def align_bodies(drift, a_insns, b_insns):
-    """`[(i, j)]` for instructions that match on mnemonic and operand SHAPE, or None."""
+    """`[(i, j)]` for instructions that match on mnemonic and operand shape, or None."""
     if not a_insns or not b_insns:
         return None
     if len(a_insns) == len(b_insns):
@@ -771,16 +771,16 @@ def align_bodies(drift, a_insns, b_insns):
 
 def witness_pair(state, a_va: int, b_va: int | None, label: str,
                  sink: list | None = None, length: int | None = None) -> int:
-    """Per-BASE-REGISTER held/moved report for one named consumer function.
+    """Per-base-register held/moved report for one named consumer function.
 
     For an object with no vtable of its own -- `CSMenuMan.menuData`, the DLUI input device, a
     `std::u16string` -- RTTI cannot name it, so the object identity comes from the repo's own RE
     (recorded in the doc comment above the constant). That is weaker than RTTI and is labelled as
     such wherever it is used. What this mode still supplies, and what a bare number-join never
-    does, is the OTHER two halves of a valid clearance: a single base register inside a single
+    does, is the other two halves of a valid clearance: a single base register inside a single
     function, and a body that is otherwise instruction-for-instruction identical between the
     builds. Every displacement on one base register in one function is one object, whatever that
-    object turns out to be called -- so a field that held still there held still IN THAT OBJECT.
+    object turns out to be called -- so a field that held still there held still in that object.
     """
     drift, md = state["drift"], state["md"]
     if b_va is None:
@@ -873,12 +873,12 @@ def harvest_all_bases(state, a_va: int, b_va: int, tag: str, ev: Evidence,
 
 # ---------------------------------------------------------------------------------------------
 def control(state) -> int:
-    """POSITIVE CONTROL -- the one field move this migration has confirmed by hand.
+    """Positive control -- the one field move this migration has confirmed by hand.
 
     `PlayerGameData` grew 8 bytes in 1.17: `GetScadutreeBlessing` is byte-identical between the
     builds except `[rcx+0xab5] -> [rcx+0xabd]` and `[rcx+0xab4] -> [rcx+0xabc]`. A method that
-    cannot rediscover that is not a method, so this runs the SAME per-`this` engine over that
-    pair and requires it to come back MOVED on `rcx`.
+    cannot rediscover that is not a method, so this runs the same per-`this` engine over that
+    pair and requires it to come back moved on `rcx`.
     """
     drift, md = state["drift"], state["md"]
     known = drift.KNOWN
@@ -935,7 +935,7 @@ def selftest() -> int:
     else:
         print("ok: prologue `mov rbx, rcx` makes rbx an alias of `this`")
 
-    # MUTATION: if the alias rule is deleted, rbx must NOT be an alias. Emulate by feeding a
+    # MUTATION: if the alias rule is deleted, rbx must not be an alias. Emulate by feeding a
     # body where rbx is loaded from somewhere else instead.
     #    48 8b da         mov rbx, rdx      <- rdx is not `this`
     insns = decode("48895c2408488bda488b4310c3")
@@ -964,7 +964,7 @@ def selftest() -> int:
     else:
         print("ok: overwriting rcx drops the alias")
 
-    # 4. A forward jump that SKIPS the alias-establishing move must not leave `rbx` trusted at
+    # 4. A forward jump that skips the alias-establishing move must not leave `rbx` trusted at
     #    the merge -- the whole reason a linear walk is unsound.
     #      eb 03            jmp +3        (over the `mov rbx, rcx`)
     #      48 8b d9         mov rbx, rcx
@@ -978,7 +978,7 @@ def selftest() -> int:
     else:
         print("ok: intersection at a merge drops an alias not established on every path")
 
-    # 4b. ... but when BOTH paths establish it, the merge must keep it, or the tracker is so
+    # 4b. ... but when both paths establish it, the merge must keep it, or the tracker is so
     #     conservative it witnesses nothing.
     #      48 8b d9         mov rbx, rcx
     #      eb 03            jmp +3
@@ -993,7 +993,7 @@ def selftest() -> int:
     else:
         print("ok: an alias established on every path survives the merge")
 
-    # 4c. An INDIRECT jump means unknown targets, so nothing past the entry block is trusted.
+    # 4c. An indirect jump means unknown targets, so nothing past the entry block is trusted.
     #      ff e0            jmp rax
     #      48 8b d9         mov rbx, rcx
     #      48 8b 43 10      mov rax, [rbx + 0x10]
@@ -1013,7 +1013,7 @@ def selftest() -> int:
     else:
         print("ok: a 32-bit write kills the 64-bit `this` alias")
 
-    # 6. ROUTE B's object test: the vtable must land in `[this + 0]`, not merely be mentioned.
+    # 6. Route B's object test: the vtable must land in `[this + 0]`, not merely be mentioned.
     #    48 8b d9              mov rbx, rcx           (prologue: rbx aliases `this`)
     #    48 8d 05 00 00 00 00  lea rax, [rip]
     #    48 89 03              mov [rbx], rax         <- stored at this+0  => CONSTRUCTOR
@@ -1024,7 +1024,7 @@ def selftest() -> int:
     else:
         print("ok: a vtable stored at [this+0] identifies the object")
 
-    #    MUTATION 1: store at `[rbx + 0x30]` -- an EMBEDDED sub-object, so `this` is NOT this
+    #    Mutation 1: store at `[rbx + 0x30]` -- an embedded sub-object, so `this` is not this
     #    class. Accepting it is exactly the FD4Time false attribution (385 of 390 witnesses).
     sub = decode("488bd9488d0500000000488943 30".replace(" ", ""))
     if stores_vtable_into_this(sub, this_aliases(sub), 1):
@@ -1033,7 +1033,7 @@ def selftest() -> int:
     else:
         print("ok: a vtable stored at [this+0x30] is rejected (embedded sub-object)")
 
-    #    MUTATION 2: store into a register that does NOT hold `this`.
+    #    Mutation 2: store into a register that does not hold `this`.
     #    48 8b d9  mov rbx,rcx / lea rax,[rip] / 48 89 07  mov [rdi], rax
     other = decode("488bd9488d0500000000488907c3")
     if stores_vtable_into_this(other, this_aliases(other), 1):
@@ -1042,7 +1042,7 @@ def selftest() -> int:
     else:
         print("ok: a vtable stored through a non-`this` register is rejected")
 
-    #    MUTATION 3: the class is merely MENTIONED -- lea, no store at all.
+    #    Mutation 3: the class is merely mentioned -- lea, no store at all.
     mention = decode("488bd9488d0500000000488b4310c3")
     if stores_vtable_into_this(mention, this_aliases(mention), 1):
         print("FAIL: mutation -- merely mentioning the vtable was accepted as construction")

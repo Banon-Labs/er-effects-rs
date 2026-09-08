@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Fail if the save-suppression crates compile with warnings on their SHIPPING target.
+"""Fail if the save-suppression crates compile with warnings on their shipping target.
 
-Covers the standalone `er-save-disable` AND the shared `er-save-suppress` core it
+Covers the standalone `er-save-disable` and the shared `er-save-suppress` core it
 (and the product DLL) link -- the suppression logic moved into that rlib for the
 save-game-flow integration, and it is exactly the "crate whose job is stopping saves"
 this gate exists for.
@@ -14,7 +14,7 @@ their only callers, and the build reported clean; they were found by counting
 occurrences by hand, not by a gate.
 
 The windows target is the one where "zero warnings" is both meaningful and
-currently true, so it is the one gated here. The host target is deliberately NOT
+currently true, so it is the one gated here. The host target is deliberately not
 gated: this is a `cdylib` cross-compiled from Linux, so on host every item whose
 only consumer is `hooks`/`DllMain` reads as dead (~69 of them). That is structural,
 not rot, and gating it would produce noise that teaches people to ignore the gate.
@@ -22,18 +22,18 @@ not rot, and gating it would produce noise that teaches people to ignore the gat
 `--force-warn` is the only mechanism that works here, and the reason is worth
 recording because two plausible alternatives silently do nothing:
 
-  * `RUSTFLAGS="-W dead_code"` works on the host but NOT through `cargo xwin`,
+  * `RUSTFLAGS="-W dead_code"` works on the host but not through `cargo xwin`,
     which sets `RUSTFLAGS` itself and clobbers the caller's value. The audit then
     reports zero warnings on a crate that has them -- a false pass.
   * `cargo rustc -- -W dead_code` also fails: cargo appends the config's rustflags
-    AFTER the trailing args, so the observed rustc command line ends up
+    after the trailing args, so the observed rustc command line ends up
     `-W dead_code -Awarnings -Awarnings` and the blanket allow wins.
 
 `--force-warn` cannot be overridden by a later `-A`, which is precisely its
 purpose. Verified against an injected dead function: without it the injected
 function is not reported.
 
-`cargo rustc` also builds only THIS crate's lints (path dependencies keep their
+`cargo rustc` also builds only this crate's lints (path dependencies keep their
 own levels), so no filtering by path is needed to avoid failing on
 `er-game-base`/`er-hook` warnings.
 """
@@ -89,7 +89,7 @@ def audit_crate(crate: str) -> int:
         text = line.strip()
         if not text.startswith("warning:") or "generated" in text:
             continue
-        # NOT A CRATE WARNING: rustc's `linker_messages` lint relays the LINKER's own stderr
+        # Not a crate WARNING: rustc's `linker_messages` lint relays the LINKER's own stderr
         # under a `warning:` prefix. Under cargo-xwin every link emits LNK4099 ("Cannot use
         # debug info for 'libcmt.lib(...)' -- failed to load reference
         # 'D:\\a\\_work\\1\\s\\binaries\\amd64ret\\lib\\amd64\\libcmt.amd64.pdb'"), because the
@@ -102,7 +102,7 @@ def audit_crate(crate: str) -> int:
         # relay as rot fails the gate on a machine's toolchain layout rather than on the code,
         # which is how a gate gets ignored. The filter is deliberately narrow -- only the
         # linker relay prefix -- so every genuine rustc lint still counts, and anything skipped
-        # is PRINTED below rather than silently dropped.
+        # is printed below rather than silently dropped.
         if text.startswith("warning: linker stderr:"):
             skipped_linker.append(text)
             continue

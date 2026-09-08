@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""Carry a MID-FUNCTION 1.16.2 address (a call site or return site) onto ELDEN RING 1.17.
+"""Carry a mid-function 1.16.2 address (a call site or return site) onto ELDEN RING 1.17.
 
-`map-rvas-1162-to-1170.py` maps FUNCTION ENTRIES. Several addresses in this workspace are not
-entries at all: they are the address of an instruction INSIDE a function, used to recognise a
+`map-rvas-1162-to-1170.py` maps function entries. Several addresses in this workspace are not
+entries at all: they are the address of an instruction inside a function, used to recognise a
 caller from a captured return address (`trace_first_game_caller_rva`,
 `callstack_contains_game_rva`). Handing one of those to the entry mapper is meaningless -- there
 is no `.pdata` entry to match and no prologue to sign -- and hooking one would be worse.
 
-WHAT THIS DOES
+What this does
 --------------
-Given a mid-function 1.16.2 VA and the entry of the function that contains it, it decodes BOTH
+Given a mid-function 1.16.2 VA and the entry of the function that contains it, it decodes both
 functions from their entries in lockstep, comparing each instruction normalised the way the rest
 of this toolchain normalises (mnemonic + register operand shape; displacements, immediates and
 branch targets dropped, because that is exactly what a patch moves). When the two bodies agree
-instruction for instruction up to the target, the 1.17 address is the byte offset of the SAME
-instruction index in the 1.17 function -- which is NOT necessarily `target + function delta`,
+instruction for instruction up to the target, the 1.17 address is the byte offset of the same
+instruction index in the 1.17 function -- which is not necessarily `target + function delta`,
 because a single changed instruction length shifts everything after it.
 
 It refuses rather than guesses:
@@ -22,7 +22,7 @@ It refuses rather than guesses:
   * the two decodes must agree on every instruction up to that point;
   * both functions must be declared by their image's own `.pdata`.
 
-USAGE
+Usage
     python3 scripts/map-callsite-rva-1162-to-1170.py 0x140744e02
     python3 scripts/map-callsite-rva-1162-to-1170.py --entry 0x140744dd0 0x140744e02
 
@@ -120,32 +120,32 @@ def carry(old_image, new_image, old_extents, new_extents, function_map, target_r
     new_entry = function_map.get(old_entry)
     if new_entry is None:
         return None, f"the containing function {old_entry + BASE:#x} has no 1.17 counterpart in the function map"
-    # ONE extent source for both sides. `old_extents[old_entry]` is the raw `.pdata` end and
-    # `body_end` is the chunk-run-MERGED one, so mixing them would measure the two images with two
+    # One extent source for both sides. `old_extents[old_entry]` is the raw `.pdata` end and
+    # `body_end` is the chunk-run-merged one, so mixing them would measure the two images with two
     # different rulers -- the divergence a single shared primitive exists to prevent.
     old_end = function_extent.body_end(old_image, old_entry + BASE)
     if old_end is None:
         return None, f"the 1.16.2 function {old_entry + BASE:#x} has no determinable extent"
     old_body = decode(old_image, old_entry, old_end)
-    # THE 1.17 SIDE GETS AN EXTENT OR IT GETS A REFUSAL. This used to read
+    # The 1.17 side gets an extent or it gets a refusal. This used to read
     #
     #     new_extents.get(new_entry, new_entry + (old_extents[old_entry] - old_entry) + 0x40)
     #
     # -- when 1.17's `.pdata` declared nothing at the entry it decoded the 1.16.2 function's
-    # LENGTH plus 0x40 bytes, from a function entry, into whatever followed. That contradicts this
+    # length plus 0x40 bytes, from a function entry, into whatever followed. That contradicts this
     # file's own stated contract ("both functions must be declared by their image's own
-    # `.pdata`") and it fails in the PERMISSIVE direction: a 1.17 function SHORTER than its 1.16.2
+    # `.pdata`") and it fails in the PERMISSIVE direction: a 1.17 function shorter than its 1.16.2
     # counterpart gets its instruction list padded out of the neighbour, `index >= len(new_body)`
     # then does not fire, and the tool returns a confidently wrong mid-function address instead of
-    # UNRESOLVED. A wrong address here is a mid-function detour.
+    # unresolved. A wrong address here is a mid-function detour.
     #
     # It is also the class that produced instance 1 of 2026-08-31 and the 12 false DIVERGES and 31
-    # false SHAPE-DIFFs of 2026-08-30: in a de-Arxan'd image the bytes past a `ret` are the
+    # false shape-DIFFs of 2026-08-30: in a de-Arxan'd image the bytes past a `ret` are the
     # deobfuscator's leftovers, and a linear decode resynchronises into instructions nobody wrote.
     #
     # Measured before the change: 0 of the 128,602 rows in the function map have a 1.17 target
-    # `.pdata` does not declare, so the fallback was unreachable TODAY and no output moves. It is
-    # reachable the moment a LEAF pair enters the map -- which is exactly what
+    # `.pdata` does not declare, so the fallback was unreachable today and no output moves. It is
+    # reachable the moment a leaf pair enters the map -- which is exactly what
     # `pair-leaf-functions-1162-1170.py` produces, leaves having no `.pdata` entry by definition.
     new_end = function_extent.body_end(new_image, new_entry + BASE)
     if new_end is None:

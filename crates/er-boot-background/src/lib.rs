@@ -9,7 +9,7 @@
 //! and touches no swapchain. It is disk discovery, a WIC decode, and integer pixel arithmetic --
 //! all of which the shim was hosting only because that is where it happened to be written.
 //!
-//! The host still owns every decision about WHERE to look: the configured path and the game
+//! The host still owns every decision about where to look: the configured path and the game
 //! directory arrive as [`Sources`], and the debug log arrives as a [`LogFn`], so this crate has no
 //! opinion about config files or about which log a message belongs in.
 

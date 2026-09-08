@@ -3,7 +3,7 @@
 //! `FUN_140bbe1a0` -- what `PROFILE_RENDERER_SET_MODEL_SOURCE_RVA` names and what the loading
 //! portrait's per-slot build kick calls -- is not a plain "install this character's equipment".
 //! Decompiled from the 1.16.2 named dump (and byte-identical on 1.17: `docs/recon/
-//! rva-map-1162-to-1170.needed-verified.tsv` maps `0x140bbe1a0 -> 0x140bbf870` IDENTICAL-WHOLE,
+//! rva-map-1162-to-1170.needed-verified.tsv` maps `0x140bbe1a0 -> 0x140bbf870` identical-whole,
 //! score 1.000 over 119 instructions), it does exactly three things:
 //!
 //! ```text
@@ -23,7 +23,7 @@
 //! is `EquipItem(chrAsm, slot + ProtectorHead, h)`, so the last two overwrite the character's own
 //! gauntlets and greaves with the bare-body rows 10200/10300.
 //!
-//! THAT IS THE WHOLE BUG, BOTH HALVES OF IT. The portrait shows no arm or leg armour because the
+//! That is the whole bug, both halves of it. The portrait shows no arm or leg armour because the
 //! feed replaced them, and it shows no weapon -- and therefore no handedness -- because the feed
 //! erased them. Neither is a limitation of the render path: the per-frame model-resource request
 //! `FUN_1409e6fb0` resolves armaments as thoroughly as armour (`EquipParamWeapon::GetEntry`,
@@ -32,10 +32,10 @@
 //! Hand it a ChrAsm that still has its weapons and it draws them.
 //!
 //! So the repair is to write the record's own `equipment_param_ids` back over the fed array after
-//! the feed returns and before the build is kicked. PARAM IDS ONLY, never the gaitem handles: the
+//! the feed returns and before the build is kicked. PARAM IDS only, never the gaitem handles: the
 //! render path resolves equipment from the id array alone (`GetProtectorParamIdBySlot` is
 //! `mov 0x7c(%rcx,%rdx,4),%eax`), while the handle array is refcounted state this process owns --
-//! the feed put two REAL default-protector handles in it, and stealing or overwriting those is how
+//! the feed put two real default-protector handles in it, and stealing or overwriting those is how
 //! PR #128 broke refcounts without fixing the picture.
 //!
 //! This module is the deterministic half: which indices differ, and what to report about them. The
@@ -78,9 +78,9 @@ pub struct PortraitEquipRestore {
     pub ammo_slots_restored: usize,
     /// Protector indices the feed overwrote (in practice hands and legs, never head or chest).
     pub protector_slots_restored: usize,
-    /// The record's first non-empty RIGHT-hand armament (odd indices), or [`PORTRAIT_EQUIP_EMPTY_ID`].
+    /// The record's first non-empty right-hand armament (odd indices), or [`PORTRAIT_EQUIP_EMPTY_ID`].
     pub right_weapon_id: i32,
-    /// The record's first non-empty LEFT-hand armament (even indices).
+    /// The record's first non-empty left-hand armament (even indices).
     pub left_weapon_id: i32,
     /// The record's own hands (gauntlets) row, whatever the feed replaced it with.
     pub hands_id: i32,
@@ -90,7 +90,7 @@ pub struct PortraitEquipRestore {
 
 /// Compare the record's `equipment_param_ids` against the array the native feed left behind.
 ///
-/// Both slices are the FULL 22-entry arrays. Returns `None` when either is the wrong length, so a
+/// Both slices are the full 22-entry arrays. Returns `None` when either is the wrong length, so a
 /// short read at the call site cannot be mistaken for "nothing to restore".
 pub fn portrait_equip_restore_report(record: &[i32], fed: &[i32]) -> Option<PortraitEquipRestore> {
     if record.len() != PORTRAIT_EQUIP_ENTRY_COUNT || fed.len() != PORTRAIT_EQUIP_ENTRY_COUNT {
@@ -137,7 +137,7 @@ fn first_non_empty(record: &[i32], indices: impl Iterator<Item = usize>) -> i32 
 
 pub const PORTRAIT_IDLE_ANIM_IDS: [i32; 3] = [3000000, 100022, 99900];
 
-/// The same list for a character who is TWO-HANDING, with the two-handed standing idle in front.
+/// The same list for a character who is two-handing, with the two-handed standing idle in front.
 ///
 /// 12000000 is grounded exactly the way 3000000 above was -- off our own in-world telemetry, not
 /// from a table. Measured 2026-09-07 on Onyx Lord: `current_animation_id` held at 12000000 across
@@ -147,13 +147,13 @@ pub const PORTRAIT_IDLE_ANIM_IDS: [i32; 3] = [3000000, 100022, 99900];
 pub const PORTRAIT_IDLE_ANIM_IDS_TWO_HANDED: [i32; 4] = [12000000, 3000000, 100022, 99900];
 
 /// `ChrAsmArmStyle` values that mean two-handing. Not a guess and not a name: `CS::ChrIns::
-/// IsTwoHanding` (deobf 0x1403f4930) is the whole function `ADD EAX,-0x2 ; CMP EAX,0x1 ; SETBE`,
+/// IsTwoHanding` (deobf 0x1403f4930) is the whole function `add EAX,-0x2 ; CMP EAX,0x1 ; SETBE`,
 /// so exactly `{2, 3}` -- `LeftBothHands` and `RightBothHands` -- answer true.
 pub const CHR_ASM_ARM_STYLE_TWO_HANDED: [i32; 2] = [2, 3];
 
 /// Which idle to try on the portrait, given the arm style of the `ChrAsm` it is being built from.
 ///
-/// The stance is NOT something the model build derives: `FUN_1409e6fb0` reads the equipment array
+/// The stance is not something the model build derives: `FUN_1409e6fb0` reads the equipment array
 /// and `selectedSlots`, and the only caller of `PlayerIns::GetArmStyle` in the whole image is
 /// `UpdatePlayerComponents` -- the live player. So a two-handed portrait has to come from the
 /// animation, which is why this is a list of anim ids and not a flag.
@@ -176,7 +176,7 @@ mod idle_anim_tests {
         }
     }
 
-    /// A DUAL-WIELDER MUST NOT INHERIT THE PREVIOUS CHARACTER'S GRIP. The arm style is an input to
+    /// A DUAL-WIELDER must not inherit the previous character'S GRIP. The arm style is an input to
     /// the next build, so it is stored per kick rather than latched; this pins the values, since the
     /// selector is the only thing that reads it and a stale 3 here drew a one-handed-each character
     /// with the two-handed idle and both weapons still attached.
@@ -199,7 +199,7 @@ mod idle_anim_tests {
         }
     }
 
-    /// Both lists END the same way, so a build where the leading id does not resolve falls through
+    /// Both lists end the same way, so a build where the leading id does not resolve falls through
     /// to the same fallbacks rather than to no pose at all.
     #[test]
     fn both_lists_share_their_fallback_tail() {
@@ -262,7 +262,7 @@ mod tests {
         assert!(portrait_equip_restore_is_material(&report));
     }
 
-    /// The case that must NOT read as a failure: a character who really is bare-handed and
+    /// The case that must not read as a failure: a character who really is bare-handed and
     /// bare-armed. The feed's clear and its default-protector write both land on values the record
     /// already holds, so there is nothing to restore and the semaphores say so.
     #[test]
@@ -282,8 +282,8 @@ mod tests {
     #[test]
     fn the_hands_are_read_off_the_odd_even_split() {
         let mut record = empty_array();
-        record[3] = 2200000; // right SECONDARY only
-        record[4] = 3300000; // left TERTIARY only
+        record[3] = 2200000; // right secondary only
+        record[4] = 3300000; // left tertiary only
         let report = portrait_equip_restore_report(&record, &empty_array()).unwrap();
         assert_eq!(report.right_weapon_id, 2200000);
         assert_eq!(report.left_weapon_id, 3300000);

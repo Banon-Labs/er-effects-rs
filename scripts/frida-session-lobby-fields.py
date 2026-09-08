@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Find which field of Seamless's session object holds the ADVERTISED lobby.
+"""Find which field of Seamless's session object holds the advertised lobby.
 
-WHY
+Why
 ---
 `SESSION_LOBBY_ID_OFFSET = 0x178` was a candidate, and its own docstring said so. Measured
 2026-08-06 while hosting: the lobby at that offset is ours, carries `lobby_type`, and accepts our
-write -- but carries NONE of `lobby_breakin_lobby_ykssr_199_6`, `matchmaking_breakin_lobby_ykssr_199_6`
+write -- but carries none of `lobby_breakin_lobby_ykssr_199_6`, `matchmaking_breakin_lobby_ykssr_199_6`
 or `ykssr_dlc`. Every lobby a Seamless query can return carries those, because ersc's own five
 filters demand them. So our key is going onto the member/session lobby, not the advertisement, and
 no invader's query can ever see it.
@@ -13,11 +13,11 @@ no invader's query can ever see it.
 Neither existing guard catches this: the owner check passes (we own both lobbies) and
 `is_advertisement_lobby` passes (both carry `lobby_type`).
 
-WHAT THIS DOES
+What this does
 --------------
 Scans the session object for 8-byte values that look like Steam lobby ids, then asks Steam about
 each one: do we own it, and does it carry the break-in trio? The right offset is the one whose
-lobby answers yes to both. Everything here is a READ -- no writes, no session calls.
+lobby answers yes to both. Everything here is a read -- no writes, no session calls.
 
     uv run --with frida python3 scripts/frida-session-lobby-fields.py --session 0x471bcd10
     python3 scripts/frida-session-lobby-fields.py --selftest
@@ -43,7 +43,7 @@ LOBBY_TYPE_KEY = "lobby_type"
 LOBBY_MAP_KEY = "er_invasion_warp_map"
 
 #: Steam lobby CSteamIDs on this account all share a high nibble pattern; anything else in the
-#: struct is a pointer, a float or a counter. Used only to SHORTLIST candidates -- every shortlisted
+#: struct is a pointer, a float or a counter. Used only to shortlist candidates -- every shortlisted
 #: id is then confirmed by asking Steam about it, so a loose filter costs nothing.
 LOBBY_ID_MASK = 0xFFF0_0000_0000_0000
 LOBBY_ID_PREFIX = 0x0180_0000_0000_0000
@@ -140,9 +140,9 @@ rpc.exports = {
 def classify(field: dict, me: str | None) -> dict:
     """Is this the lobby we should publish onto?
 
-    Two conditions, both required. OURS, because only an owner's write persists. ADVERTISED,
+    Two conditions, both required. Ours, because only an owner's write persists. Advertised,
     because ersc's own query filters on the break-in trio -- a lobby without them is invisible to
-    every invader no matter what else it carries. `lobby_type` alone is NOT sufficient: both
+    every invader no matter what else it carries. `lobby_type` alone is not sufficient: both
     lobbies carry it, which is why the existing guard waved the wrong one through.
     """
     values = field.get("values") or {}
@@ -182,7 +182,7 @@ def _selftest() -> int:
     check(classify({"owner": me, "values": adv}, me)["verdict"] == "PUBLISH-HERE",
           "ours and carrying the break-in trio is the publish target")
 
-    # THE MEASURED BUG: lobby_type alone passed the old guard, and this is the lobby it chose.
+    # The measured BUG: lobby_type alone passed the old guard, and this is the lobby it chose.
     session_only = {LOBBY_TYPE_KEY: "yknx3_seamless_master_lobby", LOBBY_MAP_KEY: "m32_05_00_00"}
     v = classify({"owner": me, "values": session_only}, me)
     check(v["verdict"] == "ours-but-not-advertised",

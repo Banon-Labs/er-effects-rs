@@ -1,34 +1,34 @@
 use super::*;
 use er_game_base::fnv1a::fnv1a64;
-// Boot-progress view -- our own pre-Continue cover content, drawn from the FIRST presented frame.
+// Boot-progress view -- our own pre-Continue cover content, drawn from the first presented frame.
 //
 // With the splash/logo/title visuals suppressed, every frame the game presents between its first
 // `Present` (~+3.5s after attach) and the post-Continue loading window (~+15.5s) is pure black. The
-// Present-hook VMT swap is already installed BEFORE the first present (task tick ~+3.0s), so the
+// Present-hook VMT swap is already installed before the first present (task tick ~+3.0s), so the
 // black gap is a draw-gating matter, not a hook-timing one: this module opens the gate at Present
-// hit #1 with content that needs NOTHING from the game -- a hairline loading bar in the game's own
+// hit #1 with content that needs nothing from the game -- a hairline loading bar in the game's own
 // understated presentation plus a small milestone label (5x7 embedded font, procedurally
 // rasterized, no game-derived assets), progress driven purely by our own already-latched RAM
 // semaphores:
 //
-//   BOOT     -- drawing at all (present hook + swapchain live)
-//   GAME     -- `game_man_ptr_or_null() != 0` (GameMan constructed)
-//   OFFLINE  -- `FORCE_OFFLINE_BYTES_CLEARED` (GameMan online bytes cleared, ~+8.5s)
-//   TITLE    -- `TITLE_FADEIN_SKIP_FIRED` (zero-input FadeIn->Loop transition)
-//   MENU     -- `PRODUCT_CORE_LAST_MENU_OPENED_LATCH` (title menu natural-open latch)
-//   CONTINUE -- `SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT` / `TFC_CONTINUE_FIRED`
-//               (the visible SAVE LOAD tick marks the save-data pause immediately after this)
-//   LOADING  -- forced Continue/native CS::LoadingScreen update -> HANDOFF. Early profile/keyed
+//   Boot     -- drawing at all (present hook + swapchain live)
+//   game     -- `game_man_ptr_or_null() != 0` (GameMan constructed)
+//   offline  -- `FORCE_OFFLINE_BYTES_CLEARED` (GameMan online bytes cleared, ~+8.5s)
+//   title    -- `TITLE_FADEIN_SKIP_FIRED` (zero-input FadeIn->Loop transition)
+//   menu     -- `PRODUCT_CORE_LAST_MENU_OPENED_LATCH` (title menu natural-open latch)
+//   continue -- `SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT` / `TFC_CONTINUE_FIRED`
+//               (the visible save load tick marks the save-data pause immediately after this)
+//   loading  -- forced Continue/native CS::LoadingScreen update -> HANDOFF. Early profile/keyed
 //               semaphores only keep the cover drawing; they do not start the bail clock.
 //
 // Reached milestones are latched into a monotonic bitmask (a latch that later reads 0 cannot walk
-// the bar backwards), and the fill WITHIN a milestone comes from that phase's own substep
+// the bar backwards), and the fill within a milestone comes from that phase's own substep
 // semaphores -- never from a clock. A clock-driven creep used to sit here and was deleted on
 // 2026-09-04 by user directive; see the `NEVER ESTIMATE` block at `boot_view_progress`. The
-// consequence is load-bearing and is the whole point: a phase whose substeps stop advancing HOLDS,
-// so a frozen bar means frozen WORK rather than a bar that ran out of animation. Do not read a held
-// value as a cosmetic estimate. The draw is a single submit on our OWN queue (transition
-// PRESENT->COPY_DEST, CopyTextureRegion upload->backbuffer strip rect, transition back, CPU fence
+// consequence is load-bearing and is the whole point: a phase whose substeps stop advancing holds,
+// so a frozen bar means frozen work rather than a bar that ran out of animation. Do not read a held
+// value as a cosmetic estimate. The draw is a single submit on our own queue (transition
+// present->COPY_DEST, CopyTextureRegion upload->backbuffer strip rect, transition back, CPU fence
 // wait) -- no backbuffer readback: the pre-Continue frames are the content-free black this view
 // exists to replace, and the strip rect is entirely ours.
 
@@ -36,8 +36,8 @@ use er_game_base::fnv1a::fnv1a64;
 /// cover last stopped, when the window armed, the last window's arm->stop duration, and the
 /// publish-version/slot-key snapshots + once-per-epoch latch behind the publish-triggered resume.
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_COVER_WINDOW_MS_LAST;
-/// DIAGNOSTIC (bd ab-portrait-disabled-load2-fps-still-low-boot-view-composite-is-killer-2026-07-20):
-/// last process-ms the per-frame boot-view stop DECISION was logged, so the log is rate-limited to
+/// Diagnostic (bd ab-portrait-disabled-load2-fps-still-low-boot-view-composite-is-killer-2026-07-20):
+/// last process-ms the per-frame boot-view stop decision was logged, so the log is rate-limited to
 /// ~1/s while we diagnose why neither stop path fires for the incomplete load2.
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_DECISION_LOG_MS;
 /// Per-frame composite counter (RAM semaphore: the boot view is actually reaching the backbuffer).
@@ -48,12 +48,12 @@ pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FPS_BAIL_PUBLISH_VERSION;
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FPS_BAIL_RESUMED;
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FPS_BAIL_RESUMES;
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FPS_BAIL_SLOT_KEY;
-/// Last DISPLAYED progress in permille (monotonic; includes the inter-milestone creep).
+/// Last displayed progress in permille (monotonic; includes the inter-milestone creep).
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_LAST_PERMILLE;
 /// Baseline `PROFILE_LOADSCREEN_TABLE_BUILDS` when the own-menu switch rearmed the boot view; a later
 /// increment is this switch's loading-window handoff. Default 0 preserves first-start behavior.
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_LOADSCREEN_TABLE_BASELINE;
-/// Monotonic-display clamp for the (phase idx, substep) LABEL numbers (user 2026-07-19): the visible
+/// Monotonic-display clamp for the (phase idx, substep) label numbers (user 2026-07-19): the visible
 /// numbers must only advance within one load epoch -- never repeat a value already passed nor
 /// decrement -- or the loading text reads as jumpy/looping. Ordinal = idx*ORD_SCALE + sub (phase idx
 /// dominates). Held label is a `&'static str` (all sub-labels come from const tables, so its ptr/len
@@ -75,7 +75,7 @@ pub(crate) const BOOT_VIEW_STOP_REASON_RELEASE_FADE: usize = 1;
 pub(crate) const BOOT_VIEW_STOP_REASON_FPS_BAIL: usize = 2;
 pub(crate) const BOOT_VIEW_STOP_REASON_WORLD_HANDOFF: usize = 3;
 /// The absolute backstop ended the window. Reasons 1-3 are the cover working; this one is the
-/// cover having FAILED and being torn down by force. Kept distinct so no reader can file a
+/// cover having failed and being torn down by force. Kept distinct so no reader can file a
 /// backstop release as a healthy one -- see [`boot_view_absolute_backstop`].
 pub(crate) const BOOT_VIEW_STOP_REASON_ABSOLUTE_BACKSTOP: usize = 4;
 const BOOT_VIEW_MONO_ORD_SCALE: usize = 1000;
@@ -98,7 +98,7 @@ use crate::constants::BOOT_VIEW_EPOCH_COMPOSITE_CAP_MS as COMPOSITE_CAP;
 use er_loading_portrait_core::native_loading_progress as np;
 
 /// LOADING_SCREEN_UPDATE_HITS baseline latched at handoff detection: the counter is cumulative
-/// across loads, so an own-menu second load must measure only ITS loading screen's ticks.
+/// across loads, so an own-menu second load must measure only its loading screen's ticks.
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_DARK_GAP_FAILURES;
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_DARK_GAP_LAST_HELD_MS;
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_DARK_GAP_LAST_NATIVE_HITS;
@@ -112,7 +112,7 @@ pub(crate) use er_telemetry_core::counters::BOOT_VIEW_DRAWN_IDX;
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_DRAWN_PERMILLE;
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FADE_COMPLETE_MS;
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FADE_FAILURES;
-/// One-way release fade (2026-08-22): how long the fade was PAUSED by an honored hold, the pause
+/// One-way release fade (2026-08-22): how long the fade was paused by an honored hold, the pause
 /// accumulator's own previous-frame stamp, and the re-assert tallies the pause is decided from.
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FADE_HELD_MS;
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FADE_HITS;
@@ -134,7 +134,7 @@ pub(crate) use er_telemetry_core::counters::BOOT_VIEW_HANDOFF_NATIVE_HITS_BASELI
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_HANDOFF_SEEN_MS;
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_NATIVE_GFX_FADE_HOLD_COMPLETE_MS;
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_NATIVE_GFX_FADE_HOLD_HITS;
-/// THE defect counter for the 2026-08-22 "portrait comes back if I press escape too quickly"
+/// The defect counter for the 2026-08-22 "portrait comes back if I press escape too quickly"
 /// report: opaque cover draws that happened while the release fade was already running. Expected 0.
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_NONFADE_DRAW_DURING_FADE;
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_NONFADE_DRAW_DURING_FADE_FIRST_MS;
@@ -146,7 +146,7 @@ pub(crate) use er_telemetry_core::counters::BOOT_VIEW_PRESENT_FULL_CLEAR_HITS;
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_PUMP_STOP_MS;
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_PUMP_STOP_REASON;
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_SELF_FULL_CLEAR_HITS;
-/// Frames WE presented on the game's swapchain before its render loop produced its first frame.
+/// Frames we presented on the game's swapchain before its render loop produced its first frame.
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_SELF_PRESENTS;
 /// CS::LoadingScreen update hits at the moment the cover stopped (telemetry: proves the cut
 /// happened on a lit loading screen, not into the black gap).
@@ -174,7 +174,7 @@ pub(crate) use er_telemetry_core::counters::BOOT_VIEW_IDX_CHANGED_MS;
 static BOOT_BG_IMAGE: std::sync::OnceLock<Option<er_boot_background::BootBgImage>> =
     std::sync::OnceLock::new();
 
-/// The phase sequence THIS load epoch publishes. Boot walks engine bring-up through the first world;
+/// The phase sequence this load epoch publishes. Boot walks engine bring-up through the first world;
 /// a character reload cannot replay any of that, so it publishes a strictly smaller sequence and its
 /// visible `N/M` denominator shrinks accordingly (bd er-effects-rs-ok8d).
 fn boot_view_phase_set() -> &'static er_loading_bar_core::PhaseSet {
@@ -184,15 +184,15 @@ fn boot_view_phase_set() -> &'static er_loading_bar_core::PhaseSet {
         &er_loading_bar_core::BOOT_PHASE_SET
     }
 }
-/// Fill edge the bar pauses at while the startup save picker holds the boot (the MAIN MENU phase, whose
+/// Fill edge the bar pauses at while the startup save picker holds the boot (the main menu phase, whose
 /// creep tops out near here). `boot_view_progress` clamps the fill here while a pick is pending, then
 /// lifts it the frame the pick clears the latch.
 const BOOT_VIEW_SAVE_CHECK_PERMILLE: usize = 470;
 /// Asymptotic creep time-constant: creep = gap * since/(since + K). At `since == K` the bar is halfway to
-/// the next milestone; it keeps approaching but never reaches it, so the bar NEVER fully freezes during a
-/// long phase (user 2026-07-15: STARTING UP ~23s and the title load ~32s made a 70%-capped bar look stuck).
+/// the next milestone; it keeps approaching but never reaches it, so the bar never fully freezes during a
+/// long phase (user 2026-07-15: Starting up ~23s and the title load ~32s made a 70%-capped bar look stuck).
 /// Seamless handoff (user 2026-07-06, replacing the earlier fade-out design): at the loading
-/// handoff the cover HOLDS fully lit over the game's black gap and the loading screen's own
+/// handoff the cover holds fully lit over the game's black gap and the loading screen's own
 /// fade-in-from-black, then stops in a single cut once the native loading screen is fully lit --
 /// a lit-to-lit scene cut with no black and no fade. Measured (run 194254 pixel telemetry): the
 /// native fade-in luminance plateaus around CS::LoadingScreen update hit ~12, ~1.8s after the
@@ -220,45 +220,45 @@ const BOOT_VIEW_FADE_HOLD_MAX_STEP_MS: u64 = 250;
 ///
 /// A honored hold clears once `CS::LoadingScreen::Update` has been quiet for
 /// `BOOT_VIEW_NATIVE_LOADING_QUIET_HOLD_MS`, so a genuine one is always well inside this. The cap
-/// exists because the fade is the ONLY exit from a world-handoff cover window, so an unbounded
+/// exists because the fade is the only exit from a world-handoff cover window, so an unbounded
 /// pause would be an unbounded cover and the per-frame GPU readback behind it would sit on the
 /// frame rate forever.
 ///
-/// CORRECTION (2026-08-30). The reasoning above is sound but it only ever asked the question one
-/// way round: what bounds the window once `world_handoff` is TRUE. It never asked the converse --
-/// what bounds the window when `world_handoff` is NEVER true -- and the answer was NOTHING. This
-/// cap is not, and cannot become, a lifetime bound: a fade that is never ENTERED is never paused,
+/// Correction (2026-08-30). The reasoning above is sound but it only ever asked the question one
+/// way round: what bounds the window once `world_handoff` is true. It never asked the converse --
+/// what bounds the window when `world_handoff` is never true -- and the answer was nothing. This
+/// cap is not, and cannot become, a lifetime bound: a fade that is never entered is never paused,
 /// so there is nothing here to cap. That hole is what [`boot_view_absolute_backstop`] closes; the
 /// two are complementary, this one bounding a running fade and that one bounding the window.
 ///
-/// CORRECTION (2026-08-31). The paragraph above this one used to add "the FPS bail below is
+/// Correction (2026-08-31). The paragraph above this one used to add "the FPS bail below is
 /// reachable only through the `own_menu_active` branch this code never falls to once
-/// `world_handoff` is true". That is FALSE, and run br-20260831-160354-2513 measured it false:
-/// `world_handoff` went true at 224208 ms, the native-loading hold kept the fade from STARTING, and
+/// `world_handoff` is true". That is false, and run br-20260831-160354-2513 measured it false:
+/// `world_handoff` went true at 224208 ms, the native-loading hold kept the fade from starting, and
 /// every frame fell straight past the `native_gfx_hold_pending && !fade_started` arm into the FPS
 /// bail, which stopped the window at 239858 ms with `reason=2`. A true `world_handoff` does not
-/// keep this code out of the bail; only a fade that has actually STARTED does. That is why the
+/// keep this code out of the bail; only a fade that has actually started does. That is why the
 /// composite cap has to be able to tell a finished gauge from a frozen one
 /// ([`er_loading_portrait_core::native_loading_progress`]) rather than relying on never being
 /// reached.
 const BOOT_VIEW_FADE_MAX_HELD_MS: u64 = 2_000;
 
-// ---- ABSOLUTE COVER BACKSTOP (user report 2026-08-30) ----
+// ---- Absolute cover BACKSTOP (user report 2026-08-30) ----
 //
-// THRESHOLDS, CHOSEN FROM MEASURED NUMBERS RATHER THAN TASTE. A backstop that fires during a
-// legitimately slow load is a REGRESSION, not a safety net: it would tear the cover off mid-load
+// Thresholds, chosen from measured numbers rather than taste. A backstop that fires during a
+// legitimately slow load is a regression, not a safety net: it would tear the cover off mid-load
 // and show the user the black gap the cover exists to hide. Every value below is therefore set
 // well past the slowest legitimate load this repo has evidence for.
 //
 //   * the reported failure's own load: `handoff_seen_ms = 19117`, last real phase label `+20449ms`;
 //   * `BOOT_VIEW_EPOCH_COMPOSITE_CAP_MS` = 20_000, the own-menu epoch's existing composite cap;
 //   * `RELOAD_STALL_BACKSTOP_SECONDS = 120.0` in `scripts/capture-samechar-3x.py`, the repo's
-//     existing DEFENSIVE reload backstop, whose comment reads "Generous so a slow-but-progressing
+//     existing defensive reload backstop, whose comment reads "Generous so a slow-but-progressing
 //     load is never cut" -- the same job, the same reasoning, so the same number;
 //   * `BOOT_TIMEOUT_SECONDS = 300.0` in the same file, raised from 110 precisely because ER's
 //     asset load is slow-but-progressing under load and must not be torn down early.
 /// Wall-clock lifetime of a single cover window, measured from `BOOT_VIEW_WINDOW_ARM_MS` (the
-/// user's load REQUEST, not process start). The pure last resort: it is the only arm that still
+/// user's load request, not process start). The pure last resort: it is the only arm that still
 /// works when the world clock itself cannot be read.
 ///
 /// 120 s is ~6x the reported failure's 19.1 s handoff and 6x the own-menu composite cap, matches
@@ -266,8 +266,8 @@ const BOOT_VIEW_FADE_MAX_HELD_MS: u64 = 2_000;
 /// so a slow-but-progressing load cannot reach it, while a window with no exit at all cannot
 /// outlive it. The user in the reported session waited 7+ minutes; this bounds that at two.
 const BOOT_VIEW_BACKSTOP_LIFETIME_MS: u64 = 120_000;
-/// How long `GameDataMan::play_time` must rise CONTINUOUSLY, while the cover is still opaque,
-/// before the world counts as demonstrably live. This is the PRIMARY arm: it does not wait for a
+/// How long `GameDataMan::play_time` must rise continuously, while the cover is still opaque,
+/// before the world counts as demonstrably live. This is the primary arm: it does not wait for a
 /// clock to run out, it observes that the game is already being played underneath us.
 ///
 /// 5 s against the repo's own `PLAY_TIME_LIVE_THRESHOLD_MS` of 1_000 (`input_trace.rs`,
@@ -280,14 +280,14 @@ const BOOT_VIEW_BACKSTOP_WORLD_LIVE_MS: u64 = 5_000;
 ///
 /// A presented frame cannot advance the world clock by two seconds -- Elden Ring presents as
 /// slowly as ~5 fps under the cover's readback, which is 200 ms, so this is 10x headroom. Its real
-/// job is the discontinuity: a character switch replaces the clock wholesale with a DIFFERENT
+/// job is the discontinuity: a character switch replaces the clock wholesale with a different
 /// character's playtime, which can jump by hours in either direction, and crediting that jump as
 /// world simulation would fire the backstop in the middle of the switch's load.
 const BOOT_VIEW_BACKSTOP_PT_MAX_STEP_MS: usize = 2_000;
 /// A world clock that has not risen for this long ends the current live run.
 ///
 /// This is the repo's own definition of a load boundary read back the other way round: a sustained
-/// flat `play_time` window IS a load (`er_telemetry_core::read::epoch`), so a run of rises
+/// flat `play_time` window is a load (`er_telemetry_core::read::epoch`), so a run of rises
 /// interrupted by one was not continuous gameplay and must not be summed across the gap.
 const BOOT_VIEW_BACKSTOP_FLAT_RESET_MS: u64 = 1_000;
 /// `BOOT_VIEW_BACKSTOP_TRIGGER` values (0 = never tripped).
@@ -297,7 +297,7 @@ const BOOT_VIEW_BACKSTOP_TRIGGER_LIFETIME: usize = 2;
 // Per-window backstop state. Internal sampling state only, cleared by
 // `boot_view_reset_cover_window`; the counters a reader is meant to look at
 // (`BOOT_VIEW_BACKSTOP_RELEASES` / `_FIRST_MS` / `_TRIGGER`) deliberately survive a rearm.
-/// Epoch-ms at which the backstop tripped for the CURRENT window (0 = not tripped). A latch: once
+/// Epoch-ms at which the backstop tripped for the current window (0 = not tripped). A latch: once
 /// set, the window is committed to the backstop release and a later flat sample cannot undo it.
 static BOOT_VIEW_BACKSTOP_TRIPPED_MS: AtomicUsize = AtomicUsize::new(0);
 /// Previous `play_time` sample (game ms; 0 = none yet).
@@ -311,7 +311,7 @@ static BOOT_VIEW_BACKSTOP_PT_RISE_LAST_MS: AtomicUsize = AtomicUsize::new(0);
 // dark track near the bottom of the screen -- the game's own now-loading bar language -- with a
 // small dim label above it. Everything else in the copied strip rect is pure black, which is
 // indistinguishable from the black boot frames underneath, so only the bar + label are visible.
-// (The game's REAL loading-bar widget/asset cannot be reused here: its menu resources are not in
+// (The game's real loading-bar widget/asset cannot be reused here: its menu resources are not in
 // game memory until ~+12.7s and the DLL must not unpack assets from disk itself.)
 pub(super) const BOOT_VIEW_TEXT_BASE_SCALE: usize = 2;
 const BOOT_VIEW_TEXT_REFERENCE_H: u32 = 1080;
@@ -353,7 +353,7 @@ const BOOT_VIEW_RGB_TRACK: [u8; 3] = [26, 26, 26];
 const BOOT_VIEW_RGB_FILL: [u8; 3] = [226, 223, 214];
 const BOOT_VIEW_RGB_TEXT: [u8; 3] = [150, 147, 138];
 
-/// Delta of a process-STICKY counter since this epoch's baseline. A reload epoch must never assert a
+/// Delta of a process-sticky counter since this epoch's baseline. A reload epoch must never assert a
 /// phase from `!= 0` on a counter a previous load already moved.
 fn boot_view_epoch_delta(
     counter: &'static std::sync::atomic::AtomicUsize,
@@ -362,9 +362,9 @@ fn boot_view_epoch_delta(
     counter.load(Ordering::SeqCst) != baseline.load(Ordering::SeqCst)
 }
 
-/// True once THIS epoch's load request has been committed. All four sources are sticky for the whole
+/// True once this epoch's load request has been committed. All four sources are sticky for the whole
 /// process, so each is measured against its rearm-time baseline (bd er-effects-rs-ok8d: the unbaselined
-/// `!= 0` form re-latched LOADING SAVE on the reload's very first frame).
+/// `!= 0` form re-latched loading save on the reload's very first frame).
 fn boot_view_load_confirmed_this_epoch() -> bool {
     boot_view_epoch_delta(
         &SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT,
@@ -380,8 +380,8 @@ fn boot_view_load_confirmed_this_epoch() -> bool {
         )
 }
 
-/// True once `phase`'s semaphore has asserted FOR THE CURRENT EPOCH. Every predicate is a pure
-/// atomic/pointer read that is safe from the render thread. Keyed on the phase IDENTITY rather than a
+/// True once `phase`'s semaphore has asserted for the current epoch. Every predicate is a pure
+/// atomic/pointer read that is safe from the render thread. Keyed on the phase identity rather than a
 /// table index so the boot and reload sequences cannot drift apart: a phase means the same thing in
 /// both, it just occupies a different slot.
 fn boot_phase_reached(phase: er_loading_bar_core::LoadPhase) -> bool {
@@ -391,27 +391,27 @@ fn boot_phase_reached(phase: er_loading_bar_core::LoadPhase) -> bool {
     match phase {
         // Drawing at all proves the present hook + game swapchain are live.
         P::StartingUp => true,
-        // A reload epoch exists BECAUSE a slot was confirmed; the rearm is that confirmation.
+        // A reload epoch exists because a slot was confirmed; the rearm is that confirmation.
         P::SwitchConfirmed => true,
         P::GameSystems => game_man_ptr_or_null() != 0,
-        // ACQUIRING ASSETS: the title menu starts acquiring its Scaleform resources (~12.7s), right
+        // Acquiring ASSETS: the title menu starts acquiring its Scaleform resources (~12.7s), right
         // after GameMan. First of three title-asset ramps; splitting the old single ~32s "asset load"
         // label into three keeps the bar/label advancing across that long stretch.
         P::AcquiringAssets => TITLE_MENU_RESOURCE_ACQUIRE_HITS.load(Ordering::SeqCst) != 0,
-        // OPENING / BUILDING MENU UI: the .gfx file-open counter climbs to ~113 across the load, so
-        // keying these off ASCENDING COUNT thresholds (not `!= 0`) spreads the two labels through the
+        // Opening / building menu UI: the .gfx file-open counter climbs to ~113 across the load, so
+        // keying these off ascending count thresholds (not `!= 0`) spreads the two labels through the
         // stretch instead of both flipping the instant the first file opens.
         P::OpeningMenuUi => TITLE_SCALEFORM_FILE_OPEN_HITS.load(Ordering::SeqCst) >= 30,
         P::BuildingMenuUi => TITLE_SCALEFORM_FILE_OPEN_HITS.load(Ordering::SeqCst) >= 70,
-        // RETURNING TO TITLE: the switch wrote menuData+0x5d and the quickload FSM left the confirm.
+        // Returning to TITLE: the switch wrote menuData+0x5d and the quickload FSM left the confirm.
         P::ReturningToTitle => quick_phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED,
         P::TitleReady => {
             if reload {
-                // The switch FSM owns this on a reload. The boot-only PRESS START / fade-in-skip
+                // The switch FSM owns this on a reload. The boot-only press start / fade-in-skip
                 // latches below are sticky for the whole process and would assert instantly.
                 quick_phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN
             } else {
-                // PRESS START is bound (~40s, the title is actually up internally) -- OR the fade-in
+                // Press start is bound (~40s, the title is actually up internally) -- Or the fade-in
                 // skip fired (backstop). We cover the title itself; this only reflects the engine
                 // reaching it.
                 TITLE_PRESS_START_BIND_HITS.load(Ordering::SeqCst) != 0
@@ -423,7 +423,7 @@ fn boot_phase_reached(phase: er_loading_bar_core::LoadPhase) -> bool {
             if reload {
                 quick_phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
             } else {
-                // Menu opened internally -- the own-stepper latch when that task runs, OR'd with the
+                // Menu opened internally -- the own-stepper latch when that task runs, or'd with the
                 // network-check shortcircuit which fires ~10ms after the title-accept-byte natural
                 // menu-open on the product path.
                 PRODUCT_CORE_LAST_MENU_OPENED_LATCH.load(Ordering::SeqCst) != 0
@@ -442,7 +442,7 @@ fn boot_phase_reached(phase: er_loading_bar_core::LoadPhase) -> bool {
 }
 
 /// The world-load phases, keyed off the game's native CS::LoadingScreen so they assert on every load
-/// path (normal autoload AND own-menu switch), independent of the profile-table build. Pure atomic
+/// path (normal autoload and own-menu switch), independent of the profile-table build. Pure atomic
 /// reads; safe from the render thread.
 fn boot_world_phase_reached(phase: er_loading_bar_core::LoadPhase) -> bool {
     use er_loading_bar_core::LoadPhase as P;
@@ -450,19 +450,19 @@ fn boot_world_phase_reached(phase: er_loading_bar_core::LoadPhase) -> bool {
     let progress = LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst);
     let close_hits = LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst);
     match phase {
-        // BUILDING WORLD: the native loading screen has appeared -> the world build has begun.
+        // Building WORLD: the native loading screen has appeared -> the world build has begun.
         P::BuildingWorld => update_hits != 0,
-        // STREAMING WORLD: the native world-load gauge is actively streaming.
+        // Streaming WORLD: the native world-load gauge is actively streaming.
         P::StreamingWorld => progress > 0,
         // FINALIZING WORLD: the gauge is past the midpoint, splitting the long stream into two labels.
         P::FinalizingWorld => progress >= 500,
-        // ENTERING WORLD: the gauge is near-complete, or a close arrived on a gauge that is finished
+        // Entering WORLD: the gauge is near-complete, or a close arrived on a gauge that is finished
         // (or that never existed).
         //
-        // A bare `close_hits != 0` is NOT enough. A reload's loading screen sends a close while its
+        // A bare `close_hits != 0` is not enough. A reload's loading screen sends a close while its
         // gauge is still at frame 1/500 -- a transient screen closing, not the world handing off -- and
-        // trusting it fired ENTERING WORLD ~1s into the reload, jumping the fill from 48% to 91% and
-        // collapsing STREAMING/FINALIZING WORLD into the same instant (measured run
+        // trusting it fired entering world ~1s into the reload, jumping the fill from 48% to 91% and
+        // collapsing STREAMING/FINALIZING world into the same instant (measured run
         // samechar-3x-threedll-20260730-082930, bd er-effects-rs-ok8d).
         P::EnteringWorld => {
             let max_frame = LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst);
@@ -489,8 +489,8 @@ fn boot_view_player_render_ready() -> bool {
 
 /// The local player exists and carries a real loaded character (model + controller both built).
 ///
-/// Weaker than [`boot_view_player_render_ready`] on purpose: it says a character is RESIDENT, not
-/// that it is currently render-enabled, and unlike the render flags it is PERSISTENT once true
+/// Weaker than [`boot_view_player_render_ready`] on purpose: it says a character is resident, not
+/// that it is currently render-enabled, and unlike the render flags it is persistent once true
 /// rather than a ~2 s spike at the tail of a load. Same pointer walk, no hook anywhere in it.
 fn boot_view_player_loaded() -> bool {
     unsafe { PlayerIns::local_player_mut() }
@@ -504,40 +504,40 @@ fn boot_view_player_loaded() -> bool {
 /// Has the cover's job finished -- is the game ready to be revealed?
 ///
 /// The two facts that answer this are "the player model is render-enabled" and "the native loading
-/// screen is finishing". Both occur in a normal session, but at DIFFERENT times: `render_ready` is
+/// screen is finishing". Both occur in a normal session, but at different times: `render_ready` is
 /// an instantaneous read of the player's render flags and goes true early (measured +27491ms in run
 /// slot-portrait-proof-20260731-115718), while the native close/fadeout lands seconds later. The
-/// previous predicate `render_ready && (close_sent || permille >= 998)` required them in the SAME
+/// previous predicate `render_ready && (close_sent || permille >= 998)` required them in the same
 /// frame, so it never fired in product -- all 57 `boot-view DECISION` lines of that run read
 /// `world_handoff=false` while the loads completed normally. With no reachable release, the FPS bail
 /// became the cover's only stop, and its heuristic predicate is what the user saw as the vanilla
 /// loading screen flashing through (er-effects-rs-drb7).
 ///
-/// So latch each fact for the window and release once BOTH have been observed. `can_move_handoff`
+/// So latch each fact for the window and release once both have been observed. `can_move_handoff`
 /// stays as an immediate release: it is the strongest possible proof the world is playable, but it
-/// is written only by the PROOF-ONLY can-move probe (`can_move_probe.rs:277` -- "never fires in a
+/// is written only by the proof-only can-move probe (`can_move_probe.rs:277` -- "never fires in a
 /// normal user session"), so it can never be the product path on its own.
 fn boot_view_cover_release_ready(can_move_handoff: bool) -> bool {
     use er_telemetry_core::counters::{
         BOOT_VIEW_RELEASE_NATIVE_DONE_SEEN, BOOT_VIEW_RELEASE_READY_MS,
         BOOT_VIEW_RELEASE_RENDER_READY_SEEN, BOOT_VIEW_SEMANTIC_RELEASES,
     };
-    // SECOND-SCREEN GATE, AND IT IS DELIBERATELY ABOVE `can_move_handoff` (2026-09-05).
+    // Second-screen gate, and it is deliberately above `can_move_handoff` (2026-09-05).
     //
     // `can_move_handoff` short-circuiting first is what actually released the cover, and it is a
     // false positive by construction rather than a rare race. It reads `CAN_MOVE_CONFIRMED &&
-    // MOVE_PROBE_EPOCH == cur_load_epoch`, and at the ARM frame of a switch BOTH still describe the
-    // OUTGOING world: the player is genuinely still standing in it, and neither epoch counter has
+    // MOVE_PROBE_EPOCH == cur_load_epoch`, and at the arm frame of a switch both still describe the
+    // outgoing world: the player is genuinely still standing in it, and neither epoch counter has
     // moved yet. Measured at the arm frame of two separate switches on
     // br-20260905-234626-ce9a -- `can_move_handoff=true fresh_deser=0 move_epoch=0` -- so
-    // `world_handoff` was true on the cover window's FIRST frame, the fade started immediately, and
+    // `world_handoff` was true on the cover window's first frame, the fade started immediately, and
     // `stop cover ... cover_window_ms=689` landed 350 ms before the incoming loading screen opened.
     // The character-load gate below was written for exactly this and never got to run.
     //
     // The gate here is the one the user described in product terms: cover from the moment the first
     // plate comes up to the moment the character load's plate fades out.
     // `LOADING_SCREEN_COMPLETED_CLOSE_HITS` is reset per cover window and latched at each finish
-    // whose gauge is at 500/500, so `>= 1` IS "the character load's own screen has finished" --
+    // whose gauge is at 500/500, so `>= 1` is "the character load's own screen has finished" --
     // stated as the fact rather than as an ordinal, which is the 2026-09-06 correction (see
     // `BOOT_VIEW_SWITCH_COMPLETED_NATIVE_SCREENS`). On the one switch whose cover survived long
     // enough to log the whole sequence that moment was +178101ms, 12.9 s after the arm -- the
@@ -545,21 +545,21 @@ fn boot_view_cover_release_ready(can_move_handoff: bool) -> bool {
     if er_telemetry_core::counters::BOOT_VIEW_RELEASE_REQUIRE_SECOND_SCREEN.load(Ordering::SeqCst)
         != 0
     {
-        // COMPLETED native loading screens a switch must show before the cover may let go: one, the
+        // Completed native loading screens a switch must show before the cover may let go: one, the
         // character load's own plate, identified by its gauge being at 500/500 when it finishes.
         //
-        // THIS USED TO BE `2` AND COUNT ALL PLATES, AND THAT IS WHAT KEPT THE COVER UP (2026-09-06). The
+        // This used to be `2` and count all plates, and that is what kept the cover up (2026-09-06). The
         // switch shape it was written from -- teardown plate, then load plate -- is not the shape the
         // user's ProfileSelect path actually produces. Measured across both switches of the run in
-        // er-quickload-autoload-debug.log: `loadscreen_builds` advanced by exactly ONE per cover window
+        // er-quickload-autoload-debug.log: `loadscreen_builds` advanced by exactly one per cover window
         // (1 -> 2, then 2 -> 3) and each window's single `finish/result sent` reported `frame=500/500`.
         // One plate, already the character load's. `screens < 2` was therefore unsatisfiable, every
-        // DECISION line of both windows read `world_handoff=false`, and the only thing that ever stopped
+        // decision line of both windows read `world_handoff=false`, and the only thing that ever stopped
         // the cover was the 35 s FPS bail: `cover_window_ms=35005` at +82240ms and `cover_window_ms=35017`
         // at +263339ms -- 15.3 s and 18.9 s after the bar filled. That is the "loading view does not fade
         // out at the right time" the user reported, with the world's fade-in audible behind it.
         //
-        // Counting COMPLETED plates asks the question the ordinal was standing in for. On the two-plate
+        // Counting completed plates asks the question the ordinal was standing in for. On the two-plate
         // run this gate was written from (br-20260905-235624-a149) the teardown finishes at `frame=1/500`
         // and does not count, the load finishes at `frame=500/500` and does -- the same release instant as
         // `>= 2`. On a one-plate switch it is reachable instead of never.
@@ -576,23 +576,23 @@ fn boot_view_cover_release_ready(can_move_handoff: bool) -> bool {
             BOOT_VIEW_RELEASE_NATIVE_DONE_SEEN.store(0, Ordering::SeqCst);
             return false;
         }
-        // AND IT RELEASES. It does not fall through to the gates below, and that is the whole
+        // And it releases. It does not fall through to the gates below, and that is the whole
         // correction of 2026-09-05's second attempt.
         //
-        // WHAT FALLING THROUGH COST, measured on br-20260905-235624-a149. The span half worked --
+        // What falling through cost, measured on br-20260905-235624-a149. The span half worked --
         // the cover held across both plates, `LS FINISH hits=1 frame=1/500` at +86721ms (the unload)
-        // and `hits=2 frame=500/500` at +103626ms (the load) -- and then the cover NEVER CAME DOWN.
+        // and `hits=2 frame=500/500` at +103626ms (the load) -- and then the cover never came down.
         // Not late: never. It stayed up 54 s, until the next switch's rearm at +157331ms tore the
         // window down for its own reasons, and the user heard the character load in behind it.
         //
         // The blocker was `BOOT_VIEW_RELEASE_REQUIRE_CONFIRM` immediately below, which holds until
         // `SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT` advances past its arm-time baseline. On
-        // the USER-driven ProfileSelect path that counter never moves: `fresh_deser=0` in every one
-        // of that run's DECISION lines, from the first to the last, so `0 <= 0` held forever while
+        // the user-driven ProfileSelect path that counter never moves: `fresh_deser=0` in every one
+        // of that run's decision lines, from the first to the last, so `0 <= 0` held forever while
         // the bar sat at `permille=1000` and `render_ready=true`.
         //
-        // The two gates were asking the same question. The confirm counter is a PROXY for "this
-        // switch's character load has begun"; the second plate FINISHING is that load having
+        // The two gates were asking the same question. The confirm counter is a proxy for "this
+        // switch's character load has begun"; the second plate finishing is that load having
         // finished, observed directly, on the same path the user is on. A proxy that disagrees with
         // the thing it stands for is not a second opinion, so the stronger fact answers for both.
         er_telemetry_core::counters::BOOT_VIEW_RELEASE_REQUIRE_CONFIRM.store(0, Ordering::SeqCst);
@@ -601,16 +601,16 @@ fn boot_view_cover_release_ready(can_move_handoff: bool) -> bool {
     if can_move_handoff {
         return true;
     }
-    // CHARACTER-LOAD GATE (er-effects-rs-q6vk). A switch shows TWO native loading screens -- the
-    // return-to-title teardown, then the character load after continue_confirm -- and BOTH satisfy
+    // Character-load gate (er-effects-rs-q6vk). A switch shows two native loading screens -- the
+    // return-to-title teardown, then the character load after continue_confirm -- and both satisfy
     // the two facts below. Measured (run slot-portrait-proof-20260731-122038): the cover armed at
     // ~25490ms, released at 28047ms while still in the teardown, and the character load that began
-    // at ~42513ms ran uncovered. So hold the release until THIS switch's character load has
+    // at ~42513ms ran uncovered. So hold the release until this switch's character load has
     // actually begun: the fresh-deser count bumps at the reload's deserialize, and is documented to
-    // NOT have incremented yet at arm time (see the composite-clock note in
+    // not have incremented yet at arm time (see the composite-clock note in
     // `rearm_boot_progress_for_own_menu_load`).
     //
-    // While held, the latches are CLEARED rather than left standing. Both facts are readily true
+    // While held, the latches are cleared rather than left standing. Both facts are readily true
     // during the teardown/title -- the player is still resident and the teardown bar fills -- so a
     // latch kept from that phase would fire the release the instant the confirm landed, which is
     // the same bug one screen later. They must be observed again against the character load.
@@ -627,11 +627,11 @@ fn boot_view_cover_release_ready(can_move_handoff: bool) -> bool {
             return false;
         }
     }
-    // "The game is ready to be revealed." This needs a signal that is still TRUE once the
+    // "The game is ready to be revealed." This needs a signal that is still true once the
     // character-load gate above opens, which rules out the obvious one.
     //
     // `boot_view_player_render_ready()` is not wrong, it is TRANSIENT: measured across runs
-    // 20260731-115718, -122038 and -125800 it reads true for only ~2 sampled seconds at the TAIL of
+    // 20260731-115718, -122038 and -125800 it reads true for only ~2 sampled seconds at the tail of
     // each load (permille 990-1000) and false everywhere else, twice per load. The gate is still
     // holding during that window -- it clears both latches every frame until this switch's
     // fresh-deser bump -- so the transient is discarded, and it never comes back. Gating on it
@@ -639,20 +639,20 @@ fn boot_view_cover_release_ready(can_move_handoff: bool) -> bool {
     // 0 semantic releases, both switches riding the 20s cap (run -125800).
     //
     // (An earlier revision of this comment called it "inverted, true at the title and false
-    // in-world". That was drawn from the last 8 DECISION lines of one run -- all post-load steady
+    // in-world". That was drawn from the last 8 decision lines of one run -- all post-load steady
     // state -- and is wrong. The full logs show the tail-of-load spikes above.)
     //
     // The per-epoch world-live signal is the semantically ideal answer -- play time advancing for
-    // THIS load epoch is the game saying the world is running, and it is what the Present hook's
+    // this load epoch is the game saying the world is running, and it is what the Present hook's
     // in-world composite skip already trusts -- but it is not reachable in every run: it needs play
-    // time to ADVANCE past a threshold, and a probe that tears down shortly after the world appears
+    // time to advance past a threshold, and a probe that tears down shortly after the world appears
     // never gets there (runs -125800 and -130326 both ended `play_time_live=false`,
     // `play_time_advanced_ms=0`). Kept as the preferred signal for real sessions, not relied on.
     let cur_load_epoch =
         crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
     let epoch_world_live = cur_load_epoch != 0
         && crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur_load_epoch;
-    // The fact that IS both reachable and PERSISTENT -- so it survives the gate's hold window,
+    // The fact that is both reachable and persistent -- so it survives the gate's hold window,
     // unlike the render-flag spike -- is the one the proof harness itself trusts to declare LOADED:
     // the local player exists and carries a real loaded character. Runs -125800 and -130326 both
     // ended `player_present=true` with a valid name/level while world-live stayed false. Reading it
@@ -667,18 +667,18 @@ fn boot_view_cover_release_ready(can_move_handoff: bool) -> bool {
     }
     // The game's own "this loading screen is going away" signals.
     //
-    // The Scaleform GFx fadeout is deliberately NOT one of them. It looked like the earliest honest
+    // The Scaleform GFx fadeout is deliberately not one of them. It looked like the earliest honest
     // end-of-screen signal, but the run that validated this release proves it contributed nothing:
-    // in both windows the window's first fadeout landed AFTER the release had already fired
+    // in both windows the window's first fadeout landed after the release had already fired
     // (release 28047ms vs fadeout 28569ms; release 52351ms vs fadeout 52875ms) -- the release
     // latched on the native bar instead. It is also unsafe here. `scaleform_label_goto_hook`
-    // stamps on any timeline label merely CONTAINING "fadeout", and a burst of 64 such stamps
+    // stamps on any timeline label merely containing "fadeout", and a burst of 64 such stamps
     // lands during the return-to-title transition (42834ms in that run). Once the cover is armed
     // earlier to close the re-arm gap (er-effects-rs-q6vk), that burst would latch native-done at
-    // window OPEN, and with the player still resident from the previous world render-ready latches
+    // window open, and with the player still resident from the previous world render-ready latches
     // too -- releasing the cover instantly and defeating that fix.
     //
-    // AND IT MUST ASK THE GAUGE (er-effects-rs-t7q2). This read `close_hits != 0 || permille >= 998`
+    // And it must ask the gauge (er-effects-rs-t7q2). This read `close_hits != 0 || permille >= 998`
     // until 2026-08-31 -- the exact bare-close form `boot_world_phase_reached(EnteringWorld)` above
     // already refuses, and refuses for the same measured reason: a reload's transient loading screen
     // sends its finish while its gauge is still at frame 1 of 500. In run br-20260831-160354-2513
@@ -720,19 +720,19 @@ fn boot_view_cover_release_ready(can_move_handoff: bool) -> bool {
     ready
 }
 
-/// Wall-clock ms over which `GameDataMan::play_time` has been rising CONTINUOUSLY, sampled once per
+/// Wall-clock ms over which `GameDataMan::play_time` has been rising continuously, sampled once per
 /// composited frame. 0 whenever there is no such run.
 ///
 /// A total delta would have been simpler and wrong. The baseline for a delta has to come from
-/// somewhere, and on an own-menu switch the clock at arm time belongs to the OUTGOING character:
+/// somewhere, and on an own-menu switch the clock at arm time belongs to the outgoing character:
 /// when the incoming one has more playtime the delta jumps by hours the instant it deserializes --
-/// mid-load, with the loading screen still up. Measuring the SPAN OF A RUN OF PLAUSIBLE RISES
+/// mid-load, with the loading screen still up. Measuring the span of a run of plausible rises
 /// instead makes that jump self-cancelling: it is one implausible step, the run resets, and the
 /// clock has to earn its five seconds again from the world that is actually running.
 fn boot_view_backstop_world_live_dwell_ms(now_ms: u64) -> u64 {
     let gdm = crate::game_data_man_ptr_or_null();
     // Pointer walk off the game's own singleton -- the same class of read as
-    // `boot_view_player_render_ready`, and deliberately NOT any counter a detour writes.
+    // `boot_view_player_render_ready`, and deliberately not any counter a detour writes.
     let play_time = if gdm == 0 {
         0
     } else {
@@ -767,7 +767,7 @@ fn boot_view_backstop_world_live_dwell_ms(now_ms: u64) -> u64 {
         return 0;
     }
     // A step of 0 is ordinary (two presents inside one game tick) and must not end the run on its
-    // own; a SUSTAINED flat window is the load boundary, and it does.
+    // own; a sustained flat window is the load boundary, and it does.
     if now_ms.saturating_sub(last) >= BOOT_VIEW_BACKSTOP_FLAT_RESET_MS {
         BOOT_VIEW_BACKSTOP_PT_RISE_FIRST_MS.store(0, Ordering::SeqCst);
         BOOT_VIEW_BACKSTOP_PT_RISE_LAST_MS.store(0, Ordering::SeqCst);
@@ -776,18 +776,18 @@ fn boot_view_backstop_world_live_dwell_ms(now_ms: u64) -> u64 {
     last.saturating_sub(first)
 }
 
-/// ABSOLUTE BACKSTOP: has this cover window failed so completely that it must be torn down by
+/// Absolute BACKSTOP: has this cover window failed so completely that it must be torn down by
 /// force? Returns the per-window latch, so once true it stays true until the window re-arms.
 ///
-/// THE HOLE THIS FILLS (user report 2026-08-30). A session played 7+ minutes with this cover
+/// The hole this fills (user report 2026-08-30). A session played 7+ minutes with this cover
 /// black-clearing the whole backbuffer over live gameplay and no way out but killing the process.
 /// The proximate cause was a game-image detour that failed to install -- but the reason a single
-/// failed detour was CATASTROPHIC rather than cosmetic is structural: on the boot epoch this
+/// failed detour was catastrophic rather than cosmetic is structural: on the boot epoch this
 /// window had no backstop of any kind, because both of its exits are downstream of that same
 /// detour.
 ///
 ///   * The release fade needs `world_handoff`, i.e. [`boot_view_cover_release_ready`], whose
-///     `NATIVE_DONE_SEEN` half is written ONLY from `LOADING_SCREEN_CLOSE_SENT_HITS` or
+///     `NATIVE_DONE_SEEN` half is written only from `LOADING_SCREEN_CLOSE_SENT_HITS` or
 ///     `LOADING_SCREEN_BAR_PROGRESS_PERMILLE`, both fed by the CS::LoadingScreen detour. Measured
 ///     in the reported run: `release_native_done_seen = 0`, `fade_hits = 0`, `fade_start_ms = 0`.
 ///   * The FPS bail lives inside `if own_menu_active`, and the boot epoch is not an own-menu one
@@ -800,12 +800,12 @@ fn boot_view_backstop_world_live_dwell_ms(now_ms: u64) -> u64 {
 /// `present_full_clear_hits = 5001` against `present_hook_hits = 4794` -- full-clearing essentially
 /// every Present, indefinitely.
 ///
-/// WHY THESE SIGNALS AND NOT THE OBVIOUS ONES. A backstop keyed on anything a detour writes would
+/// Why these signals and not the obvious ones. A backstop keyed on anything a detour writes would
 /// share the failure mode it exists to survive, which is the whole defect repeated one layer up.
 /// Everything below is a pointer walk into game memory:
 ///
 ///   * `GameDataMan::play_time` rising is the game itself saying the world is simulating. It is
-///     flat during loads -- this repo detects load boundaries BY that flatness
+///     flat during loads -- this repo detects load boundaries by that flatness
 ///     (`er_telemetry_core::read::epoch`) -- so it cannot be true during the load the cover is for.
 ///   * the local player carrying a loaded character. The same class of read as the render-ready
 ///     path that DEMONSTRABLY kept working throughout the failure
@@ -814,13 +814,13 @@ fn boot_view_backstop_world_live_dwell_ms(now_ms: u64) -> u64 {
 /// The wall clock is the second arm and the pure last resort: it is the only one left when the
 /// world clock itself cannot be read at all.
 ///
-/// IT CANNOT PREEMPT A HEALTHY RELEASE. `release_reachable` is `world_handoff`; while that is true
+/// It cannot PREEMPT a healthy release. `release_reachable` is `world_handoff`; while that is true
 /// the normal path owns the window and this only samples, never trips. And the thresholds are set
 /// so far past any measured legitimate load (see `BOOT_VIEW_BACKSTOP_LIFETIME_MS`) that a
 /// slow-but-progressing load reaches neither arm.
 fn boot_view_absolute_backstop(now_ms: u64, release_reachable: bool) -> bool {
     // Sample every frame, including the frames the healthy path owns: the dwell is the span of a
-    // CONTINUOUS run of rises, so skipping frames would put holes in the run it measures.
+    // continuous run of rises, so skipping frames would put holes in the run it measures.
     let world_live_ms = boot_view_backstop_world_live_dwell_ms(now_ms);
     if BOOT_VIEW_BACKSTOP_TRIPPED_MS.load(Ordering::SeqCst) != 0 {
         return true;
@@ -828,15 +828,15 @@ fn boot_view_absolute_backstop(now_ms: u64, release_reachable: bool) -> bool {
     if release_reachable {
         return false;
     }
-    // SWITCH GATE, reusing the q6vk character-load gate rather than inventing a second one. An
-    // own-menu switch arms this window from the IN-WORLD System menu, so the OUTGOING world is
+    // Switch gate, reusing the q6vk character-load gate rather than inventing a second one. An
+    // own-menu switch arms this window from the in-world System menu, so the outgoing world is
     // still simulating when the cover goes up and its play_time keeps rising through the
     // return-to-title teardown. Crediting that as "the world is live underneath our cover" would
     // fire the world-live arm on the teardown and reveal the exact screen the cover exists to
     // hide. So on a window that is waiting for a character load, the world-live arm stays shut
     // until that load has actually begun -- the same fresh-deser advance
     // `boot_view_cover_release_ready` holds its release on. The boot epoch clears
-    // `BOOT_VIEW_RELEASE_REQUIRE_CONFIRM`, so it is unaffected. The wall clock below is NOT gated
+    // `BOOT_VIEW_RELEASE_REQUIRE_CONFIRM`, so it is unaffected. The wall clock below is not gated
     // this way: it is the last resort and must survive a switch that never deserializes at all.
     let confirm_pending = er_telemetry_core::counters::BOOT_VIEW_RELEASE_REQUIRE_CONFIRM
         .load(Ordering::SeqCst)
@@ -847,7 +847,7 @@ fn boot_view_absolute_backstop(now_ms: u64, release_reachable: bool) -> bool {
     let world_live = !confirm_pending
         && world_live_ms >= BOOT_VIEW_BACKSTOP_WORLD_LIVE_MS
         && boot_view_player_loaded();
-    // From the load REQUEST, not process start: `BOOT_VIEW_WINDOW_ARM_MS` is 0 until
+    // From the load request, not process start: `BOOT_VIEW_WINDOW_ARM_MS` is 0 until
     // `boot_view_reset_cover_window` stamps it, and on the boot epoch that is the frame the user's
     // load flow was requested. A 0 here means the cover is still over the pre-Continue title,
     // where dwelling as long as the user likes is correct behaviour and not a defect to cut short.
@@ -913,7 +913,7 @@ fn boot_view_load_flow_requested() -> bool {
         || LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) != 0
 }
 
-/// Clear the native CS::LoadingScreen counters so the NEXT loading window is measured on its own.
+/// Clear the native CS::LoadingScreen counters so the next loading window is measured on its own.
 /// These are cumulative for the whole process: without this the world phases inherit the previous
 /// screen's finished state and the bar stays full with a frozen label for the entire next load
 /// (user-reported 2026-07-16: "I don't know what's going on for 30s").
@@ -933,53 +933,53 @@ fn boot_view_reset_native_loading_semaphores() {
     LOADING_SCREEN_GFX_FADEOUT_LAST_MS.store(0, Ordering::SeqCst);
 }
 
-/// ONE-WAY RELEASE FADE (user report 2026-08-22, second round: "I still see my portrait come back
+/// One-way release fade (user report 2026-08-22, second round: "I still see my portrait come back
 /// very briefly if I press escape too quickly after getting in game").
 ///
-/// THE MECHANISM, confirmed in source rather than assumed. `native_gfx_hold_pending` is rebuilt
+/// The mechanism, confirmed in source rather than assumed. `native_gfx_hold_pending` is rebuilt
 /// every frame from two RECENCY predicates -- a Scaleform fade-out stamped within
 /// `BOOT_VIEW_NATIVE_GFX_FADEOUT_HOLD_MS`, or a `CS::LoadingScreen::Update` tick within
 /// `BOOT_VIEW_NATIVE_LOADING_QUIET_HOLD_MS`. Neither can become true again on its own as time
-/// passes; both need a FRESH stamp. One of the two writers used to take any stamp at all:
-/// `scaleform_label_goto_hook` called `stamp_loading_gfx_fadeout` for ANY timeline label merely
-/// CONTAINING "fadeout", on ANY movie, matched case-insensitively (`bounded_ascii_contains`
+/// passes; both need a fresh stamp. One of the two writers used to take any stamp at all:
+/// `scaleform_label_goto_hook` called `stamp_loading_gfx_fadeout` for any timeline label merely
+/// containing "fadeout", on any movie, matched case-insensitively (`bounded_ascii_contains`
 /// lowercases). Opening the in-world menu was enough, and that is measured rather than assumed: of
 /// the 106 vanilla menu `.gfx` movies in the local extraction, 98 carry a frame label literally
 /// named `FadeOut` -- including `02_000_ingametop.gfx`, the pause menu Escape opens, whose label
 /// table reads `FadeIn` / `Loop` / `FadeOut`, and `01_000_fe.gfx`, the HUD that fades out when it
 /// does. So the stamp was not a loading-screen signal at all; almost any menu transition refreshed
-/// it. The hold then re-asserted mid-fade and the old code fell through to the OPAQUE cover path,
+/// it. The hold then re-asserted mid-fade and the old code fell through to the opaque cover path,
 /// which rasterizes with
 /// `draw_portrait: true` where the fade frame is built with `draw_portrait: false` -- so the head
 /// was not riding the fade down, it was being re-drawn at full alpha, and then the fade finished
 /// and took it away again. Reappear and tear down, exactly as reported.
 ///
-/// THE RULE. The hold was written as a START GATE ("is it safe to begin fading yet?") and it is now
+/// The rule. The hold was written as a start gate ("is it safe to begin fading yet?") and it is now
 /// only asked as one. Once `BOOT_VIEW_FADE_START_MS` is set, the fade owns the rest of the window
 /// and can never hand it back to the opaque path. But the gate is not simply switched off, because
 /// it defends a real case: fading out while the game's own loading screen is still on the
 /// backbuffer is the vanilla flash-through (er-effects-rs-wmw defect #1). So the two halves are
 /// separated by what they can actually prove:
 ///
-///   * the Scaleform half is a start gate ONLY. NARROWED 2026-09-05: it now stamps only for
+///   * the Scaleform half is a start gate only. Narrowed 2026-09-05: it now stamps only for
 ///     `LOADING_SCREEN_LAST_THIS + LOADING_SCREEN_FADEOUT_CLIP_OFFSET`, the one clip the image
-///     shows the screen playing its own fade on, so it CAN tell the loading screen's fade from a
+///     shows the screen playing its own fade on, so it can tell the loading screen's fade from a
 ///     menu's. It stays a start gate anyway -- the fade is one-way because of the fall-through
 ///     bug below, not because the signal was noisy -- and every other movie's label now lands in
 ///     `LOADING_SCREEN_GFX_FADEOUT_FOREIGN_HITS`, which holds nothing.
 ///   * the `CS::LoadingScreen::Update` half stays live during the fade, but only for ticks past
 ///     `BOOT_VIEW_FADE_START_LS_UPDATE_HITS`. Only the loading-screen detour writes that counter, so
-///     a tick past the snapshot IS the game's loading screen running again, with no ambiguity.
+///     a tick past the snapshot is the game's loading screen running again, with no ambiguity.
 ///
-/// A honored hold PAUSES the fade at its current alpha (see [`boot_view_fade_hold_tick`]) instead of
+/// A honored hold pauses the fade at its current alpha (see [`boot_view_fade_hold_tick`]) instead of
 /// cancelling it, so the cover stays as opaque as it already was, never brighter, and the full ramp
 /// still plays once the loading screen goes quiet.
 ///
-/// WHY A GENUINE HOLD IS ALMOST UNREACHABLE HERE, and why that is not an argument for skipping it.
+/// Why a genuine hold is almost UNREACHABLE here, and why that is not an argument for skipping it.
 /// The fade only starts once the loading screen has been quiet for 900 ms, and a genuinely new load
 /// re-arms the cover window -- `boot_view_reset_cover_window` clears `BOOT_VIEW_FADE_START_MS`, so
 /// "mid-fade" cannot survive into a new load. The honored path is therefore expected to stay at 0,
-/// which is precisely why it is CHEAP to keep: it costs one comparison per fade frame and removes
+/// which is precisely why it is cheap to keep: it costs one comparison per fade frame and removes
 /// the need to argue that no such case exists.
 fn boot_view_note_fade_hold_reassert(
     now_ms: usize,
@@ -1001,7 +1001,7 @@ fn boot_view_note_fade_hold_reassert(
         BOOT_VIEW_FADE_HOLD_REFUSED.fetch_add(1, Ordering::SeqCst);
     }
     // First frame of each contiguous run only. A single stamp keeps the recency window true for up
-    // to 600 ms, which at 60 fps is ~36 frames from ONE Escape press; this is inside Present, so
+    // to 600 ms, which at 60 fps is ~36 frames from one Escape press; this is inside Present, so
     // that would be a log line per frame of a render stall. One press, one line.
     if BOOT_VIEW_FADE_HOLD_REASSERT_RUN.fetch_add(1, Ordering::SeqCst) != 0 {
         return;
@@ -1014,7 +1014,7 @@ fn boot_view_note_fade_hold_reassert(
     ));
 }
 
-/// Accumulate the time the release fade spends PAUSED by an honored hold, and return the total the
+/// Accumulate the time the release fade spends paused by an honored hold, and return the total the
 /// fade clock should subtract.
 ///
 /// Differencing consecutive paused frames, rather than timing the hold from its start, is what makes
@@ -1040,12 +1040,12 @@ fn boot_view_fade_hold_tick(now_ms: u64, held: bool) -> u64 {
     total.min(BOOT_VIEW_FADE_MAX_HELD_MS)
 }
 
-/// Count an OPAQUE cover draw that reached the backbuffer while this window's release fade was
+/// Count an opaque cover draw that reached the backbuffer while this window's release fade was
 /// already running and had not yet completed.
 ///
-/// THIS IS THE NUMBER THE PREVIOUS ROUND OF DETECTORS COULD NOT PRODUCE. Both of them --
+/// This is the number the previous round of detectors could not produce. Both of them --
 /// [`boot_view_note_draw_after_stop`] and the `cover_plate_visible_after_release` watch -- open only
-/// once `BOOT_VIEW_STOPPED` latches, and the reported defect happens BEFORE that, during the fade.
+/// once `BOOT_VIEW_STOPPED` latches, and the reported defect happens before that, during the fade.
 /// So they were structurally incapable of firing on it and duly returned 0, which read as "our
 /// compositor did not draw what the user saw". It did. In run br-20260822-184123-fa3d the menu
 /// opened at log +39905 ms, inside a fade window of +39281 to +40554, and across it
@@ -1084,21 +1084,21 @@ fn boot_view_note_nonfade_draw_during_fade() {
     }
 }
 
-/// NULL DETECTOR for the 2026-08-22 "loading screen briefly reappears after Escape" report.
+/// NULL detector for the 2026-08-22 "loading screen briefly reappears after Escape" report.
 ///
-/// Called at BOTH boot-view composite counter sites, reading `BOOT_VIEW_STOPPED` BEFORE the frame
-/// makes its own store, so a nonzero read means the cover latched stopped on an EARLIER frame and
+/// Called at both boot-view composite counter sites, reading `BOOT_VIEW_STOPPED` before the frame
+/// makes its own store, so a nonzero read means the cover latched stopped on an earlier frame and
 /// this one drew anyway. `BOOT_VIEW_STOPPED` deliberately, not `BOOT_VIEW_FADE_COMPLETE_MS`: the
 /// FPS-bail exit never sets the latter, so a bail-stopped window would look armed forever.
 ///
 /// It is expected to stay 0 for the life of the process, and that is precisely the point. The
-/// diagnosis of that report rests on the claim that OUR compositor did not draw what the user saw
+/// diagnosis of that report rests on the claim that our compositor did not draw what the user saw
 /// (`oracle_boot_view_stop_reason=1`, epoch_seq 0, fps_bail_resumes 0 -- none of the clearing paths
 /// ran). If this ever fires, that claim is false and the next reader learns it from one number
 /// instead of re-deriving it.
 ///
-/// ONE KNOWN WAY IT COULD OVER-REPORT, so a single hit is read and not merely believed: both stop
-/// stores happen BEFORE `BOOT_VIEW_DRAW_BUSY` is taken, so if the self-present pump thread and the
+/// One known way it could over-report, so a single hit is read and not merely believed: both stop
+/// stores happen before `BOOT_VIEW_DRAW_BUSY` is taken, so if the self-present pump thread and the
 /// render thread were ever inside the composite together, one could latch the stop while the other
 /// was already past the entry guard. That needs the pump still running at a release fade, and the
 /// pump stops at the game's first present ~30 s earlier -- but the log line carries `stop_ms` for
@@ -1130,11 +1130,11 @@ fn boot_view_note_draw_after_stop(site: &str) {
 }
 
 /// Snapshot everything the post-release watch measures deltas against, at the instant the cover
-/// latches stopped. Called from BOTH stop sites (release fade and FPS bail) so the watch behaves
+/// latches stopped. Called from both stop sites (release fade and FPS bail) so the watch behaves
 /// the same whichever way the window ended.
 fn boot_view_stamp_stop_baselines(now_ms: usize) {
     er_telemetry_core::counters::BOOT_VIEW_STOP_MS.store(now_ms.max(1), Ordering::SeqCst);
-    // A new watch starts with a clean RUN. The watch only samples inside its window, so a run left
+    // A new watch starts with a clean run. The watch only samples inside its window, so a run left
     // part-way through when the previous window's watch expired would otherwise be continued by the
     // next one -- and `_max_run` is exactly the number that tells a brief reappearance apart from a
     // plate that never went down, so carrying a stale count into it corrupts the one reading it is
@@ -1149,7 +1149,7 @@ fn boot_view_stamp_stop_baselines(now_ms: usize) {
         LOADING_SCREEN_GFX_FADEOUT_HITS.load(Ordering::SeqCst),
         Ordering::SeqCst,
     );
-    // The total-load witness, so a world load STARTED after this stop is a delta. Read only by
+    // The total-load witness, so a world load started after this stop is a delta. Read only by
     // `er_telemetry_core::counters::cover_owns_current_loading_screen`, which carries the argument.
     er_telemetry_core::counters::BOOT_VIEW_STOP_LOAD_WITNESS.store(
         SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst),
@@ -1157,17 +1157,17 @@ fn boot_view_stamp_stop_baselines(now_ms: usize) {
     );
 }
 
-/// Re-arm the cover DRAWING WINDOW: stop latch, window clock, handoff/fade/dark-gap state, draw cache.
+/// Re-arm the cover drawing WINDOW: stop latch, window clock, handoff/fade/dark-gap state, draw cache.
 /// This is "start covering again", independent of whether the phase walk is also starting over.
 fn boot_view_reset_cover_window() {
     BOOT_VIEW_STOPPED.store(0, Ordering::SeqCst);
-    // Snapshot the cumulative draw count so `title_visual_suppression_active` can tell whether THIS
+    // Snapshot the cumulative draw count so `title_visual_suppression_active` can tell whether this
     // epoch has composited anything. Clearing BOOT_VIEW_DRAW_HITS itself is not an option -- several
     // readers depend on the running total -- so the baseline carries the per-window answer instead.
     er_telemetry_core::counters::BOOT_VIEW_DRAW_HITS_ARM_BASELINE
         .store(BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst), Ordering::SeqCst);
     BOOT_VIEW_STOP_REASON.store(0, Ordering::SeqCst);
-    // Post-stop draw detector + the post-release watch's baselines belong to ONE window.
+    // Post-stop draw detector + the post-release watch's baselines belong to one window.
     er_telemetry_core::counters::BOOT_VIEW_DRAW_AFTER_STOP.store(0, Ordering::SeqCst);
     er_telemetry_core::counters::BOOT_VIEW_DRAW_AFTER_STOP_FIRST_MS.store(0, Ordering::SeqCst);
     er_telemetry_core::counters::BOOT_VIEW_STOP_MS.store(0, Ordering::SeqCst);
@@ -1183,10 +1183,10 @@ fn boot_view_reset_cover_window() {
     BOOT_VIEW_FADE_HITS.store(0, Ordering::SeqCst);
     BOOT_VIEW_FADE_LAST_ALPHA.store(0, Ordering::SeqCst);
     BOOT_VIEW_FADE_FAILURES.store(0, Ordering::SeqCst);
-    // One-way-fade state. All per-window: the snapshot describes THIS window's fade start, and the
+    // One-way-fade state. All per-window: the snapshot describes this window's fade start, and the
     // pause accumulator must not carry a previous window's pause into the next fade's clock.
     // The re-assert TALLIES (`BOOT_VIEW_FADE_HOLD_REASSERTS` / `_REFUSED` / `_HONORED` / `_FIRST_MS`)
-    // and `BOOT_VIEW_NONFADE_DRAW_DURING_FADE*` are deliberately NOT cleared here, for the reason
+    // and `BOOT_VIEW_NONFADE_DRAW_DURING_FADE*` are deliberately not cleared here, for the reason
     // given at `BOOT_VIEW_DRAW_AFTER_STOP_TOTAL`: a detector a rearm can silently empty is not a
     // detector, and a run with several loads must still be able to report the first occurrence.
     BOOT_VIEW_FADE_START_LS_UPDATE_HITS.store(0, Ordering::SeqCst);
@@ -1198,9 +1198,9 @@ fn boot_view_reset_cover_window() {
     BOOT_VIEW_DARK_GAP_FAILURES.store(0, Ordering::SeqCst);
     BOOT_VIEW_DARK_GAP_LAST_HELD_MS.store(0, Ordering::SeqCst);
     BOOT_VIEW_DARK_GAP_LAST_NATIVE_HITS.store(0, Ordering::SeqCst);
-    // Absolute-backstop SAMPLING state. The trip latch belongs to one window, and the world-clock
+    // Absolute-backstop sampling state. The trip latch belongs to one window, and the world-clock
     // run must not span a rearm: the load the new window covers is exactly the gap in that run.
-    // The `BOOT_VIEW_BACKSTOP_RELEASES` / `_FIRST_MS` / `_TRIGGER` counters are deliberately NOT
+    // The `BOOT_VIEW_BACKSTOP_RELEASES` / `_FIRST_MS` / `_TRIGGER` counters are deliberately not
     // cleared here, for the reason given at `BOOT_VIEW_DRAW_AFTER_STOP_TOTAL`.
     BOOT_VIEW_BACKSTOP_TRIPPED_MS.store(0, Ordering::SeqCst);
     BOOT_VIEW_BACKSTOP_PT_LAST.store(0, Ordering::SeqCst);
@@ -1222,11 +1222,11 @@ fn boot_view_reset_cover_window() {
     BOOT_VIEW_DRAWN_BG_ACTIVE.store(usize::MAX, Ordering::SeqCst);
 }
 
-/// Start a NEW LOAD EPOCH: everything `boot_view_reset_cover_window` does, plus the state that only a
+/// Start a new load EPOCH: everything `boot_view_reset_cover_window` does, plus the state that only a
 /// genuinely new load may reset -- the phase walk, the displayed fill, the label high-water, and the
 /// baselines for counters that are sticky for the whole process.
 ///
-/// THE EPOCH BOUNDARY IS THE REARM, NOT THE TEARDOWN (bd er-effects-rs-ok8d). A teardown-side clear
+/// The epoch boundary is the REARM, not the TEARDOWN (bd er-effects-rs-ok8d). A teardown-side clear
 /// only runs on the path that actually tore down, and the cover has several exits (release fade, FPS
 /// bail, world handoff, and a load abandoned mid-flight), so clearing there leaves half-cleared state
 /// behind whenever an epoch ends by a path that was not carrying the clear. The rearm is the single
@@ -1238,7 +1238,7 @@ fn boot_view_reset_epoch_state(kind: usize) {
     boot_view_reset_cover_window();
     boot_view_reset_native_loading_semaphores();
     // Phase walk + displayed fill. The mask starts at literally zero: phase 0 latches on this epoch's
-    // first sample and is REPORTED, instead of being pre-seeded and silently skipped.
+    // first sample and is reported, instead of being pre-seeded and silently skipped.
     BOOT_VIEW_REACHED_MASK.store(0, Ordering::SeqCst);
     BOOT_VIEW_MILESTONE_IDX.store(0, Ordering::SeqCst);
     BOOT_VIEW_LAST_PERMILLE.store(0, Ordering::SeqCst);
@@ -1253,7 +1253,7 @@ fn boot_view_reset_epoch_state(kind: usize) {
     BOOT_VIEW_MONO_LABEL_LEN.store(0, Ordering::SeqCst);
     BOOT_VIEW_LAST_LABEL_HASH.store(0, Ordering::SeqCst);
     // BASELINES for counters that stay set for the whole process, so this epoch's phases assert from
-    // what happens NEXT rather than from what a previous load left behind.
+    // what happens next rather than from what a previous load left behind.
     BOOT_VIEW_CONTINUE_ALLOW_BASELINE.store(
         SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst),
         Ordering::SeqCst,
@@ -1270,9 +1270,9 @@ fn boot_view_reset_epoch_state(kind: usize) {
     );
 }
 
-/// The boot epoch's user-started load begins mid-sequence, NOT at a new epoch: the same walk that
-/// started at STARTING UP continues into LOADING SAVE and the world phases. So this re-arms the cover
-/// WINDOW and drops the stale boot-to-title native loading counters, and deliberately leaves the phase
+/// The boot epoch's user-started load begins mid-sequence, not at a new epoch: the same walk that
+/// started at starting up continues into loading save and the world phases. So this re-arms the cover
+/// window and drops the stale boot-to-title native loading counters, and deliberately leaves the phase
 /// walk alone -- resetting it here would re-report every phase the boot already passed.
 fn boot_view_rearm_for_first_load_request_if_needed() {
     if BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0
@@ -1299,13 +1299,13 @@ pub(crate) fn boot_view_epoch_ms() -> u64 {
     epoch.elapsed().as_millis().min(u64::MAX as u128) as u64
 }
 
-/// The same clock as [`boot_view_epoch_ms`], read WITHOUT starting it: `None` until boot-view code
+/// The same clock as [`boot_view_epoch_ms`], read without starting it: `None` until boot-view code
 /// has anchored the epoch.
 ///
 /// The distinction is not pedantry. `boot_view_epoch_ms` anchors on first call, so a caller outside
 /// the boot view that happens to run first would silently move the origin of the clock every
 /// telemetry `*_ms` field is measured against -- rewriting the meaning of the whole run's timeline
-/// to stamp one event. Callers that only want to READ the timeline (the in-game menu open stamp,
+/// to stamp one event. Callers that only want to read the timeline (the in-game menu open stamp,
 /// the clock map) use this and simply decline to stamp while the clock does not exist yet.
 pub(crate) fn boot_view_epoch_ms_if_anchored() -> Option<u64> {
     BOOT_VIEW_EPOCH
@@ -1323,39 +1323,39 @@ pub(crate) fn rearm_boot_progress_for_own_menu_load(selected_slot: i32, source: 
     BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.store(slot_key, Ordering::SeqCst);
     BOOT_VIEW_LOADSCREEN_TABLE_BASELINE.store(table_baseline, Ordering::SeqCst);
     boot_view_reset_epoch_state(BOOT_VIEW_EPOCH_KIND_RELOAD);
-    // FPS-bail composite clock: force re-init at the first composite of THIS window. The clock is
-    // keyed on the fresh-deser epoch, which has NOT incremented yet at rearm time (it bumps at the
-    // reload's deserialize), so switch #2+ inherited the PREVIOUS window's first-composite timestamp
+    // FPS-bail composite clock: force re-init at the first composite of this window. The clock is
+    // keyed on the fresh-deser epoch, which has not incremented yet at rearm time (it bumps at the
+    // reload's deserialize), so switch #2+ inherited the previous window's first-composite timestamp
     // and instantly tripped the 20s cap (measured run samechar-3x-threedll-20260729-203842: bail at
     // cover_window_ms=36 with composite_ms=24582). The usize::MAX sentinel never equals a real epoch,
     // so the next composite's swap re-stamps BOOT_VIEW_COMPOSITE_FIRST_MS.
     crate::constants::BOOT_VIEW_COMPOSITE_EPOCH.store(usize::MAX, Ordering::SeqCst);
     BOOT_VIEW_PUMP_STOP_MS.store(0, Ordering::SeqCst);
     BOOT_VIEW_PUMP_STOP_REASON.store(0, Ordering::SeqCst);
-    // CHARACTER-LOAD RELEASE GATE (er-effects-rs-q6vk). This arm happens at the switch TRIGGER,
+    // Character-load release gate (er-effects-rs-q6vk). This arm happens at the switch trigger,
     // before the return-to-title teardown -- so the character load this cover exists for has not
     // started yet. Snapshot the fresh-deser count here; the release stays held until it advances,
-    // which is exactly when the reload deserializes. Set AFTER boot_view_reset_epoch_state above,
+    // which is exactly when the reload deserializes. Set after boot_view_reset_epoch_state above,
     // which resets the per-window release latches.
     er_telemetry_core::counters::BOOT_VIEW_RELEASE_CONFIRM_BASELINE.store(
         crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst),
         Ordering::SeqCst,
     );
     er_telemetry_core::counters::BOOT_VIEW_RELEASE_REQUIRE_CONFIRM.store(1, Ordering::SeqCst);
-    // SECOND-SCREEN GATE, armed here and only here: the BOOT load shows one native plate, a switch
+    // Second-screen gate, armed here and only here: the boot load shows one native plate, a switch
     // shows two, so this is the one flow that needs it. `boot_view_reset_epoch_state` ran above and
-    // zeroed `LOADING_SCREEN_CLOSE_SENT_HITS`, so the count this gate reads describes THIS switch.
+    // zeroed `LOADING_SCREEN_CLOSE_SENT_HITS`, so the count this gate reads describes this switch.
     er_telemetry_core::counters::BOOT_VIEW_RELEASE_REQUIRE_SECOND_SCREEN.store(1, Ordering::SeqCst);
     er_telemetry_core::counters::BOOT_VIEW_RELEASE_HELD_FOR_SECOND_SCREEN
         .store(0, Ordering::SeqCst);
     er_telemetry_core::counters::BOOT_VIEW_NATIVE_SCREENS_SEEN.store(0, Ordering::SeqCst);
-    // Clear the PREVIOUS character's portrait/render state IMMEDIATELY when a new load arms (2026-07-16,
+    // Clear the previous character's portrait/render state immediately when a new load arms (2026-07-16,
     // user-reported: the old character lingered on the new load screen). The portrait window is otherwise
-    // only reset on load COMPLETION, so the just-loaded character carried into the NEXT switch's cover.
+    // only reset on load completion, so the just-loaded character carried into the next switch's cover.
     // Resetting here rebinds the portrait pipeline for the incoming slot so the cover shows the new
-    // character (or a clean black/bar) instead of the prior one. SAME-IDENTITY variant (bd
+    // character (or a clean black/bar) instead of the prior one. Same-identity variant (bd
     // er-effects-rs-dpf6 Phase 3): when the incoming slot+name-hash matches the published head's
-    // identity tag, the bridge + crop envelope are KEPT (a same-character reload cannot show a wrong
+    // identity tag, the bridge + crop envelope are kept (a same-character reload cannot show a wrong
     // head); an identity mismatch keeps the full 2026-07-16/2026-07-06 clear above. Game thread
     // (confirm-press hook), so the summary-record identity read is safe here.
     unsafe { loading_portrait_window_reset_for_switch(selected_slot, "own-menu-switch-rearm") };
@@ -1369,26 +1369,26 @@ pub(crate) fn rearm_boot_progress_for_own_menu_load(selected_slot: i32, source: 
 fn boot_view_progress() -> (usize, usize) {
     boot_view_rearm_for_first_load_request_if_needed();
     let set = boot_view_phase_set();
-    // Highest phase this epoch has evidence for, then DOWNWARD CLOSURE over 0..=highest.
+    // Highest phase this epoch has evidence for, then downward closure over 0..=highest.
     //
     // The sequence is strictly ordered, so reaching phase k proves the load passed through every phase
     // before it -- whether or not that phase's own detector ever published. Closing the run is what
     // makes the reported walk hole-free: the old "set bit i iff predicate i" form left gaps whenever a
-    // later detector fired first, and the bar reported 7 -> 8 -> 11, never naming STREAMING WORLD or
-    // FINALIZING WORLD even though the load plainly went through them (bd er-effects-rs-ok8d).
-    // EPOCH FENCE, opened before the phase predicates are read and checked again before the result is
-    // published. `boot_view_reset_epoch_state` runs on the GAME thread at the switch arm and zeroes
+    // later detector fired first, and the bar reported 7 -> 8 -> 11, never naming streaming world or
+    // FINALIZING world even though the load plainly went through them (bd er-effects-rs-ok8d).
+    // Epoch fence, opened before the phase predicates are read and checked again before the result is
+    // published. `boot_view_reset_epoch_state` runs on the game thread at the switch arm and zeroes
     // both the reached-mask and every `LOADING_SCREEN_*` counter the world-load predicates key on;
-    // this samples on the RENDER thread. Without the fence a sample that read the OUTGOING load's
-    // finished counters could store its mask AFTER the reset had zeroed it, and because the mask is
+    // this samples on the render thread. Without the fence a sample that read the outgoing load's
+    // finished counters could store its mask after the reset had zeroed it, and because the mask is
     // monotonic within an epoch that pins the whole switch at a bar it never earned.
     //
-    // MEASURED, run br-20260905-221201-969c, three loads and three different amounts of phantom fill:
-    //   switch #1 (+55.6s)  every one of the nine milestones fired in the SAME millisecond as the arm,
-    //                       first line already `mask 0x1ff` -- the bar sat full at ENTERING WORLD 8/8
+    // Measured, run br-20260905-221201-969c, three loads and three different amounts of phantom fill:
+    //   switch #1 (+55.6s)  every one of the nine milestones fired in the same millisecond as the arm,
+    //                       first line already `mask 0x1ff` -- the bar sat full at entering world 8/8
     //                       for the whole 4s the load actually took
-    //   switch #2 (+71.0s)  seven fired at once, `mask 0x7f`, entering at STREAMING WORLD 6/8
-    //   switch #3 (+387.0s) `mask 0x3`, a real walk: RETURNING TO TITLE -> TITLE READY -> ...
+    //   switch #2 (+71.0s)  seven fired at once, `mask 0x7f`, entering at streaming world 6/8
+    //   switch #3 (+387.0s) `mask 0x3`, a real walk: Returning to title -> title ready -> ...
     // Three different answers for the same code path is the signature of a race, not of a phase
     // predicate that is merely too loose; the amount of inherited fill is just where the render thread
     // happened to be standing relative to the game thread's reset.
@@ -1399,7 +1399,7 @@ fn boot_view_progress() -> (usize, usize) {
             highest = i;
         }
     }
-    // The epoch reset runs on the GAME thread while this samples on the RENDER thread, so a single
+    // The epoch reset runs on the game thread while this samples on the render thread, so a single
     // frame can straddle the swap and read a wider epoch's mask against a narrower epoch's phase set.
     // Masking to the active set's width keeps `idx` inside the set instead of resolving a phase this
     // epoch does not have; the next frame is consistent either way.
@@ -1410,7 +1410,7 @@ fn boot_view_progress() -> (usize, usize) {
     let now_ms = boot_view_epoch_ms();
     if mask != prev_mask && BOOT_VIEW_EPOCH_SEQ.load(Ordering::SeqCst) == epoch_at_sample {
         BOOT_VIEW_REACHED_MASK.store(mask, Ordering::SeqCst);
-        // Report EVERY phase that just became reached, in order -- not only the new top one.
+        // Report every phase that just became reached, in order -- not only the new top one.
         for i in 0..set.len() {
             if mask & (1 << i) != 0 && prev_mask & (1 << i) == 0 {
                 append_autoload_debug(format_args!(
@@ -1427,44 +1427,44 @@ fn boot_view_progress() -> (usize, usize) {
     let base = set.base_permille(idx);
     let next = set.next_permille(idx);
     let gap = next.saturating_sub(base);
-    // SUBSTEP-DRIVEN FILL: the active phase's own parenthesized sub-progression paces the bar across
+    // SUBSTEP-driven FILL: the active phase's own parenthesized sub-progression paces the bar across
     // its span. This is the real pacing source -- the phase's substeps are concrete RAM semaphores, so
-    // the fill tracks actual work instead of a clock. `sub_i` is 1-based (the substep IN PROGRESS), so
-    // `sub_i - 1` is the count COMPLETED and the fill can never reach the next phase's target early.
+    // the fill tracks actual work instead of a clock. `sub_i` is 1-based (the substep in progress), so
+    // `sub_i - 1` is the count completed and the fill can never reach the next phase's target early.
     let (_, sub_i, sub_max) = boot_view_phase_submilestone(set.phase(idx));
     let done = sub_i.saturating_sub(1).min(sub_max);
     let sub_fill = base + gap * done / sub_max.max(1);
-    // NEVER ESTIMATE (user directive 2026-09-04). An asymptotic clock-driven creep used to sit here
+    // Never estimate (user directive 2026-09-04). An asymptotic clock-driven creep used to sit here
     // -- `gap * since / (since + BOOT_VIEW_CREEP_K_MS)` -- so that "a phase with no finer RAM
-    // granularity still inches forward instead of freezing". It advanced the bar on WALL TIME, with
+    // granularity still inches forward instead of freezing". It advanced the bar on wall time, with
     // no relation to work performed, which makes it an estimate presented as a measurement. Its own
-    // stated purpose was to stop a stalled phase LOOKING stalled: that is the one thing a progress
+    // stated purpose was to stop a stalled phase looking stalled: that is the one thing a progress
     // readout must never do, because this project's whole runtime debugging turns on telling a slow
     // load apart from a frozen one, and a bar that inches forward regardless erases the difference
-    // for the user AND for the agent reading the log afterwards.
+    // for the user and for the agent reading the log afterwards.
     //
     // What remains is `sub_fill`, which is measured: the active phase's substeps are RAM semaphores,
     // so the fill moves when the game does and holds when it does not. A phase with no substep
-    // granularity now HOLDS at its base, and AGENTS.md already says how to render that honestly --
+    // granularity now holds at its base, and AGENTS.md already says how to render that honestly --
     // a labelled `<phase-specific label> 1/1` in the parenthesised sub-progression, codifying the
     // ignorance rather than smoothing over it.
     let pm = sub_fill.min(next).min(1000);
-    // While the startup save picker holds the boot, clamp the fill so it PAUSES at the PREPARING SAVE edge
+    // While the startup save picker holds the boot, clamp the fill so it pauses at the preparing save edge
     // (the phase creep would otherwise drift past it); the clamp lifts the frame the pick clears the latch,
-    // so the bar resumes toward LOADING SAVE / the world phases.
+    // so the bar resumes toward loading save / the world phases.
     let pm = if missing_save_selection_pending() {
         pm.min(BOOT_VIEW_SAVE_CHECK_PERMILLE)
     } else {
         pm
     };
-    // WORLD-LOAD tail: once the world phases are the active region, drive the product bar from the
-    // game's real Gauge_3 progress on ALL runtimes. The previous native-Windows-only gate made
+    // World-load tail: once the world phases are the active region, drive the product bar from the
+    // game's real Gauge_3 progress on all runtimes. The previous native-Windows-only gate made
     // Wine/user-launch keep showing the stale pre-handoff milestone (~46%) while the real loading gauge
-    // reached 100%. The floor is THIS epoch's BUILDING WORLD target, so the gauge maps onto whichever
+    // reached 100%. The floor is this epoch's building world target, so the gauge maps onto whichever
     // slice of the bar the world tail owns in this epoch's phase sequence.
     //
-    // The trigger is the PHASE WALK reaching BUILDING WORLD (whose own predicate is the native loading
-    // screen appearing), NOT the cover's separate handoff latch. That latch can assert within a frame
+    // The trigger is the phase walk reaching building world (whose own predicate is the native loading
+    // screen appearing), not the cover's separate handoff latch. That latch can assert within a frame
     // of a reload arming -- long before any world work starts -- and using it here yanked the fill up
     // to the world floor before the bar had reported a single pre-world phase.
     let native = LOADING_SCREEN_BAR_PROGRESS_PERMILLE
@@ -1541,7 +1541,7 @@ fn boot_view_entering_world_submilestone() -> (&'static str, usize, usize) {
     let ls731_clear = SWITCH_ORACLE_LOADING_FIELD11.load(Ordering::SeqCst) == 0;
     let loading_close_sent = LOADING_SCREEN_CLOSE_SENT.load(Ordering::SeqCst) != 0
         || SWITCH_ORACLE_LOADING_FIELD11.load(Ordering::SeqCst) != 0;
-    // The two post-FINISH InGameStep stages ride here, as substeps of the phase they belong to.
+    // The two post-finish InGameStep stages ride here, as substeps of the phase they belong to.
     let request_started = request_code >= INGAMESTEP_REQUEST_CODE_MAP_FINISH;
     let request_stable = request_code >= INGAMESTEP_REQUEST_CODE_IN_WORLD;
     let menu_job_present = SWITCH_ORACLE_MENU_JOB_PRESENT.load(Ordering::SeqCst) != 0;
@@ -1577,7 +1577,7 @@ fn boot_view_entering_world_submilestone() -> (&'static str, usize, usize) {
 fn boot_view_load_save_submilestone() -> (&'static str, usize, usize) {
     if BOOT_VIEW_EPOCH_KIND.load(Ordering::SeqCst) == BOOT_VIEW_EPOCH_KIND_RELOAD {
         // All three counters are sticky for the process, so a reload reads them as deltas since this
-        // epoch's rearm -- otherwise every substep reports COMPLETE on the reload's first frame.
+        // epoch's rearm -- otherwise every substep reports complete on the reload's first frame.
         boot_view_first_pending_substep(&[
             (
                 SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.load(Ordering::SeqCst) != 0,
@@ -1613,11 +1613,11 @@ fn boot_view_load_save_submilestone() -> (&'static str, usize, usize) {
     }
 }
 
-/// STARTING UP (phase 0) sub-progression: the render/display bring-up chain, every step a concrete
-/// RAM semaphore set by OUR OWN present path (swapchain resolve + Present detour install, our D3D12
+/// Starting up (phase 0) sub-progression: the render/display bring-up chain, every step a concrete
+/// RAM semaphore set by our own present path (swapchain resolve + Present detour install, our D3D12
 /// command objects, our loading cover reaching the backbuffer, the game's own render loop presenting)
 /// -- never the game's boot state, which is not yet observable this early. Each predicate ORs in every
-/// LATER signal so an earlier step can never read false once a later stage has fired (keeps the
+/// later signal so an earlier step can never read false once a later stage has fired (keeps the
 /// reported step monotonic even when a counter path is skipped, e.g. no self-present pump on Wine).
 /// The reported step is the first not-yet-satisfied one (the stage in progress); once all are done we
 /// hold the final milestone label. All labels are 5x7 font-safe (uppercase A-Z + space).
@@ -1637,7 +1637,7 @@ fn boot_view_starting_up_submilestone() -> (&'static str, usize, usize) {
     let cover = BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst) != 0
         || BOOT_VIEW_SELF_PRESENTS.load(Ordering::SeqCst) != 0
         || c::PRESENT_HOOK_HITS.load(Ordering::SeqCst) != 0;
-    // 4: the game's OWN render loop is presenting frames now (the engine is live behind our cover).
+    // 4: the game's own render loop is presenting frames now (the engine is live behind our cover).
     let engine_frames = c::PRESENT_HOOK_HITS.load(Ordering::SeqCst) != 0
         || BOOT_VIEW_PUMP_STOP_REASON.load(Ordering::SeqCst) == 1;
     let steps: [(bool, &'static str); 4] = [
@@ -1656,16 +1656,16 @@ fn boot_view_starting_up_submilestone() -> (&'static str, usize, usize) {
     (steps[current - 1].1, current, steps.len())
 }
 
-/// GAME SYSTEMS (phase 1) sub-progression = the game's OWN top-level boot state machine,
+/// Game systems (phase 1) sub-progression = the game's own top-level boot state machine,
 /// CS::CSSystemStep. Its `current_state` (states 0..20 of CSSystemStepState) names the exact
-/// subsystem the boot thread is constructing / waiting on -- this IS the singleton + manager
+/// subsystem the boot thread is constructing / waiting on -- this is the singleton + manager
 /// construction sequence this phase covers, so the sublabel tracks the real substep instead of a
 /// single placeholder. One guaranteed-ordered RAM read: base + global -> current_state (u32 low
 /// dword), at the offset owned by `er_game_base::rva`.
 /// The global staying null very early, or an out-of-range value, falls back to the coarse label so a
 /// state number is never fabricated. RVA/state names from the Ghidra 1.16.2 dump (CSSystemStep
 /// ctor @0x140dec7c0, singleton @base+0x3d85680) and the game's own 21-entry StepperFn table
-/// (initializer 0x1400b16f0); the offset is MEASURED, see
+/// (initializer 0x1400b16f0); the offset is measured, see
 /// `er_game_base::rva::CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` -- it was 0x40 here until 2026-08-31,
 /// which read a pointer field and pinned this sub-progression to its fallback label.
 /// The Wait* states map to the ctor child steps
@@ -1722,14 +1722,14 @@ fn boot_view_game_systems_submilestone() -> (&'static str, usize, usize) {
     }
 }
 
-/// SWITCHING SAVE (reload phase 0) sub-progression. Between the confirm press and the return-title
+/// Switching save (reload phase 0) sub-progression. Between the confirm press and the return-title
 /// request there is no finer RAM granularity we can honestly claim, so this phase declares that
 /// ignorance with a single explicit substep rather than borrowing a label from a neighbouring phase.
 fn boot_view_switch_confirmed_submilestone() -> (&'static str, usize, usize) {
     boot_view_single_submilestone("SLOT CONFIRMED")
 }
 
-/// RETURNING TO TITLE (reload) sub-progression: the two switch-teardown semaphores that actually gate
+/// Returning to title (reload) sub-progression: the two switch-teardown semaphores that actually gate
 /// this phase -- the menuData+0x5d teardown request we write, then the quickload FSM observing the
 /// title owner. Both are phase-relevant: nothing about the incoming save can be true yet.
 fn boot_view_returning_to_title_submilestone() -> (&'static str, usize, usize) {
@@ -1746,8 +1746,8 @@ fn boot_view_returning_to_title_submilestone() -> (&'static str, usize, usize) {
     ])
 }
 
-/// Sub-progression for the ACTIVE phase, keyed on the phase identity so both epochs' sequences resolve
-/// through the same table. Every returned label is a substep OF THAT PHASE: a phase with known RAM
+/// Sub-progression for the active phase, keyed on the phase identity so both epochs' sequences resolve
+/// through the same table. Every returned label is a substep of that PHASE: a phase with known RAM
 /// granularity exposes its real substeps, and a phase without any exposes exactly one explicit
 /// phase-specific substep (`<label> 1/1`) instead of borrowing an unrelated one.
 fn boot_view_phase_submilestone(
@@ -1780,7 +1780,7 @@ fn boot_view_phase_submilestone(
         P::TitleReady => {
             if BOOT_VIEW_EPOCH_KIND.load(Ordering::SeqCst) == BOOT_VIEW_EPOCH_KIND_RELOAD {
                 // The boot latches below are sticky; on a reload the switch FSM is the only honest
-                // evidence that the title has come back up for THIS epoch.
+                // evidence that the title has come back up for this epoch.
                 boot_view_single_submilestone("TITLE OWNER UP")
             } else {
                 boot_view_first_pending_substep(&[
@@ -1915,9 +1915,9 @@ fn boot_bg_image() -> Option<&'static er_boot_background::BootBgImage> {
 // flows back in through the glob shim at the top of gpu_readback.rs, so this shared
 // rasterizer still constructs the same type the crate's native overlay consumes.
 
-/// Render the boot/loading-screen frame ONCE, device-agnostically: the loading bar (milestone label,
+/// Render the boot/loading-screen frame once, device-agnostically: the loading bar (milestone label,
 /// ticks, text scaling, progress creep) and -- when the startup save picker is armed -- its browser panel
-/// composited on top. This is the SHARED rasterizer for BOTH the Wine in-swapchain composite
+/// composited on top. This is the shared rasterizer for both the Wine in-swapchain composite
 /// (composite_boot_progress_inner) and the native-Windows separate-window overlay, so the loading screen
 /// is identical on both. The caller uploads `rgba` and copies it to its backbuffer at `(dx, dy)`.
 pub(crate) fn boot_view_render_frame(bw: usize, bh: usize) -> BootViewFrame {
@@ -1961,7 +1961,7 @@ pub(crate) fn boot_view_render_frame(bw: usize, bh: usize) -> BootViewFrame {
         )
     };
     let (ms_idx, permille) = boot_view_progress();
-    // Portrait draws INSIDE the rasterizer (behind the bar) when active and the picker is not up.
+    // Portrait draws inside the rasterizer (behind the bar) when active and the picker is not up.
     let draw_portrait = portrait_active && !picker_active;
     let mut rgba = boot_view_rasterize(
         BootViewRaster {
@@ -2049,12 +2049,12 @@ fn boot_view_rasterize(
     } else {
         boot_fill_rect(&mut buf, w, h, 0, 0, w, h, BOOT_VIEW_RGB_BLACK);
     }
-    // Character portrait BEHIND the bar/label: composite it right after the background so the bar, its
+    // Character portrait behind the bar/label: composite it right after the background so the bar, its
     // shadow band, and the phase label all draw in front (user 2026-07-15 "behind the loading bar").
     if draw_portrait {
         let _ = portrait_onto(&mut buf, w, h);
     }
-    // Label = "<PHASE NAME> <i>/<N> (<SUBMILESTONE> <x>/<y>)". The main `i/N` is THIS epoch's phase
+    // Label = "<PHASE NAME> <i>/<N> (<SUBMILESTONE> <x>/<y>)". The main `i/N` is this epoch's phase
     // sequence, and the parenthesized subprogression belongs to the active phase: a phase with no known
     // finer RAM granularity says so with its own 1/1 substep, world-gauge phases use the native Gauge_3
     // frame, and entering-world uses only the handoff semaphores that are relevant once the world exists.
@@ -2079,7 +2079,7 @@ fn boot_view_rasterize(
             BOOT_VIEW_MONO_LABEL_LEN.store(raw_sub_label.len(), Ordering::SeqCst);
             (raw_sub_label, raw_sub_i)
         } else if hw / BOOT_VIEW_MONO_ORD_SCALE == idx {
-            // Regressed within the SAME phase -> hold the high-water substep + its (still-valid) label.
+            // Regressed within the same phase -> hold the high-water substep + its (still-valid) label.
             let held_sub = hw % BOOT_VIEW_MONO_ORD_SCALE;
             let ptr = BOOT_VIEW_MONO_LABEL_PTR.load(Ordering::SeqCst);
             let len = BOOT_VIEW_MONO_LABEL_LEN.load(Ordering::SeqCst);
@@ -2100,18 +2100,18 @@ fn boot_view_rasterize(
     };
     // Surface the GameMan load-in-progress FSM (b80 == save_state) when a load is active (b80 > 0):
     // READING/RESIDENT. It stays visible through streaming and, notably, exposes the finalize-time
-    // b80=RESIDENT stall (the case-7 blocker) directly on the bar. Hidden when idle (b80 <= 0).
+    // b80=resident stall (the case-7 blocker) directly on the bar. Hidden when idle (b80 <= 0).
     let b80 = SWITCH_ORACLE_B80.load(Ordering::SeqCst);
     let mms_step = SWITCH_ORACLE_MMS_STEP.load(Ordering::SeqCst);
     let finalize = SWITCH_ORACLE_FINALIZE_12A.load(Ordering::SeqCst);
-    // The engine's live MoveMapStep step/finalize-substate name rides in the suffix, NOT in the main
-    // `N/M`. It used to REPLACE the main phase label with a second, 22-long step sequence -- which both
-    // changed the visible denominator mid-load and let a STALE in-world step from the previous epoch
+    // The engine's live MoveMapStep step/finalize-substate name rides in the suffix, not in the main
+    // `N/M`. It used to replace the main phase label with a second, 22-long step sequence -- which both
+    // changed the visible denominator mid-load and let a stale in-world step from the previous epoch
     // read as 96% progress the instant a reload armed (bd er-effects-rs-ok8d). As a suffix it keeps its
     // whole diagnostic value (the bar still freezes on the exact stuck step by name during a softlock)
     // without pretending to be the phase sequence.
     // The MoveMapStep detail only means something once the world phases are running. Before then the
-    // switch oracle still holds the PREVIOUS epoch's values, and showing them decorated an early reload
+    // switch oracle still holds the previous epoch's values, and showing them decorated an early reload
     // phase with a stale substate (`TITLE READY 2/8 (TITLE OWNER UP 1/1 - IDLE/DONE)`, measured run
     // samechar-3x-threedll-20260730-082930) -- the same stale-oracle leak this issue is about.
     let world_phase = matches!(
@@ -2161,7 +2161,7 @@ fn boot_view_rasterize(
     } else {
         boot_draw_text(&mut buf, w, h, content_x, content_y, label, text_scale);
     }
-    // NO tick markers/labels (user 2026-07-15 "remove all of the markers ... remove other tick markers and
+    // No tick markers/labels (user 2026-07-15 "remove all of the markers ... remove other tick markers and
     // labels"): all phase information is carried by the single left-aligned granular label above the bar.
     boot_fill_rect(
         &mut buf,
@@ -2188,7 +2188,7 @@ fn boot_view_rasterize(
 
 /// Draw one release-fade frame. The GPU half -- the command objects, the root signature/PSO/texture
 /// slot and the alpha-blended full-screen draw -- moved to `er-cover-fade`, which has no product
-/// decision in it. What stays here is everything that IS a product decision: taking the draw-busy
+/// decision in it. What stays here is everything that is a product decision: taking the draw-busy
 /// latch this file shares with the opaque composite path, rasterizing the frame from the current
 /// strip geometry and progress reading, and this cover window's own bookkeeping on success.
 unsafe fn composite_boot_release_fade_frame(swapchain_raw: usize, alpha: u8) -> bool {
@@ -2231,7 +2231,7 @@ unsafe fn composite_boot_release_fade_frame(swapchain_raw: usize, alpha: u8) -> 
 }
 
 /// Composite the boot-progress strip onto the swapchain backbuffer. Called from the Present detour
-/// for every pre-loading-window frame. This path MUST full-clear the backbuffer first: after the
+/// for every pre-loading-window frame. This path must full-clear the backbuffer first: after the
 /// self-present pump yields to Elden Ring's render loop, a strip-only copy lets the title/menu/world
 /// render around the loading bar. Full-clear + strip copy keeps the bar persistent and tells the rest
 /// of the frame, politely, to die in a fire.
@@ -2245,7 +2245,7 @@ pub(crate) unsafe fn composite_boot_progress_on_swapchain(
     .unwrap_or(false)
 }
 
-/// Self-present-pump frame (pre-first-game-present): same draw, but the engine has NEVER rendered
+/// Self-present-pump frame (pre-first-game-present): same draw, but the engine has never rendered
 /// this backbuffer, so its contents are undefined -- clear the whole RT to black before the strip
 /// copy so no init-garbage flashes on screen.
 pub(crate) unsafe fn composite_boot_progress_self_frame(swapchain_raw: usize) -> bool {
@@ -2263,12 +2263,12 @@ impl Drop for BootViewBusyGuard {
     }
 }
 
-/// FPS-BAIL RESUME ON PUBLISH (bd er-effects-rs-dpf6 Phase 2). The permille arm of the FPS bail
-/// latches on a HEALTHY fast switch load ~2s after confirm (measured run product-continue-direct-
+/// FPS-bail resume on publish (bd er-effects-rs-dpf6 Phase 2). The permille arm of the FPS bail
+/// latches on a healthy fast switch load ~2s after confirm (measured run product-continue-direct-
 /// 20260729-194759: bail at +136108 with permille=960, publish at +138063 -- the cover was dead 2.0s
-/// before the head arrived). When a NEW portrait publish (version bump past the bail-time snapshot)
+/// before the head arrived). When a new portrait publish (version bump past the bail-time snapshot)
 /// lands while the native loading screen is still active (update ticked / fadeout+close within the
-/// same hold windows the release path uses), clear the bail stop ONCE per cover window so the head
+/// same hold windows the release path uses), clear the bail stop once per cover window so the head
 /// composites for the remainder; the release fade / world handoff still owns the real end. Safe by
 /// the frozen-load2 insight: a genuinely frozen load never publishes a portrait, so this can never
 /// re-open the cover on the pathology the bail protects against. The 20s composite cap stays armed
@@ -2330,8 +2330,8 @@ unsafe fn composite_boot_progress_inner(
     }
     // HANDOFF: first start stops when the loading window / published keyed head / world takes over.
     // During an own-menu switch, the old-world and prior-keyed-frame latches are intentionally still
-    // set, so stop only when THIS switch builds a fresh loading-screen table (baseline comparison).
-    // NOTE: `now_loading_active` is deliberately NOT consulted: its `load_done` latch is false during
+    // set, so stop only when this switch builds a fresh loading-screen table (baseline comparison).
+    // NOTE: `now_loading_active` is deliberately not consulted: its `load_done` latch is false during
     // boot too, so it cannot distinguish "booting" from "loading".
     let own_menu_active = BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0;
     let loadscreen_builds = PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst);
@@ -2341,12 +2341,12 @@ unsafe fn composite_boot_progress_inner(
     } else {
         loadscreen_builds != 0 || PROFILE_HAVE_KEYED_FRAME.load(Ordering::SeqCst) != 0
     };
-    // FPS FIX (bd fps-killer-rootcaused-per-frame-gpu-readback-boot-view-not-stopping-inworld-load2):
+    // FPS fix (bd fps-killer-rootcaused-per-frame-gpu-readback-boot-view-not-stopping-inworld-load2):
     // for the FIRST/boot load, IN_WORLD_REACHED (a one-shot latch) is the world-reached signal. For an
-    // own-menu switch (load2+) that latch is STALE (already set from load1), so it can never stop the
+    // own-menu switch (load2+) that latch is stale (already set from load1), so it can never stop the
     // per-frame GPU readback in-world -- the compositor kept readback-stalling the pipeline (~20-40fps).
-    // Use the PER-EPOCH world-live signal instead: play_time advancing for the CURRENT fresh_deser epoch
-    // means THIS switch's world is genuinely playable, so stop compositing (the loading cover is done).
+    // Use the per-epoch world-live signal instead: play_time advancing for the current fresh_deser epoch
+    // means this switch's world is genuinely playable, so stop compositing (the loading cover is done).
     let cur_load_epoch =
         crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
     let can_move_handoff = crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
@@ -2354,16 +2354,16 @@ unsafe fn composite_boot_progress_inner(
     let render_release_handoff = boot_view_cover_release_ready(can_move_handoff);
     let _epoch_world_handoff = render_release_handoff;
     let world_handoff = render_release_handoff;
-    // ABSOLUTE BACKSTOP -- see [`boot_view_absolute_backstop`] for the whole argument. False in
+    // Absolute BACKSTOP -- see [`boot_view_absolute_backstop`] for the whole argument. False in
     // every healthy window: while `world_handoff` is true the normal path owns the window and this
     // only samples, and its thresholds sit far past any measured legitimate load.
     //
-    // It does NOT stop the cover itself. It routes the window down the SAME release fade a healthy
+    // It does not stop the cover itself. It routes the window down the same release fade a healthy
     // release uses, so the user gets the 640 ms fade rather than a hard pop, and the only thing it
     // overrides on the way is the native-loading hold below -- which cannot be evidence here,
     // because it is a recency read of counters a dead loading-screen detour never writes.
     let backstop = boot_view_absolute_backstop(boot_view_epoch_ms(), world_handoff);
-    // DIAGNOSTIC (bd ab-portrait-disabled-load2-fps-still-low-boot-view-not-stopping): log the actual
+    // Diagnostic (bd ab-portrait-disabled-load2-fps-still-low-boot-view-not-stopping): log the actual
     // stop gates. The product cover must not stop at player-present/native-loading; only the same
     // can_move epoch-gated proof used by the watcher is allowed to uncover the game.
     {
@@ -2416,7 +2416,7 @@ unsafe fn composite_boot_progress_inner(
         // Fall through and keep compositing.
     }
     if real_loading_handoff || world_handoff || backstop {
-        // PRODUCT COVER (user 2026-07-25): native CS::LoadingScreen becoming lit is NOT a stop
+        // Product cover (user 2026-07-25): native CS::LoadingScreen becoming lit is not a stop
         // condition. The product loading bar owns the full backbuffer until the game is actually
         // world/playable-ready. Native loading updates only prove the handoff happened and drive the
         // bar; the rest of the frame stays black-cleared.
@@ -2466,18 +2466,18 @@ unsafe fn composite_boot_progress_inner(
             let update_quiet_pending = loading_update_last != 0
                 && (now_ms as u64).saturating_sub(loading_update_last as u64)
                     < BOOT_VIEW_NATIVE_LOADING_QUIET_HOLD_MS;
-            // ONE-WAY RELEASE FADE (2026-08-22). Ask the hold as the START GATE it was written to
-            // be. Once the fade has begun, only a `CS::LoadingScreen::Update` tick PAST the
+            // One-way release fade (2026-08-22). Ask the hold as the start gate it was written to
+            // be. Once the fade has begun, only a `CS::LoadingScreen::Update` tick past the
             // fade-start snapshot can still hold. That used to be because the Scaleform half was
             // untrustworthy mid-fade -- it stamped on any movie's "fadeout" label, so opening the
             // in-world menu refreshed it. The narrowing on 2026-09-05 removed that reason, and the
-            // rule stays anyway: what put the portrait back on screen was the FALL-THROUGH to the
+            // rule stays anyway: what put the portrait back on screen was the fall-through to the
             // opaque path, which is a bug about honouring a mid-fade hold at all, not about which
             // movie raised it. See [`boot_view_note_fade_hold_reassert`] for the whole argument.
             let start_gate_hold = fadeout_pending || update_quiet_pending;
             let fade_started = BOOT_VIEW_FADE_START_MS.load(Ordering::SeqCst) != 0;
             let native_gfx_hold_pending = if backstop {
-                // NO HOLD SURVIVES THE BACKSTOP. Both halves of the hold are recency reads of
+                // No hold survives the BACKSTOP. Both halves of the hold are recency reads of
                 // counters the CS::LoadingScreen detour writes, and a dead detour is the failure
                 // this arrived to survive -- so an honest hold cannot exist here. Since 2026-09-05
                 // a dishonest one cannot either: the Scaleform half only stamps for the loading
@@ -2525,7 +2525,7 @@ unsafe fn composite_boot_progress_inner(
                 // deliberately delayed until native loading has both started its authored fade and stopped
                 // updating long enough that the backbuffer behind our fade is gameplay, not loading art.
                 //
-                // Reachable only BEFORE the fade starts. A hold that arrives once the fade is
+                // Reachable only before the fade starts. A hold that arrives once the fade is
                 // running never comes here: it pauses the fade below instead, because falling
                 // through from mid-fade is what put the portrait back on screen at full alpha.
             } else if !native_gfx_hold_pending
@@ -2543,7 +2543,7 @@ unsafe fn composite_boot_progress_inner(
                     loading_close_ms,
                 ));
             }
-            // THE COMMITMENT. `fade_started` is enough on its own to enter: once the fade owns the
+            // The commitment. `fade_started` is enough on its own to enter: once the fade owns the
             // window a hold can pause it but can never send it back to the opaque path above.
             if !native_gfx_hold_pending || fade_started {
                 let fade_start = match BOOT_VIEW_FADE_START_MS.compare_exchange(
@@ -2570,7 +2570,7 @@ unsafe fn composite_boot_progress_inner(
                     }
                     Err(start) => start,
                 };
-                // A honored hold PAUSES rather than cancels: the elapsed clock stops, so the alpha
+                // A honored hold pauses rather than cancels: the elapsed clock stops, so the alpha
                 // freezes where it is and the full ramp still plays once the game's loading screen
                 // goes quiet again. Capped, because the fade is this window's only exit.
                 // Named apart from the outer `held_ms` (which is arm-to-now for the handoff log);
@@ -2586,7 +2586,7 @@ unsafe fn composite_boot_progress_inner(
                         // Cover-window measurability (bd er-effects-rs-dpf6 Phase 1): stop reason
                         // (can-move world proof vs render-release) + arm->stop duration.
                         //
-                        // The backstop is checked FIRST and unconditionally. A window that needed
+                        // The backstop is checked first and unconditionally. A window that needed
                         // it was pathological long enough to trip it, and that stays the truth
                         // even if the healthy release became reachable during the fade it forced;
                         // filing such a window as reason 1 would hide the defect behind its own
@@ -2642,14 +2642,14 @@ unsafe fn composite_boot_progress_inner(
         // full-clearing + drawing the bar until the character render path is ready (or can-move proves
         // control on probe runs). If this stops early, the pre-world-stop/full-clear oracles fail.
     }
-    // FPS BAIL (bd fps-killer-rootcaused-per-frame-gpu-readback-boot-view-not-stopping-inworld-load2):
-    // when an own-menu reload STALLS at the finalize (frozen load2), it builds no new loadscreen table
-    // and its play_time never advances, so NEITHER loading_handoff NOR world_handoff ever fires and the
+    // FPS bail (bd fps-killer-rootcaused-per-frame-gpu-readback-boot-view-not-stopping-inworld-load2):
+    // when an own-menu reload stalls at the finalize (frozen load2), it builds no new loadscreen table
+    // and its play_time never advances, so neither loading_handoff nor world_handoff ever fires and the
     // per-frame GPU readback-with-wait above would run forever (~20fps). The loading bar itself still
-    // fills (world resident/present at mms18), so stop the composite once the bar is essentially full OR
+    // fills (world resident/present at mms18), so stop the composite once the bar is essentially full or
     // the composite has run past the per-epoch cap -- the readback must never permanently tank FPS.
     //
-    // SCOPE, STATED SO IT IS NOT MISREAD AS GENERAL (2026-08-30): this is the OWN-MENU epoch's cap
+    // Scope, stated so it is not MISREAD as general (2026-08-30): this is the own-menu epoch's cap
     // and nothing else. The `if own_menu_active` below is the whole reason the boot epoch had no
     // bound at all, which is what [`boot_view_absolute_backstop`] now supplies for every epoch. The
     // 20 s cap here still fires first on a switch, so this path is unchanged in practice.
@@ -2665,8 +2665,8 @@ unsafe fn composite_boot_progress_inner(
         let first_ms = crate::constants::BOOT_VIEW_COMPOSITE_FIRST_MS.load(Ordering::SeqCst) as u64;
         let composite_ms = now_ms.saturating_sub(first_ms);
         let permille = BOOT_VIEW_LAST_PERMILLE.load(Ordering::SeqCst);
-        // PERMILLE ARM REMOVED (er-effects-rs-drb7). It stopped the cover the moment the bar read
-        // ~full, which on a HEALTHY switch happens ~1.3s in, long before the first portrait publish
+        // PERMILLE arm removed (er-effects-rs-drb7). It stopped the cover the moment the bar read
+        // ~full, which on a healthy switch happens ~1.3s in, long before the first portrait publish
         // -- a progress reading standing in for a freeze predicate. With no reachable semantic
         // release (see boot_view_cover_release_ready) this arm was the cover's de facto end
         // condition, and it produced the vanilla flash-through on every switch: run

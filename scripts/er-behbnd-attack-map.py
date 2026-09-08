@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Join hkbBehaviorGraph EVENT NAME -> state -> generator -> clip (animation id).
+"""Join hkbBehaviorGraph event name -> state -> generator -> clip (animation id).
 
 Offline, no Havok SDK. Reads <chr>.behbnd.dcx payloads (Havok 2018.1.0 TAG0).
 

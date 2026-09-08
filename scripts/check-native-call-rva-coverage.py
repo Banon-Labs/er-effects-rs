@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-r"""Fail when a crate CALLS game functions that the 1.17 address map cannot answer.
+r"""Fail when a crate calls game functions that the 1.17 address map cannot answer.
 
-WHY THIS EXISTS
+Why this exists
 ===============
 On 2026-08-30 a user pressed "Load Build from URL" and the importer did nothing. It also
 pressed "Generate Build Link" and got a build with no items in it. Neither surface reported a
@@ -10,10 +10,10 @@ problem: the telemetry said `imported_count=2, accepted_count=2, failed_count=0`
 The cause was one fact nobody could see at build time. `er-build-import-runtime` calls 27 game
 functions, and every one of its constants is named without `RVA` in it --
 `GET_WEAPON_NAME`, `SET_REINFORCEMENT`, `EQUIP_ITEM_TO_CHR_ASM_SLOT`. Every tool in this repo
-that decides which addresses to translate keyed on the constant NAME, so all 27 were invisible:
+that decides which addresses to translate keyed on the constant name, so all 27 were invisible:
 never selected, never mapped, never verified. On 1.17 the running game refused all of them.
 
-Refusing was CORRECT -- calling a stale address transfers control into whatever moved there --
+Refusing was correct -- calling a stale address transfers control into whatever moved there --
 and the refusal was even logged. It was logged into a 2.3-million-line runtime log that somebody
 has to launch the game to produce. Sixteen `ADDRESS REFUSED` lines, six of them the item-name
 getters, and the consequence of those six was total: every item name failed to resolve, so
@@ -25,33 +25,33 @@ address X" and "X is not in the map" -- and no gate put them next to each other.
 class is not new either: `select-needed-1170-rows.py` documents three earlier instances of it in
 its own comments (`_BOUND` suffixes, enum aliases, bare `rva:` fields). This was the fourth.
 
-WHAT IT IS NOT
+What it is not
 ==============
 * Not `check-detour-rva-coverage.py`. That gates DETOURS against the stricter detour map. Every
-  address here is a direct CALL and never goes near MinHook; the two maps are different sets and
+  address here is a direct call and never goes near MinHook; the two maps are different sets and
   a row can be callable without being detourable.
-* Not `verify-rva-map-1170.py`. That asks whether a mapped destination is the RIGHT function.
+* Not `verify-rva-map-1170.py`. That asks whether a mapped destination is the right function.
   This asks the prior question -- whether there is a destination at all.
 
-THE VOCABULARY IS DERIVED, NEVER TRANSCRIBED
+The vocabulary is derived, never transcribed
 ============================================
 The map file paths and the refuted-verdict word are PARSED out of `crates/er-game-base/build.rs`,
 because that file is what actually assembles the table the DLL consults. The resolver entry
 points come from `scripts/rva_usage.py`, which reads them off the call sites. Addresses are
-resolved from names by `scripts/rva_symbols.py`, which evaluates declarations to NUMBERS and so
+resolved from names by `scripts/rva_symbols.py`, which evaluates declarations to numbers and so
 sees enum aliases and derived constants no `_RVA` regex would.
 
-AND THE LEDGER SET IS DISCOVERED BY PATH, NOT BY THE SPELLING OF A RUST CONSTANT (fixed 2026-08-31)
+And the ledger set is discovered by path, not by the spelling of a Rust constant (fixed 2026-08-31)
 Discovery used to be `const (\w*MAP\w*): &str = "..."`. `QUARANTINE` -- the ledger whose rows
-`build.rs` REMOVES from the translation table -- has no `MAP` in its name, so this gate never
-opened it, and an address deliberately WITHDRAWN from the table was reported COVERED. Nothing
+`build.rs` removes from the translation table -- has no `MAP` in its name, so this gate never
+opened it, and an address deliberately withdrawn from the table was reported covered. Nothing
 looked wrong only because that ledger has no data rows yet: the first row anybody writes there is
 a call this gate licenses while the running game refuses it, which is the 2026-08-30 defect above
 with the evidence already written down and still unread. A name filter standing in for a semantic
 test is the same substitution all four historical misses were made of.
 
-What replaced it: every `const NAME: &str` whose VALUE points into `docs/recon/*.tsv` is a ledger,
-whatever it is called; its ROLE (seeded, subtracted, or deliberately unwired) is read off what
+What replaced it: every `const NAME: &str` whose value points into `docs/recon/*.tsv` is a ledger,
+whatever it is called; its role (seeded, subtracted, or deliberately unwired) is read off what
 `build.rs` does with it -- `let _ = AUDITED_DETOURS;` is unwired, and a ledger reached from the
 `held_back` construction without a verdict test is a quarantine. And because a widened regex can
 still miss a file, the parse is checked against the DISK: every
@@ -59,10 +59,10 @@ still miss a file, the parse is checked against the DISK: every
 name or pinned in `LEDGERS_NOT_BUILD_INPUTS` with a reason, and an unaccounted one is a
 `VocabularyError` rather than a silent omission.
 
-Nine audits in this repo have printed a confident ZERO because they transcribed a literal that
+Nine audits in this repo have printed a confident zero because they transcribed a literal that
 later drifted -- `verified_rvas()` filtered on `"IDENTICAL"` and matched 0 of 99 rows, and
-`check-rva-alias-drift.py` then ran `assert bad == 0` over an empty set and PASSED. So this
-script prints COVERAGE rather than a bare verdict, and holds a frozen floor under the control
+`check-rva-alias-drift.py` then ran `assert bad == 0` over an empty set and passed. So this
+script prints coverage rather than a bare verdict, and holds a frozen floor under the control
 crate: if the matcher is ever blinded, the count collapses and the floor fails, instead of an
 empty set reporting a clean tree.
 """
@@ -84,15 +84,15 @@ import rva_usage  # noqa: E402
 BUILD_RS = ROOT / "crates/er-game-base/build.rs"
 RECON = ROOT / "docs/recon"
 
-# A LEDGER IS SOMETHING THAT POINTS AT `docs/recon/*.tsv`, not something with `MAP` in its name.
+# A ledger is something that points at `docs/recon/*.tsv`, not something with `MAP` in its name.
 # See the module docstring: the previous `const (\w*MAP\w*)` filter could not see `QUARANTINE`,
 # which is the one ledger whose rows are SUBTRACTED, so a withdrawn address read as covered.
 LEDGER_DECLARATION = re.compile(
     r'const\s+(\w+)\s*:\s*&str\s*=\s*"([^"]*docs/recon/[^"]+\.tsv)"'
 )
-# `let _ = AUDITED_DETOURS;` -- declared, and deliberately wired into NEITHER table (build.rs gives
+# `let _ = AUDITED_DETOURS;` -- declared, and deliberately wired into neither table (build.rs gives
 # the reason at length: feeding those rows to detours put the 2026-08-29 crash straight back).
-# Reading it here would hand a detour-audit row a CALL licence build.rs never granted.
+# Reading it here would hand a detour-audit row a call licence build.rs never granted.
 UNWIRED_LEDGER = re.compile(r"let\s+_\s*=\s*(\w+)\s*;")
 # The statement that assembles the held-back set, from its first line to the retain that applies
 # it. Everything subtracted from the table is named in here, directly or through the function that
@@ -101,7 +101,7 @@ HELD_BACK_REGION = re.compile(r"let mut held_back\s*=(.*?)rows\.retain", re.S)
 # Which files on disk the parse above is answerable for. Both prefixes, because a ledger that this
 # gate cannot see is exactly the defect being fixed and the glob is what makes the miss loud.
 LEDGER_GLOBS = ("rva-map-1162-to-1170*.tsv", "rva-1170-*.tsv")
-# Files those globs catch that `build.rs` genuinely does not read. Each needs a REASON, and each is
+# Files those globs catch that `build.rs` genuinely does not read. Each needs a reason, and each is
 # asserted to still exist -- a pin describing a file that is gone reads as current while covering
 # nothing.
 LEDGERS_NOT_BUILD_INPUTS = {
@@ -117,11 +117,11 @@ LEDGERS_NOT_BUILD_INPUTS = {
     ),
 }
 
-# THE FROZEN CONTROL. `er-build-import-runtime` is the crate the whole defect was found in, and
+# The frozen control. `er-build-import-runtime` is the crate the whole defect was found in, and
 # it declares its 27 game addresses in its own source. The floor is what makes a blinded matcher
-# FAIL rather than report a clean tree: if `rva_usage` stops seeing resolver call sites, or
+# fail rather than report a clean tree: if `rva_usage` stops seeing resolver call sites, or
 # `rva_symbols` stops resolving these names to numbers, this count drops and the run fails loudly.
-# It is a floor, not an equality, so ADDING a native call is not a gate failure.
+# It is a floor, not an equality, so adding a native call is not a gate failure.
 CONTROL_CRATE = "er-build-import-runtime"
 # 37 = the 27 this crate declares itself, plus the 10 it imports from `er-game-base::rva` under a
 # `use ... as` alias. The floor is deliberately set at the aliased total rather than the 27,
@@ -129,7 +129,7 @@ CONTROL_CRATE = "er-build-import-runtime"
 # full coverage over three quarters of the set -- which is the exact shape of the defect this
 # gate was written for.
 CONTROL_MIN_ADDRESSES = 37
-# One address from the control crate, spelled out, so a matcher that finds 27 of the WRONG things
+# One address from the control crate, spelled out, so a matcher that finds 27 of the wrong things
 # still fails. `MsgRepositoryImp::GetWeaponName` -- the getter whose refusal emptied the export.
 CONTROL_ADDRESS = 0xD11370
 
@@ -163,15 +163,15 @@ def _function_body(text: str, name: str) -> str:
 def _held_back_ledgers(text: str, ledgers: dict) -> tuple[set[str], set[str]]:
     """Split the ledgers `build.rs` SUBTRACTS into unconditional ones and verdict-filtered ones.
 
-    THE SPLIT IS THE WHOLE POINT, and it is read off what build.rs does rather than off a name.
+    The split is the whole point, and it is read off what build.rs does rather than off a name.
     `held_back` is assembled from two shapes:
 
         let mut held_back = quarantined(root_dir);
         held_back.extend(refuted_sources(&Path::new(root_dir).join(VERIFIED_MAP)));
 
-    The second names its ledger in the ARGUMENT and drops only the rows carrying one verdict, so
+    The second names its ledger in the argument and drops only the rows carrying one verdict, so
     that ledger is still a source of coverage -- it is `refuted` that decides row by row. The first
-    names no ledger at all: the reader holds its own path, and EVERY row it carries is withdrawn.
+    names no ledger at all: the reader holds its own path, and every row it carries is withdrawn.
     That is a quarantine, and it is the one this gate used to miss entirely because the constant is
     spelled `QUARANTINE` rather than `*_MAP*`.
     """
@@ -197,10 +197,10 @@ def _held_back_ledgers(text: str, ledgers: dict) -> tuple[set[str], set[str]]:
 
 
 def assert_ledgers_accounted(ledgers: dict) -> None:
-    """Every ledger on DISK is read, subtracted, or pinned as not-a-build-input. No fourth case.
+    """Every ledger on disk is read, subtracted, or pinned as not-a-build-input. No fourth case.
 
     A widened regex is still a regex. This is the assertion that a ledger cannot go missing by
-    SPELLING again: the check is against the files that exist, so hiding one from the parse -- by a
+    spelling again: the check is against the files that exist, so hiding one from the parse -- by a
     narrower pattern, a renamed constant, a moved path -- fails here instead of quietly shrinking
     the set of addresses this gate believes are unusable.
     """
@@ -233,7 +233,7 @@ def assert_ledgers_accounted(ledgers: dict) -> None:
 
 
 def read_build_vocabulary() -> dict:
-    """Ledger paths WITH THEIR ROLES, and the refuted-verdict word, parsed out of `build.rs`."""
+    """Ledger paths with their roles, and the refuted-verdict word, parsed out of `build.rs`."""
     text = BUILD_RS.read_text(encoding="utf-8", errors="replace")
     ledgers = dict(LEDGER_DECLARATION.findall(text))
     if not ledgers:
@@ -266,11 +266,11 @@ def read_build_vocabulary() -> dict:
         )
     return {
         "ledgers": ledgers,
-        # The maps rows are COUNTED from. Named `paths` because that is what the rest of this file
+        # The maps rows are counted from. Named `paths` because that is what the rest of this file
         # has always called them; what changed is that the set is now a subtraction of roles rather
         # than a match on the letters `MAP`.
         "paths": {name: ledgers[name] for name in sorted(set(ledgers) - unwired - quarantine)},
-        # Read row-for-row and REMOVED. Every address in here is unusable on 1.17 by a human
+        # Read row-for-row and removed. Every address in here is unusable on 1.17 by a human
         # decision, which is a stronger statement than "no row exists yet".
         "quarantine": {name: ledgers[name] for name in sorted(quarantine)},
         "unwired": sorted(unwired),
@@ -309,19 +309,19 @@ def _normalise(source: int) -> int:
 
 
 def callable_sources(vocab: dict) -> tuple[set[int], set[int], set[int]]:
-    """1.16.2 RVAs the generated CALL table can answer, and the two ways it refuses them.
+    """1.16.2 RVAs the generated call table can answer, and the two ways it refuses them.
 
     `build.rs::emit_address_map` seeds the call map from the curated ledger, then adds every row
     of the function and data maps it does not already hold, then SUBTRACTS two things:
 
-    * sources any verdict table marks with the refuted verdict -- a comparison that RAN and
+    * sources any verdict table marks with the refuted verdict -- a comparison that ran and
       disagreed, so the row is positive evidence of a wrong address rather than a missing one;
-    * every source in the QUARANTINE ledger, whose rows verify and are withheld anyway because the
-      HANDLER at that address turned out to be stale on 1.17.
+    * every source in the quarantine ledger, whose rows verify and are withheld anyway because the
+      handler at that address turned out to be stale on 1.17.
 
     Both leave the address unanswerable at runtime, which is the only question this gate asks. The
     second was not read here at all until 2026-08-31, so a quarantined address -- one a human had
-    deliberately withdrawn, with a reason written beside it -- was reported COVERED.
+    deliberately withdrawn, with a reason written beside it -- was reported covered.
     """
     have: set[int] = set()
     refused: set[int] = set()
@@ -353,16 +353,16 @@ def audit(vocab: dict | None = None) -> dict:
     index = rva_symbols.index()
 
     # Which names each crate hands to an address resolver. Test modules are skipped: a test may
-    # name an address precisely to assert the workspace does NOT use it.
+    # name an address precisely to assert the workspace does not use it.
     wanted: dict[str, dict[str, set[int]]] = {}
     unresolved: dict[str, set[str]] = {}
     all_paths = sorted(ROOT.glob("crates/**/*.rs"))
-    # FILES THAT ARE A FOREIGN MODULE ARE NOT PRICED AGAINST THE GAME MAP.
+    # Files that are a foreign module are not priced against the game map.
     #
     # `er-invasion-warp` resolves four RVAs against Seamless Co-op's base, not the game's:
     # `GetModuleHandleA("ersc.dll")` + `0x241a0` / `0x25850` / `0x258d0` / `0xad6e0`. Priced against
     # the 1.17 eldenring.exe map they are of course absent, and this gate reported
-    # `er-invasion-warp 0/5 ZERO COVERAGE -- every call it makes is refused at runtime and the
+    # `er-invasion-warp 0/5 zero coverage -- every call it makes is refused at runtime and the
     # feature is silently inert`. That verdict was a category error in the GATE: the addresses are
     # correct, they simply describe a different module.
     #
@@ -409,7 +409,7 @@ def audit(vocab: dict | None = None) -> dict:
             if values:
                 wanted.setdefault(crate, {}).setdefault(name, set()).update(values)
             else:
-                # NOT dropped. A name this gate cannot price is a name it cannot check, and
+                # Not dropped. A name this gate cannot price is a name it cannot check, and
                 # silently skipping it is the same invisibility the gate exists to end -- it is
                 # how 27 addresses went unnoticed in the first place. Measured: dropping these
                 # quietly hid ten real addresses that `er-build-import-runtime` imports under an
@@ -430,7 +430,7 @@ def _values_of(index, name: str) -> set[int]:
 
     The alias hop is not a nicety. `er-build-import-runtime` reaches ten of its game functions as
     `use er_game_base::rva::GET_EQUIP_INVENTORY_DATA_RVA as GET_EQUIP_INVENTORY_DATA;` and then
-    calls the SHORT name, which is declared nowhere. Without this the gate prices 27 of that
+    calls the short name, which is declared nowhere. Without this the gate prices 27 of that
     crate's 37 addresses and calls it full coverage.
     """
     values: set[int] = set()
@@ -482,7 +482,7 @@ def report(result: dict, show_gaps: bool) -> None:
         print(f"  {crate:<{width}}  {mapped:3d}/{total:3d}  {pct:5.1f}%{flag}")
         if show_gaps:
             for name, rva in gaps:
-                # WHY it is unmapped is the difference between "nobody has mapped this yet" and
+                # Why it is unmapped is the difference between "nobody has mapped this yet" and
                 # "somebody read the handler and withdrew it"; only the second names a decision.
                 why = "  QUARANTINED" if rva in quarantined else ""
                 print(f"      unmapped 0x{rva:x}  {name}{why}")
@@ -506,11 +506,11 @@ def verdict(result: dict) -> int:
                 f"First few: " + ", ".join(f"{n} 0x{r:x}" for n, r in gaps[:4])
             )
 
-    # A QUARANTINED address a crate still CALLS fails on its own, at any coverage level.
+    # A QUARANTINED address a crate still calls fails on its own, at any coverage level.
     #
     # It is not the ordinary gap. An address with no row yet is a thing nobody has got to; a row in
     # the quarantine ledger is a human who read the handler, found it stale on 1.17, and withdrew
-    # the mapping ON PURPOSE -- `build.rs` drops it from the table and the call then refuses. Left
+    # the mapping on purpose -- `build.rs` drops it from the table and the call then refuses. Left
     # to the zero-coverage rule alone, withdrawing one of `er-build-import-runtime`'s 45 addresses
     # would print 44/45, pass, and leave exactly the silent-inert call this whole gate was written
     # after. Quarantining an address something still calls is a decision about that FEATURE: either
@@ -587,8 +587,8 @@ def selftest() -> int:
     check("...and is fully mapped today", (total, mapped) == (total, total), True)
     check("...and the live tree passes", verdict(live), 0)
 
-    # NON-VACUITY. Blind `rva_usage` exactly the way the four historical misses blinded the older
-    # tools -- make the resolver call sites unmatchable -- and the run MUST fail. If it still
+    # Non-VACUITY. Blind `rva_usage` exactly the way the four historical misses blinded the older
+    # tools -- make the resolver call sites unmatchable -- and the run must fail. If it still
     # passes, every assertion above is decoration.
     keep = rva_usage.RESOLVERS
     try:
@@ -604,12 +604,12 @@ def selftest() -> int:
     finally:
         rva_usage.RESOLVERS = keep
 
-    # THE QUARANTINE CONTROL. Until 2026-08-31 this gate never opened the quarantine ledger, so an
+    # The quarantine control. Until 2026-08-31 this gate never opened the quarantine ledger, so an
     # address a human had deliberately withdrawn -- reason written beside it -- was reported
-    # COVERED. It was invisible because that ledger has no data rows: with none, reading it and not
+    # covered. It was invisible because that ledger has no data rows: with none, reading it and not
     # reading it produce the same answer. Plant one and the two answers must diverge.
     #
-    # The row names the FROZEN CONTROL ADDRESS, which the live tree covers today (asserted below,
+    # The row names the frozen control address, which the live tree covers today (asserted below,
     # first, so the mutant is not proving something that was already false).
     import tempfile
 
@@ -650,13 +650,13 @@ def selftest() -> int:
             1,
         )
 
-    # THE LEDGER-DISCOVERY CONTROL, in the shape of the defect itself. This is the exact matcher
+    # The ledger-discovery control, in the shape of the defect itself. This is the exact matcher
     # this file used to discover ledgers with, spelled out as a literal rather than composed from
     # the live one -- a control assembled from the live pattern widens when it widens, and then
     # "the old matcher misses this" quietly becomes "the new matcher misses this".
     legacy = re.compile(r'const\s+(\w*MAP\w*)\s*:\s*&str\s*=\s*"([^"]+)"')
-    # ...and a second mutant that hides ONE ordinary map, to prove the assertion is about files on
-    # disk rather than about the word QUARANTINE.
+    # ...and a second mutant that hides one ordinary map, to prove the assertion is about files on
+    # disk rather than about the word quarantine.
     hides_the_data_map = re.compile(
         r'const\s+(\w+)\s*:\s*&str\s*=\s*"([^"]*docs/recon/(?!rva-map-1162-to-1170\.data)[^"]+\.tsv)"'
     )
@@ -681,7 +681,7 @@ def selftest() -> int:
                     )
         finally:
             globals()["LEDGER_DECLARATION"] = saved_declaration
-    # NON-VACUITY of the two above: unpatched, the same call must succeed.
+    # Non-VACUITY of the two above: unpatched, the same call must succeed.
     try:
         read_build_vocabulary()
     except VocabularyError as raised:

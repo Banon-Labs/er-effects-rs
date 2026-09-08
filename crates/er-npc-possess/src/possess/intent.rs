@@ -1,4 +1,4 @@
-//! WHERE THE POSSESSED CREATURE IS TOLD TO GO, and the four fields that takes.
+//! Where the possessed creature is told to go, and the four fields that takes.
 //!
 //! # The one field that decides whether anything happens
 //!
@@ -16,11 +16,11 @@
 //! the last goal left, which for a fresh spawn is `0`: a perfect `wantToMoveTo`, written every
 //! frame, consumed by a branch that never runs.
 //!
-//! `GetMoveType` is the other half of that gate and is NOT ours to set -- it comes from the
+//! `GetMoveType` is the other half of that gate and is not ours to set -- it comes from the
 //! creature's own `NpcParam` row, so a creature the game ships as stationary stays stationary and
 //! that is correct. See [`crate::possess::layout::ai_ins`] for the byte proof of all of it.
 //!
-//! # WHICH WAY IS FORWARD: the sign, and its two proofs
+//! # which way is FORWARD: the sign, and its two proofs
 //!
 //! `forward = (-sin yaw, 0, -cos yaw)`. The minus signs are not a convention someone picked; they
 //! are read out of the binary twice, by routes that share nothing.
@@ -36,7 +36,7 @@
 //! into `aiIns+0xc3f0` (`FUN_1402c6850` writes `param_1[0x187e]`, i.e. byte `0xc3f0`). `[vt+0x50]`
 //! then forms the frame's turn delta as `aiIns[0xc3f0] - ChrIns::GetOrientation()`. A body that
 //! already faces `d` must produce a zero delta, so `GetOrientation().y = atan2(d.x, d.z) + PI`,
-//! and inverting that gives `d = (-sin yaw, 0, -cos yaw)`. The `+ PI` IS the minus sign.
+//! and inverting that gives `d = (-sin yaw, 0, -cos yaw)`. The `+ PI` is the minus sign.
 //!
 //! **Route two -- the engine's own "which way is this character facing".** `GetForward` is
 //! `CS::ChrCtrl::GetPhysicsOrientation`, which builds the rotation matrix from
@@ -44,28 +44,28 @@
 //! `+Z` basis vector XOR'd with `(-0.0, -0.0, -0.0, -0.0)`, i.e. **negated**. So the character's
 //! forward is minus the image of local `+Z`: the models face local `-Z`.
 //!
-//! # `right` WAS ALSO WRONG, and the note here used to say otherwise
+//! # `right` was also wrong, and the note here used to say otherwise
 //!
 //! An earlier version of this section concluded that `right` did not need changing, deriving
 //! `forward x up = (cos yaw, 0, -sin yaw)` and calling that the image of local `+X`. The
 //! arithmetic is right and the conclusion is wrong, which is the worst shape a note can have: it
-//! reads as proof. `forward x up` is the RIGHT-hand-rule construction, and Elden Ring is
+//! reads as proof. `forward x up` is the right-hand-rule construction, and Elden Ring is
 //! left-handed (`+X` right, `+Y` up, `+Z` forward), so in this basis that cross product yields
-//! LEFT. A model whose nose is local `-Z` -- which the forward proof above establishes -- has its
+//! left. A model whose nose is local `-Z` -- which the forward proof above establishes -- has its
 //! right hand at local `-X`, not `+X`.
 //!
 //! So `right = (-cos yaw, 0, sin yaw)`, the negation of what shipped between 2026-09-02 and the
 //! fix below.
 //!
-//! **The evidence for this one is the OBSERVABLE, and that is stated rather than dressed up.**
+//! **The evidence for this one is the observable, and that is stated rather than dressed up.**
 //! There is no `GetRight`/`GetSide` export to pair with `GetForward` -- searched, none exists --
 //! and the one binary route that looked promising is ambiguous: `CalcSelfToDirectionPos` sets
-//! `AI_DIR_TYPE_L` to `-row1`, which WOULD settle it, except that the same switch sets
+//! `AI_DIR_TYPE_L` to `-row1`, which would settle it, except that the same switch sets
 //! `AI_DIR_TYPE_F` to `+row3` while `GetPhysicsOrientation` proves the body's forward is `-row3`.
 //! Those two cannot both be the body's own frame, so the `DIR_TYPE` frame is rotated by something
 //! this note cannot pin, and reading `L` out of it would be a guess wearing a citation.
 //!
-//! What is not ambiguous: pressing A (`stick.x = -1`) rotated every creature CLOCKWISE viewed
+//! What is not ambiguous: pressing A (`stick.x = -1`) rotated every creature clockwise viewed
 //! from above -- toward its own right -- consistently and across creature types. A left input that
 //! turns the body right is a sign error on the lateral vector and nothing else. The handedness
 //! argument above agrees with that measurement, which is why it is kept; the measurement is what
@@ -85,13 +85,13 @@
 //! ```
 //!
 //! A possessed creature has no follow-path target -- building one is `FUN_1402c65e0`, the third
-//! thing `MoveTo` does and the one this crate does NOT reproduce -- so both predicates are false
+//! thing `MoveTo` does and the one this crate does not reproduce -- so both predicates are false
 //! and the third branch is the live one. [`IntentWrite`] still emits `pathData->target` as well as
 //! `wantToMoveTo`, with the same value, because the two can never disagree when they are one
 //! number written twice and it is the branch-two answer for free. Only branch one still escapes
 //! us, and no field write reaches it.
 //!
-//! # `turnTarget` IS a steering wheel, in exactly one of its values
+//! # `turnTarget` is a steering wheel, in exactly one of its values
 //!
 //! An earlier version of this note said writing `turnTarget` steers nothing, because the named
 //! points an `AiTargetPointType` selects stop being refreshed once goal selection is dead. That is
@@ -106,7 +106,7 @@
 //!
 //! # Nothing here writes a velocity
 //!
-//! The move vector `[vt+0x50]` builds is a normalised DIRECTION, transformed by the body's model
+//! The move vector `[vt+0x50]` builds is a normalised direction, transformed by the body's model
 //! matrix and handed to `CSChrActionRequestModule` -- the same request module the player's own pad
 //! feeds. The behaviour graph turns that into locomotion clips and their root motion moves the
 //! body. There is no velocity anywhere on the path, which is why `[movement]` no longer carries a
@@ -120,7 +120,7 @@ use crate::possess::layout::ai_ins;
 /// How far ahead of the creature the move target is placed, in physics-space units, at full stick
 /// deflection and `speed_scale = 1.0`.
 ///
-/// It is a LEASH, not a speed: the engine walks toward the point and stops on arrival, so a short
+/// It is a leash, not a speed: the engine walks toward the point and stops on arrival, so a short
 /// reach means a creature that keeps arriving and re-departing (visible stutter) and a long one
 /// means a creature that keeps running for a while after the stick is released. Eight units is
 /// roughly two of the range bands' "close" figure and holds a continuous walk at 60fps with a
@@ -136,7 +136,7 @@ const QUATERNION_NORM_MIN: f32 = 0.9;
 /// The widest squared norm [`yaw_of_quaternion`] will still call a unit quaternion.
 const QUATERNION_NORM_MAX: f32 = 1.1;
 
-/// What `[vt+0x50]` multiplies the move vector by for the WALK gait, and the reason there are two
+/// What `[vt+0x50]` multiplies the move vector by for the walk gait, and the reason there are two
 /// moving gaits at all.
 ///
 /// `DAT_14329e980`, byte-read out of `eldenring-deobf.bin` as `(0.5, 0.5, 0.5, 0.5)` -- a splatted
@@ -222,7 +222,7 @@ impl Stick {
 
     /// The angle off the body's own forward, in radians, `-PI..=PI`.
     ///
-    /// The stick is read CREATURE-RELATIVE -- `y` is the body's forward and `x` its right -- so
+    /// The stick is read creature-relative -- `y` is the body's forward and `x` its right -- so
     /// "how far off-heading is this push" needs no yaw and no world transform; it is the stick's
     /// own angle. That is the number `[movement].turn_deadzone_deg` is expressed in.
     #[must_use]
@@ -238,25 +238,25 @@ impl Stick {
 /// discipline expected of the caller.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct IntentWrite {
-    /// The physics-space point to walk to. The MOVEMENT vector the driver stages at
+    /// The physics-space point to walk to. The movement vector the driver stages at
     /// `ComManipulator+0x140` is measured from here, and that staging is what moves the body.
     ///
-    /// It is NOT written to any game field. The engine has its own staging into the same slot,
+    /// It is not written to any game field. The engine has its own staging into the same slot,
     /// built from `wantToMoveTo` -- i.e. from [`Self::aim`] -- but only on the frames `walkType`
     /// survives the goal churn, and ours is written every frame. With an aim in force and the
     /// stick pushed off-forward the two disagree; that contest is not new, and the resolution has
     /// not changed.
     pub(crate) target: [f32; 3],
-    /// The physics-space point to FACE. Written to `AiIns.wantToMoveTo` AND to
+    /// The physics-space point to face. Written to `AiIns.wantToMoveTo` and to
     /// `AiIns.pathData->target`.
     ///
     /// Equal to [`Self::target`] unless [`Self::aiming_at`] has replaced it, which is the whole
     /// of the aim bridge: `[vt+0x50]` differences `aiIns+0xc3f0` against the body's live
-    /// orientation OUTSIDE the `walkType` gate, and `+0xc3f0` is written by `UpdateMovement`'s
+    /// orientation outside the `walkType` gate, and `+0xc3f0` is written by `UpdateMovement`'s
     /// closing `FUN_1402c9410(aiIns, turnTarget)` from `wantToMoveTo - GetPhysicsPosition()`. So
     /// this field is the only steering wheel the body has, and it steers with the gait stopped.
     pub(crate) aim: [f32; 3],
-    /// `AiIns.walkType`. **THE GATE**: `0` and the engine builds no move vector at all, whatever
+    /// `AiIns.walkType`. **the gate**: `0` and the engine builds no move vector at all, whatever
     /// `target` says. `1` walks, `2` runs.
     pub(crate) walk_type: i32,
     /// `AiIns.turnTarget`, always [`TURN_TARGET_SELF`] -- it means "face wherever `wantToMoveTo`
@@ -334,7 +334,7 @@ impl IntentWrite {
 /// agree in the steady state, and the two converge whenever they do not.
 ///
 /// `turn_deadzone_deg` is `[movement].turn_deadzone_deg`: a push closer to straight ahead than
-/// this is treated as EXACTLY straight ahead. The engine derives the body's facing from the target
+/// this is treated as exactly straight ahead. The engine derives the body's facing from the target
 /// this function returns, so without a floor a stick a couple of degrees off centre is a standing
 /// request to turn, and the body weaves down a corridor it was asked to walk straight along.
 /// Snapping to the heading makes the derived turn delta exactly zero.
@@ -366,7 +366,7 @@ pub(crate) fn intent(
     };
     let (sin, cos) = yaw.sin_cos();
     // forward * stick.y + right * stick.x, with forward = (-sin, -cos) and right = (-cos, sin).
-    // BOTH basis vectors are negated against the naive reading; see the module note for which
+    // Both basis vectors are negated against the naive reading; see the module note for which
     // evidence pins which.
     let dx = (-cos).mul_add(stick.x, -sin * stick.y);
     let dz = sin.mul_add(stick.x, -cos * stick.y);
@@ -390,14 +390,14 @@ pub(crate) fn intent(
 
 /// A point `distance` in front of a character facing `yaw`, at the same height.
 ///
-/// THE SAME BASIS AS [`intent`], and that is the whole reason it lives here rather than beside its
+/// The same basis as [`intent`], and that is the whole reason it lives here rather than beside its
 /// caller: `forward = (-sin yaw, 0, -cos yaw)`. A second copy of that convention, written from the
 /// same description, is exactly how a sign error gets in -- and the failure is a creature spawned
 /// behind the player, which reads as "the spawn did nothing". That is not hypothetical: it is what
 /// this function did until 2026-09-02, and the user's report of it ("the spawned enemy definitely
 /// is behind the player") is what found the sign.
 ///
-/// Height is COPIED, never offset. A spawn point raised off the player's own footing is a creature
+/// Height is copied, never offset. A spawn point raised off the player's own footing is a creature
 /// dropped from a height, and the ground under it is not known here.
 #[must_use]
 pub(crate) fn ahead_of(position: [f32; 3], yaw: f32, distance: f32) -> [f32; 3] {
@@ -415,7 +415,7 @@ pub(crate) fn ahead_of(position: [f32; 3], yaw: f32, distance: f32) -> [f32; 3] 
 
 /// How far in front of the creature the camera aim point is placed, in physics-space units.
 ///
-/// A FACING target, not a walk target: the engine turns toward `wantToMoveTo` and this distance
+/// A facing target, not a walk target: the engine turns toward `wantToMoveTo` and this distance
 /// only has to be long enough that the direction to it is not swamped by the body's own radius.
 /// `[vt+0x50]` calls a target closer than `hitRadius * 0.01` "arrived"; thirty units clears that
 /// for every creature the game ships.
@@ -434,12 +434,12 @@ const LOCK_ON_MIN_DISTANCE: f32 = 0.1;
 /// `cos(60 degrees)`: how far off the camera's own look direction a lock-on point may sit and
 /// still be treated as the thing the player is aiming at.
 ///
-/// **This is the freshness test, and it is why no lock-on STATE has to be read.** Nothing clears
+/// **This is the freshness test, and it is why no lock-on state has to be read.** Nothing clears
 /// `ChrIns+0xd0 lockOnTargetPos` when a lock is dropped, so the field alone cannot say whether it
 /// describes now or ten seconds ago -- and the handle the rest of this crate reads for that,
 /// `PlayerIns+0x6b0`, is not written during a possession at all: `FUN_140716260` gates that store
-/// on `IsMainPlayerIns(subject)`, which is FALSE once `camOverrideChrIns` has made the creature
-/// the subject. But lock-on DRIVES the camera, so a live lock point and the camera always agree.
+/// on `IsMainPlayerIns(subject)`, which is false once `camOverrideChrIns` has made the creature
+/// the subject. But lock-on drives the camera, so a live lock point and the camera always agree.
 /// A stale one agrees only while the player still happens to be looking that way, in which case
 /// using it is right anyway.
 const LOCK_ON_AGREEMENT_COS: f32 = 0.5;
@@ -477,11 +477,11 @@ pub(crate) struct Aim {
 ///
 /// `look_yaw` is `ChrExFollowCam+0x154 anglesEuler.y` (see [`crate::camera::game::look_yaw`]),
 /// which the engine computes as `atan2(look.x, look.z)`; `lock_on` is `ChrIns+0xd0
-/// lockOnTargetPos` read off the POSSESSED CREATURE, which is a physics-space point because
+/// lockOnTargetPos` read off the possessed creature, which is a physics-space point because
 /// possession has made the creature the lock-on subject. `None` when the camera is unreadable,
-/// which leaves the OLD behaviour -- face wherever you were told to walk -- exactly in place.
+/// which leaves the old behaviour -- face wherever you were told to walk -- exactly in place.
 ///
-/// # THE SIGN, WHICH IS THE ONE THING HERE THAT CAN BE SILENTLY WRONG
+/// # the sign, which is the one thing here that can be silently wrong
 ///
 /// The camera angle and the character heading are the same angle plus PI, and this is the only
 /// place the two meet. `angleOnXZPlane` is `atan2f(v.x, v.z)`, so the look direction is
@@ -491,13 +491,13 @@ pub(crate) struct Aim {
 ///
 /// # Why an NPC needs this at all
 ///
-/// Because the camera-to-aim path the player gets is gated on being a player, by TYPE. The bullet
+/// Because the camera-to-aim path the player gets is gated on being a player, by type. The bullet
 /// spawn orientation comes from `FUN_1403fb0b0`, whose first line is
 /// `ChrCtrl::GetPhysicsOrientation` -- the body's facing -- and which only adjusts that by the
 /// camera when `(*chr->vfptr->IsPlayerIns)(chr)` is true. That is a virtual on the `ChrIns`
 /// vtable, false for every `EnemyIns`, and `camOverrideChrIns` cannot move it: the override is a
-/// POINTER the ~40 `GetMainPlayerIns` consumers follow, not a change of class. So a possessed
-/// creature's attacks fly along its BODY FACING, always, and the only way to aim them is to turn
+/// pointer the ~40 `GetMainPlayerIns` consumers follow, not a change of class. So a possessed
+/// creature's attacks fly along its body facing, always, and the only way to aim them is to turn
 /// the body.
 #[must_use]
 pub(crate) fn aim(
@@ -596,7 +596,7 @@ pub(crate) fn yaw_of_quaternion(q: [f32; 4]) -> Option<f32> {
     let row3_z = 2.0f32.mul_add(-x.mul_add(x, y * y), 1.0);
     // A body pitched onto its nose has its local +Z pointing straight down and no horizontal
     // heading at all. `atan2` would answer 0 there -- a silent claim that it faces -Z -- so the
-    // horizontal component has to be long enough to have a direction. The threshold is a LENGTH
+    // horizontal component has to be long enough to have a direction. The threshold is a length
     // and not an equality test because the components are computed, so a nose-down quaternion
     // lands a few ULP off zero rather than on it.
     if row3_x.hypot(row3_z) < HEADING_MIN_HORIZONTAL {
@@ -614,7 +614,7 @@ mod tests {
         (a - b).abs() < 1e-3
     }
 
-    /// [`intent`] with the turn deadzone OFF.
+    /// [`intent`] with the turn deadzone off.
     ///
     /// Every test that is not about the deadzone uses this, so a widened default can never
     /// silently straighten a push a basis test meant to be off-heading -- which would turn a real
@@ -627,8 +627,8 @@ mod tests {
     /// yaw 0 faces. The field is `atan2(look.x, look.z)`, so `atan2(0, -1)` is PI.
     const LOOK_YAW_MINUS_Z: f32 = core::f32::consts::PI;
 
-    /// THE INVARIANT THE WHOLE AIM BRIDGE RESTS ON: aiming moves what the body FACES and leaves
-    /// what it WALKS TOWARD exactly alone.
+    /// The invariant the whole aim bridge rests ON: aiming moves what the body faces and leaves
+    /// what it walks toward exactly alone.
     ///
     /// The driver measures the move vector it stages at `ComManipulator+0x140` from
     /// [`IntentWrite::target`], and that vector is the only thing that moves the body. If
@@ -671,7 +671,7 @@ mod tests {
     }
 
     /// With no lock, the aim is the camera's own look direction -- and it is expressed in the
-    /// SAME basis the body walks in, so `ahead_of` reproduces the point from the yaw.
+    /// same basis the body walks in, so `ahead_of` reproduces the point from the yaw.
     #[test]
     fn the_camera_alone_aims_the_body_where_the_camera_looks() {
         let at = [10.0, 5.0, -20.0];
@@ -685,7 +685,7 @@ mod tests {
         assert!(close(aim.point[2], placed[2]), "{aim:?}");
     }
 
-    /// THE SIGN, PINNED AT EVERY ANGLE RATHER THAN AT ONE.
+    /// The sign, pinned at every angle rather than at one.
     ///
     /// The camera field is `atan2(look.x, look.z)` and the body's heading for that same direction
     /// is `atan2(-look.x, -look.z)`; a flipped sign or a swapped pair still passes a single-angle
@@ -713,7 +713,7 @@ mod tests {
         }
     }
 
-    /// No camera means no aim, which leaves the OLD behaviour in place rather than spinning the
+    /// No camera means no aim, which leaves the old behaviour in place rather than spinning the
     /// body about an invented yaw. Same for a junk angle or a junk position.
     #[test]
     fn an_unreadable_camera_or_position_produces_no_aim() {
@@ -727,7 +727,7 @@ mod tests {
         );
     }
 
-    /// A lock point the camera agrees with wins, and the aim is at the POINT rather than at a
+    /// A lock point the camera agrees with wins, and the aim is at the point rather than at a
     /// fixed distance along the camera -- which is the whole reason to prefer it.
     #[test]
     fn a_lock_point_the_camera_agrees_with_is_the_aim() {
@@ -743,7 +743,7 @@ mod tests {
         );
     }
 
-    /// THE FRESHNESS TEST. `lockOnTargetPos` is never cleared, so a point the player has since
+    /// The freshness test. `lockOnTargetPos` is never cleared, so a point the player has since
     /// turned away from is stale -- and the only evidence available for that, with the lock-on
     /// handle unwritten during a possession, is that it disagrees with the camera.
     #[test]
@@ -776,7 +776,7 @@ mod tests {
         assert_eq!(just_inside.source, AimSource::LockOn);
     }
 
-    /// The spawn point uses the SAME basis as the movement target, and in front means in front.
+    /// The spawn point uses the same basis as the movement target, and in front means in front.
     /// A sign error here spawns the creature behind the player, which is indistinguishable from
     /// the spawn having done nothing.
     #[test]
@@ -867,13 +867,13 @@ mod tests {
         let right = drive(at, 0.0, Stick::from_axes(1.0, 0.0), 1.0);
         assert!(close(right.target[0], -REACH), "{:?}", right.target);
         assert!(close(right.target[2], 0.0), "{:?}", right.target);
-        // ...and LEFT is the other way, which is the whole of the bug this pins: pressing A used
+        // ...and left is the other way, which is the whole of the bug this pins: pressing A used
         // to send the body clockwise, toward its own right.
         let left = drive(at, 0.0, Stick::from_axes(-1.0, 0.0), 1.0);
         assert!(close(left.target[0], REACH), "{:?}", left.target);
     }
 
-    /// THE OBSERVABLE, as an assertion. At yaw 0 the body faces `-Z`; a LEFT push must send it to
+    /// The observable, as an assertion. At yaw 0 the body faces `-Z`; a left push must send it to
     /// the `+X` side of that heading, which is counter-clockwise viewed from above. This is the
     /// test that fails if anyone re-derives `right` from `forward x up` and trusts the answer.
     #[test]
@@ -893,7 +893,7 @@ mod tests {
         }
     }
 
-    /// RELEASING THE STICK MUST STOP THE CREATURE. A stale target is a creature that keeps
+    /// Releasing the stick must stop the creature. A stale target is a creature that keeps
     /// walking after the player let go, which is the single most alarming failure this can have.
     #[test]
     fn no_stick_asks_for_the_creatures_own_position_so_it_stops() {
@@ -942,7 +942,7 @@ mod tests {
         }
     }
 
-    /// THE GATE. A frame that is asking for movement must carry a non-zero `walkType`, because
+    /// The gate. A frame that is asking for movement must carry a non-zero `walkType`, because
     /// zero is the value the engine reads as "build no move vector at all" -- and a target written
     /// under a zero gait is exactly the bug this module was shipped with: perfect coordinates,
     /// consumed by a branch that never runs.
@@ -959,7 +959,7 @@ mod tests {
         }
     }
 
-    /// ...and the inverse: every frame that is NOT moving must carry the stop gait, or the body
+    /// ...and the inverse: every frame that is not moving must carry the stop gait, or the body
     /// keeps walking toward its own position at a non-zero gait after the player let go.
     #[test]
     fn every_non_moving_frame_carries_the_stop_gait_and_the_bodys_own_position() {
@@ -994,7 +994,7 @@ mod tests {
         assert_eq!(gait(1.0, 1.0), ai_ins::WALK_TYPE_RUN);
     }
 
-    /// The turn target is the ONE value that steers, on every frame including the stopped ones --
+    /// The turn target is the one value that steers, on every frame including the stopped ones --
     /// with the stop gait the engine's own branch holds the body's current facing instead, so the
     /// constant does not have to be conditional.
     #[test]
@@ -1046,10 +1046,10 @@ mod tests {
         delta.abs() < 1e-3
     }
 
-    /// THE BASIS, PINNED TO THE BINARY RATHER THAN TO ITS OWN DESCRIPTION.
+    /// The basis, pinned to the binary rather than to its own description.
     ///
     /// The tests above assert that yaw 0 faces `-Z`, which is exactly the shape of assertion that
-    /// let the WRONG sign ship: written from the same prose as the code, it agrees with whatever
+    /// let the wrong sign ship: written from the same prose as the code, it agrees with whatever
     /// the code happens to do. This one is different. It asserts the engine's own equation, read
     /// out of `FUN_1402c9410` (which stores `atan2f(d.x, d.z) + PI` into `aiIns+0xc3f0`) and
     /// `FUN_1403d0250` (which turns the body by `aiIns[0xc3f0] - ChrIns::GetOrientation()`):
@@ -1126,7 +1126,7 @@ mod tests {
         }
     }
 
-    /// THE ZERO QUATERNION MUST BE A REFUSAL. `(0,0,0,0)` is exactly what
+    /// The zero QUATERNION must be a refusal. `(0,0,0,0)` is exactly what
     /// `CSChrPhysicsModule+0x2d0` held on a live character -- the field this crate used to read as
     /// a heading -- and the point of answering `None` is that a dead field can no longer
     /// masquerade as "facing world zero".
@@ -1141,12 +1141,12 @@ mod tests {
         assert_eq!(yaw_of_quaternion([3.0, 0.0, 0.0, 0.0]), None, "not unit");
         assert_eq!(yaw_of_quaternion([f32::NAN, 0.0, 0.0, 1.0]), None);
         assert_eq!(yaw_of_quaternion([0.0, 0.0, f32::INFINITY, 0.0]), None);
-        // A QUARTER turn about X stands the body on its nose: the image of local +Z is straight
+        // A quarter turn about X stands the body on its nose: the image of local +Z is straight
         // down, there is no horizontal heading at all, and answering `0.0` would be a silent claim
         // that it faces -Z.
         let quarter = core::f32::consts::FRAC_1_SQRT_2;
         assert_eq!(yaw_of_quaternion([quarter, 0.0, 0.0, quarter]), None);
-        // A HALF turn about X is upside down but still pointing somewhere horizontal -- forward is
+        // A half turn about X is upside down but still pointing somewhere horizontal -- forward is
         // +Z, i.e. yaw PI -- so that one is an answer and not a refusal.
         let upside_down = yaw_of_quaternion([1.0, 0.0, 0.0, 0.0]).expect("still has a heading");
         assert!(wrapped_close(upside_down, core::f32::consts::PI));

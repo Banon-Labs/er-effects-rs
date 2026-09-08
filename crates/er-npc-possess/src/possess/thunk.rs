@@ -1,4 +1,4 @@
-//! THE VTABLE SWIZZLE: one slot of the creature's own `ComManipulator` vtable replaced, on a
+//! The VTABLE SWIZZLE: one slot of the creature's own `ComManipulator` vtable replaced, on a
 //! patched copy of that table, so its brain stops running and nothing else about it changes.
 //!
 //! # What it is for
@@ -13,13 +13,13 @@
 //! Only slot `+0x48` differs from the creature's own table. Every other entry is copied verbatim,
 //! which is what makes the swizzle invisible to the rest of the engine.
 //!
-//! # WHY THIS REPLACED THE `ChrCtrl+0x3b0` OVERRIDE, MEASURED 2026-09-02
+//! # why this replaced the `ChrCtrl+0x3b0` override, measured 2026-09-02
 //!
-//! The previous design put a separate 55-slot object in `ChrCtrl+0x3b0` -- a manipulator OVERRIDE
+//! The previous design put a separate 55-slot object in `ChrCtrl+0x3b0` -- a manipulator override
 //! slot retail never writes -- whose stubs swapped `rcx` to the real `ComManipulator` and
-//! tail-jumped. Dispatch worked. The problem was that the engine does not only DISPATCH through
+//! tail-jumped. Dispatch worked. The problem was that the engine does not only dispatch through
 //! that slot: fourteen sites resolve `chrManipulator ?? manipulator` and then use the answer as an
-//! OBJECT. Enumerate them with `find-deobf-field-access.py 0x3b0`.
+//! object. Enumerate them with `find-deobf-field-access.py 0x3b0`.
 //!
 //! The publish and the consume are a matched pair, and the `rcx` swap put them on opposite sides:
 //!
@@ -30,7 +30,7 @@
 //!                                       then calls FUN_1403cd770 on the result
 //! ```
 //!
-//! So `[vt+0x50]` published into the REAL object while the consumer read the OVERRIDE's zeroes.
+//! So `[vt+0x50]` published into the real object while the consumer read the override's zeroes.
 //! `FUN_1403cd4c0`, called on the same pointer two lines later, reads `+0x20`..`+0x50` and was
 //! starved identically. Runtime telemetry: `staged == published` on the real object with the body
 //! frozen to five decimals.
@@ -50,14 +50,14 @@
 //! # Why the RTTI pointer is copied too
 //!
 //! MSVC puts the `CompleteObjectLocator` at `vptr[-1]`, and `dynamic_cast` and the
-//! `GetRuntimeClassMetadata` paths read it by walking BACKWARDS off the vtable pointer. A copy
+//! `GetRuntimeClassMetadata` paths read it by walking backwards off the vtable pointer. A copy
 //! that started at slot 0 would leave those reads looking at whatever precedes our allocation, so
 //! the page holds that pointer first and the address we hand out is one slot past it.
 //!
 //! # The one ordering that is a crash
 //!
-//! The page is ours; the OBJECT is the game's. While the swizzle is installed the creature's
-//! manipulator holds a pointer INTO this page, so the original vptr must go back before the page
+//! The page is ours; the object is the game's. While the swizzle is installed the creature's
+//! manipulator holds a pointer into this page, so the original vptr must go back before the page
 //! is freed and before the creature is destroyed. `crate::possess::teardown` sequences that, and
 //! `Step::RestoreManipulatorVtable` is the step whose failure is treated as unrecoverable.
 //!
@@ -74,21 +74,21 @@ pub(crate) const VTABLE_BYTES: usize = 0x1b8;
 
 /// `[vt+0x08]` -- the scalar deleting destructor.
 ///
-/// It is COPIED VERBATIM, and that is a REVERSAL of the previous design. When the override object
+/// It is copied verbatim, and that is a reversal of the previous design. When the override object
 /// was a separate allocation this slot had to return `this` and do nothing, because forwarding it
-/// would have freed the creature's real manipulator. Now the object IS the creature's real
+/// would have freed the creature's real manipulator. Now the object is the creature's real
 /// manipulator, the engine owns its lifetime, and a slot that refused to destroy it would leak the
 /// object and leave a live vptr pointing into a page we free. Verbatim is the only correct answer.
 pub(crate) const SLOT_DESTRUCTOR: usize = 0x08;
 
-/// `[vt+0x48]` -- `UpdateAi`. The ONE slot that is replaced, and the reason the mod works.
+/// `[vt+0x48]` -- `UpdateAi`. The one slot that is replaced, and the reason the mod works.
 pub(crate) const SLOT_UPDATE_AI: usize = 0x48;
 
 /// The slot we replace must not be the slot that destroys the object.
 ///
 /// A `const` assertion rather than a test, because the consequence is not a wrong answer: a
 /// patched table whose destructor pointed at `xor eax,eax; ret` would leak the creature's
-/// manipulator and leave our freed page in its vptr. That should be a BUILD error.
+/// manipulator and leave our freed page in its vptr. That should be a build error.
 const _: () = assert!(SLOT_DESTRUCTOR != SLOT_UPDATE_AI);
 
 /// Bytes reserved for the no-op stub, padded so a fall-through lands on a breakpoint.
@@ -97,7 +97,7 @@ pub(crate) const STUB_STRIDE: usize = 16;
 /// The MSVC RTTI `CompleteObjectLocator` pointer, which lives at `vptr[-1]`.
 ///
 /// Part of the copy even though it is not a slot: `dynamic_cast` and the `GetRuntimeClassMetadata`
-/// paths read it by walking BACKWARDS off the vtable pointer, so a copy that starts at slot 0
+/// paths read it by walking backwards off the vtable pointer, so a copy that starts at slot 0
 /// leaves those reads looking at whatever happens to precede our allocation.
 pub(crate) const RTTI_SLOT_BYTES: usize = core::mem::size_of::<usize>();
 
@@ -108,7 +108,7 @@ const INT3: u8 = 0xcc;
 ///
 /// `xor eax, eax; ret` -- the same body `ComManipulator`'s own `[vt+0xf8]` already has, so it is a
 /// shape the engine tolerates from a manipulator. `rcx` is untouched because with the vtable
-/// swizzled there is nothing to swap: `this` already IS the real `ComManipulator`.
+/// swizzled there is nothing to swap: `this` already is the real `ComManipulator`.
 #[must_use]
 pub(crate) fn no_op_stub_bytes() -> [u8; STUB_STRIDE] {
     let mut out = [INT3; STUB_STRIDE];
@@ -120,7 +120,7 @@ pub(crate) fn no_op_stub_bytes() -> [u8; STUB_STRIDE] {
 
 /// The patched vtable: the creature's own, with [`SLOT_UPDATE_AI`] pointed at the no-op.
 ///
-/// Every other slot is the ORIGINAL function pointer, so there are no stubs, no `rcx` swap and no
+/// Every other slot is the original function pointer, so there are no stubs, no `rcx` swap and no
 /// second object -- which is the whole point. The divergence the previous design created (the
 /// engine writing fields on one object while fourteen consumers read them off another) cannot
 /// exist when there is only one object.
@@ -139,7 +139,7 @@ pub(crate) mod plan {
 
     /// The copied `vptr[-1]` RTTI pointer, first, so the vtable that follows is what we hand out.
     pub(crate) const RTTI_AT: usize = 0;
-    /// The vtable proper. THIS address is what goes in the object's vptr.
+    /// The vtable proper. This address is what goes in the object's vptr.
     pub(crate) const VTABLE_AT: usize = RTTI_AT + RTTI_SLOT_BYTES;
     /// The single no-op stub.
     pub(crate) const STUB_AT: usize = VTABLE_AT + VTABLE_BYTES;
@@ -176,13 +176,13 @@ mod windows_impl {
     const MEM_RELEASE: u32 = 0x8000;
     const PAGE_EXECUTE_READWRITE: u32 = 0x40;
 
-    /// A patched vtable for ONE creature's real `ComManipulator`, plus the original vptr to put
+    /// A patched vtable for one creature's real `ComManipulator`, plus the original vptr to put
     /// back.
     ///
     /// # Lifetime, and the one ordering that is a crash
     ///
-    /// The page is ours; the OBJECT is the game's. While the swizzle is installed the creature's
-    /// manipulator holds a pointer INTO this page, so freeing it before restoring the original
+    /// The page is ours; the object is the game's. While the swizzle is installed the creature's
+    /// manipulator holds a pointer into this page, so freeing it before restoring the original
     /// vptr leaves the engine dispatching through unmapped memory on its next tick. The restore
     /// must therefore run before `Drop`, and the teardown state machine in
     /// [`crate::possess::teardown`] is what enforces that order -- the same guarantee it used to
@@ -211,7 +211,7 @@ mod windows_impl {
             if !unsafe { is_heap_aligned_ptr(original_vptr) } {
                 return None;
             }
-            // The whole table plus the RTTI pointer one slot BEFORE it, every read checked: a
+            // The whole table plus the RTTI pointer one slot before it, every read checked: a
             // manipulator whose table is not fully mapped is one to decline, not one to copy
             // garbage out of.
             let rtti = unsafe { safe_read_usize(original_vptr.checked_sub(RTTI_SLOT_BYTES)?) }?;
@@ -290,7 +290,7 @@ mod tests {
             .collect()
     }
 
-    /// THE SIZE THAT IS A CRASH IF IT IS WRONG. Three oracles say 55 slots / `0x1b8` bytes, and
+    /// The size that is a crash if it is wrong. Three oracles say 55 slots / `0x1b8` bytes, and
     /// the engine reads past a shorter table.
     #[test]
     fn the_vtable_is_fifty_five_slots_and_exactly_0x1b8_bytes() {
@@ -299,7 +299,7 @@ mod tests {
         assert_eq!(SLOT_COUNT * core::mem::size_of::<usize>(), VTABLE_BYTES);
     }
 
-    /// EXACTLY ONE SLOT DIFFERS, and it is `UpdateAi`. Everything else is the creature's own
+    /// Exactly one slot differs, and it is `UpdateAi`. Everything else is the creature's own
     /// function pointer -- that is what makes the swizzle invisible to every consumer, and it is
     /// the property the previous design could not have because it emitted 55 stubs of its own.
     #[test]
@@ -320,10 +320,10 @@ mod tests {
         }
     }
 
-    /// THE SLOT THAT REVERSED MEANING WITH THIS DESIGN, and the one that crashes if it is wrong.
+    /// The slot that reversed meaning with this design, and the one that crashes if it is wrong.
     ///
     /// With a separate override object the destructor had to return `this`, because forwarding it
-    /// would free the creature's real manipulator. The object IS that manipulator now, so the
+    /// would free the creature's real manipulator. The object is that manipulator now, so the
     /// engine's own destructor is the only correct body: refusing it would leak the object and
     /// leave our freed page in its vptr.
     #[test]
@@ -349,7 +349,7 @@ mod tests {
         assert!(!stub.windows(2).any(|pair| pair == [0xff, 0xa0]));
     }
 
-    /// The RTTI pointer is INSIDE the allocation and BEFORE the vtable, or `dynamic_cast` reads
+    /// The RTTI pointer is inside the allocation and before the vtable, or `dynamic_cast` reads
     /// whatever precedes our page.
     #[test]
     fn the_rtti_slot_sits_one_pointer_before_the_vtable() {

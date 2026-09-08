@@ -52,10 +52,10 @@ pub fn picker_dim_cover_factory(label: &str) -> Option<PickerCover> {
     Some(PickerCover::new(owner_hwnd, Box::new(guard)))
 }
 
-/// OS-mode LOAD source: pick a save container, then hand it to the unchanged in-game ingest
+/// OS-mode load source: pick a save container, then hand it to the unchanged in-game ingest
 /// pipeline and stage the slot view exactly as the in-game pick does.
 ///
-/// `SAVE_PICKER_SYSTEM_DIALOG` is stored from the row's action object BEFORE the dialog opens, the
+/// `SAVE_PICKER_SYSTEM_DIALOG` is stored from the row's action object before the dialog opens, the
 /// same way the in-game arm does it: the menu-pump resubmit reopens `05_010` through that dialog and
 /// abandons the reopen if it is 0. `SYSTEM_QUIT_PROFILE_SELECT_WINDOW` is already 0 in OS mode
 /// (there is no picker window), so the resubmit's precondition holds with no window to close.
@@ -92,7 +92,7 @@ pub unsafe fn os_open_save_picker_load(action_obj: usize) -> PickerOpenOutcome {
     // Same flavor filter and the same source of it as the in-game picker and the ingest pipeline.
     let seamless = save_picker_seamless_mode_after_settle("system-quit-os-picker-open");
     let extensions: &[&str] = if seamless { &["co2", "sl2"] } else { &["sl2"] };
-    // Store the owning System dialog BEFORE the blocking call: the menu-pump resubmit needs it, and
+    // Store the owning System dialog before the blocking call: the menu-pump resubmit needs it, and
     // after the dialog returns the action object may no longer be the identity that survives.
     SAVE_PICKER_ACTION_OBJ.store(action_obj, Ordering::SeqCst);
     SAVE_PICKER_SYSTEM_DIALOG.store(
@@ -100,9 +100,9 @@ pub unsafe fn os_open_save_picker_load(action_obj: usize) -> PickerOpenOutcome {
         Ordering::SeqCst,
     );
     SAVE_PICKER_OPEN_COUNT.fetch_add(1, Ordering::SeqCst);
-    // THE ONE COLLAPSE THIS ARM IS ALLOWED: the System>Quit load surface treats a user's Cancel and
+    // The one collapse this arm is ALLOWED: the System>Quit load surface treats a user's Cancel and
     // an unusable comdlg32 identically, because both leave the System menu alone and the row press
-    // that asked for the dialog is spent either way. It does NOT collapse either of them into
+    // that asked for the dialog is spent either way. It does not collapse either of them into
     // `NotOpened` -- that collapse is the reopen loop (bd `er-effects-rs-rsxi`).
     let staged = os_pick_validated(
         false,
@@ -112,7 +112,7 @@ pub unsafe fn os_open_save_picker_load(action_obj: usize) -> PickerOpenOutcome {
         &PickerIntent::LoadSource,
         picker_dim_cover_factory,
         |picked| {
-            // The SECOND gate, unchanged: BND4 parse, SteamID normalization, ProfileSummary
+            // The second gate, unchanged: BND4 parse, SteamID normalization, ProfileSummary
             // preview, candidate staging, picked-dir memory. The predicate above only added the
             // listing gate the dialog bypassed; nothing here is weakened.
             if !unsafe { system_quit_ingest_picked_save(picked) } {
@@ -124,7 +124,7 @@ pub unsafe fn os_open_save_picker_load(action_obj: usize) -> PickerOpenOutcome {
                 return false;
             }
             SAVE_PICKER_PICK_COUNT.fetch_add(1, Ordering::SeqCst);
-            // Hand off to the SAME menu-pump resubmit the in-game pick uses, which reopens `05_010`
+            // Hand off to the same menu-pump resubmit the in-game pick uses, which reopens `05_010`
             // as the normal slot view. Contract 5: the slot view is always ours.
             SAVE_PICKER_OPEN_SLOTS_PENDING.store(1, Ordering::SeqCst);
             append_autoload_debug(format_args!(
@@ -139,26 +139,26 @@ pub unsafe fn os_open_save_picker_load(action_obj: usize) -> PickerOpenOutcome {
         Ok(true) => PickerOpenOutcome::Opened,
         // Nothing staged, the System menu untouched. Restore the preview we armed above so the
         // user's real rows are what the System UI shows. There is no retry latch on this surface --
-        // the row press IS the request -- so a cancel here simply leaves the user standing on the
+        // the row press is the request -- so a cancel here simply leaves the user standing on the
         // System>Quit rows, which is the Back semantics the save-destination surface now matches.
         other => {
             unsafe { system_quit_save_swap_restore_profile_summary("save-picker-os-no-pick") };
             match other {
-                // No dialog ever appeared, so this is NOT a user decision. It used to be counted as
+                // No dialog ever appeared, so this is not a user decision. It used to be counted as
                 // a cancel (every `None` was); now that the two are distinguishable, counting a
                 // refusal as a user's Cancel is just a telemetry lie.
                 Err(OsPickAbort::NotOpened) => PickerOpenOutcome::NotOpened,
-                // A dialog RAN and produced nothing. `SAVE_PICKER_CANCEL_COUNT` is the
+                // A dialog ran and produced nothing. `SAVE_PICKER_CANCEL_COUNT` is the
                 // surface-agnostic "a picker was abandoned" counter, and both halves belong in it;
-                // WHICH half it was is already separated one layer down, by
+                // Which half it was is already separated one layer down, by
                 // `SAVE_PICKER_OS_CANCEL_COUNT` and `SAVE_PICKER_OS_ERROR_COUNT`. Nothing on this
                 // surface acts on the difference -- only the boot arm does.
                 Err(OsPickAbort::Cancelled | OsPickAbort::Failed) => {
                     SAVE_PICKER_CANCEL_COUNT.fetch_add(1, Ordering::SeqCst);
                     PickerOpenOutcome::Dismissed
                 }
-                // The ingest refused a path the listing predicate had accepted: a dialog RAN and
-                // came back, so the request is discharged -- but that is OUR refusal, not the
+                // The ingest refused a path the listing predicate had accepted: a dialog ran and
+                // came back, so the request is discharged -- but that is our refusal, not the
                 // user's, and `SAVE_PICKER_PICK_REJECT_COUNT` already counted it.
                 Ok(_) => PickerOpenOutcome::Dismissed,
             }
@@ -166,13 +166,13 @@ pub unsafe fn os_open_save_picker_load(action_obj: usize) -> PickerOpenOutcome {
     }
 }
 
-/// OS-mode SAVE DESTINATION: the Save-As dialog IS the destination browser.
+/// OS-mode save DESTINATION: the Save-As dialog is the destination browser.
 ///
 /// Menu-pump owned, exactly like the in-game destination open: called from
 /// `system_quit_menu_window_run_post` after the save-flow tick stages
 /// `SAVE_DEST_OPEN_PICKER_PENDING`.
 ///
-/// Three things this deliberately does NOT do, each of which would be a bug:
+/// Three things this deliberately does not do, each of which would be a bug:
 ///
 ///  * it never calls `save_picker_native_close`. There is no picker window in OS mode, and handing
 ///    the System dialog to that helper would dispatch the MenuWindow cancel-close vfunc on a
@@ -181,9 +181,9 @@ pub unsafe fn os_open_save_picker_load(action_obj: usize) -> PickerOpenOutcome {
 ///  * it never writes `SAVE_FLOW_STAGE`. The in-game arm does, from the menu thread, bypassing
 ///    `save_flow_enter_stage` -- a filed defect (bd `er-effects-rs-8tq4` item 15). Adding a second
 ///    instance of a known defect is not "keeping the modes symmetric". It sets
-///    `SAVE_DEST_CONFIRM_PENDING` and the TICK performs the transition.
+///    `SAVE_DEST_CONFIRM_PENDING` and the tick performs the transition.
 ///  * it stages nothing at all on cancel. Dropping the dialog claim with no latch set is precisely
-///    what stage 3 reads as "the user abandoned the save". That was TRUE of the latches and FALSE
+///    what stage 3 reads as "the user abandoned the save". That was true of the latches and false
 ///    of the request: the menu pump's `SAVE_DEST_OPEN_PICKER_PENDING` stayed armed through the
 ///    cancel and reopened the dialog on the next pump, ~57 ms later, forever (bd
 ///    `er-effects-rs-rsxi`). The cancel path still needs no latch of its own -- what it needs is to
@@ -202,7 +202,7 @@ pub unsafe fn os_open_save_dest_picker(system_dialog: usize) -> PickerOpenOutcom
         ));
         return PickerOpenOutcome::NotOpened;
     }
-    // The SAME start-dir/leaf resolution the in-game destination browser uses, so the two modes
+    // The same start-dir/leaf resolution the in-game destination browser uses, so the two modes
     // cannot open in different places.
     let Some(SaveDestOrigin {
         start_dir,
@@ -239,7 +239,7 @@ pub unsafe fn os_open_save_dest_picker(system_dialog: usize) -> PickerOpenOutcom
         picker_dim_cover_factory,
         |picked| {
             let target = PathBuf::from(picked);
-            // The SAME mode-free routing decision the in-game browser's activation makes, so the
+            // The same mode-free routing decision the in-game browser's activation makes, so the
             // overwrite gate cannot differ between surfaces.
             match save_dest_route_picked_target(&target) {
                 DestRoute::ConfirmOverwrite => {

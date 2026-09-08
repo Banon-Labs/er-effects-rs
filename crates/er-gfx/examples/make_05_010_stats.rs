@@ -1,5 +1,5 @@
 //! Generator for the 05_010_ProfileSelect stats-panel movie (see
-//! `title_05_010.rs`). Reads the VANILLA `05_010_profileselect.gfx` from a
+//! `title_05_010.rs`). Reads the vanilla `05_010_profileselect.gfx` from a
 //! path argument, applies the stats-panel layout transform structurally, and
 //! writes the edited movie to the output path. The committed edit table
 //! (`title_05_010_edits.rs`) is then generated from the two files by
@@ -9,9 +9,9 @@
 //! Usage: `cargo run -p er-gfx --example make_05_010_stats -- <vanilla.gfx> <out.gfx>`
 //!
 //! Transform (row template sprite 76; coordinates are row-center px):
-//! - HIDE the 128x128 face box placement (`Icon_0`, char 66) at (-448,0) via an
+//! - hide the 128x128 face box placement (`Icon_0`, char 66) at (-448,0) via an
 //!   alpha-0 CXFORMWITHALPHA, freeing the row's left strip (user direction
-//!   2026-07-04: omit the boxes for more text area). It stays PLACED so the
+//!   2026-07-04: omit the boxes for more text area). It stays placed so the
 //!   native row-populate FUN_1408758d0 can still resolve `Icon_0` /
 //!   `Icon_0/m_trialFaceIcon` and release their CSScaleformValue -- UNPLACING it
 //!   crashes (er-effects-rs-7e7: AV in ~CSScaleformValue at the first in-world
@@ -23,18 +23,18 @@
 //!   `ErCharStats` field in the lower band for the colored two-line stat block. The name matches no engine populate prefix (StaticText_/
 //!   StaticRegionText_/StaticLineHelp_/StaticSystemText_/StaticDialogText_/
 //!   StaticKeyGuide_/Dynamic+KeyIcon_), so only our DLL push writes it.
-//! - MOVE PlayerName, Location, Level caption/value, PlayTime, and ErStats onto
+//! - move PlayerName, Location, Level caption/value, PlayTime, and ErStats onto
 //!   one visual baseline. The native fields remain placed/named for engine row
 //!   population, but none of them define a second subrow.
-//! - COMPACT the `ProfileList/ItemList` visual row pitch from 156px to `COMPACT_ROW_PITCH_PX` and expose the full
+//! - compact the `ProfileList/ItemList` visual row pitch from 156px to `COMPACT_ROW_PITCH_PX` and expose the full
 //!   native-backed ten-row picker prefix (`Item_0_0..Item_9_0`) plus top/bottom recycle cells. Row
 //!   population and activation still use native row indices; this moves the row clips, their internal
 //!   chrome, the scroll tween offsets, the viewport mask, and the scrollbar together.
-//! - ADD an invisible full-row `HitArea` child to the row template. The engine's row hit resolver
+//! - add an invisible full-row `HitArea` child to the row template. The engine's row hit resolver
 //!   prefers a child of that name over `Cursor`, and the drive-row runtime shrinks `Cursor` onto
 //!   the focused sub-control -- which is what made the row hoverable only over whatever already had
 //!   focus. The plate restores a full-row mouse target and leaves `Cursor` as pure focus chrome.
-//! - MOVE and shrink the native `ScrollBarV` so the game's own scrollbar controller remains the
+//! - move and shrink the native `ScrollBarV` so the game's own scrollbar controller remains the
 //!   visible long-list affordance. The DLL feeds that native controller the real save-picker scroll
 //!   offset instead of drawing private fake thumbs or pips.
 
@@ -371,15 +371,15 @@ fn main() {
         _ => None,
     };
 
-    // OMIT the face box VISUALLY without UNPLACING it (user direction 2026-07-04:
+    // Omit the face box visually without UNPLACING it (user direction 2026-07-04:
     // omit the per-row portrait boxes to free area for text). The native row-populate
-    // FUN_1408758d0 UNCONDITIONALLY resolves `Icon_0` and `Icon_0/m_trialFaceIcon`,
+    // FUN_1408758d0 unconditionally resolves `Icon_0` and `Icon_0/m_trialFaceIcon`,
     // drives their setters, and releases the resulting CSScaleformValue -- an UNPLACED
     // Icon_0 makes that release operate on an invalid value and hard-crashes
     // (er-effects-rs-7e7, runtime-confirmed: removing Icon_0 -> AV in ~CSScaleformValue
     // at the first in-world ProfileSelect open; keeping it vanilla-placed -> clean).
     // So Icon_0 stays a resolvable placed instance, but an alpha-0 CXFORMWITHALPHA on
-    // its placement makes the box AND its bound face texture render nothing, freeing
+    // its placement makes the box and its bound face texture render nothing, freeing
     // the strip. (The earlier `row.remove` + "setters are dataType-guarded, unplaced is
     // a safe no-op" claim was falsified by the crash.)
     let icon = row
@@ -408,7 +408,7 @@ fn main() {
             )
         })
         .expect("row template places char 67 at depth 14");
-    // Place the save-picker stats field (char 67) ONCE on the same visual baseline as the native
+    // Place the save-picker stats field (char 67) once on the same visual baseline as the native
     // header fields. Normal character stats use `ErCharStats` in the lower band.
     let stats_placement = |name: &str, depth: u16, character_id: u16| {
         let field = DRIVE_CELL_FIELD_NAMES
@@ -484,7 +484,7 @@ fn main() {
         );
     }
 
-    // Give every drive cell its own REAL button frame, cloned from the game's normal row-button art
+    // Give every drive cell its own real button frame, cloned from the game's normal row-button art
     // (char 54) and placed immediately behind its text. The runtime routes each cell as an independent
     // hit target and applies the same visibility bit to both halves, so absent drives leave no empty
     // button chrome.
@@ -573,15 +573,15 @@ fn main() {
         },
     );
 
-    // FULL-ROW MOUSE TARGET. `GridControl::HandleMouse` -> `FUN_140736c90` asks
+    // Full-row mouse target. `GridControl::HandleMouse` -> `FUN_140736c90` asks
     // `FUN_14074b0d0(cell)` for each row's hit object, and that resolver takes the child named
-    // `HitArea` FIRST, the child named `Cursor` second, and the cell component only as a last
-    // resort (1.16.2; "HitArea" is the movie-facing name at 0x142a8fa08 and the ONLY occurrence of
+    // `HitArea` first, the child named `Cursor` second, and the cell component only as a last
+    // resort (1.16.2; "HitArea" is the movie-facing name at 0x142a8fa08 and the only occurrence of
     // that literal in the image, referenced by nothing but this resolver). It then hit-tests that
-    // ONE object's own bounds -- so with no `HitArea`, the row's mouse target IS the `Cursor`
+    // one object's own bounds -- so with no `HitArea`, the row's mouse target is the `Cursor`
     // sprite, which `apply_drive_row_native_cursor` shrinks onto the focused sub-control. That is
     // why the drive row was only hoverable over whatever already had focus, forcing the user into
-    // a drive cell + RIGHT to reach the path editor.
+    // a drive cell + right to reach the path editor.
     //
     // The plate reuses the row's own backing art (char 54) at the `Backing` transform, so its
     // bounds are the drawn row to the twip, and it is baked fully transparent: a hit test is not a
@@ -639,7 +639,7 @@ fn main() {
         set_translate(tag, x, y);
     }
 
-    // PlayTime is hidden at the ASSET level, not per row, because no row rendering wants it any
+    // PlayTime is hidden at the asset level, not per row, because no row rendering wants it any
     // more: the merged character row drops it to free its band for a wider `Location`
     // (`RowSlotFieldVisibility::NATIVE_MERGED`), browse rows never had it (`browse_row`), and the
     // picker's timestamp goes to `Location` via `stage_row_model_location`, not here.
@@ -730,7 +730,7 @@ fn main() {
         "sprite 74 should place at least one cursor body char 73"
     );
 
-    // COMPACT ROW PITCH + FULL NATIVE-BACKED ROW PREFIX. Sprite 77 is the actual row stack. Vanilla
+    // Compact row pitch + full native-backed row prefix. Sprite 77 is the actual row stack. Vanilla
     // ships five visible row clips (`Item_0_0..Item_4_0`) plus top/bottom recycle clips; the picker
     // model/native ProfileSummary transport owns ten dense rows, so expose ten named row clips rather
     // than only stretching the mask around five rows.

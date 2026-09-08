@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Find xrefs to a target VA in the deobf flat image.
 
-Catches: E8 (call) / E9 (jmp) rel32 code xrefs, and absolute 8-byte LE pointer
+Catches: E8 (call) / E9 (jmp) rel32 code xrefs, and absolute 8-byte le pointer
 occurrences (function-pointer tables / vtables -> indirect dispatch). Mapped
 image: file offset == RVA, image base 0x140000000 (see disas-deobf.sh).
 Usage: find-xrefs.py <target_va_hex> [more_targets...]
@@ -31,7 +31,7 @@ def main() -> int:
                 kind = "call" if op == 0xE8 else "jmp"
                 rel[tgt].append((BASE + i, kind))
         i += 1
-    # Absolute 8-byte LE pointer occurrences (data refs / fn-pointer tables).
+    # Absolute 8-byte le pointer occurrences (data refs / fn-pointer tables).
     ptr = {t: [] for t in targets}
     for t in targets:
         needle = t.to_bytes(8, "little")

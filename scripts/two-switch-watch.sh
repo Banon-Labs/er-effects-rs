@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Verify TWO back-to-back harness-driven switches load TWO DIFFERENT characters after one startup.
+# Verify two back-to-back harness-driven switches load two different characters after one startup.
 # Watches telemetry: fresh_deser_count should reach 2, gaitem_reset invocations 2, and the debug log
 # records each switch's deserialized slot. Reads the final loaded identity via the switch oracle.
-# Does NOT tear down on the transient stale state; only on ER self-exit, both switches done, or a cap.
+# Does not tear down on the transient stale state; only on ER self-exit, both switches done, or a cap.
 set -u
 REPO=/home/banon/projects/er-mods-rs
 ART="${ARTIFACT_DIR:-$REPO/target/runtime-probe/system-quit-repro-selfdrive}"
@@ -64,7 +64,7 @@ print(','.join(s))")
     verdict=3; break
   fi
 
-  # Both switches committed: deser_ok>=2 and two DISTINCT slots recorded.
+  # Both switches committed: deser_ok>=2 and two distinct slots recorded.
   if [[ "${deser:-0}" -ge 2 ]]; then
     distinct=$(python3 -c "
 s='$slots'.split(',') if '$slots' else []
@@ -72,7 +72,7 @@ s=[x for x in s if x!='']
 print('1' if len(set(s))>=2 and len(s)>=2 else '0')")
     if [[ "$distinct" == "1" ]]; then
       echo "===== PASS (+${t}s): TWO back-to-back harness-driven switches loaded TWO DIFFERENT characters (deser_slots=[$slots], gaitem_reset=$reset_inv). ====="
-      # HOLD before teardown so the loaded world is visible + screenshotted (user feedback: teardown
+      # Hold before teardown so the loaded world is visible + screenshotted (user feedback: teardown
       # was too fast to see/capture the post-load state). Capture the validated ER window now.
       HOLD_AFTER_PASS_S=${HOLD_AFTER_PASS_S:-12}
       mkdir -p "$ART/two-switch-capture"

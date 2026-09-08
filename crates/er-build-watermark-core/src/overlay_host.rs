@@ -2,21 +2,21 @@
 //!
 //! # The bug this exists to make impossible
 //!
-//! hudhook's install latch is a plain `static`, and statics are PER DLL. Two of our modules each
+//! hudhook's install latch is a plain `static`, and statics are per DLL. Two of our modules each
 //! calling `Hudhook::apply()` therefore both believe they are first, both hook `Present`, and one
 //! of them silently loses every frame from then on. [`claim_owner`] was added to stop that, but
-//! it only ever told the LOSER to give up -- it gave the loser nowhere to draw. So the module
+//! it only ever told the loser to give up -- it gave the loser nowhere to draw. So the module
 //! with the interactive UI could lose the race to a module that draws six words of grey text, and
 //! the user would simply find their panel gone.
 //!
-//! MEASURED 2026-08-25, live, on the user's own session: `er-build-watermark` logged
+//! Measured 2026-08-25, live, on the user's own session: `er-build-watermark` logged
 //! `first render display_width=3840 rows=14` while `er-net-effects` logged
 //! `hudhook dx12 overlay installed` and then `hudhook_render_count = 0` -- installed, never
 //! rendered, no error anywhere. The interactive bar had been invisible since #336 added the
 //! watermark shell, because me3 loads `er_build_watermark.dll` before `er_net_effects.dll` and
 //! alphabetical order is not a design.
 //!
-//! A prior fix had the watermark SLEEP six seconds to let a richer UI claim the context first.
+//! A prior fix had the watermark sleep six seconds to let a richer UI claim the context first.
 //! That was removed for being a sleep used as synchronization -- correctly -- but the yield it
 //! implemented was load-bearing and nothing replaced it. This does, without any sleep.
 //!
@@ -28,12 +28,12 @@
 //!
 //! A guest finds the host by walking the loaded-module list and calling
 //! [`REGISTER_EXPORT`] on each. Every shell that links this crate exports it; each
-//! implementation registers only if THAT module is the host, so exactly one call answers `true`.
+//! implementation registers only if that module is the host, so exactly one call answers `true`.
 //!
 //! # The ABI, and why the tag is not optional
 //!
 //! The `ui` pointer crosses a DLL boundary as `*const c_void` and is cast back to `&Ui` in the
-//! guest. That is only sound while host and guest were built against the SAME imgui, so every
+//! guest. That is only sound while host and guest were built against the same imgui, so every
 //! registration carries [`OVERLAY_ABI_TAG`] and a host refuses a tag it does not recognise. A
 //! refused guest draws nothing, which is a missing panel; accepting a mismatched one would
 //! reinterpret an imgui context through the wrong struct layout inside `Present`, which is a
@@ -57,7 +57,7 @@ pub type OverlayDrawFn = unsafe extern "C" fn(frame: *const OverlayFrame);
 /// # Why the context and the allocators travel with the pointer
 ///
 /// Dear ImGui keeps its current context in a plain global, and each DLL that links imgui gets its
-/// OWN copy of that global. A guest handed only a `&Ui` therefore calls `ui.io()` against a NULL
+/// own copy of that global. A guest handed only a `&Ui` therefore calls `ui.io()` against a NULL
 /// `GImGui` and dies on the first dereference -- which is exactly what happened on 2026-08-25:
 /// the guest logged that its render loop had initialised and then never logged the line four
 /// statements later, drew nothing, and raised no crash anyone could see.
@@ -93,12 +93,12 @@ pub const OVERLAY_ABI_TAG: u32 = 0x0903;
 /// host without knowing which module won.
 pub const REGISTER_EXPORT: &[u8] = b"er_overlay_register_guest_v1\0";
 
-/// True in the ONE module that won the mutex, set the instant it wins.
+/// True in the one module that won the mutex, set the instant it wins.
 ///
 /// Distinct from [`IS_CONFIRMED_HOST`] on purpose, and the distinction is the whole race. The
 /// watermark claims from a spawned thread (hudhook's install takes locks that must not run under
 /// the loader lock), so `apply()` finishes some unknown time after the claim. A guest that looks
-/// for a host in that window would find nobody, claim the mutex itself, FAIL because the
+/// for a host in that window would find nobody, claim the mutex itself, fail because the
 /// watermark already holds it, and give up -- which is precisely the vanished-panel bug, merely
 /// moved. Designation happens synchronously inside [`claim_owner`], so from the moment the mutex
 /// is taken there is always exactly one module answering yes.
@@ -128,7 +128,7 @@ pub fn become_host() {
     designate_host();
 }
 
-/// Is THIS module the one that will host the render loop (installed or about to be)?
+/// Is this module the one that will host the render loop (installed or about to be)?
 pub fn is_host() -> bool {
     IS_DESIGNATED_HOST.load(Ordering::SeqCst)
 }
@@ -253,7 +253,7 @@ pub fn register_with_host(_draw: OverlayDrawFn) -> bool {
     false
 }
 
-/// Register `draw` with a host that is KNOWN to exist, waiting out its designation.
+/// Register `draw` with a host that is known to exist, waiting out its designation.
 ///
 /// Call this only after [`crate::OverlayClaim::LostToAnotherModule`], which proves some other
 /// module created the ownership mutex. That module calls [`designate_host`] a handful of
@@ -276,7 +276,7 @@ pub fn register_with_host_retrying(_draw: OverlayDrawFn) -> bool {
 
 /// Adopt the host's imgui context and allocators, then hand back its `&Ui`.
 ///
-/// Every guest draw calls this FIRST. Skipping it is not a subtle degradation: imgui's context is
+/// Every guest draw calls this first. Skipping it is not a subtle degradation: imgui's context is
 /// a per-DLL global, so the guest's copy is NULL and the first `ui.io()` faults.
 ///
 /// # Safety
@@ -293,7 +293,7 @@ pub unsafe fn adopt_frame<'a>(frame: *const OverlayFrame) -> Option<&'a Ui> {
     if frame.ui.is_null() || frame.imgui_context.is_null() {
         return None;
     }
-    // SAFETY: adopting the host's context and allocator globals into THIS module's copies, which
+    // SAFETY: adopting the host's context and allocator globals into this module's copies, which
     // is the documented way to drive imgui from more than one DLL.
     unsafe {
         hudhook::imgui::sys::igSetCurrentContext(frame.imgui_context.cast());

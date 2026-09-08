@@ -1,15 +1,15 @@
-// === Stats-panel NATIVE TEXT (2026-07-04) =========================================================
-// Render the character's attributes as text on the ProfileSelect rows using the GAME'S OWN font, each
+// === Stats-panel native text (2026-07-04) =========================================================
+// Render the character's attributes as text on the ProfileSelect rows using the game'S own font, each
 // value in its own field. The 05_010 GFX edit (`er_gfx::title_05_010`) removes the 128px face box and
 // adds a dedicated `ErStats` DefineEditText to the row template; the DLL hooks the native row-populate
-// template `FUN_1408758d0` (the only writer of PlayerName/Level/Location/PlayTime) and, BEFORE calling
+// template `FUN_1408758d0` (the only writer of PlayerName/Level/Location/PlayTime) and, before calling
 // the original (which destroys the row proxy at its end -- callee-dtor convention), resolves the
 // row's `ErStats` child natively (assignComponentWithName) and pushes the attribute line through the
 // native SetText wrapper -- the engine wraps the string in HTML and renders it through the field's own
 // `MenuFont_01`. No font work, no new Scaleform surface, no substitution of native fields' text.
 // (RE: bd profileselect-native-settext-RE-2026-07-04 + Ghidra dump FUN_1408758d0/FUN_14074c630;
 // ARM/CONSUME SetText substitution was rejected because the FMG-static populate pass calls the SetText
-// CORE directly, so no wrapper-level routing can target a field the row-populate never writes.)
+// core directly, so no wrapper-level routing can target a field the row-populate never writes.)
 /// `CS::CSScaleformValue::~CSScaleformValue` (dump 0x140d7f900) = deobf/live 0xd7f850
 /// (`scripts/dump-deobf-shift.py` -> content-unique). fastcall(rcx=CSScaleformValue*). Releases the
 /// GFx::Value handle a resolved child proxy holds; the stats push calls it exactly like the native
@@ -18,9 +18,9 @@ pub(crate) const CSSCALEFORMVALUE_DTOR_RVA: usize = 0xd7f850;
 /// SceneObjProxy layout, corrected 2026-07-04 from the Ghidra dump structures + `ComponentProxy::
 /// ComponentProxy` (dump 0x1407331b0) after the er-effects-rs-7e7 crash: +0x00 vfptr, +0x08/+0x10/
 /// +0x18 an intrusive component-link node (ctor initializes all three to `self`; the resolve links
-/// the live component object in), +0x20 context, +0x28 the EMBEDDED `CSScaleformValue` (0x38 bytes:
-/// vfptr + GFx::Value). The old claim that the CSScaleformValue sits at +0x8 was WRONG -- +0x8 is
-/// the component slot whose OBJECT POINTER the SetText wrapper reads (`rcx = *(proxy+0x8)`) and
+/// the live component object in), +0x20 context, +0x28 the embedded `CSScaleformValue` (0x38 bytes:
+/// vfptr + GFx::Value). The old claim that the CSScaleformValue sits at +0x8 was wrong -- +0x8 is
+/// the component slot whose object pointer the SetText wrapper reads (`rcx = *(proxy+0x8)`) and
 /// virtual-calls (`vt+0x8` GetValue). Native row-populate `FUN_1408758d0` passes `&proxy->field_0x8`
 /// to `FUN_14074a0f0` and destroys `&proxy.scaleformValue` (+0x28) afterward.
 pub(crate) const SCENE_OBJ_PROXY_COMPONENT_SLOT_OFFSET: usize = 0x8;
@@ -65,7 +65,7 @@ pub(crate) const GFX_TEXT_DOC_CONTENT_HEIGHT_OFFSET: usize = 0xc4;
 /// `GFx::TextField`/text document reflow routine. It recomputes layout bounds from the source bounds,
 /// refreshes wrapping/alignment, updates scroll range, and invalidates the backing render state.
 pub(crate) const GFX_TEXT_DOC_REFLOW_RVA: usize = 0x114bf10;
-/// `GFx::TextField::SetSelection(field, begin, end)` -- the caret/selection primitive, and the ONLY
+/// `GFx::TextField::SetSelection(field, begin, end)` -- the caret/selection primitive, and the only
 /// thing that moves the caret in the 02_990 path editor. The native SoftwareKeyboard owns no caret at
 /// all: `EnterName_` (0xe70c00) writes a prompt string, max length and flags, and the set-initial path
 /// (0xe709f0 -> 0x142416ef0) is a pure `DLString` assign. The caret lives in Scaleform, and this is
@@ -73,9 +73,9 @@ pub(crate) const GFX_TEXT_DOC_REFLOW_RVA: usize = 0x114bf10;
 /// resolved the focused character and checked [`GFX_TEXT_OBJECT_KIND_VTABLE_SLOT`] == 4.
 ///
 /// It takes the same text object the native text helpers do (`*(value + 0x88)`), creates the field's
-/// editor kit if absent, CLAMPS both indices to the current text length, then invalidates for redraw.
+/// editor kit if absent, clamps both indices to the current text length, then invalidates for redraw.
 /// The clamp is why caret-to-end needs no string length: pass [`GFX_TEXT_FIELD_SELECTION_END`] for
-/// both and the field itself resolves it to the end -- exactly what AS does when `setSelection` is
+/// both and the field itself resolves it to the end -- exactly what as does when `setSelection` is
 /// called without an end argument (it defaults end to `i64::MAX`).
 ///
 /// Byte-verified against `eldenring-deobf.bin`: `48 89 5c 24 10 48 89 74 24 18 57 48 83 ec 20`
@@ -103,7 +103,7 @@ pub(crate) use er_telemetry_core::counters::PROFILE_PLAYER_NAME_SETTEXT_SUBS;
 pub(crate) use er_telemetry_core::counters::PROFILE_PLAYER_NAME_PUSH_FAILURES;
 /// Count of slot names decoded from the live `.sl2` cache.
 pub(crate) use er_telemetry_core::counters::PROFILE_SLOT_NAMES_DECODED;
-/// Count of pushes SKIPPED fail-closed because the resolved component at proxy+0x8 was not a live
+/// Count of pushes skipped fail-closed because the resolved component at proxy+0x8 was not a live
 /// image-vtabled object (er-effects-rs-7e7: a stale/garbage-vt component here crashed the native
 /// SetText wrapper's unvalidated `call *0x8(vt)` dispatch). Distinct from PUSH_FAILURES so telemetry
 /// separates "field missing / SetText rejected" from "component stale -- crash avoided" (oracle).
@@ -115,11 +115,11 @@ pub(crate) use er_telemetry_core::counters::PROFILE_STATS_PUSH_STALE_LAST_VT;
 /// Row-populate template `FUN_1408758d0` (deobf/live 0x8757e0; dump 0x1408758d0 -> shift -0xf0,
 /// content-unique). `longlong(rowModel* rcx, SceneObjProxy* rdx, undefined8 r8, undefined8 r9)`. The
 /// only writer of the per-row PlayerName/Level/Location/PlayTime fields, invoked once per visible
-/// ProfileSelect list row with a PER-SLOT row model. We hook its ENTRY so we can push the correct
-/// slot's attributes BEFORE the original runs (the original destroys the row proxy's embedded
+/// ProfileSelect list row with a per-slot row model. We hook its entry so we can push the correct
+/// slot's attributes before the original runs (the original destroys the row proxy's embedded
 /// `CSScaleformValue` at its end, so a post-call resolve would operate on a released value).
 pub(crate) const PROFILE_ROW_POPULATE_RVA: usize = 0x8757e0;
-/// Row-model BUILDER `FUN_1408752c0(rowModel, int slot)` -- the only reader of a slot's
+/// Row-model builder `FUN_1408752c0(rowModel, int slot)` -- the only reader of a slot's
 /// `ProfileSummary` record on the way to a row.
 ///
 /// It resolves the record (`FUN_140261b80(summary, slot)`), pulls the level from `record[0x24]`, the
@@ -127,7 +127,7 @@ pub(crate) const PROFILE_ROW_POPULATE_RVA: usize = 0x8757e0;
 /// to the field filler `FUN_1408759e0`, which turns the place id into the row model's `+0x90`
 /// `Location` MenuString via `FUN_1407611c0` = `MsgRepository::GetAndFormat(id, "PlaceName", "PN")`.
 ///
-/// That ordering is why the record must be lent its corrected place name HERE and not at
+/// That ordering is why the record must be lent its corrected place name here and not at
 /// [`PROFILE_ROW_POPULATE_RVA`]: by the time the populate runs, `Location` is already a formatted
 /// string and the record is no longer consulted. Patching there changed nothing on screen while the
 /// telemetry happily reported a repair (observed 2026-08-07 -- seven rows still read the stale
@@ -137,26 +137,26 @@ pub(crate) const PROFILE_ROW_POPULATE_RVA: usize = 0x8757e0;
 /// identical to the 1.16.2 dump's disassembly at the same VA (shift 0).
 pub(crate) const PROFILE_ROW_MODEL_BUILD_RVA: usize = 0x8752c0;
 /// Title/load-current-character row builder `FUN_140951220`: builds a transient current-player
-/// `MenuSaveDataSummary` on its own STACK, then calls [`PROFILE_ROW_POPULATE_RVA`] to fill
+/// `MenuSaveDataSummary` on its own stack, then calls [`PROFILE_ROW_POPULATE_RVA`] to fill
 /// PlayerName/Level/Location/PlayTime/Icon_0. Hooked after the original to push `ErCharStats` on
 /// the same row proxy for the title Load Game view.
 ///
-/// CORRECTED 2026-08-07 (decompile of `FUN_140951220`). This previously claimed the builder
+/// Corrected 2026-08-07 (decompile of `FUN_140951220`). This previously claimed the builder
 /// "returns without going through the per-slot row-populate hook entry we own". It does NOT: the
 /// body ends `pSVar3 = SceneObjProxy(&local_188, param_2); FUN_1408757e0(local_128, pSVar3);
-/// FUN_140875030(local_128);` -- an ordinary call, so our entry hook on 0x8757e0 DOES see this row.
+/// FUN_140875030(local_128);` -- an ordinary call, so our entry hook on 0x8757e0 does see this row.
 /// Believing the old comment cost a debugging session: a change was added to a second hook to work
 /// around a bypass that never existed, while the real defect sat in the first hook's own guard.
 ///
-/// What IS distinctive here: `FUN_1408753f0` builds that transient summary as
-/// `FUN_1408759e0(summary, 0, &name, pgd->level)` -- SLOT INDEX 0 with the LIVE player's level. So a
+/// What is distinctive here: `FUN_1408753f0` builds that transient summary as
+/// `FUN_1408759e0(summary, 0, &name, pgd->level)` -- Slot index 0 with the live player's level. So a
 /// row reaching the per-slot hook with `rowModel + 0x8 == 0` may be this current-player row rather
 /// than save slot 0, and anything keyed on that slot index (a stats-cache lookup, a "is this the
 /// picker?" test) will be wrong for it. Read per-row values off the row model instead.
 pub(crate) const PROFILE_CURRENT_ROW_POPULATE_RVA: usize = 0x951220;
 /// Row-model field holding the profile/save slot index (0-9). The native populate reads
 /// `*(int*)(rowModel + 0x8) + 1` as the `Icon_0` face-sprite frame, i.e. the slot; we read the same
-/// field to index the per-slot stats cache so each row shows ITS OWN character's attributes.
+/// field to index the per-slot stats cache so each row shows its own character's attributes.
 pub(crate) const PROFILE_ROW_MODEL_SLOT_08_OFFSET: usize = 0x8;
 /// Offset of the row model's `PlayerName` `CS::MenuString` inside `CS::MenuSaveDataSummary`.
 /// Static RE of 1.16.2 `FUN_1408757e0`: native row populate resolves `PlayerName`, reads raw
@@ -165,37 +165,37 @@ pub(crate) const PROFILE_ROW_MODEL_SLOT_08_OFFSET: usize = 0x8;
 /// populate so the game's own writer, not a later out-of-band SetText, owns the rendered text.
 pub(crate) const PROFILE_ROW_MODEL_PLAYER_NAME_MENUSTRING_50_OFFSET: usize = 0x50;
 
-// === PER-SLOT INFO FIELDS ON A PROFILESELECT ROW =================================================
-// WHAT PRODUCES "Level 0" AND "0:00:00" ON A ROW, and therefore why zeroing the staged record could
+// === per-slot info fields on a PROFILESELECT row =================================================
+// what produces "Level 0" and "0:00:00" on a row, and therefore why zeroing the staged record could
 // never blank them (static RE of the 1.16.2 dump, which is the live image -- shift 0; row template
 // = sprite 76 of `05_010_profileselect.gfx`, names read off the movie the DLL actually serves):
-//   * `StaticText_110502` -- the "Level" CAPTION, an ENGINE-populated static field. The named-child
+//   * `StaticText_110502` -- the "Level" caption, an engine-populated static field. The named-child
 //     binder hands every child's name to the FMG static-text pass `FUN_14074c540`, which matches the
 //     `StaticText_` prefix from the table at `PTR_s_StaticText__142a94aa0`, `atoi`s the trailing id
-//     (110502) and calls the SetText CORE `FUN_140d842a0` DIRECTLY. The row-populate never writes
+//     (110502) and calls the SetText core `FUN_140d842a0` directly. The row-populate never writes
 //     it, so it is written once per bind and survives row-clip reuse.
-//   * `Level` -- the level VALUE. `FUN_140749ed0(&proxy->comp, *(u32*)(rowModel + 0x88))`, which
+//   * `Level` -- the level value. `FUN_140749ed0(&proxy->comp, *(u32*)(rowModel + 0x88))`, which
 //     `DLTX::DLString::FormatW(L"%d")`s the int and SetTexts the digits. No int formats to nothing,
 //     so a zeroed (or NULL, `FUN_140875790`) record still renders "0".
 //   * `PlayTime` -- `FUN_14074a000(&proxy->comp, playtime)`, the string being the row model's own
 //     `CS::MenuSaveDataSummary` playtime (+0xc8 literal, else the DLString at +0xd0), formatted from
 //     seconds by `FUN_140875be0` inside the row-model builder `FUN_1408759e0`.
-// LEVER, LEVEL FIELDS: neither can be emptied through the record, and a post-populate re-resolve is
-// impossible (the named-child ctor 0x14074a7c0 resolves out of the PARENT proxy's embedded value at
-// +0x28, which the populate destroys at its end). So a browse row HIDES them, per row, through the
+// Lever, level FIELDS: neither can be emptied through the record, and a post-populate re-resolve is
+// impossible (the named-child ctor 0x14074a7c0 resolves out of the parent proxy's embedded value at
+// +0x28, which the populate destroys at its end). So a browse row hides them, per row, through the
 // game's own visibility wrapper (`TITLE_PRESS_START_SET_VISIBLE_RVA`) -- content-free in both
 // directions, which is what makes the restore as exact as the hide.
-// LEVER, LOCATION/PLAYTIME: both strings come from the row model. A browse save-FILE row stages its
+// Lever, LOCATION/PLAYTIME: both strings come from the row model. A browse save-file row stages its
 // timestamp into `Location` (top-right, same line as PlayerName) and hides the bottom `PlayTime`, so
 // `ER0000.sl2` and `YYYY-MM-DD HH:MM` occupy one row instead of two vertical bands.
 /// Offset of the row model's level word -- the exact `u32` the native `Level` field formats
 /// (`FUN_140749ed0(&proxy->comp, *(u32*)(rowModel + 0x88))`, see the note above).
 ///
-/// Reading the MERGED header's level from here rather than from a slot-indexed cache removes the
-/// slot-mapping question entirely: whatever number the native field would have printed on THIS row
+/// Reading the merged header's level from here rather than from a slot-indexed cache removes the
+/// slot-mapping question entirely: whatever number the native field would have printed on this row
 /// is the number the merged string prints, per-slot rows and the transient current-player row alike.
 /// Static RE of `FUN_1408753f0` shows the current-player summary is built as
-/// `FUN_1408759e0(summary, 0, &name, pgd->level)` -- slot 0 with the LIVE level -- so a cache lookup
+/// `FUN_1408759e0(summary, 0, &name, pgd->level)` -- slot 0 with the live level -- so a cache lookup
 /// keyed on that slot would describe save slot 0's character, not the loaded one.
 pub(crate) const PROFILE_ROW_MODEL_LEVEL_88_OFFSET: usize = 0x88;
 pub(crate) const PROFILE_ROW_LEVEL_CAPTION_FIELD_NAME: &str = "StaticText_110502\0";
@@ -205,7 +205,7 @@ pub(crate) const PROFILE_ROW_PLAYTIME_FIELD_NAME: &str = "PlayTime\0";
 /// Full-width row chrome. The drive row hides both because its independent button frames are the
 /// only truthful click targets; every other row explicitly restores them.
 pub(crate) const PROFILE_ROW_BACKING_FIELD_NAME: &str = "Backing\0";
-/// The fields WE added to the row. They need the same per-row-kind visibility statement the native
+/// The fields we added to the row. They need the same per-row-kind visibility statement the native
 /// ones get: the row clips are recycled across the character/browse/drive lists, so a field only one
 /// kind mentions keeps that kind's text when another kind reuses the clip.
 pub(crate) const PROFILE_ROW_ER_STATS_FIELD_NAME: &str = "ErStats\0";
@@ -230,7 +230,7 @@ pub(crate) const PROFILE_ROW_MODEL_LOCATION_MENUSTRING_90_OFFSET: usize = 0x90;
 /// struct is `{ wchar_t* rawString; DLString<wchar_t> dLString; }` (Ghidra `CS::MenuString`, 0x38
 /// bytes) and every reader takes `rawString` when it is non-NULL, else the DLString's buffer -- the
 /// row-populate `FUN_1408757e0` and the FMG static pass `FUN_14074c540` both spell that same
-/// accessor inline. So pointing `rawString` at our own UTF-16 for the duration of ONE native
+/// accessor inline. So pointing `rawString` at our own UTF-16 for the duration of one native
 /// populate makes the game's own `FUN_14074a000` write our text, with no second SetText and nothing
 /// left behind: `~MenuString` (0x1401bcc60) frees only the DLString, never `rawString`, and we
 /// restore the displaced pointer as soon as the populate returns.
@@ -242,21 +242,21 @@ pub(crate) use er_telemetry_core::counters::PROFILE_ROW_LAST_SAVED_ROWS;
 /// was unreadable), so the row kept the native playtime string (oracle).
 pub(crate) use er_telemetry_core::counters::PROFILE_ROW_LAST_SAVED_STAGE_FAILURES;
 /// GFx value type (`CSScaleformValue+0x20 & 0x8f`) the visibility setter `FUN_140d844d0` requires:
-/// it returns without doing anything unless the resolved value is a DISPLAY OBJECT (10). Recorded
+/// it returns without doing anything unless the resolved value is a display object (10). Recorded
 /// per call as an oracle so "the fields are still visible in game" is diagnosable from telemetry
 /// instead of guesswork -- a non-10 type means the hide silently no-ops.
 pub(crate) const GFX_VALUE_TYPE_DISPLAY_OBJECT: usize = 10;
 /// `GFx::Value::VT_Undefined` / `VT_Null` -- what a named-child resolve leaves in the out proxy when
-/// the movie has NO child by that name.
+/// the movie has no child by that name.
 ///
 /// This is the only observable difference between a hit and a miss, and missing it is what let one
 /// movie's presentation be applied to another's. `SceneObjProxy::assignComponentWithName`
 /// (`0x14074a2f0`) always returns a fully constructed out proxy: the named-child ctor
 /// (`0x14074a7c0`) runs `ComponentProxy::ComponentProxy` -- which initialises the component slot at
-/// +0x8 to the proxy ITSELF -- and then asks `FUN_140d7f9d0` for the member. On a miss the member
+/// +0x8 to the proxy itself -- and then asks `FUN_140d7f9d0` for the member. On a miss the member
 /// lookup writes an undefined `GFx::Value` and the self-link stands, so `*(out + 0x8)` is non-null
-/// and its vtable IS in the game image. Any "did the field resolve?" test written on the component
-/// pointer therefore answers YES for every name on every movie. Measured on the live game: 5
+/// and its vtable is in the game image. Any "did the field resolve?" test written on the component
+/// pointer therefore answers yes for every name on every movie. Measured on the live game: 5
 /// non-display resolves per populate on the System>Quit summary, exactly the five field names this
 /// mod injects into `05_010_ProfileSelect` and that `02_040_OptionSetting` does not have.
 pub(crate) const GFX_VALUE_TYPE_UNDEFINED: usize = 0;
@@ -272,7 +272,7 @@ pub(crate) const CSSCALEFORMVALUE_DATATYPE_20_OFFSET: usize = 0x20;
 /// MSVC's `_purecall` (`0x14251c480`) and the handler it jumps to, `purecall_crash_handler`
 /// (`0x140c90080` = `xor eax,eax; mov dword [rax], 0xdead; ret`) -- a deliberate write to NULL.
 ///
-/// THIS IS HOW A DESTROYED C++ OBJECT ANSWERS A VIRTUAL CALL. When an object is destructed its
+/// This is how a destroyed C++ object answers a virtual call. When an object is destructed its
 /// vtable pointer is left describing an abstract base, whose slots are filled with `_purecall`; the
 /// dispatch then "succeeds" and lands in the trap. Every liveness check in this module used to ask
 /// only whether the resolved function pointer lies inside the game image -- and `_purecall` does,
@@ -284,11 +284,11 @@ pub(crate) const PURECALL_RVA: usize = 0x251c480;
 pub(crate) const PURECALL_CRASH_HANDLER_RVA: usize = 0xc90080;
 
 /// True when an about-to-be-called vtable slot is the pure-virtual trap, i.e. the object behind it
-/// has been destructed. Check this before EVERY indirect call through a resolved component.
+/// has been destructed. Check this before every indirect call through a resolved component.
 ///
-/// BOTH targets are resolved for the running build, and a target of 0 matches NEITHER. The second
+/// Both targets are resolved for the running build, and a target of 0 matches neither. The second
 /// comparison used to be a raw `base + PURECALL_CRASH_HANDLER_RVA` while the first already asked
-/// the resolver -- an inconsistency with teeth, because the handler MOVED on 1.17
+/// the resolver -- an inconsistency with teeth, because the handler moved on 1.17
 /// (0xc90080 -> 0xc91750), so that half of a guard whose whole job is to notice a destructed object
 /// could never match and the indirect call went ahead. And `game_data_addr` answers 0 on a refusal,
 /// so without the zero screen a refused RVA would make every unreadable slot look like the trap.
@@ -304,18 +304,18 @@ pub(crate) fn dispatch_target_is_purecall(target: usize, base: usize) -> bool {
     );
     target == purecall || target == crash_handler
 }
-/// Count of rows the hide was DRIVEN on because the row has no character -- i.e. the native setter
+/// Count of rows the hide was driven on because the row has no character -- i.e. the native setter
 /// was called for at least one of the three fields; pair it with `_NON_DISPLAY` below to know the
 /// call took effect (oracle). Also the latch that arms the symmetric re-show: until it is non-zero
 /// nothing was ever driven, so the vanilla path stays completely untouched.
 pub(crate) use er_telemetry_core::counters::PROFILE_ROW_SLOT_INFO_HIDDEN_ROWS;
 /// Count of rows the re-show was driven on (oracle). Row clips are reused across rows and across
-/// windows, so every row that KEEPS its slot info re-asserts visibility.
+/// windows, so every row that keeps its slot info re-asserts visibility.
 pub(crate) use er_telemetry_core::counters::PROFILE_ROW_SLOT_INFO_SHOWN_ROWS;
 /// Count of per-field visibility calls skipped fail-closed: the child did not resolve, or the out
 /// proxy did not carry the game's own `CS::SceneObjProxy` vtable (oracle).
 pub(crate) use er_telemetry_core::counters::PROFILE_ROW_SLOT_INFO_VIS_SKIPS;
-/// Count of per-field visibility calls whose resolved value was NOT a display object, i.e. calls the
+/// Count of per-field visibility calls whose resolved value was not a display object, i.e. calls the
 /// native setter ignored (oracle). Non-zero means this lever does not reach that field.
 pub(crate) use er_telemetry_core::counters::PROFILE_ROW_SLOT_INFO_NON_DISPLAY;
 /// Last GFx value type observed by the visibility path (diagnostic companion to the counter above).
@@ -345,19 +345,19 @@ pub(crate) const PLAYER_GAME_DATA_NAME_GETTER_RVA: usize = 0x25f8e0;
 pub(crate) static PLAYER_GAME_DATA_NAME_GETTER_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static PLAYER_GAME_DATA_NAME_GETTER_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-/// SOMEONE HAS ALREADY ATTEMPTED `install_profile_row_populate_hook` -- claimed with a `swap`,
+/// Someone has already attempted `install_profile_row_populate_hook` -- claimed with a `swap`,
 /// before any work, exactly as [`TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_CLAIMED`] is.
 ///
 /// Same two-owner shape as that one, and found in the same sweep: `install_title_visual_startup_hooks`
 /// calls the installer synchronously (`experiments/lifecycle/title_visual_startup.rs:31`, so the
-/// name getter is live before the first row populate) and then AGAIN from the thread it spawns two
+/// name getter is live before the first row populate) and then again from the thread it spawns two
 /// lines later (`:37`). Only sequencing has kept it from firing -- the spawn happens after the
 /// synchronous call returns -- and sequencing is not a guarantee: a scheduler that runs the new
 /// thread while the parent is still inside the installer reproduces the measured named-child race
 /// verbatim, four detours at a time.
 ///
 /// The four per-row `_INSTALLED` latches below it cannot stand in for this. Each is stored only
-/// after its own `MH_ApplyQueued` succeeds, so a check-then-act READ of one is exactly the window
+/// after its own `MH_ApplyQueued` succeeds, so a check-then-act read of one is exactly the window
 /// two threads walk through together; and each covers one row, whereas the race is over the whole
 /// installer. Kept separate from those latches for the same reason the named-child claim is: they
 /// answer "is this hook live", which must stay honest about a failed install, and a claim answers
@@ -502,13 +502,13 @@ pub(crate) const SCALEFORM_MEMORY_FILE_CURSOR_OFFSET: usize = 0x24;
 pub(crate) const SCALEFORM_MEMORY_FILE_VALID_OFFSET: usize = 0x28;
 pub(crate) use er_telemetry_core::counters::TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS;
 /// 05_000_title-only slice of `TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS` (which aggregates both the
-/// 05_001 logo and 05_000 title slots): the product-strip proof oracle must show the STRIPPED TITLE
+/// 05_001 logo and 05_000 title slots): the product-strip proof oracle must show the stripped title
 /// movie was served on every title visit (cold boot + each System-Quit reload), unambiguously.
 pub(crate) use er_telemetry_core::counters::TITLE_SCALEFORM_05_000_MEMORY_GFX_REPLACEMENTS;
 pub(crate) static TITLE_SCALEFORM_MEMORY_GFX_LAST_FILE: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 
-/// Product-default 05_000_title strip is armed for RUNTIME derivation (er-effects-rs-h7x): no
+/// Product-default 05_000_title strip is armed for runtime derivation (er-effects-rs-h7x): no
 /// embedded stripped movie; the Scaleform file-open hook reads the game's own vanilla bytes out of
 /// the native MemoryFile the FileOpener returns (payload owned by GLOBAL_GfxRepository) and applies
 /// `er_gfx::title_05_000::strip` -- 18 content-addressed tag edits, all-or-nothing, byte-identical
@@ -548,13 +548,13 @@ pub(crate) use er_telemetry_core::counters::TITLE_05_000_RUNTIME_STRIP_INPUT_LEN
 pub(crate) use er_telemetry_core::counters::TITLE_05_000_RUNTIME_STRIP_OUTPUT_LEN;
 /// Input provenance: 0 = not yet classified, 1 = known vanilla (output proven byte-identical to
 /// the validated asset), 2 = unknown input (game update / other mod; edits applied all-or-nothing).
-/// NOTE (run 20260702-203258): the LIVE repository payload is 12,176 bytes vs the 12,174-byte
+/// NOTE (run 20260702-203258): the live repository payload is 12,176 bytes vs the 12,174-byte
 /// extracted corpus file -- 2 trailing bytes after the root End tag -- so class 2 is the expected
 /// steady state on the current game build; the output still derived byte-identical.
 pub(crate) use er_telemetry_core::counters::TITLE_05_000_RUNTIME_STRIP_INPUT_CLASS;
 /// Whether the derived output matches the validated-asset fingerprint (len 11707 +
 /// FNV 0x17906a0e91ce5374): 0 = not derived yet, 1 = byte-identical to the validated v2 asset,
-/// 2 = clean all-or-nothing edit result with a DIFFERENT fingerprint (expected only after a game
+/// 2 = clean all-or-nothing edit result with a different fingerprint (expected only after a game
 /// update changes untouched tags; not an error, but the proof of visual equivalence is then open).
 pub(crate) use er_telemetry_core::counters::TITLE_05_000_RUNTIME_STRIP_OUTPUT_VALIDATED;
 
@@ -606,12 +606,12 @@ pub(crate) static TITLE_SCALEFORM_RESOURCE_CTOR_LAST_CALLER_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// Dead-end note: `CS::TitleBackViewParts::FadeIn` (dump 0x1409a63f0 -> live 0x1409a62a0)
 /// only calls the state transition helper on `this+0x88` with `"FadeIn"`; runtime/user evidence
-/// proved suppressing it does NOT hide the visible logo. Keep as RE context, not a product hook.
+/// proved suppressing it does not hide the visible logo. Keep as RE context, not a product hook.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_FADEIN_RVA: usize = 0x9a62a0;
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const TITLE_PRESS_START_NAME_RVA: usize = 0x2b26500;
-/// Diagnostic span: if *(proxy) is NOT SceneObjProxy, scan [proxy .. proxy+0x40] stride 8 logging
+/// Diagnostic span: if *(proxy) is not SceneObjProxy, scan [proxy .. proxy+0x40] stride 8 logging
 /// each qword + its [0] vtable so the next probe reveals the real layout. Also bounds the fallback.
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SCENE_PROXY_DIAG_SCAN_SPAN: usize = 0x40;
@@ -625,7 +625,7 @@ pub(crate) const STAGE1D_RETRY_INTERVAL: u64 = 30;
 /// Set by cap_sequence_iter_hook when the Sequence iterator first walks a MenuWindowJob child
 /// (vt 0x142aa97e8) -- i.e. the main menu actually opened and its entries are registered. The
 /// retry loop stops once this is set (the title views tick via a different pump, so this fires
-/// ONLY on the real main-menu entries).
+/// only on the real main-menu entries).
 pub(crate) const MENU_ENTRIES_SEEN_NO: usize = false as usize;
 pub(crate) const MENU_ENTRIES_SEEN_YES: usize = true as usize;
 pub(crate) static MENU_ENTRIES_SEEN: AtomicUsize = AtomicUsize::new(MENU_ENTRIES_SEEN_NO);
@@ -637,7 +637,7 @@ pub(crate) static OWN_STEPPER_TITLETOP_DUMPS: AtomicUsize = AtomicUsize::new(MEN
 /// Max TitleTopDialog entry dumps + the per-dump frame interval.
 pub(crate) const OWN_STEPPER_TITLETOP_DUMP_CAP: usize = TraceSampleLimit::Value8 as usize;
 /// Recon-only Load-Game fingerprint scan (`scan_dialog_for_loadgame`) counter + cap. Runs in the
-/// post-open SAFE-DEFAULT park, independent of the pre-open `OWN_STEPPER_TITLETOP_DUMPS` (which the
+/// post-open safe-default park, independent of the pre-open `OWN_STEPPER_TITLETOP_DUMPS` (which the
 /// d180-locate exhausts before menu-open). 2026-06-18 reconciliation: the title rows are
 /// TitleTopDialog registry entries, not FD4 jobs.
 pub(crate) static OWN_STEPPER_LOADGAME_SCANS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
@@ -673,11 +673,11 @@ pub(crate) use er_title_flow::FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA;
 /// mAA_BB_CC_DD decimal -> byte3=AA..byte0=DD). A valid map to pass the PlayGame
 /// map-area gate (area byte 0x32..0x58) while we prove the SetState(5) path builds
 /// CSFeMan; the real slot map comes from GameMan+0xc30 once peeked.
-/// Full sync slot deserialize 0x14067b290(ecx=slot) -- CSFeMan-LESS (verified): reads
+/// Full sync slot deserialize 0x14067b290(ecx=slot) -- CSFeMan-less (verified): reads
 /// the save, writes the real saved map to GameMan+0xc30, applies the character. The
 /// cycle-breaker for slot loading (slot9-load-phase-machine-b80-csfeman-less-2026).
 pub(crate) const DESERIALIZE_SLOT_RVA: usize = 0x67b290;
-/// `GameMan::WriteSaveToSlot(slot, flushToDisk, blankSlot) -> char`. **This WRITES a save;
+/// `GameMan::WriteSaveToSlot(slot, flushToDisk, blankSlot) -> char`. **This writes a save;
 /// it does not read one.** Corrected 2026-08-01 against the 1.16.2 Ghidra dump after this
 /// address was found declared under two contradictory names across three crates (it was
 /// `CONTINUE_LOAD_RVA` here and in er-save-loader, `SAVE_DISPATCH_CHAR_RVA` in
@@ -692,9 +692,9 @@ pub(crate) const DESERIALIZE_SLOT_RVA: usize = 0x67b290;
 /// device via [`IODEV_GETTER_RVA`] (0xe6e060) and writes the buffer out through 0x140e6ec70;
 /// then sets `saveState = 1` and clears `saveRequested`.
 ///
-/// `blankSlot == 1` takes the `memset(buf, 0, 0x280000)` branch, i.e. it writes an ERASED
+/// `blankSlot == 1` takes the `memset(buf, 0, 0x280000)` branch, i.e. it writes an erased
 /// slot -- destructive. The prior doc claimed this "submits the 0x280000 save read"; the
-/// 0x280000 buffer is the save WRITE buffer.
+/// 0x280000 buffer is the save write buffer.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const SAVE_WRITE_TO_SLOT_RVA: usize = 0x67b750;
 pub(crate) use er_title_flow::GAME_MAN_SAVED_MAP_C30_OFFSET;
@@ -711,7 +711,7 @@ pub(crate) const SUBMIT_PHASE_DESER: i32 = 2;
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SUBMIT_PHASE_DONE: i32 = 3;
 /// Phase C world-priming (ingameinit-decoded-world-built-by-movemapstep-msbload-2026):
-/// the world singletons are built by the MoveMapStep's OWN step machine (STEP_MsbLoad),
+/// the world singletons are built by the MoveMapStep's own step machine (STEP_MsbLoad),
 /// driven by per-frame update 0x140aff640(rcx=MoveMapStep, rdx=FD4TaskData). The
 /// MoveMapStep is held at InGameStep(owner+0x2e8)+0xe8. Pump it until child+0xd8 drains.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
@@ -721,32 +721,32 @@ pub(crate) use er_title_flow::INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET;
 pub(crate) const INGAMESTEP_PENDING_D8_PENDING: i32 = 1;
 /// play_game_submit-handoff discriminators on the InGameStep object (own-load-worldreswait-is-block-
 /// registration-not-coord-2026-06-22). play_game_submit 0x140aebdc0 sets InGameStep+0xd8=1 and
-/// InGameStep+0x100=requested BlockId. So reading these PURELY (no call) tells us whether the native
+/// InGameStep+0x100=requested BlockId. So reading these purely (no call) tells us whether the native
 /// request handoff ran: +0x100 == the saved BlockId (e.g. 0x1c000000) means play_game_submit primed
-/// the m28 request; +0x100 == 0/unset means it did NOT. +0xd8 is the matching pending phase byte.
+/// the m28 request; +0x100 == 0/unset means it did not. +0xd8 is the matching pending phase byte.
 pub(crate) const INGAMESTEP_PHASE_D8_OFFSET: usize = 0xd8;
 pub(crate) const INGAMESTEP_REQ_BLOCKID_100_OFFSET: usize = 0x100;
 /// Native b80 load INITIATOR 0x14067b4e0(ecx=slot): begins the async slot-IO read
 /// and sets GameMan+0xb80=1. The scheduler ticks CSTaskGroup 20 (MoveMapStep) every
 /// frame (fd4-scheduler-no-group-active-gate-runs-all-2026), so once initiated the
-/// b80 machine (dispatcher-1 deserialize + dispatcher-2 apply) + MsbLoad PRIME the
+/// b80 machine (dispatcher-1 deserialize + dispatcher-2 apply) + MsbLoad prime the
 /// world-stream natively -> resident -> child+0xd8 drains. This is the stream-priming
 /// step the direct 0x14067b290 deserialize skipped.
-/// **BLANKS THE ENTIRE SAVE CONTAINER.** Not a load initiator, despite the old name.
-/// 0x67b4e0 stages one memset-to-zero 0x280000 buffer into EVERY container entry via
+/// **blanks the entire save container.** Not a load initiator, despite the old name.
+/// 0x67b4e0 stages one memset-to-zero 0x280000 buffer into every container entry via
 /// 0x140e6ec80 (whose callees are `memset` + `SLSaveContent` + `AllocateAligned`), submits on
-/// the write lane, and sets `GameMan->saveState = 1`. It is NOT among the code xrefs of the
-/// READ builder 0x140e6eb80. Corrected 2026-08-01; nothing in this repo calls it (the two
+/// the write lane, and sets `GameMan->saveState = 1`. It is not among the code xrefs of the
+/// read builder 0x140e6eb80. Corrected 2026-08-01; nothing in this repo calls it (the two
 /// remaining references sit in `let _ = (...)` warning-suppression tuples, and one trace hook
 /// observes it), so this is a badly-named loaded gun rather than a live hazard.
 pub(crate) const BLANK_SAVE_CONTAINER_REQUEST_RVA: usize = 0x67b4e0;
-/// FULL-LOAD (deserialize-arm) initiator 0x14067b1a0: begins the slot read and
-/// sets GameMan+0xb80=2 (the b80==2 deserialize arm), NOT b80=1 (the preview lane that
+/// Full-load (deserialize-arm) initiator 0x14067b1a0: begins the slot read and
+/// sets GameMan+0xb80=2 (the b80==2 deserialize arm), not b80=1 (the preview lane that
 /// 0x14067b4e0 uses and that resets to 0 without deserializing). Runtime-proven the
 /// preview lane never reaches b80==3; the b80=2 arm is the one the poll 0x140679180
 /// advances 2->3 (resident) so the full deserialize 0x14067b290 can run.
 ///
-/// **ITS ARGUMENT IS NOT THE SLOT.** This comment used to say `(ecx=slot)` and that is
+/// **its argument is not the slot.** This comment used to say `(ecx=slot)` and that is
 /// what every call site in this repo believed. The game's own and only call site passes
 /// a hard zero:
 ///
@@ -762,7 +762,7 @@ pub(crate) const BLANK_SAVE_CONTAINER_REQUEST_RVA: usize = 0x67b4e0;
 /// the allocate-and-enqueue path. A non-zero argument takes the other branch, nothing is
 /// enqueued, the initiator returns 0 and `b80` stays 0.
 ///
-/// The SLOT is communicated separately and beforehand, by
+/// The slot is communicated separately and beforehand, by
 /// [`FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA`] (`0x14067a810`) plus the `GameMan+0xb78`
 /// selector write. Passing the slot here worked for slot 0 purely because 0 is the value
 /// the game passes anyway; every other slot was silently refused, which is what
@@ -773,7 +773,7 @@ pub(crate) const B80_FULL_LOAD_INITIATOR_RVA: usize = 0x67b1a0;
 /// than spelled `0` at each call site, because a bare zero next to a slot variable reads
 /// like an oversight and invites someone to "fix" it back into a slot.
 pub(crate) const B80_FULL_LOAD_SUBMIT_FLAG: i32 = 0;
-/// The MENU's STEP_LoadSaveData initiator 0x14067b200(ecx=slot): sets GameMan+0xb80=2
+/// The menu's STEP_LoadSaveData initiator 0x14067b200(ecx=slot): sets GameMan+0xb80=2
 /// (the deserialize arm) the way the real Load-Game list does. Distinct from the
 /// preview 0x67b4e0 (b80=1) and the 0x67b1a0 variant. Hooked for the b80-mount capture
 /// to pin which initiator the real .co2 load fires and in what order.

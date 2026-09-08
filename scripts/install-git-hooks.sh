@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the repo's version-controlled git hooks. TWO THINGS GET INSTALLED, and the second one is
+# Install the repo's version-controlled git hooks. Two things get installed, and the second one is
 # the reason this script is not a one-liner any more:
 #
 #   1. core.hooksPath -> scripts/hooks. The normal path: git runs scripts/hooks/<name> directly.
@@ -19,7 +19,7 @@
 # static-guards-run-in-build-format-cycle-precommit-hook-2026-07-19.
 set -euo pipefail
 
-# NOT `git rev-parse --show-toplevel`: this script is the repair tool for a broken git config, and
+# Not `git rev-parse --show-toplevel`: this script is the repair tool for a broken git config, and
 # on 2026-08-31 it could not run at all in the state it was meant to repair -- the checkout had
 # core.bare=true, --show-toplevel died with "fatal: this operation must be run in a work tree",
 # and `set -e` killed the script on its first line. The script's own location is not a git

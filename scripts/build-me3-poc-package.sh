@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# er-artifact-redirect: this script GENERATES the two user-facing launchers below, and their
+# er-artifact-redirect: this script generates the two user-facing launchers below, and their
 # redirect lines are the ones a user's run actually uses. The `me3 launch` commands live inside
 # the heredocs that write them, which the audit's shape detector treats as data rather than a
 # command (correctly -- see stage-autoload-release.sh, whose usage() text is not a launch). This
@@ -121,7 +121,7 @@ save_file = $SaveToml
 slot = $Slot
 "@ | Set-Content -Encoding UTF8 -Path $ConfigPath
 
-# EVERY per-run artifact goes to $LogDir. Anything left beside the game exe is SINGLE-SLOT: the DLL
+# Every per-run artifact goes to $LogDir. Anything left beside the game exe is single-SLOT: the DLL
 # rotates `<name>` to `<name>.prev` on its first write, so run N-2 is already gone. Add a line here
 # (and to the bash launcher below) for any future log rather than copying it out afterwards.
 # ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH also relocates the portrait-capture-slot*.bin dumps.
@@ -232,7 +232,7 @@ config.write_text(
 )
 PY
 
-# EVERY per-run artifact goes to $LOG_DIR. Anything left beside the game exe is SINGLE-SLOT: the DLL
+# Every per-run artifact goes to $LOG_DIR. Anything left beside the game exe is single-SLOT: the DLL
 # rotates `<name>` to `<name>.prev` on its first write, so run N-2 is already gone. Add a line here
 # (and to the PowerShell launcher above) for any future log rather than copying it out afterwards.
 # ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH also relocates the portrait-capture-slot*.bin dumps.

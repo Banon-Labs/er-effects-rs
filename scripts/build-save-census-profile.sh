@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the standalone save-disable DLL and emit an ME3 profile that loads ONLY it.
+# Build the standalone save-disable DLL and emit an ME3 profile that loads only it.
 #
 # The profile is deliberately minimal -- no product DLL, no Seamless Co-op -- so the
 # run measures the game plus this DLL and nothing else.
@@ -41,7 +41,7 @@ else
 fi
 
 # Built through er-build-dlls.sh rather than a bare `cargo xwin build` because that wrapper
-# RECORDS PROVENANCE for what it just linked -- a content hash over each package's compiled
+# records provenance for what it just linked -- a content hash over each package's compiled
 # closure, taken while that tree was the one being compiled, which cannot be reconstructed
 # afterwards. Without it the verification below could never pass, and a gate that can never pass
 # is a gate people delete.
@@ -50,7 +50,7 @@ if ! ER_BUILD_TARGET="$TARGET_TRIPLE" bash "$REPO/scripts/er-build-dlls.sh" "${P
 	exit 1
 fi
 
-# REFUSE TO EMIT, rather than warn. This script's output is not a run, it is a FILE: the .me3
+# Refuse to emit, rather than warn. This script's output is not a run, it is a FILE: the .me3
 # below names the DLL by absolute path and is handed to `me3 launch -p save-census.me3` later --
 # possibly much later, by someone who never saw this shell. A warning printed now is gone by
 # then, me3 itself checks nothing, and the census the profile produces would be attributed to
@@ -75,7 +75,7 @@ start_online = false
 [[supports]]
 game = "eldenring"
 
-# Save-disable DLL: suppresses every save WRITE at the SL submit choke point and
+# Save-disable DLL: suppresses every save write at the SL submit choke point and
 # reports success to the game, while the Win32 file-API census keeps watching for any
 # write that escapes. Loads are untouched. Set ER_SAVE_DISABLE_CENSUS_ONLY=1 to disarm
 # suppression for the positive-control run.

@@ -6,7 +6,7 @@
 //! frame rather than at attach. A fixed delay is a guess about all of that, and it is a guess that
 //! silently reports half a profile whenever a machine is slower than the machine it was tuned on.
 //!
-//! So the gate is evidence-driven, and it needs BOTH halves:
+//! So the gate is evidence-driven, and it needs both halves:
 //!
 //! * **The module list has stopped changing.** A signature over the loaded modules, unchanged for
 //!   [`STABLE_TICKS`] consecutive frames. This is what says every DLL is in.

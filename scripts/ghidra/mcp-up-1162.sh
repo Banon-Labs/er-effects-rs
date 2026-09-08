@@ -34,12 +34,12 @@ PORT="${GHIDRA_MCP_PORT:-8765}"
 bash "$REPO/scripts/ghidra/mcp-ghidra-daemon.sh" start \
 	--proj-dir "$PROJ_DIR" --proj-name "$PROJ_NAME" --port "$PORT" "$@"
 
-# Validate. Loading the 1.16.2 program takes longer than the daemon's own 30s READY wait, so block
-# EVENT-DRIVEN on the daemon's READY heartbeat via `tail -F` (no polling sleeps -- same pattern the
+# Validate. Loading the 1.16.2 program takes longer than the daemon's own 30s ready wait, so block
+# event-driven on the daemon's ready heartbeat via `tail -F` (no polling sleeps -- same pattern the
 # daemon uses), then ping + fetch program info over the lock-free direct client.
 LOG="$HOME/ghidra_maporch/mcp/daemon.log"
-# Wait for the daemon's READY heartbeat in <=30s bounded segments (per-op 30s cap; the 1.16.2 program
-# load exceeds one segment). Event-driven via `tail -F`, no polling sleeps. Bail early on FAILED.
+# Wait for the daemon's ready heartbeat in <=30s bounded segments (per-op 30s cap; the 1.16.2 program
+# load exceeds one segment). Event-driven via `tail -F`, no polling sleeps. Bail early on failed.
 for _ in 1 2 3 4 5 6 7 8; do
 	timeout 30 grep -m1 "MCP_HEADLESS: READY" <(tail -F -n +1 "$LOG" 2>/dev/null) >/dev/null 2>&1 && break
 	grep -q "MCP_HEADLESS: FAILED" "$LOG" 2>/dev/null && break
@@ -49,7 +49,7 @@ if python3 "$REPO/scripts/ghidra/mcp_query.py" ping --port "$PORT" >/dev/null 2>
 	# Daemon methods are camelCase (get_program_info is not a method). getContext names the program.
 	python3 "$REPO/scripts/ghidra/mcp_query.py" getContext --port "$PORT"
 	# Decompiler smoke: a fresh/copied install can lose +x on the native `decompile` binary, which
-	# fails ALL decompiles while other queries work. The daemon start self-heals the bits
+	# fails all decompiles while other queries work. The daemon start self-heals the bits
 	# (fix_native_exec_bits in mcp-ghidra-daemon.sh); this proves end-to-end decompiled C.
 	if python3 "$REPO/scripts/ghidra/mcp_query.py" getDecompiledCode \
 			--params '{"address":"1406793d0"}' --port "$PORT" 2>/dev/null \

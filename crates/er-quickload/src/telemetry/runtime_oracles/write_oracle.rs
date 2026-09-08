@@ -1,6 +1,6 @@
-/// ORACLE reads for the proof bundle (per the goal): the LIVE in-world facts the harness asserts
+/// Oracle reads for the proof bundle (per the goal): the live in-world facts the harness asserts
 /// on, independent of any agent narrative. Re-fetches the local player (the lib.rs player borrow
-/// has ended before this runs). For a ZERO-INPUT run, `simulated_button_presses_total` MUST be 0;
+/// has ended before this runs). For a zero-input run, `simulated_button_presses_total` must be 0;
 /// `oracle_grounded` + a valid `oracle_block_id` + finite non-origin `oracle_havok_pos`
 /// distinguish "in the playable world" from "frozen on a loading screen".
 pub(crate) fn write_oracle_telemetry(body: &mut String) {
@@ -43,7 +43,7 @@ fn write_stepfinish_gate_oracle(body: &mut String) {
         ingame.and_then(|ig| rd(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET).filter(|v| *v != null));
     // Publish the reliably-resolved MoveMapStep pointer for the in-world finalize drive to consume:
     // this resolution tracks load2's true in-world step (18) whereas the game-task's fresh title_owner
-    // scan reads a stale owner -> stale step (bd CORRECTED-title-owner-gate-not-blocker-load2-mms18-
+    // scan reads a stale owner -> stale step (bd corrected-title-owner-gate-not-blocker-load2-mms18-
     // resolution-disagrees-writeoracle-reliable-2026-07-20).
     ORACLE_RELIABLE_MMS_PTR.store(mms.unwrap_or(0), Ordering::SeqCst);
     const MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET: usize = 0x12a;
@@ -87,13 +87,13 @@ fn write_stepfinish_gate_oracle(body: &mut String) {
         remoman != 0,
         remo_pending != 0
     ));
-    // RESIDUAL-STATE DIAGNOSTIC (bd fix-real-gap-is-residual-teardown-state-not-continue-shape): the FD4
+    // Residual-state diagnostic (bd fix-real-gap-is-residual-teardown-state-not-continue-shape): the FD4
     // scheduler stops ticking load2's MoveMapStep child (mms+0x108) after ~6 ticks while load1's keeps
-    // ticking. Publish the child EzChildStepBase ptr + a header window (vtable + state/flags/links) EVERY
+    // ticking. Publish the child EzChildStepBase ptr + a header window (vtable + state/flags/links) every
     // frame so a load1-vs-load2 diff pins the exact field that flips when the child leaves the tick set.
     // Read-only, fault-safe (null when mms/child unresolved). No behavior change.
-    // CORRECTED: the MoveMapStep child (EzChildStepBase) is EMBEDDED at mms+0x108 (its first qword is
-    // the vtable), NOT a pointer. Read its member fields directly (mms+0x108+off) and the step object it
+    // CORRECTED: the MoveMapStep child (EzChildStepBase) is embedded at mms+0x108 (its first qword is
+    // the vtable), not a pointer. Read its member fields directly (mms+0x108+off) and the step object it
     // wraps (*(mms+0x110), i.e. ezcsb+0x8). One of these holds the active/scheduled state the FD4
     // scheduler reads; ez00 (vtable) is static so it is omitted. Diff load1(ticking) vs load2(dropped).
     let cbase = mms.map(|m| m + MOVEMAPSTEP_CHILD_EZSTEP_108_OFFSET);
@@ -150,10 +150,10 @@ fn write_stepfinish_gate_oracle(body: &mut String) {
         mms_u8(MOVEMAPSTEP_ADVANCE_GATE_HI_4B9_OFFSET),
         mms_u8(MOVEMAPSTEP_CONTROL_ENABLE_4BA_OFFSET),
     ));
-    // LOAD2 BLOCK-STREAMING discriminator (bd menu-open-works-real-blocker-is-load2-mms18-completion-
-    // block-streaming-0x35): the loadlist is POPULATED yet load2 stalls at WorldResWait, so scan the
-    // block list from FieldArea=mms+0xf0 to see if the target-area block is REGISTERED (registration gap
-    // vs present-but-not-streaming). Reuses the proven own_load scan offsets but runs on the CURRENT
+    // LOAD2 block-streaming discriminator (bd menu-open-works-real-blocker-is-load2-mms18-completion-
+    // block-streaming-0x35): the loadlist is populated yet load2 stalls at WorldResWait, so scan the
+    // block list from FieldArea=mms+0xf0 to see if the target-area block is registered (registration gap
+    // vs present-but-not-streaming). Reuses the proven own_load scan offsets but runs on the current
     // native-continue/switch path where that observer is dormant. Passive, capped at 64, fault-safe.
     let field_area = mms.and_then(|m| rd(m + 0xf0)).filter(|&v| v > 0x1_0000);
     let l2_req_coord = field_area.and_then(|fa| rd(fa + 0x2c)).map(|v| v as u32).unwrap_or(0);
@@ -318,9 +318,9 @@ fn write_title_menu_flow_oracles(body: &mut String) {
         format_optional_ptr(RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA.load(Ordering::SeqCst))
     ));
     body.push_str(&format!(
-        // NOTE: oracle_continue_deser_fired / oracle_continue_confirmed were REMOVED
+        // NOTE: oracle_continue_deser_fired / oracle_continue_confirmed were removed
         // (2026-06-24): they tracked OWN_STEPPER_DESER_FIRED/OWN_STEPPER_CONFIRMED -- the
-        // own_stepper/native_continue confirm-FIRE chain -- NOT whether the character loaded.
+        // own_stepper/native_continue confirm-fire chain -- Not whether the character loaded.
         // The default zero-input autoload (pab-advance + title-accept-byte natural menu-open)
         // loads without that chain, so the fields read 0 on success and were repeatedly misread
         // as "load failed". The real load semaphore is world_loaded (player_present + world_stable
@@ -337,9 +337,9 @@ fn write_title_menu_flow_oracles(body: &mut String) {
 fn write_player_presence_oracle(body: &mut String) {
     const BLOCK_ID_NONE: i32 = -1;
     if let Ok(world_chr_man) = unsafe { eldenring::cs::WorldChrMan::instance_mut() } {
-        // Loaded-entity list counts (bd STEP4-4fps-attribution-needs-NEW-telemetry): the ~4fps is a
-        // heavier GAME render at identical render-state flags -> test whether the mod SetState5 reload
-        // leaves MORE entities resident (heavier draw) than the vanilla native-Continue reload. These are
+        // Loaded-entity list counts (bd STEP4-4fps-attribution-needs-new-telemetry): the ~4fps is a
+        // heavier game render at identical render-state flags -> test whether the mod SetState5 reload
+        // leaves more entities resident (heavier draw) than the vanilla native-Continue reload. These are
         // the WorldChrMan world-block/area character-list counts.
         body.push_str(&format!(
             "  \"oracle_worldchrman_present\": true,\n  \"oracle_worldchrman_main_player\": \"0x{:x}\",\n  \"oracle_worldchrman_player_chr_set_capacity\": {},\n  \"oracle_wcm_world_area_chr_list_count\": {},\n  \"oracle_wcm_world_block_chr_list_count\": {},\n  \"oracle_wcm_world_grid_area_chr_list_count\": {},\n",
@@ -385,8 +385,8 @@ fn write_player_presence_oracle(body: &mut String) {
         let chr_onscreen = player.chr_ins.chr_flags1c4.is_onscreen();
         let chr_enable_render = player.chr_ins.chr_flags1c5.enable_render();
         // player_render_ready = the player is actually being RENDERED: model+ctrl instances exist and
-        // the render-group + enable_render flags are on. It intentionally does NOT require
-        // chr_draw_group_enabled -- that is a LOAD draw-state flag that stays FALSE through a valid
+        // the render-group + enable_render flags are on. It intentionally does not require
+        // chr_draw_group_enabled -- that is a load draw-state flag that stays false through a valid
         // movable reload (run4 load3 moved 115 frames with draw_group=False), which made render_ready a
         // false-negative reading False while the game presented frames at 20fps (user 2026-07-22:
         // ">0 fps with render_ready false makes no sense"). draw_group is kept as its own oracle
@@ -421,10 +421,10 @@ fn write_player_presence_oracle(body: &mut String) {
     } else {
         body.push_str("  \"oracle_player_present\": false,\n");
     }
-    // CAN-MOVE proof (2026-07-18): input-causes-movement gate. can_move latches once a load sustains
+    // Can-move proof (2026-07-18): input-causes-movement gate. can_move latches once a load sustains
     // >=60 consecutive frames of injected-forward havok motion; moved_frames is the live consecutive
-    // count. EPOCH-GATED: only report can_move for the CURRENT load -- when fresh_deser flips (a reload
-    // deserialize commits, mid-loading) CAN_MOVE_CONFIRMED is still latched from the PRIOR load until the
+    // count. Epoch-GATED: only report can_move for the current load -- when fresh_deser flips (a reload
+    // deserialize commits, mid-loading) CAN_MOVE_CONFIRMED is still latched from the prior load until the
     // probe's next in-world tick resets it, so gate on MOVE_PROBE_EPOCH == current fresh_deser to avoid
     // misattributing the prior load's movement to the new one (the false-pass fix).
     let cur_deser =
@@ -432,9 +432,9 @@ fn write_player_presence_oracle(body: &mut String) {
     let probe_epoch = crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst);
     let can_move =
         crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst) && probe_epoch == cur_deser;
-    // SEMAPHORE SPLIT (user 2026-07-19): three distinct signals, not one conflated can_move.
-    //  * oracle_can_move           = CAPABILITY proven (>=60 consecutive moved frames under our input)
-    //  * oracle_supplied_movement_input_frames = did WE inject (frames we wrote the forward stick)
+    // SEMAPHORE split (user 2026-07-19): three distinct signals, not one conflated can_move.
+    //  * oracle_can_move           = capability proven (>=60 consecutive moved frames under our input)
+    //  * oracle_supplied_movement_input_frames = did we inject (frames we wrote the forward stick)
     //  * oracle_did_move_frames    = did the char actually move (cumulative displaced frames)
     // supplied>0 && did_move==0  => injection layer wrong/ignored (pad stick vs kb+mouse WASD).
     body.push_str(&format!(
@@ -444,10 +444,10 @@ fn write_player_presence_oracle(body: &mut String) {
         crate::constants::SUPPLIED_MOVEMENT_INPUT_FRAMES.load(Ordering::Relaxed),
         crate::constants::DID_MOVE_FRAMES.load(Ordering::Relaxed)
     ));
-    // HARNESS-ATTRIBUTED verdict (user 2026-07-20): the CONTAMINATION-PROOF movement result -- the
-    // probe alternates inject-on/inject-off windows and requires the char to move under OUR stick AND
+    // Harness-attributed verdict (user 2026-07-20): the contamination-proof movement result -- the
+    // probe alternates inject-on/inject-off windows and requires the char to move under our stick and
     // stop when we release, so a user moving the char cannot read as proof. Epoch-gated like can_move.
-    // 0=pending 1=PROVEN(harness moved char) 2=DISPROVEN(injection ineffective) 3=CONTAMINATED(external).
+    // 0=pending 1=proven(harness moved char) 2=DISPROVEN(injection ineffective) 3=contaminated(external).
     let harness_move_verdict = if probe_epoch == cur_deser {
         crate::constants::HARNESS_MOVE_VERDICT.load(Ordering::SeqCst)
     } else {
@@ -456,15 +456,15 @@ fn write_player_presence_oracle(body: &mut String) {
     body.push_str(&format!(
         "  \"oracle_harness_move_verdict\": {harness_move_verdict},\n"
     ));
-    // THE KEYBOARD STAGES ER ACTUALLY READS (2026-09-05). These five answer the question the RawInput
-    // counters below CANNOT. `eldenring.exe` 1.17 imports DINPUT8's DirectInput8Create and USER32's
-    // GetKeyState/GetKeyboardState/ToAscii, and imports NO RawInput API at all -- GetRawInputData,
+    // The keyboard stages ER actually reads (2026-09-05). These five answer the question the RawInput
+    // counters below cannot. `eldenring.exe` 1.17 imports DINPUT8's DirectInput8Create and USER32's
+    // GetKeyState/GetKeyboardState/ToAscii, and imports no RawInput API at all -- GetRawInputData,
     // GetRawInputBuffer and RegisterRawInputDevices are absent from the image -- so every RawInput
     // number below is the overlay's traffic, never the game's. That is what made run
     // br-20260905-031610-5406 unreadable: 150 supplied SendInput frames against 0 RawInput key events,
     // with no way to tell "the key never arrived" from "the key arrived and did nothing".
     // `*_fires` = the game asked this stage for the keyboard. `*_stamps` = we answered "held" into the
-    // buffer/return value it was about to read. Stamping happens AFTER the original call, which is what
+    // buffer/return value it was about to read. Stamping happens after the original call, which is what
     // makes it focus-independent: both stages otherwise report only for the thread that owns focus.
     body.push_str(&format!(
         "  \"oracle_dinput_kb_hook_fires\": {},\n  \"oracle_dinput_injected_key_stamps\": {},\n  \"oracle_user32_get_keyboard_state_fires\": {},\n  \"oracle_user32_get_key_state_fires\": {},\n  \"oracle_user32_injected_vk_stamps\": {},\n  \"oracle_user32_get_cursor_pos_fires\": {},\n  \"oracle_dinput_mouse_hook_fires\": {},\n  \"oracle_move_probe_on_disp_milli\": {},\n  \"oracle_move_probe_off_tail_disp_milli\": {},\n  \"oracle_pad_gate_mgr_2f8\": {},\n  \"oracle_pad_gate_mgr_2f9\": {},\n  \"oracle_pad_gate_debug_byte\": {},\n  \"oracle_pad_gate_shut_on_inject_frames\": {},\n",
@@ -482,9 +482,9 @@ fn write_player_presence_oracle(body: &mut String) {
         er_telemetry_core::counters::PAD_GATE_DEBUG_BYTE.load(Ordering::Relaxed),
         er_telemetry_core::counters::PAD_GATE_SHUT_ON_INJECT_FRAMES.load(Ordering::Relaxed),
     ));
-    // RAWINPUT RECEPTION (user 2026-07-20): whether the GAME received USER mouse/keyboard input this
-    // run. The input-harness injects via the direct-memory inputmgr (NOT RawInput), so any nonzero count
-    // here means the user's input reached the game -> the run is CONTAMINATED. Cumulative event counts.
+    // RAWINPUT reception (user 2026-07-20): whether the game received user mouse/keyboard input this
+    // run. The input-harness injects via the direct-memory inputmgr (not RawInput), so any nonzero count
+    // here means the user's input reached the game -> the run is contaminated. Cumulative event counts.
     body.push_str(&format!(
         "  \"oracle_rawinput_hook_calls\": {},\n  \"oracle_rawinput_mouse_move_events\": {},\n  \"oracle_rawinput_mouse_button_events\": {},\n  \"oracle_rawinput_key_events\": {},\n  \"oracle_rawinput_blocked_unfocused_events\": {},\n",
         crate::experiments::RAWINPUT_HOOK_CALLS.load(Ordering::Relaxed),

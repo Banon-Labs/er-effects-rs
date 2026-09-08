@@ -1,4 +1,4 @@
-//! Resolving the game functions this crate CALLS, for the build that is actually running.
+//! Resolving the game functions this crate calls, for the build that is actually running.
 //!
 //! # Why every call in this crate goes through here
 //!
@@ -19,15 +19,15 @@
 //!
 //! `resolve_game_address` writes one line per refusal into the shared address log, and this crate
 //! adds one line of its own naming the feature that just went inert. That second line is emitted
-//! ONCE PER NAME for the life of the process. The bound is not decoration: a session once logged
+//! once per name for the life of the process. The bound is not decoration: a session once logged
 //! **339,764** refusals of a single address because an unbounded refusal sat inside a recurring
 //! task, and the log became unreadable rather than merely long. This crate's callers are one-shot
 //! (`tick` claims its phase before it runs), so the natural volume is already small -- the guard
 //! is what keeps it small if a future caller is not.
 //!
-//! # What this is NOT for
+//! # What this is not for
 //!
-//! An address the running process DISCOVERED for itself -- an AOB scan hit, a vtable read, a
+//! An address the running process discovered for itself -- an AOB scan hit, a vtable read, a
 //! MinHook trampoline, a captured return address -- is already on the running build and must
 //! never be translated. Feeding one to this helper would refuse it (it is not a 1.16.2 source in
 //! the table) and cost the feature, or worse, translate it a second time. Nothing in this crate
@@ -41,7 +41,7 @@ use std::sync::Mutex;
 /// and a linear scan of forty `&'static str` pointers is not worth a hash table.
 static REPORTED: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
 
-/// Where `module_base + rva` lives on the RUNNING build, or `None` when nothing knows.
+/// Where `module_base + rva` lives on the running build, or `None` when nothing knows.
 ///
 /// `what` names the game function, and is what a reader of the log has to go on when a feature
 /// goes quiet -- so it should be the engine's own name for it, not the call site's.
@@ -74,7 +74,7 @@ fn report_once(what: &'static str) {
     ));
 }
 
-/// Resolve a whole group of natives, reporting EVERY name that has no mapping rather than the
+/// Resolve a whole group of natives, reporting every name that has no mapping rather than the
 /// first.
 ///
 /// The equip pass needs ten functions at once. Failing on the first would send a reader to fix one
@@ -101,10 +101,10 @@ pub fn resolve_all<const N: usize>(
 
 /// The natives already reported inert on this build, in the order they were first refused.
 ///
-/// Exists so a run that applied nothing can NAME what was missing instead of printing zeroes.
+/// Exists so a run that applied nothing can name what was missing instead of printing zeroes.
 /// Before 2026-08-30 the importer answered a fully-refused run with
 /// `import complete: 0/0 items, 0/0 gear, 0/0 spells, RL0` and a telemetry block reading
-/// `failed_count=0, refused_count=0` -- the counters were truthful about what was ATTEMPTED and
+/// `failed_count=0, refused_count=0` -- the counters were truthful about what was attempted and
 /// silent about the fact that nothing could be, which is the most expensive way to be right.
 /// A poisoned lock yields an empty list: the caller's message degrades to "no names available",
 /// which is still a failure report.

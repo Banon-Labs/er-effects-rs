@@ -15,7 +15,7 @@ DCX/zstd -> BND4 -> PARAM), so a format change fails loudly in one place.
 
 Row stride is derived from the row-entry table (consecutive data offsets), not
 from a paramdef -- no paramdef is needed to detect that a row got wider, which is
-the layout change that matters. A stride that is unchanged does NOT prove the
+the layout change that matters. A stride that is unchanged does not prove the
 field *meanings* are unchanged; it only rules out resizing.
 """
 
@@ -46,7 +46,7 @@ RP = _load_sibling()
 
 
 #: Explicit opt-out for an environment that genuinely cannot have the game installed (CI).
-#: Set to 1 to downgrade a missing regulation from a failure to a PRINTED skip. Absent this,
+#: Set to 1 to downgrade a missing regulation from a failure to a printed skip. Absent this,
 #: a missing regulation is exit 2 -- "could not look" must never read as "agreed".
 ALLOW_MISSING_REGULATION_ENV = "ER_ALLOW_MISSING_REGULATION"
 
@@ -71,7 +71,7 @@ def missing_regulation(path, what):
 
 
 def installed_regulation():
-    """The regulation of the game installed for the CURRENT user.
+    """The regulation of the game installed for the current user.
 
     `ER_REGULATION` wins; otherwise the native-Linux Steam library under this user's
     home. Never a hard-coded `/home/<someone>`: this has to run for whoever checks the
@@ -98,7 +98,7 @@ def param_stats(blob):
     row_count = struct.unpack_from("<H", blob, 0x0A)[0]
     # SoulsFormats names the u16 at +0x08 ParamdefDataVersion: the revision of the PARAMDEF
     # this file's rows were built against. Corroborating evidence for a layout change, not
-    # proof of one -- the row STRIDE below is the direct measurement.
+    # proof of one -- the row stride below is the direct measurement.
     paramdef_data_version = struct.unpack_from("<H", blob, 0x08)[0]
     # +0x2C..+0x2F are PARAM's format flag bytes (SoulsFormats Format2D/2E/2F/Unk2B), read as
     # one u16 purely as an invariant: if the container format changed, this changes.
@@ -148,13 +148,13 @@ def validate_effects_json(path, old_files, new_files):
     """Every `sp_effect` id in the catalog must still be a `SpEffectParam` row.
 
     This is the pure-python equivalent of `er-param-inspect validate`, which needs a
-    Smithbox checkout and a dotnet bridge to answer the same question. Row EXISTENCE
+    Smithbox checkout and a dotnet bridge to answer the same question. Row existence
     needs no paramdef, so it needs neither -- which is what lets it run in a gate.
 
-    `old_files` is OPTIONAL. With a second regulation it also reports which referenced
-    rows changed BYTES between the two: an id that still exists but whose row was
+    `old_files` is optional. With a second regulation it also reports which referenced
+    rows changed bytes between the two: an id that still exists but whose row was
     rebalanced is a silent behaviour change, not a validation failure, so it is reported
-    without failing. Without one -- the shape a gate uses, since only the INSTALLED
+    without failing. Without one -- the shape a gate uses, since only the installed
     regulation is guaranteed to be on the machine -- the existence check still runs, and
     that is the check that fails the build.
     """

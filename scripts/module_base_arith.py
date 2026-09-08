@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
 """Is this `<module base> + <something>` a compiled-in 1.16.2 address used raw on 1.17?
 
-ONE DIALECT, NOT TWO. `scripts/check-oracle-singleton-globals.py` and
+One dialect, not two. `scripts/check-oracle-singleton-globals.py` and
 `scripts/check-stale-rva-calls.py` both answer that question, and until 2026-08-31 they answered
 it with two different vocabularies -- which is how 29 sites ended up owned by neither.
 
-    THE SEAM, measured rather than asserted. The pair was repeatedly described as a partition:
+    The seam, measured rather than asserted. The pair was repeatedly described as a partition:
     `check-stale-rva-calls.py` owns `base + NAMED_CONSTANT`, the singleton gate owns every other
     right-hand side. It was not a partition. The sibling recognised a named constant only inside
     `transmute(...)`, `safe_read_*(...)` or a comparison, and the singleton gate had already
     handed the site away on seeing an uppercase right-hand side. Anywhere else -- inside a
-    `format_args!`, as an element of a hook-install table, as a bare `let` -- BOTH gates were
+    `format_args!`, as an element of a hook-install table, as a bare `let` -- Both gates were
     silent, and `check-stale-rva-calls.py` reported `0 known ungated site(s)` throughout.
 
     The consequence was mostly log lines naming a 1.16.2 address on the one branch whose entire
     subject is that addresses moved: `title_scaleform_msgbox.rs:361` printed
     `base + POLICY_TOS_TITLE_CTOR_RVA` directly above a correctly resolved `game_data_addr` call
-    inside the SAME `format_args!`, so the line named an address the code never touched.
+    inside the same `format_args!`, so the line named an address the code never touched.
 
 So the shared vocabulary lives here, and both gates import it. A widening or a fix to any of
 these decisions now lands in both at once, which is the whole point -- the alternative is two
 copies that agree today and drift by the next migration.
 
-WHAT IS SHARED, and what each decision is FOR:
+What is shared, and what each decision is FOR:
 
-  `is_module_base`      Is the identifier the GAME module base? Decided from the BINDING, never
+  `is_module_base`      Is the identifier the game module base? Decided from the binding, never
                         from the name -- `er-crash-logging-core/src/hang.rs` calls a heap
                         `CS::LoadingScreenData` pointer `base`, `er-invasion-warp`'s is
                         `ersc.dll`'s, and `er-save-loader/src/profile_summary.rs`'s is a byte
@@ -32,13 +32,13 @@ WHAT IS SHARED, and what each decision is FOR:
                         them has a version to be wrong about.
   `is_resolver_fed`     Does the sum reach an API that performs the 1.16.2 -> 1.17 resolve
                         itself? Handing `base + rva` to `MhHook::new`, `register_shared_hook` or
-                        `resolve_game_address` is the DOCUMENTED shape; resolving first is the
+                        `resolve_game_address` is the documented shape; resolving first is the
                         double-translate bug that `scripts/check-double-resolved-hook-targets.py`
                         exists for.
-  the VALUE bounds      A constant below `.text` is a PE-header field and cannot move; one at or
-                        above the image span is an EXTENT (`a < base + MODULE_SPAN`), not an
-                        address in it. Both are excluded by VALUE, never by name -- and a
-                        constant that cannot be resolved is KEPT, so "I could not read it" is
+  the value bounds      A constant below `.text` is a PE-header field and cannot move; one at or
+                        above the image span is an extent (`a < base + MODULE_SPAN`), not an
+                        address in it. Both are excluded by value, never by name -- and a
+                        constant that cannot be resolved is kept, so "I could not read it" is
                         never spelled the same way as "I read it and it is safe".
 """
 
@@ -49,7 +49,7 @@ import re
 # `.text` starts at RVA 0x1000; below that is the DOS stub and the PE headers, whose layout the PE
 # format fixes and which therefore cannot move between game builds.
 PE_HEADER_LIMIT = 0x1000
-# At or above the image span a constant is a module EXTENT, not an address in it: `a < base +
+# At or above the image span a constant is a module extent, not an address in it: `a < base +
 # 0x0800_0000` is a range test. `er-armament-icons` writes two of those and `msb_invasion_points.rs`
 # a third (`MAX_IMAGE_SPAN` = 0x1000_0000).
 MODULE_SPAN_LIMIT = 0x0800_0000
@@ -72,9 +72,9 @@ SOURCE_EXEMPT = {
     "crates/er-game-base/src/build_id.rs",
 }
 
-# What makes an identifier the MODULE base rather than any other pointer called `base`.
+# What makes an identifier the module base rather than any other pointer called `base`.
 #
-# MATCHED ON A WORD BOUNDARY, not as a substring. `ersc_module_base()` CONTAINS `module_base(`, and
+# Matched on a word boundary, not as a substring. `ersc_module_base()` contains `module_base(`, and
 # reading it as one made `er-invasion-warp/src/local_invasion_filter.rs` -- whose `base` is the
 # Seamless Co-op DLL, resolved by a prologue byte-check against a shipped ersc build and nothing to
 # do with the game image -- look like a stale game address.
@@ -83,10 +83,10 @@ MODULE_BASE_SOURCE_RE = re.compile(
     r"(?<![A-Za-z0-9_])(?:game_module_base|game_base\s*\(|module_base\s*\(|GetModuleHandle)"
 )
 
-# The first parameter of each of these IS the game module base -- that is the whole signature. A
+# The first parameter of each of these is the game module base -- that is the whole signature. A
 # file that passes an identifier there has stated, in its own code, what that identifier is. This is
-# what lets a PARAMETER be recognised: `title_tick_cover.rs` takes `module_base: usize` and
-# `pad_inject.rs` takes `base: usize`, and neither has a `let`. Corroboration is per FILE, so
+# what lets a parameter be recognised: `title_tick_cover.rs` takes `module_base: usize` and
+# `pad_inject.rs` takes `base: usize`, and neither has a `let`. Corroboration is per file, so
 # `er-save-loader/src/profile_summary.rs` (whose `base` is an offset into a save record) is
 # unaffected by a sibling module that does resolve addresses.
 CORROBORATORS = (
@@ -96,7 +96,7 @@ CORROBORATORS = (
     "read_global_u8",
     "write_global_u8",
 )
-# Handing `base + rva` to one of these is CORRECT and is the documented shape: they perform the
+# Handing `base + rva` to one of these is correct and is the documented shape: they perform the
 # single 1.16.2 -> 1.17 resolve themselves, and resolving before the call would translate twice --
 # which silently lands on a third, unrelated function whenever an address is both one row's
 # destination and another row's source. See `er_game_base::mem::game_rva_for_hook` and
@@ -123,7 +123,7 @@ RESOLVING_CONSUMERS = (
     "create_and_apply_single_hook",
     "create_absolute_hook",
 )
-# An RVA the code READ OUT OF THE RUNNING IMAGE is already correct for the running build; there is
+# An RVA the code read out of the running image is already correct for the running build; there is
 # nothing to translate and translating it would be the bug. That is the same distinction
 # `MhHook::new_runtime_derived` draws, and it is what separates the PE-header walks in the crash
 # loggers (`base + e_lfanew`, `base + vaddr`, `base + size`) from a compiled-in 1.16.2 claim.
@@ -142,7 +142,7 @@ RUNTIME_DERIVED_MARKS = (
 # `hud_badge.rs` hands `target` to `MhHook::new` on the next line; `er-reload-trace` passes
 # `requested` to a registrar about fifteen lines down.
 LET_CONSUMER_WINDOW = 1200
-# The same idea for a TABLE. Wider because the distance is not one statement but a whole array
+# The same idea for a table. Wider because the distance is not one statement but a whole array
 # literal plus whatever stands between it and the loop: `er-better-refills` has fifteen lines of
 # comment between `let targets = [ ... ];` and the `for` that installs them, and comments are
 # blanked to spaces rather than removed, so they still cost their full length.
@@ -158,7 +158,7 @@ def _identifiers(pattern_text: str) -> list[str]:
 
 
 def binders(text: str) -> list[tuple[int, str, str, str]]:
-    """Every point where a lowercase name is BOUND, as `(pos, name, kind, initialiser)`.
+    """Every point where a lowercase name is bound, as `(pos, name, kind, initialiser)`.
 
     Not just `let`. The two false positives these gates have to keep clear of are bound by other
     means entirely: `title_tick_cover.rs` writes `for &(base, cnt) in GROUPS` -- a tuple of
@@ -182,12 +182,12 @@ def binders(text: str) -> list[tuple[int, str, str, str]]:
     for match in re.finditer(r"\bfor\s+([^\n{]{0,80}?)\s+in\b", text):
         for name in _identifiers(match.group(1)):
             out.append((match.start(), name, "for", ""))
-    # A closure parameter. The RECEIVER matters and is kept as the "initialiser": `.map(|rva| ...)`
+    # A closure parameter. The receiver matters and is kept as the "initialiser": `.map(|rva| ...)`
     # on a resolver call yields a resolved RVA, while the same spelling on a const array yields a
     # compiled-in one. Those are opposite facts and the only thing that separates them is what the
     # closure is mapped over.
     for match in re.finditer(r"\|\s*&?\s*([a-z_][a-z0-9_,:&\s]{0,60}?)\s*\|", text):
-        # The receiver is the CHAIN this closure is mapped over, and only when there is one.
+        # The receiver is the chain this closure is mapped over, and only when there is one.
         # `.map(|rva| ...)` on a resolver call yields a resolved RVA; the identical spelling on a
         # const array yields a compiled-in one. Taking "the 200 characters before the pipe"
         # instead conflated the two -- it swept up any nearby mention of the base and declared
@@ -219,9 +219,9 @@ def nearest_binder(bound: list[tuple[int, str, str, str]], name: str, before: in
 
 
 def is_module_base(text: str, bound, name: str, before: int) -> bool:
-    """Is `name`, at this point in this file, the GAME MODULE base?
+    """Is `name`, at this point in this file, the game module base?
 
-    Decided from the BINDING, never from the identifier -- the rule the original gate established
+    Decided from the binding, never from the identifier -- the rule the original gate established
     when `er-crash-logging-core/src/hang.rs` turned out to call a heap `CS::LoadingScreenData`
     pointer `base`. Widened only to answer the question for a name a `let` never bound.
     """
@@ -257,11 +257,11 @@ def balanced_rhs(text: str, start: int, limit: int = 120) -> str:
 def enclosing_call(text: str, position: int) -> str:
     """The callee of the innermost call this position sits inside, or `''`.
 
-    A BARE PARENTHESISED GROUP IS NOT A CALL and the walk steps over it (2026-08-31). `er-quickload`
+    A bare PARENTHESISED group is not a call and the walk steps over it (2026-08-31). `er-quickload`
     writes `create_and_apply_single_hook("AssertWrapper", (base + ASSERT_WRAPPER_RVA) as *mut
     c_void, ...)`: the innermost `(` around the addition has no callee before it, and returning
     `''` there reported a correctly-resolving hook install as an ungated address. The cast
-    parenthesis is punctuation; the call that RECEIVES the value is one level out.
+    parenthesis is punctuation; the call that receives the value is one level out.
     """
     depth = 0
     index = position - 1
@@ -324,22 +324,22 @@ def _enclosing_array(text: str, position: int) -> tuple[int, int] | None:
 
 
 def table_element_reaches_resolver(text: str, position: int) -> bool:
-    """Is this addition an ELEMENT of a hook-install table whose rows go to a resolving API?
+    """Is this addition an element of a hook-install table whose rows go to a resolving API?
 
     The shape `let addr = base + rva; MhHook::new(addr, ..)` is already recognised by
     `is_resolver_fed`, and this is the same fact written as a table -- which is how the tree
     actually installs more than one hook at a time, and which `check-double-resolved-hook-targets.py`
-    records that IT cannot see either ("its taint follows `let` bindings, and this target is an
+    records that it cannot see either ("its taint follows `let` bindings, and this target is an
     element of an array literal destructured by the `for` pattern, never bound to a local").
 
     Both spellings the tree uses are accepted, and nothing looser:
 
-      * the literal IS the iterable -- `for (name, target, ..) in [ .. base + RVA .. ] { .. }`
+      * the literal is the iterable -- `for (name, target, ..) in [ .. base + RVA .. ] { .. }`
         (`er-refill-all/src/runtime.rs`);
       * the literal is bound and then iterated -- `let targets = [ .. base + RVA .. ];` followed by
         `for (name, target, ..) in targets { .. }` (`er-better-refills/src/lib.rs`).
 
-    In both cases a name bound by the `for` PATTERN must be handed to a resolving consumer inside
+    In both cases a name bound by the `for` pattern must be handed to a resolving consumer inside
     the loop. A `for` merely standing near an addition proves nothing and is not accepted.
     """
     span = _enclosing_array(text, position)
@@ -376,13 +376,13 @@ def is_resolver_fed(text: str, position: int, expression: str | None) -> bool:
 
     Four ways, all of them shapes the tree actually writes:
 
-      * it IS the argument -- `resolve_detour_address(base + seam.rva, seam.name)`;
-      * the SAME expression is the argument somewhere else in the file, which is how
+      * it is the argument -- `resolve_detour_address(base + seam.rva, seam.name)`;
+      * the same expression is the argument somewhere else in the file, which is how
         `map_seams.rs` keeps `let stale = base + seam.rva` to name the address in its refusal
         while `resolve_detour_address` gets the identical expression on the next line;
       * it is bound with `let` and the binding is handed to a resolving API just below --
         `let target = base + rva;` then `MhHook::new(target, ...)`;
-      * it is a ROW of an install table that a `for` destructures into a resolving API -- see
+      * it is a row of an install table that a `for` destructures into a resolving API -- see
         `table_element_reaches_resolver`.
     """
     if enclosing_call(text, position) in RESOLVING_CONSUMERS or any(

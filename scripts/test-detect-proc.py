@@ -2,7 +2,7 @@
 """Regression tests for scripts/detect-proc.py.
 
 The detector runs on machines with different process topologies (native Linux, WSL with a
-Windows Steam, nested containers), so the tests must NOT depend on the live box. They pin
+Windows Steam, nested containers), so the tests must not depend on the live box. They pin
 the pure parsing/logic (path translation, ACF/VDF parsing, target matching) with fixtures
 and drive the environment-touching helpers (`_run`, `shutil.which`, filesystem) through
 monkeypatching, so the same assertions hold on every box in the fleet.
@@ -55,7 +55,7 @@ def check_acf_and_library_parsing(d, tmp: Path) -> None:
     assert hit is not None
     assert hit["name"] == "ELDEN RING"
     assert hit["fully_installed"] is True
-    # A partial/updating install (StateFlags != 4) must NOT read as fully installed.
+    # A partial/updating install (StateFlags != 4) must not read as fully installed.
     manifest.write_text('"AppState"\n{\n\t"StateFlags"\t\t"6"\n\t"name"\t\t"ELDEN RING"\n}\n',
                         encoding="utf-8")
     partial = d._game_in_library(str(tmp), "1245620")
@@ -78,8 +78,8 @@ def check_library_roots_from_vdf(d, tmp: Path) -> None:
 
 
 def check_match_target_uses_executable_not_cmdline(d) -> None:
-    # local-proc rows carry (pid, comm, argv0). A generic "steam" MUST match the real
-    # steam.exe image but MUST NOT match a shell whose argv0 is /usr/bin/zsh -- the earlier
+    # local-proc rows carry (pid, comm, argv0). A generic "steam" must match the real
+    # steam.exe image but must not match a shell whose argv0 is /usr/bin/zsh -- the earlier
     # full-cmdline match falsely flagged the detector's own invocation.
     rows = [
         ("100", "steam.exe", "steam.exe"),
@@ -145,7 +145,7 @@ def check_steam_readiness_windows_ready(d, monkeypatch, tmp: Path) -> None:
     assert r["game_installed"] is True
     assert r["game"]["name"] == "ELDEN RING"
 
-    # Not-signed-in variant: ActiveUser 0x0 flips signed_in off and the READY verdict.
+    # Not-signed-in variant: ActiveUser 0x0 flips signed_in off and the ready verdict.
     def fake_run_logged_out(cmd, _timeout=8.0):
         if cmd[0] == "reg.exe" and cmd[4] == "ActiveUser":
             return "    ActiveUser    REG_DWORD    0x0\r\n"

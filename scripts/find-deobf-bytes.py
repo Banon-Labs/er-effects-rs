@@ -11,7 +11,7 @@ A pattern is a hex string; use "??" for a wildcard byte, e.g.:
 
 Override the image with ER_DEOBF_BIN.
 
-The scan STOPS at 64 hits and says so ("hits=64+ (TRUNCATED ...)"), because a pattern loose
+The scan stops at 64 hits and says so ("hits=64+ (TRUNCATED ...)"), because a pattern loose
 enough to match dozens of sites is usually the wrong pattern rather than a long answer. Raise the
 cap with ER_DEOBF_MAX_HITS when you genuinely want the whole list -- but note that "hits=N" with
 no `+` is the only form that means "these are all of them", and an enumeration read off a
@@ -76,7 +76,7 @@ def main() -> int:
     for pat in sys.argv[1:]:
         want, mask = parse(pat)
         hits = search(data, want, mask)
-        # THE `+` IS LOAD-BEARING. A bare count reads as "this is the complete set", and an
+        # The `+` is load-bearing. A bare count reads as "this is the complete set", and an
         # agent that concluded "nothing else writes this field" off a silently-capped list would
         # be proving a negative out of a truncated sample.
         truncated = len(hits) >= MAX_HITS

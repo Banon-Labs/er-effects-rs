@@ -1,35 +1,35 @@
 #!/usr/bin/env bash
 # Cupcake signal: last_assistant_authority_agreement
 #
-# Scans the most recently COMPLETED assistant turn of the current session transcript and returns a
-# TAGGED banned-phrase marker, or empty if the turn is clean. Consumed by TWO policies:
+# Scans the most recently completed assistant turn of the current session transcript and returns a
+# tagged banned-phrase marker, or empty if the turn is clean. Consumed by two policies:
 #   * no_authority_agreement (Stop): halts turn-end so the agent must correct.
 #   * no_authority_agreement_reminder (UserPromptSubmit): injects a mandatory correction directive.
 #
-# TWO BANNED CLASSES (2026-07-17 directives):
-#   Category A -- AUTHORITY-CODED AGREEMENT ("You're right", "That's right", "Correct,", "Exactly,",
-#     "Absolutely,", "Precisely,"). Banned OUTRIGHT. Emitted as  AUTH:<phrase>.
-#   Category B -- FEEDBACK-ACKNOWLEDGEMENT / receipt-announcement prose ("Point taken", "Got it",
-#     "Understood", "Noted", "Fair point", "Makes sense", ...). This ANNOUNCES that the agent received
+# Two banned classes (2026-07-17 directives):
+#   Category A -- Authority-coded agreement ("You're right", "That's right", "Correct,", "Exactly,",
+#     "Absolutely,", "Precisely,"). Banned outright. Emitted as  AUTH:<phrase>.
+#   Category B -- Feedback-acknowledgement / receipt-announcement prose ("Point taken", "Got it",
+#     "Understood", "Noted", "Fair point", "Makes sense", ...). This announces that the agent received
 #     feedback; it is only acceptable when the agent actually internalized it by recording a beads
-#     memory in the SAME turn (a Bash tool_use running `bd remember`). So it is banned ONLY when the
-#     turn contains NO bd-memory recording. Emitted as  ACKUNBACKED:<phrase>  (and suppressed entirely
+#     memory in the same turn (a Bash tool_use running `bd remember`). So it is banned only when the
+#     turn contains no bd-memory recording. Emitted as  ACKUNBACKED:<phrase>  (and suppressed entirely
 #     when the turn has a bd-memory write).
 # Category A always wins over Category B (checked first, regardless of any bd-memory write).
-# A clean turn emits empty. Consumers also treat any NON-EMPTY UNTAGGED value as a Category-A hit
+# A clean turn emits empty. Consumers also treat any non-empty UNTAGGED value as a Category-A hit
 # (backward compat with crafted/bare signal values).
 #
-# WHY A WHOLE-TURN SCAN, NOT JUST THE LAST MESSAGE (2026-07-17 fix): the old signal kept only the LAST
-# assistant text block, so (a) a slip in an EARLIER message of a multi-message turn was overwritten by a
-# later clean block and escaped, and (b) when the user INTERRUPTS a turn, the Stop event never fires at
-# all -- the halt could not catch it. Scanning the whole last-completed turn fixes (a); routing the SAME
-# signal into the UserPromptSubmit reminder (which ALWAYS runs on the next prompt, even after an
+# Why a whole-turn scan, not just the last message (2026-07-17 fix): the old signal kept only the last
+# assistant text block, so (a) a slip in an earlier message of a multi-message turn was overwritten by a
+# later clean block and escaped, and (b) when the user interrupts a turn, the Stop event never fires at
+# all -- the halt could not catch it. Scanning the whole last-completed turn fixes (a); routing the same
+# signal into the UserPromptSubmit reminder (which always runs on the next prompt, even after an
 # interrupt) fixes (b). "Last completed turn" = the last non-empty run of assistant text bounded by real
 # user prompts; on UserPromptSubmit the just-submitted prompt opens a new empty run, so the prior turn is
-# still the last NON-EMPTY one -- the same value both events need. The bd-memory flag is bucketed into
-# the SAME turns so the Category-B exception is evaluated against the turn that produced the ack.
+# still the last non-empty one -- the same value both events need. The bd-memory flag is bucketed into
+# the same turns so the Category-B exception is evaluated against the turn that produced the ack.
 #
-# Double-quoted spans are stripped before matching so QUOTING the ban (this file, the reminder text, or a
+# Double-quoted spans are stripped before matching so quoting the ban (this file, the reminder text, or a
 # meta-discussion like `the phrase "You're right"`) does not false-trip; a real unquoted slip
 # (`You're right, ...`) still matches. Fail-open (empty output) on any error so a transcript hiccup
 # cannot wedge the session.
@@ -87,7 +87,7 @@ def assistant_has_bd_memory(ev):
     return False
 
 
-# Bucket assistant text AND bd-memory writes into turns delimited by real user prompts; keep the last
+# Bucket assistant text and bd-memory writes into turns delimited by real user prompts; keep the last
 # bucket that has any text (its own bd flag decides the Category-B exception).
 turns = [{"text": [], "bd": False}]
 try:
@@ -116,7 +116,7 @@ for bucket in reversed(turns):
         turn_has_bd_memory = bucket["bd"]
         break
 
-# Strip DOUBLE-quoted spans so quoting the ban does not count as using it (single quotes are left alone
+# Strip double-quoted spans so quoting the ban does not count as using it (single quotes are left alone
 # because the phrases themselves contain apostrophes, e.g. you're).
 scrubbed = re.sub(r'"[^"]*"', " ", last_turn)
 
@@ -128,7 +128,7 @@ def phrase(m):
     return m.group(0).strip()
 
 
-# Category A: authority-coded AGREEMENT, not incidental words ("the correct offset").
+# Category A: authority-coded agreement, not incidental words ("the correct offset").
 AUTH_RE = re.compile(
     r"\b(you'?re\s+right|you\s+are\s+right|that'?s\s+right|you'?re\s+correct|you\s+are\s+correct)\b"
     r"|(?:^|[.!?]\s+|\n)\s*(correct|exactly|absolutely|precisely)[,.! ]",
@@ -144,7 +144,7 @@ ACK_ANYWHERE_RE = re.compile(
     r"|(?:that|this|it)\s+makes sense)\b",
     re.IGNORECASE,
 )
-# Ambiguous words/short phrases: only when they OPEN a sentence as a standalone receipt, so
+# Ambiguous words/short phrases: only when they open a sentence as a standalone receipt, so
 # "as noted above" / "I understood the code" / "get everyone on board" do not false-trip.
 ACK_SENTENCE_INITIAL_RE = re.compile(
     r"(?:^|[.!?]\s+|\n)\s*"

@@ -4,10 +4,10 @@
 // log the full register/stack context, restore the byte, single-step over the
 // original instruction (trap flag), then re-arm. This is the same mechanism CE's
 // VEH debugger uses; software INT3 + VEH works under wine/Proton (esync/fsync),
-// unlike hardware DR data breakpoints. RVAs to break on are read from
+// unlike hardware dr data breakpoints. RVAs to break on are read from
 // er-quickload-breakpoints.txt (one hex RVA per line) in the game dir.
 pub(crate) const EXCEPTION_BREAKPOINT_CODE: u32 = 0x80000003;
-/// Win64 CONTEXT GP-register + EFlags offsets (ABI-fixed). EFlags carries the trap flag.
+/// Win64 context GP-register + EFlags offsets (ABI-fixed). EFlags carries the trap flag.
 pub(crate) const CONTEXT_EFLAGS_OFFSET: usize = 0x44;
 pub(crate) const CONTEXT_RAX_OFFSET: usize = 0x78;
 pub(crate) const CONTEXT_RCX_OFFSET: usize = 0x80;
@@ -58,7 +58,7 @@ pub(crate) static SW_BP_HITS: [AtomicUsize; SW_BP_MAX] =
 /// in the single-step handler). Single global: our breakpoints fire on one menu thread.
 pub(crate) static SW_BP_REARM_PENDING: AtomicUsize = AtomicUsize::new(SW_BP_REARM_NONE);
 pub(crate) use er_telemetry_core::counters::SW_BP_INSTALLED;
-/// Diagnostic: count #BP exceptions our VEH sees that are NOT at one of our armed addresses,
+/// Diagnostic: count #BP exceptions our VEH sees that are not at one of our armed addresses,
 /// to distinguish "VEH gets #BP but addr mismatch" from "VEH never sees #BP" under wine.
 pub(crate) static SW_BP_UNMATCHED_LOGGED: AtomicUsize = AtomicUsize::new(SW_BP_HITS_INIT);
 pub(crate) const SW_BP_MAX_UNMATCHED_LOGS: usize = 8;

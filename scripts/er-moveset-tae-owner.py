@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Which chr's TimeAct file describes a given creature's animations.
 
-WHY THIS EXISTS. `scripts/er-moveset-table-gen.py` joined the behaviour graph (what a
-creature can FIRE) against `<chr>.tae` (what the animation DOES) by chr id on both sides.
+Why this exists. `scripts/er-moveset-table-gen.py` joined the behaviour graph (what a
+creature can fire) against `<chr>.tae` (what the animation does) by chr id on both sides.
 That join is wrong for a third of the roster: 143 of the 408 creatures in the shipped
 table came out with zero attacks, every one of them a creature whose own `.anibnd`
 contains a skeleton and nothing else -- no animations, no TimeAct. c4351 Godrick Knight
@@ -10,14 +10,14 @@ is the worked example: its graph declares 72 in-band events and can fire all 72,
 anibnd is `skeleton.hkx` alone, so every one of those 72 arrived with no damage window and
 was denied, leaving the twelve `W_Step` walk clips as the whole moveset.
 
-The animations are not missing from the game. They live in the FAMILY BASE's anibnd --
+The animations are not missing from the game. They live in the family base's anibnd --
 `c4350.anibnd.dcx` carries `INTERROOT_win64/chr/c4350/tae/c4350.tae`, 1,045,648 bytes of
 TimeAct for every 435x knight -- and the base is named by `NpcParam.behaviorVariationId`:
 
     behaviorVariationId = <family> * 100 + <variant>       43500 -> family 435 -> c4350
                                                            41600 -> family 416 -> c4160
 
-A creature whose family base IS itself (c4160, variation 41600) already joined correctly;
+A creature whose family base is itself (c4160, variation 41600) already joined correctly;
 this script exists to name the owner for the ones that did not, and to prove the rule over
 the whole corpus rather than over the one creature that motivated it.
 
@@ -129,7 +129,7 @@ def main():
             print(f'  {chr_id} variation={variation} base={base}')
 
     if args.selftest:
-        # The rule has to EXPLAIN the misjoin, not merely be consistent with it: every
+        # The rule has to explain the misjoin, not merely be consistent with it: every
         # creature the chr-id join left without TimeAct must gain one here, or the family
         # convention is not the mechanism.
         stranded = [r for r in rows if r[5] == 'none']

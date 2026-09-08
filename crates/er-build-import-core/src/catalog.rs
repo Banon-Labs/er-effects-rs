@@ -1,6 +1,6 @@
 //! The item catalog: name -> item id, scoped by category.
 //!
-//! # Why lookup MUST be category-scoped
+//! # Why lookup must be category-scoped
 //!
 //! Elden Ring reuses item names across categories, so a flat name->id map grants
 //! the wrong item. Measured against the planner's own database (2063 entries),
@@ -44,7 +44,7 @@ pub enum Kind {
     /// Great runes.
     ///
     /// A separate kind rather than a subset of [`Kind::Tool`] because the goods table contains
-    /// MORE THAN ONE row named e.g. "Godrick's Great Rune", and only rows 191..=196 are
+    /// more than one row named e.g. "Godrick's Great Rune", and only rows 191..=196 are
     /// accepted by the game: `GetGreatruneEnumByGoodsId` switches on exactly those six and
     /// returns "none" for anything else. A plain name lookup picked row 8148 and the rune
     /// silently failed to equip.
@@ -89,9 +89,9 @@ pub struct Entry {
     /// to `paramRow->maxNum > 0 ? paramRow->maxNum : 99`. So this is the ceiling the engine will
     /// enforce whatever the importer asks for.
     ///
-    /// # TWO FIELDS IN TWO TABLES, and which one this holds depends on the [`Kind`]
+    /// # two fields in two tables, and which one this holds depends on the [`Kind`]
     ///
-    /// `maxNum` is a GOODS field, and the engine reads it only for the goods category: every
+    /// `maxNum` is a goods field, and the engine reads it only for the goods category: every
     /// other category is tail-jumped to `::GetMaxItemQuantity` (1.16.2 `0x140674680`, 1.17
     /// `0x1406754d0`), which answers `1` for an armament, a protector and a talisman -- and, for
     /// a weapon row whose `weaponCategory` is 13 or 14, `EquipParamWeapon.maxArrowQuantity`.
@@ -103,7 +103,7 @@ pub struct Entry {
     /// It is also what the planner's own item database records under this name. Measured against
     /// the installed 1.17 `regulation.bin`, every tool, great rune and tear row the test fixture
     /// carries matches `maxNum` exactly -- Clarifying Boluses 99, Flask of Cerulean Tears 20,
-    /// Opaline Pickled Liver 5, Blessing of Marika 1, Mohg's Great Rune 1. The planner's SPELL
+    /// Opaline Pickled Liver 5, Blessing of Marika 1, Mohg's Great Rune 1. The planner's spell
     /// rows are the one place the two disagree (it records `maxRepositoryNum`, 600, where the
     /// game's `maxNum` is 99), and a spell is granted one copy either way, so nothing reads this
     /// for them.
@@ -116,7 +116,7 @@ pub struct Entry {
     pub max_stored: Option<u32>,
     /// Whether the armament upgrades with Somber Smithing Stones.
     pub somber: bool,
-    /// `EquipParamGoods.potGroupId` when this item is one the game POT-CAPS, else `None`.
+    /// `EquipParamGoods.potGroupId` when this item is one the game POT-caps, else `None`.
     ///
     /// # The one inventory limit an importer cannot see coming
     ///
@@ -134,7 +134,7 @@ pub struct Entry {
     /// This mirrors `EquipParamGoodsLookupResult::IsPotConsumable` exactly
     /// (1.16.2 `0x140d3a190`, 1.17 `0x140d3b8e0`, byte-identical): `goodsType == 0` (NORMAL_ITEM)
     /// **and** `potGroupId >= 0`. The Cracked Pot itself is `goodsType == 0x0b`
-    /// (REGENERATIVE_MATERIAL) and is deliberately excluded, because it is what SUPPLIES the
+    /// (REGENERATIVE_MATERIAL) and is deliberately excluded, because it is what supplies the
     /// capacity -- a caller freeing pot space by depositing group members would otherwise deposit
     /// the pots that create the space and make the problem worse.
     ///
@@ -154,10 +154,10 @@ pub trait Catalog {
     /// Look up `name` (unfolded; the implementation folds it) within `kind`.
     fn lookup(&self, kind: Kind, name: &str) -> Option<Entry>;
 
-    /// Ids OTHER than [`Self::lookup`]'s answer that the same name also resolves to.
+    /// Ids other than [`Self::lookup`]'s answer that the same name also resolves to.
     ///
     /// Elden Ring gives each upgrade level of a flask its own goods row, and every row carries the
-    /// SAME name -- so "Flask of Crimson Tears" is a dozen ids, not one. A caller that treats
+    /// same name -- so "Flask of Crimson Tears" is a dozen ids, not one. A caller that treats
     /// `lookup`'s single answer as "the" id will conclude the player does not hold an item they
     /// are visibly carrying, because they hold a different row of it.
     ///
@@ -166,21 +166,21 @@ pub trait Catalog {
         Vec::new()
     }
 
-    /// Every id that is THIS ITEM AT SOME UPGRADE LEVEL, the primary included.
+    /// Every id that is this item at some upgrade level, the primary included.
     ///
     /// [`Self::alternates`] is not enough for the question "does the player hold this". It
-    /// answers with the rows carrying the IDENTICAL name, and Elden Ring does not name an
+    /// answers with the rows carrying the identical name, and Elden Ring does not name an
     /// upgraded flask identically: the live catalog enumerates `flask of crimson tears` at goods
     /// 1000/1001 and `flask of crimson tears +9` at 1018/1019, four distinct rows of one belt
     /// item under two distinct names. A character who has drunk a single Sacred Tear holds none
     /// of the ids `alternates` returns, which is why two imports in a row reported the Crimson
     /// and Cerulean flasks `NOT-IN-INVENTORY` while they sat visibly in the pouch -- run
     /// 2026-08-25 missed 0x400003E9/0x4000041B and run 2026-08-31 missed 0x400003E8/0x4000041A,
-    /// i.e. BOTH rows of the unupgraded name.
+    /// i.e. Both rows of the unupgraded name.
     ///
     /// The suffix is the game's own: the upgraded row's `GoodsName` is the base name plus
     /// ` +N`. Talismans are the same shape (`Erdtree's Favor +2`), so this is not a flask
-    /// special case. Armaments are NOT -- their level lives in the last two digits of the id and
+    /// special case. Armaments are not -- their level lives in the last two digits of the id and
     /// is handled arithmetically -- so a weapon name simply has no `+N` siblings and this
     /// returns the primary alone.
     ///
@@ -200,12 +200,12 @@ pub trait Catalog {
 ///
 /// # Why a name can map to more than one id
 ///
-/// The catalog is built by enumerating the game's param rows, asking each for its NAME, and
+/// The catalog is built by enumerating the game's param rows, asking each for its name, and
 /// inverting. Names are not unique: several rows can share one, and a plain `insert` therefore
 /// let the last row enumerated silently win. That is not a cosmetic loss -- the importer asks
 /// "does the player already hold this?" about the id it resolved, so picking the other row means
 /// asking about an item nobody has, concluding the player has none, and granting a duplicate. It
-/// is exactly how importing a build produced a SECOND Flask of Wondrous Physick beside the one
+/// is exactly how importing a build produced a second Flask of Wondrous Physick beside the one
 /// already in the inventory.
 ///
 /// So every id is kept. `lookup` still answers with one, because callers want one, but the
@@ -233,8 +233,8 @@ impl MapCatalog {
 
     /// Add one row.
     ///
-    /// A second row under a name already present does NOT replace the first: the first stays the
-    /// primary answer and the newcomer joins [`Self::alternates`]. Keeping the FIRST is what makes
+    /// A second row under a name already present does not replace the first: the first stays the
+    /// primary answer and the newcomer joins [`Self::alternates`]. Keeping the first is what makes
     /// the resolution stable -- param enumeration order is the game's, not ours, and a catalog
     /// whose answers shuffle between patches is worse than one that answers consistently.
     pub fn insert(&mut self, kind: Kind, name: &str, entry: Entry) {
@@ -258,10 +258,10 @@ impl MapCatalog {
             .map_or(&[], Vec::as_slice)
     }
 
-    /// Every id under `name` OR under `name +N`, within `kind`, sorted and deduplicated.
+    /// Every id under `name` or under `name +N`, within `kind`, sorted and deduplicated.
     ///
     /// See [`Catalog::upgrade_variants`] for why the `+N` rows have to be in the answer. The
-    /// match is on the FOLDED name, and [`fold`] preserves `+`, so `"Erdtree's Favor +2"` folds
+    /// match is on the folded name, and [`fold`] preserves `+`, so `"Erdtree's Favor +2"` folds
     /// to `"erdtree's favor +2"` and is found by the prefix `"erdtree's favor +"`. The trailing
     /// space in that prefix is load-bearing: without it `"flask of crimson tears"` would also
     /// claim a hypothetical `"flask of crimson tears of something else"`.
@@ -339,7 +339,7 @@ impl Catalog for MapCatalog {
 
 /// Build a simple entry with no known hold limit and standard upgrade material.
 ///
-/// `max_stored: None` means a caller building a table by hand gets ONE of the item, which is the
+/// `max_stored: None` means a caller building a table by hand gets one of the item, which is the
 /// right default for the armaments and armour this helper exists for. A consumable wants the
 /// game's own number; see [`Entry::max_stored`].
 pub fn entry(full_item_id: u32) -> Entry {

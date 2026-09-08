@@ -1,11 +1,11 @@
-//! Writing one setting back into a config file the PLAYER also owns.
+//! Writing one setting back into a config file the player also owns.
 //!
 //! # Why not just render the file
 //!
 //! Several of these DLLs change a setting from in-game and have to store it: a hotkey that toggles
 //! a feature is worthless if the feature is off again on the next launch. The obvious
 //! implementation -- keep the settings in a struct and write the struct out -- destroys the file.
-//! These configs are mostly COMMENTS, and the comments are the feature's only documentation: what
+//! These configs are mostly comments, and the comments are the feature's only documentation: what
 //! the key names are, which SpEffect row is which, a commented-out alternative left in place for
 //! the player to re-enable later. A renderer emits the four keys it knows about and every one of
 //! those is gone, silently, the first time the player presses the key.
@@ -19,7 +19,7 @@
 //!
 //! [`write_atomic`] writes a sibling temp file and renames it over the destination. `fs::write` is
 //! truncate-then-write: a crash or a full disk part way through leaves a config that is neither
-//! the old one nor the new one, and the parser's own tolerance makes that WORSE rather than better
+//! the old one nor the new one, and the parser's own tolerance makes that worse rather than better
 //! -- a half-written file usually still parses, into something the player did not ask for. Every
 //! failure of the staged form instead ends with the destination holding exactly its previous
 //! contents.
@@ -30,11 +30,11 @@
 //! with `MOVEFILE_REPLACE_EXISTING`, which Wine services with `rename(2)` on the underlying Linux
 //! filesystem. A reader sees the old file or the new one, never a partial one.
 //!
-//! # The lost update this does NOT solve
+//! # The lost update this does not solve
 //!
 //! Read-modify-write is not a lock. If the player's editor saves between the read and the rename,
 //! the rename wins and their save is gone. That window is microseconds wide and there is no
-//! portable way to close it here; the mitigation is that only ONE line is ever rewritten, so
+//! portable way to close it here; the mitigation is that only one line is ever rewritten, so
 //! everything the two writers disagree about is confined to that key. The caller should re-read
 //! after writing and adopt what came back -- [`crate::reload::HotFile::adopt`] -- which both keeps
 //! its own write from reading as somebody's edit and picks up an edit that landed just before it.
@@ -59,7 +59,7 @@ const TEMP_SUFFIX: &str = ".er-config-write.tmp";
 /// assignment are appended -- a bare key appearing in somebody's config with no explanation is
 /// worse than no key at all.
 ///
-/// Only the FIRST uncommented assignment is rewritten, matching how the hand-rolled readers in
+/// Only the first uncommented assignment is rewritten, matching how the hand-rolled readers in
 /// this workspace resolve a duplicated key: first one wins.
 ///
 /// `value` is written verbatim, so it must not contain a `#` or a newline.
@@ -213,7 +213,7 @@ enabled = false
             .collect()
     }
 
-    /// THE DELIVERABLE. Rewriting one value changes exactly one line and nothing else -- the
+    /// The DELIVERABLE. Rewriting one value changes exactly one line and nothing else -- the
     /// comments, the commented-out alternative, the blank line, the indentation and the unknown
     /// key all come through byte for byte.
     #[test]
@@ -241,7 +241,7 @@ enabled = false
         assert_eq!(out, "effect_id = 503350 # darkness\n");
     }
 
-    /// Indentation and the line's POSITION are preserved: a file somebody organised stays
+    /// Indentation and the line's position are preserved: a file somebody organised stays
     /// organised, and the key does not migrate to the bottom.
     #[test]
     fn indentation_and_position_are_preserved() {
@@ -340,7 +340,7 @@ enabled = false
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// A write that cannot be staged leaves the destination ALONE. This is the read-only game
+    /// A write that cannot be staged leaves the destination alone. This is the read-only game
     /// directory case, and the requirement is that it degrades to "not persisted", never to a
     /// destroyed config.
     #[test]
@@ -368,8 +368,8 @@ enabled = false
         assert!(write_atomic(Path::new("/"), "a = 1").is_err());
     }
 
-    /// END TO END, and the feedback loop this module exists inside: write the file, adopt what
-    /// came back, and the watcher must stay SILENT -- our own write is not somebody's edit. A real
+    /// End to end, and the feedback loop this module exists inside: write the file, adopt what
+    /// came back, and the watcher must stay silent -- our own write is not somebody's edit. A real
     /// edit right after it is still seen.
     #[test]
     fn our_own_write_is_not_reported_back_as_an_edit() {

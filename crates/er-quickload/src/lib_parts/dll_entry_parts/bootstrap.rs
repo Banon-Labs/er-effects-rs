@@ -111,12 +111,12 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // the exact sink the union used before it moved into the er-hook crate. Installed here, before any
     // hook is registered, so no union-chain or collision line is ever missed.
     // A rust_panic in a cdylib loaded into the game is otherwise anonymous: the message goes to a
-    // stderr nobody reads, and what survives is a 0xe06d7363 record naming the MODULE and nothing
+    // stderr nobody reads, and what survives is a 0xe06d7363 record naming the module and nothing
     // else. Two boots were lost to one before this existed. See er_game_base::panic_report.
     er_game_base::panic_report::report_panics_to("er-quickload", crate::telemetry::append_autoload_debug);
     er_hook::set_hook_logger(crate::telemetry::append_autoload_debug);
     // Portrait crate split: wire the er-loading-portrait-core seam to the real product fns
-    // BEFORE any hook install or task spawn can execute moved code (the crate's neutral
+    // before any hook install or task spawn can execute moved code (the crate's neutral
     // defaults would otherwise gate the whole pipeline off). Pure fn-pointer writes.
     er_loading_portrait_core::install_host(er_loading_portrait_core::PortraitHost {
         append_autoload_debug: crate::telemetry::append_autoload_debug,
@@ -148,8 +148,8 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         boot_view_render_frame: crate::experiments::boot_view_render_frame,
     });
     // ProfileSummary crate split: wire the er-profile-summary-core seam before any hook install
-    // or task spawn can execute moved code. Its neutral defaults read NO summary and rebuild
-    // NOTHING, so this must land before the first autoload tick. Pure fn-pointer writes.
+    // or task spawn can execute moved code. Its neutral defaults read no summary and rebuild
+    // nothing, so this must land before the first autoload tick. Pure fn-pointer writes.
     er_profile_summary_core::host::install_host(er_profile_summary_core::host::ProfileSummaryHost {
         append_autoload_debug: crate::telemetry::append_autoload_debug,
         game_data_man_ptr_or_null: crate::constants::game_data_man_ptr_or_null,
@@ -196,7 +196,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         save_dest_set_target: crate::experiments::save_dest_set_target,
         save_flow_box_recipe_available: crate::experiments::save_flow_box_recipe_available,
         save_flow_box_clear: crate::experiments::save_flow_box_clear,
-        // ONE route to the summary: the quit menu reads the pointer through the crate that owns
+        // One route to the summary: the quit menu reads the pointer through the crate that owns
         // the `GameDataMan+0x78` walk, not through a second copy of it.
         system_quit_profile_summary_ptr:
             er_profile_summary_core::live_records::system_quit_profile_summary_ptr,
@@ -275,9 +275,9 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // addresses the game-base resolver cannot decode. Pure PE-header read, no API/loader lock.
     record_self_dll_base(hmodule.0 as usize);
 
-    // SAVE-DISABLE SUPPRESSION (save-game-flow WP1): swallow native SL save enqueues and
+    // Save-disable suppression (save-game-flow WP1): swallow native SL save enqueues and
     // answer the status poll with success, so the System->Quit "Save Game" row's scoped
-    // one-shot bypass is the ONLY path that really writes while suppression is armed. This
+    // one-shot bypass is the only path that really writes while suppression is armed. This
     // is dangerous as a partial slice: without the WP2/WP3 arming+commit path, unconditional
     // install would silently suppress every native save. Keep the product hook default-off
     // behind er-quickload.toml `save_suppression_enabled = true`; when unset, the save-flow
@@ -287,7 +287,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // er-save-disable's validated run). No product code hooks 0xe6fb50/0xe6e430/0x67a980
     // elsewhere, so there is no ordering constraint; the product only *calls* 0xe6f200 as a
     // finalizer, which is compatible. GraphicsConfig.xml is untouched: suppression sits on
-    // the SL container funnel only. NEVER load er_save_disable.dll together with this DLL in
+    // the SL container funnel only. Never load er_save_disable.dll together with this DLL in
     // one me3 profile -- two MinHook instances would double-detour the same prologues.
     if save_suppression_enabled() {
         START_SAVE_SUPPRESS.call_once(spawn_save_suppress_install);
@@ -295,9 +295,9 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         append_autoload_debug(format_args!(
             "save-suppress: disabled by default config guard (set save_suppression_enabled=true to opt in); native saves are not suppressed"
         ));
-        // ATTRIBUTION WITHOUT SUPPRESSION (2026-08-04). The save-lane observers are read-only --
+        // Attribution without suppression (2026-08-04). The save-lane observers are read-only --
         // each calls its original and only counts -- but they used to be reachable only through
-        // `install`, which ARMS suppression. So in the default configuration, which is the one every
+        // `install`, which arms suppression. So in the default configuration, which is the one every
         // user runs, `oracle_save_dispatch_last_decline_reason` read `unsampled`: the single field
         // that names why the lane refused a save was unavailable precisely where the refusal
         // matters. `GameMan+0xb72`/`+0xb73` latching after a reload is the `FUN_140afa6d0` case-7
@@ -307,7 +307,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
 
     // SAVE-DESTINATION WRITE-OPEN REDIRECT CORE (save-game-flow WP3): the "save somewhere else"
     // path diverts the native writer's single container write-open, which means the CreateFileW
-    // detour must exist in EVERY save mode -- including the default game-owned APPDATA mode, where
+    // detour must exist in every save mode -- including the default game-owned APPDATA mode, where
     // `install_save_redirect_hooks` deliberately installs nothing. The detour body is
     // pass-through-safe without a redirect dir (it only observes), and the Wine-only free-space
     // overrides stay behind their own gate. Own thread: no hook work inside DllMain.
@@ -317,10 +317,10 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
             .spawn(install_save_file_core_hooks);
     });
 
-    // Boot profiler: spawn the independent CPU sampler FIRST so it captures the engine-init threads
+    // Boot profiler: spawn the independent CPU sampler first so it captures the engine-init threads
     // during the pre-CSTaskImp-instance gap (the largest uninstrumented boot window). Read-only by
     // default (QueryThreadCycleTime/GetThreadTimes, no thread suspension); RIP sampling is a separate
-    // opt-in sub-switch. Gated OFF unless ER_QUICKLOAD_PROFILE=1 / er-quickload-profile.txt.
+    // opt-in sub-switch. Gated off unless ER_QUICKLOAD_PROFILE=1 / er-quickload-profile.txt.
     if er_boot_profiler::profiler_enabled() {
         START_BOOT_PROFILER
             .call_once(|| er_boot_profiler::spawn_boot_profiler(append_autoload_debug));
@@ -332,7 +332,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         install_crash_logger();
     }
 
-    // SAVE-SOURCE ENFORCEMENT / DEFAULT FALLBACK.
+    // Save-source enforcement / default FALLBACK.
     // Explicit ER_QUICKLOAD_SAVE_FILE / er-quickload.toml save_file sources install the scoped Win32
     // save-path redirect. If no explicit source is supplied, the active Steam user's default
     // %APPDATA%/EldenRing/<SteamID>/ER0000.sl2 is accepted and read normally. If neither exists,
@@ -341,7 +341,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     let save_override_mode = enforce_save_override_or_abort();
     let missing_save_gate_pending = missing_save_selection_pending();
     match save_override_mode {
-        // Telemetry-only: install the hooks ONLY when the save-trace gate is on (diagnostics only --
+        // Telemetry-only: install the hooks only when the save-trace gate is on (diagnostics only --
         // no redirect dir, so the detours just log and pass through). Lets us trace the working
         // vanilla save-read (char-present save in the real appdata, no redirect).
         SaveOverrideMode::TelemetryOnly => {
@@ -418,7 +418,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         });
     }
 
-    // Foreground-force REMOVED (user directive 2026-07-16): the product feature must NOT force the
+    // Foreground-force removed (user directive 2026-07-16): the product feature must not force the
     // game's foreground state. Patching CS::CSWindowImp::IsGameInForeground to always-true made the
     // game behave as if focused, which captures/confines the OS cursor onto the window when a load
     // completes and the world comes up -- unwanted product behavior. The old 2026-06-21 "keep it on"
@@ -473,7 +473,7 @@ fn spawn_save_suppress_install() {
                             ));
                         }
                         attempts = attempts.saturating_add(1);
-                        // BOUNDED (2026-08-29): user-space backoff instead of a bare yield, which
+                        // Bounded (2026-08-29): user-space backoff instead of a bare yield, which
                         // hammered the wineserver hard enough to hang a boot. The enclosing loop
                         // waits on GetModuleHandleA(NULL) and has never been observed to spin.
                         er_game_base::wait::back_off(attempts);
@@ -492,7 +492,7 @@ fn spawn_save_suppress_install() {
         });
 }
 
-/// Bind the save-lane observers WITHOUT arming suppression.
+/// Bind the save-lane observers without arming suppression.
 ///
 /// Same thread shape and same module-base wait as [`spawn_save_suppress_install`] -- MinHook and the
 /// prologue verification both need the image mapped -- but it installs only the read-only observer
@@ -503,12 +503,12 @@ fn spawn_save_observers_only() {
         .name("er-quickload-save-observers".to_owned())
         .spawn(|| {
             er_save_suppress::set_log_sink(crate::telemetry::append_autoload_debug);
-            // The save-state witness reports WHO abandoned a save, and the caller's RVA is the half
+            // The save-state witness reports who abandoned a save, and the caller's RVA is the half
             // of that no decompile can supply. The stack walk knows which module is the game, so it
             // lives here rather than in the Tier-A crate; without this the witness still counts and
             // logs, but its line reads "caller unknown".
             er_save_suppress::set_caller_rva_sink(crate::crashlog::trace_first_game_caller_rva);
-            // THE SAME EPOCH THE LOG LINES USE. `oracle_save_dispatch_first_latched_ms` exists to be
+            // The same epoch the log lines use. `oracle_save_dispatch_first_latched_ms` exists to be
             // read against the accept record that latched the device, and those records live in this
             // log; a stamp from a clock of the crate's own would be correct and unalignable.
             er_save_suppress::set_clock_sink(save_suppress_elapsed_ms);
@@ -523,7 +523,7 @@ fn spawn_save_observers_only() {
                             ));
                         }
                         attempts = attempts.saturating_add(1);
-                        // BOUNDED (2026-08-29): user-space backoff instead of a bare yield, which
+                        // Bounded (2026-08-29): user-space backoff instead of a bare yield, which
                         // hammered the wineserver hard enough to hang a boot. The enclosing loop
                         // waits on GetModuleHandleA(NULL) and has never been observed to spin.
                         er_game_base::wait::back_off(attempts);
@@ -548,7 +548,7 @@ const SAVE_SUPPRESS_WAIT_LOG_INTERVAL: u64 = 4096;
 /// A free function rather than a closure because [`er_save_suppress::ClockSinkFn`] is a plain `fn`
 /// pointer. The clamp is unreachable in any real run (`u64::MAX` ms is ~584 million years); it stops
 /// one short of [`er_save_suppress::ELAPSED_MS_UNAVAILABLE`] so an absurd clock reports an absurd
-/// TIME rather than impersonating the "no clock wired" sentinel, and it clamps rather than truncates
+/// time rather than impersonating the "no clock wired" sentinel, and it clamps rather than truncates
 /// so it can never wrap into a plausible one.
 fn save_suppress_elapsed_ms() -> u64 {
     u64::try_from(crate::telemetry::process_log_elapsed_ms())
@@ -558,7 +558,7 @@ fn save_suppress_elapsed_ms() -> u64 {
 
 /// The game's task manager, or `None` if it never turns up.
 ///
-/// BOUNDED (2026-08-29). This used to be `loop { yield_now() }`. On 1.17 the singleton did not
+/// Bounded (2026-08-29). This used to be `loop { yield_now() }`. On 1.17 the singleton did not
 /// appear promptly and two shells running the same loop saturated the wineserver: the game
 /// managed 104 CPU ticks in three minutes while those two threads burned 19,000 each, and around
 /// thirty of our own threads never got scheduled at all. `er_game_base::wait` spins in user space

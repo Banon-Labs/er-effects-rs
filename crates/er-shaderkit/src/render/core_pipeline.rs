@@ -71,7 +71,7 @@ pub struct UniformWrite<'a> {
     pub bytes: &'a [u8],
 }
 
-/// A REAL captured texture's pixels for the frame-replay path: replaces a stub at
+/// A real captured texture's pixels for the frame-replay path: replaces a stub at
 /// `(set, binding)` with the game's actual texture (IBL cubemap, GI irradiance volume,
 /// material map). `data` is tightly-packed UNCOMPRESSED texels (mip 0, all layers) in
 /// `format`; the extract step decodes BCn → rgba so the upload stays simple.
@@ -87,7 +87,7 @@ pub struct RealTexture<'a> {
     pub data: &'a [u8],
 }
 
-/// A full object DRAW (not just pipeline creation): real vertex+index buffers bound to
+/// A full object draw (not just pipeline creation): real vertex+index buffers bound to
 /// the native vertex+pixel passthrough shaders, every resource stubbed, selected cbuffers
 /// overwritten with real matrices, drawn into an offscreen target and read back.
 pub struct ObjDrawDesc<'a> {
@@ -103,23 +103,23 @@ pub struct ObjDrawDesc<'a> {
     pub uniform_sizes: &'a [(u32, u32, u64)],
     /// Matrix/constant overrides written into the stub uniform buffers.
     pub uniform_writes: &'a [UniformWrite<'a>],
-    /// FRAME-REPLAY: full captured contents for a uniform/storage buffer at `(set, binding)`
+    /// Frame-REPLAY: full captured contents for a uniform/storage buffer at `(set, binding)`
     /// — the game's real cbuffers (scene lighting, material params). Sizes the buffer to the
     /// data and uploads it, replacing the zeroed stub. `uniform_writes` still apply on top.
     pub buffer_data: &'a [(u32, u32, &'a [u8])],
-    /// FRAME-REPLAY: real captured textures (IBL/GI/material), replacing the gray stubs.
+    /// Frame-REPLAY: real captured textures (IBL/GI/material), replacing the gray stubs.
     pub textures: &'a [RealTexture<'a>],
     pub color_targets: usize,
     pub size: u32,
     /// When `Some`, replace the native pixel shader with this WGSL fragment (entry
-    /// `fs_main`, one colour target). Isolates the native VERTEX shader's projection
+    /// `fs_main`, one colour target). Isolates the native vertex shader's projection
     /// from the native pixel shader's shading — a solid colour appears wherever real
     /// geometry rasterises, regardless of lighting/texture cbuffers.
     pub pixel_wgsl: Option<&'a str>,
 }
 
 /// A sampled-texture binding's reflected view dimension + sample type, so the harness can
-/// stub each texture to MATCH. A generic 1×1 2D stub bound where the shader samples a cube
+/// stub each texture to match. A generic 1×1 2D stub bound where the shader samples a cube
 /// or 3D texture segfaults llvmpipe's fragment thread (ER pixel shaders sample IBL cubemaps
 /// and 3D irradiance/fog volumes).
 #[derive(Clone, Copy, Debug)]
@@ -262,8 +262,8 @@ impl Headless {
         Self::with_options(false)
     }
 
-    /// Initialise on a SOFTWARE adapter (lavapipe / llvmpipe) via
-    /// `force_fallback_adapter`. A shader fault here is a CPU process error, NOT a
+    /// Initialise on a software adapter (lavapipe / llvmpipe) via
+    /// `force_fallback_adapter`. A shader fault here is a CPU process error, not a
     /// hardware GPU reset — the safe way to execute a translated ER shader whose
     /// hardware draw deterministically faults the real GPU.
     pub fn new_software() -> Result<Self, RenderError> {
@@ -1102,7 +1102,7 @@ impl Headless {
                 })
         };
         let vs = make(d.vertex_spirv, "obj-vs");
-        // Fragment: native pixel SPIR-V (passthrough) or a WGSL override for VS isolation.
+        // Fragment: native pixel SPIR-V (passthrough) or a WGSL override for vs isolation.
         let (frag_mod, pixel_entry): (wgpu::ShaderModule, &str) = match d.pixel_wgsl {
             Some(wgsl) => (
                 self.device
@@ -1127,7 +1127,7 @@ impl Headless {
         for &(set, binding, kind) in d.bindings {
             by_set.entry(set).or_default().push((binding, kind));
         }
-        // Reflect each texture binding's dimension + sample type so stubs MATCH; a 1×1 2D
+        // Reflect each texture binding's dimension + sample type so stubs match; a 1×1 2D
         // stub bound where the shader samples a cube/3D texture segfaults the rasteriser.
         let mut img_map: std::collections::HashMap<(u32, u32), ImageBinding> =
             std::collections::HashMap::new();
@@ -1143,7 +1143,7 @@ impl Headless {
         // group so the layout array is contiguous (wgpu indexes by group number).
         let mut bgls: Vec<wgpu::BindGroupLayout> = Vec::new();
         let mut bind_groups: Vec<wgpu::BindGroup> = Vec::new();
-        // Stub resources MUST outlive the draw: keep every buffer/view/sampler alive
+        // Stub resources must outlive the draw: keep every buffer/view/sampler alive
         // until after submit, or the descriptors dangle (lavapipe segfaults on a freed
         // backing store).
         let mut keep_buffers: Vec<wgpu::Buffer> = Vec::new();
@@ -1167,7 +1167,7 @@ impl Headless {
                 match kind {
                     ObjBind::Uniform | ObjBind::Storage => {
                         let storage = matches!(kind, ObjBind::Storage);
-                        // FRAME-REPLAY: seed from the captured buffer contents when provided,
+                        // Frame-REPLAY: seed from the captured buffer contents when provided,
                         // else a zeroed stub. uniform_writes (matrices) apply on top.
                         let captured = d
                             .buffer_data
@@ -1231,7 +1231,7 @@ impl Headless {
                         let sample_type = info
                             .map(|i| i.sample_type)
                             .unwrap_or(wgpu::TextureSampleType::Float { filterable: true });
-                        // FRAME-REPLAY: real captured texture (IBL/GI/material) if provided.
+                        // Frame-REPLAY: real captured texture (IBL/GI/material) if provided.
                         let real = d
                             .textures
                             .iter()
@@ -1450,7 +1450,7 @@ impl Headless {
                 multiview_mask: None,
                 cache: None,
             });
-        // Surface any creation/binding validation error NOW (before the draw executes),
+        // Surface any creation/binding validation error now (before the draw executes),
         // so a bad descriptor is reported instead of segfaulting the software driver.
         if let Some(err) = scope.pop().block_on() {
             return Err(RenderError::Pipeline(format!("setup: {err}")));

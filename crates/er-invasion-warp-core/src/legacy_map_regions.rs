@@ -5,7 +5,7 @@
 //! The `.aip` table covers areas 60 and 61 only, so Leyndell, Stormveil, Farum Azula, the
 //! Haligtree and every cave/catacomb/tunnel contribute no invasion markers from it. Their
 //! invasion points live in each map's MSB, and an MSB is only readable while its map is
-//! RESIDENT -- so the player had to physically walk into a dungeon before it could show a
+//! resident -- so the player had to physically walk into a dungeon before it could show a
 //! marker.
 //!
 //! The expensive-looking way out is to read every map file off disk. That is both a big job
@@ -20,7 +20,7 @@
 //! # The entry that makes this work
 //!
 //! `ConvertLegacyDungeonPositionToOverworldPositionForMap` (`0x1408775e0`) is, for a
-//! non-overworld block, a lookup followed by a PURE ADD:
+//! non-overworld block, a lookup followed by a pure ADD:
 //!
 //! ```text
 //! *blockIdOut = node->overrideBlockId;
@@ -36,13 +36,13 @@
 //! # Shape
 //!
 //! The table is an MSVC `std::map` and there are two indirections to get wrong, both of which
-//! yield a readable pointer that is not a tree -- so both fail as an EMPTY table rather than a
+//! yield a readable pointer that is not a tree -- so both fail as an empty table rather than a
 //! crash, which is why the census log exists:
 //!
 //! 1. `WorldMapLegacyConverter+0x08` is the container itself, embedded, not a pointer to one.
 //!    Its `root` member is at `+0x08` within it, so the head is at `+0x10`. (`+0x08` is the
 //!    container's allocator.)
-//! 2. That `root` is the HEAD SENTINEL, not the root: the real root is `head->parent`, the
+//! 2. That `root` is the head sentinel, not the root: the real root is `head->parent`, the
 //!    head's `isNull` byte is set, and every leaf's child pointers lead back to the head.
 //!
 //! `ConvertLegacyDungeonPositionToOverworldPositionForMap` does exactly this:
@@ -56,14 +56,14 @@ pub const AREA_CONVERTER_LEGACY_OFFSET: usize = 0x28;
 
 /// `CS::WorldMapLegacyConverter+0x10` -- the `std::map` head sentinel.
 ///
-/// TWO corrections live in this one number, and getting either wrong reads a valid pointer that
+/// Two corrections live in this one number, and getting either wrong reads a valid pointer that
 /// is not a tree and yields an empty table:
 ///
-/// * `+0x08` is not the head. It is `blockCoordinates`, an EMBEDDED
+/// * `+0x08` is not the head. It is `blockCoordinates`, an embedded
 ///   `WorldMapAreaLegacyConverter` (24 bytes: `allocator` `+0x00`, `root` `+0x08`, `length`
 ///   `+0x10`), so the head sits at `0x08 + 0x08`. Reading `+0x08` yields the ALLOCATOR pointer.
 ///   That was the first live run's result: `legacy_offered=0`, no dungeon markers.
-/// * `root` is still not the ROOT. It is the head sentinel; the real root is `root->parent`,
+/// * `root` is still not the root. It is the head sentinel; the real root is `root->parent`,
 ///   exactly as `ConvertLegacyDungeonPositionToOverworldPositionForMap` reads it
 ///   (`pWVar5 = blockCoordinates.root; ... pWVar5->parent`).
 pub const LEGACY_TREE_HEAD_OFFSET: usize = 0x10;
@@ -78,7 +78,7 @@ pub const LEGACY_TREE_LENGTH_OFFSET: usize = 0x18;
 
 /// `WorldMapLegacyConverter+0x08` -- the embedded `WorldMapAreaLegacyConverter` container.
 ///
-/// Named so the two offsets below are visibly DERIVED from the struct layout rather than
+/// Named so the two offsets below are visibly derived from the struct layout rather than
 /// asserted as bare numbers. Reading this address as the head is the bug that cost a live run.
 pub const LEGACY_CONTAINER_OFFSET: usize = 0x08;
 /// `root` within that container. `+0x00` is its allocator.

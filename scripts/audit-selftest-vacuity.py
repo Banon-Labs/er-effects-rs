@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Audit the audits: is a gate's PASS provable, or merely asserted?
+"""Audit the audits: is a gate's pass provable, or merely asserted?
 
 A gate that scans the tree with a regex and reports "0 findings" is only
 trustworthy if something would go red when that regex stops matching. Three
@@ -8,34 +8,34 @@ because its core matcher knew exactly one spelling of a thing that has several.
 
 This tool answers the question empirically instead of by reading code: it
 re-runs each gate's own ``--selftest`` (or its companion ``test-*.py``) with the
-``re`` module lobotomised so that EVERY pattern matches nothing, and records
+``re`` module lobotomised so that every pattern matches nothing, and records
 whether the selftest noticed.
 
-    exit 0 under a blind matcher  ->  ASSERTED (the selftest cannot see the
+    exit 0 under a blind matcher  ->  asserted (the selftest cannot see the
                                       matcher; a silent zero is indistinguishable
                                       from a clean tree)
     non-zero under a blind matcher -> PROVABLE (something is watching)
 
-A SHELL gate has no ``re`` module to lobotomise, and every ``.sh`` in check.sh
+A shell gate has no ``re`` module to lobotomise, and every ``.sh`` in check.sh
 was silently skipped here -- ``--only check-git-hooks-installed`` printed nothing
 at all, which reads exactly like a gate that was judged and had no findings. Its
-matchers are external programs instead, so the blinding is a PATH shim. Three
+matchers are external programs instead, so the blinding is a path shim. Three
 things a bash gate decides with, and the shim for each:
 
-  * CONTENT COMPARATORS -- ``cmp``, ``diff``, ``grep`` -- forced to report
+  * Content COMPARATORS -- ``cmp``, ``diff``, ``grep`` -- forced to report
     SAMENESS/PRESENCE with no output.
-  * DELEGATES -- ``cargo``, ``python3``, the programs a shell gate hands its
-    verdict to -- run for real, output kept, EXIT STATUS forced to 0. Three of
+  * Delegates -- ``cargo``, ``python3``, the programs a shell gate hands its
+    verdict to -- run for real, output kept, exit status forced to 0. Three of
     the nine shell gates in check.sh run no comparator at all and decide purely
-    this way; all three used to come back NO-MATCHER-RUN, which is this tool
+    this way; all three used to come back no-MATCHER-run, which is this tool
     failing to reach the matcher in a costume that reads like a finding.
-  * THE SUBJECT of a ``test-<x>.sh`` harness -- ``<x>.sh`` itself -- replaced by
-    an ``exit 0`` stub in a shadow root of symlinks. No PATH shim can reach a
+  * The subject of a ``test-<x>.sh`` harness -- ``<x>.sh`` itself -- replaced by
+    an ``exit 0`` stub in a shadow root of symlinks. No path shim can reach a
     subject invoked by absolute path, and "would this harness notice its gate
     doing nothing?" is the sharper question anyway.
 
 A shell selftest that still passes when nothing can ever differ is asserting, not
-proving. Note the one asymmetry with the python blinding: a PATH shim is not
+proving. Note the one asymmetry with the python blinding: a path shim is not
 caller-aware, so it blinds the whole process tree rather than only callers under
 ``scripts/``.
 
@@ -64,13 +64,13 @@ PER_SCRIPT_TIMEOUT = 28
 # mutation runner (invoked as a subprocess: --run-blind <script> [args...])
 # --------------------------------------------------------------------------
 def run_blind_reads(script: str, argv: list[str]) -> None:
-    """Exec `script` with every FILE READ it performs returning empty content.
+    """Exec `script` with every file read it performs returning empty content.
 
     The regex blinding below is blind in turn to a gate that matches with ``in``,
-    ``str.startswith``, ``ast`` or ``tomllib`` -- 27 of the gates in check.sh ran ZERO
-    regex calls under it and were reported NO-MATCHER-RUN, which is not a verdict. This
+    ``str.startswith``, ``ast`` or ``tomllib`` -- 27 of the gates in check.sh ran zero
+    regex calls under it and were reported no-MATCHER-run, which is not a verdict. This
     is the second question, and it is matcher-agnostic: if a selftest still passes when
-    every file the gate opens is EMPTY, the selftest is not reading the tree at all, so
+    every file the gate opens is empty, the selftest is not reading the tree at all, so
     its green says nothing about the tree.
 
     Writes are left alone, so a selftest that builds a temp fixture still builds it --
@@ -127,14 +127,14 @@ def run_blind_reads(script: str, argv: list[str]) -> None:
 
 
 def run_blind(script: str, argv: list[str]) -> None:
-    """Exec `script` with every regex IT compiles neutered so it can never match.
+    """Exec `script` with every regex it compiles neutered so it can never match.
 
     Only calls whose immediate caller lives under ``scripts/`` are blinded --
     stdlib internals (argparse's nargs matcher, in particular) keep working, so
-    a non-zero exit means the GATE noticed, not that the runner broke it.
+    a non-zero exit means the gate noticed, not that the runner broke it.
 
     The number of blinded calls is written to $VACUITY_COUNT_FILE: a selftest
-    that passes having blinded ZERO calls never touched a matcher at all, which
+    that passes having blinded zero calls never touched a matcher at all, which
     is a stronger form of the same vacuity.
     """
     import atexit
@@ -155,7 +155,7 @@ def run_blind(script: str, argv: list[str]) -> None:
         except ValueError:
             return False
         # abspath, because a relative target path makes co_filename relative too and a naive
-        # prefix test then blinds NOTHING while reporting a confident zero.
+        # prefix test then blinds nothing while reporting a confident zero.
         return os.path.abspath(fn).startswith(scripts_dir)
 
     def wrap(real, blind):
@@ -189,41 +189,41 @@ def run_blind(script: str, argv: list[str]) -> None:
 # --------------------------------------------------------------------------
 # shell blinding
 # --------------------------------------------------------------------------
-# A bash gate matches with EXTERNAL PROGRAMS, so the blinding is a PATH shim. Two families,
+# A bash gate matches with external programs, so the blinding is a path shim. Two families,
 # because two different kinds of program carry a shell gate's verdict and they need opposite
 # treatment.
 #
-# SUPPRESSING shims -- the content comparators. `cmp` and `diff` answer "are these the same
+# Suppressing shims -- the content comparators. `cmp` and `diff` answer "are these the same
 # bytes", `grep` answers "is this present"; forcing all three to say yes, with no output, is the
 # shell equivalent of a regex that can never fail to match.
 SHELL_COMPARATORS = ("cmp", "diff", "grep")
 
-# DELEGATING shims -- the programs a shell gate hands its VERDICT to. `check-committed-compiles`
+# DELEGATING shims -- the programs a shell gate hands its verdict to. `check-committed-compiles`
 # asks cargo whether a commit builds; `er-dll-freshness` asks er-dll-provenance.py whether a DLL
 # is current; `er-stale-run-sentinel` asks python whether a path feeds a loaded DLL. None of them
-# runs a single cmp/diff/grep, so all three came back NO-MATCHER-RUN -- which is not a verdict,
+# runs a single cmp/diff/grep, so all three came back no-MATCHER-run -- which is not a verdict,
 # it is this tool failing to reach the matcher and saying so in a way that reads like a finding.
 #
-# These shims RUN THE REAL PROGRAM and keep its stdout/stderr; only the EXIT STATUS is forced to
+# These shims run the real program and keep its stdout/stderr; only the exit status is forced to
 # 0. That asymmetry is deliberate and it is the whole safety argument: suppressing cargo's or
 # python's output would break the gate's own plumbing (a package map read from
 # `me3-dll-list.py --pairs`, a SHA parsed out of a helper) and the gate would go red because the
 # harness broke it, which this tool would then report as PROVABLE. A false PROVABLE is
 # manufactured confidence in a gate -- the exact failure this instrument exists to prevent. A
-# shim that under-blinds only ever costs a false ASSERTED, which is a false alarm a human
+# shim that under-blinds only ever costs a false asserted, which is a false alarm a human
 # resolves by reading. The two errors are not symmetric, so the shims lean the safe way.
 SHELL_DELEGATES = ("cargo", "python3")
 
 
 def _write_shim(shim_dir: Path, tool: str, kind: str) -> None:
-    """One PATH shim. `kind` is 'suppress' (say yes, print nothing) or 'delegate'
+    """One path shim. `kind` is 'suppress' (say yes, print nothing) or 'delegate'
     (run the real program, keep its output, force exit 0)."""
     shim = shim_dir / tool
     if kind == "suppress":
         body = "exit 0\n"
     else:
-        # Resolved to an ABSOLUTE path at build time. `command $tool` would re-find the shim
-        # (the shim dir is first on PATH) and spin forever.
+        # Resolved to an absolute path at build time. `command $tool` would re-find the shim
+        # (the shim dir is first on path) and spin forever.
         real = shutil.which(tool)
         if real is None:
             return
@@ -268,18 +268,18 @@ def run_shell_blinded(path: Path, args: list[str]) -> "tuple[int, str, int]":
 # --------------------------------------------------------------------------
 # `test-git-pre-push-block-main.sh` decides with a bash glob over the guard's output and the
 # guard's exit code; `test-pr-refactor-scope.sh` with `sed` over its subject's stdout. Neither
-# runs a comparator, and no PATH shim can reach a subject the harness invokes by absolute path.
-# But the question those harnesses exist to answer has a sharper form anyway: WOULD THIS HARNESS
-# NOTICE IF ITS SUBJECT DID NOTHING AT ALL? That is not a proxy for the defect, it IS the defect
+# runs a comparator, and no path shim can reach a subject the harness invokes by absolute path.
+# But the question those harnesses exist to answer has a sharper form anyway: Would this harness
+# notice if its subject did nothing at all? That is not a proxy for the defect, it is the defect
 # -- a five-week-old `exit 0` stub standing where a gate used to be is this repo's own history.
 #
-# The subject is never touched. The harness runs against a SHADOW ROOT: a temp directory whose
+# The subject is never touched. The harness runs against a shadow ROOT: a temp directory whose
 # `scripts/` holds a symlink to every real script except the subject, which is a stub that exits
 # 0. `${BASH_SOURCE[0]}/..` resolves inside the shadow, so the harness finds the stub where it
 # expects its subject and the live tree is not written to at all -- which matters here, because
 # several agents share this checkout.
 def shell_subject_for(path: Path) -> "Path | None":
-    """`test-<x>.sh` tests `<x>.sh` BESIDE IT. Returns None when there is no such subject."""
+    """`test-<x>.sh` tests `<x>.sh` beside it. Returns None when there is no such subject."""
     if not path.name.startswith("test-") or not path.name.endswith(".sh"):
         return None
     subject = path.parent / path.name[len("test-"):]
@@ -289,7 +289,7 @@ def shell_subject_for(path: Path) -> "Path | None":
 def _shadow_root(td: Path, subject: "Path | None", script_dir: Path) -> Path:
     """A repo root of symlinks whose `script_dir` has `subject` replaced by an inert stub.
 
-    `.git` is deliberately NOT linked: a harness that reached the real repository through it
+    `.git` is deliberately not linked: a harness that reached the real repository through it
     could rewrite the config of a checkout several agents are working in.
     """
     shadow = td / "root"
@@ -318,10 +318,10 @@ def _shadow_root(td: Path, subject: "Path | None", script_dir: Path) -> Path:
 def run_shell_subject_stubbed(path: Path, args: list[str], subject: Path) -> "tuple[int, str, int, str]":
     """(control_rc, blinded_output, blinded_rc, control_output) for the shadow-root probe.
 
-    The CONTROL run -- same shadow root, subject NOT stubbed -- is what keeps this honest. If it
+    The control run -- same shadow root, subject not stubbed -- is what keeps this honest. If it
     is already red the shadow root itself is the problem (a harness that needs something not
-    linked into it), and a red stubbed run would then be the harness noticing the HARNESS, not
-    the subject. That case is reported as SHADOW-BASELINE-RED rather than as a verdict.
+    linked into it), and a red stubbed run would then be the harness noticing the harness, not
+    the subject. That case is reported as shadow-baseline-red rather than as a verdict.
     """
     import tempfile
 
@@ -338,17 +338,17 @@ def run_shell_subject_stubbed(path: Path, args: list[str], subject: Path) -> "tu
 # --------------------------------------------------------------------------
 def shell_selftest_args(name: str, path: Path, arglists: "list[str]",
                         invocations: "dict[str, list[str]]") -> "tuple[Path, list[str]] | None":
-    """Which command actually EXERCISES this shell gate, mirroring the python branch.
+    """Which command actually exercises this shell gate, mirroring the python branch.
 
     The first version of this asked one question -- does check.sh pass `--selftest`? -- and
-    answered NO-SELFTEST for everything else. That silently unjudged five of the nine shell gates
-    in check.sh, three of which are `test-*.sh` files that ARE the test: check.sh runs them bare
+    answered no-SELFTEST for everything else. That silently unjudged five of the nine shell gates
+    in check.sh, three of which are `test-*.sh` files that are the test: check.sh runs them bare
     because there is nothing else to run them as.
     """
     if any("--selftest" in a for a in arglists):
         return path, ["--selftest"]
     if name.startswith("test-"):
-        return path, []                       # a test-*.sh IS the test; run it bare
+        return path, []                       # a test-*.sh is the test; run it bare
     if name.startswith("check-"):
         companion = SCRIPTS / ("test-" + name[len("check-"):])
         if companion.is_file() and companion.name in invocations:
@@ -452,7 +452,7 @@ def run_mutated(path: Path, args: list[str], mode: str = "regex") -> "tuple[int,
     # Several scripts here `os.execvp` into `uv run --with capstone python3` when the import
     # fails. That replaces the process and throws away the blinding, so provision capstone up
     # front and the re-exec never fires.
-    # ANY mention of capstone, not `import capstone`. The narrow needle missed three real cases:
+    # Any mention of capstone, not `import capstone`. The narrow needle missed three real cases:
     # `from capstone import ...` (check-singleton-field-offsets.py), and gates that never import
     # it themselves but load a matcher module that does and re-execs from in there
     # (check-object-field-offsets-1170.py, attribute-field-offset-owners.py). Each came back
@@ -467,7 +467,7 @@ def run_mutated(path: Path, args: list[str], mode: str = "regex") -> "tuple[int,
         prefix = [sys.executable]
     flag = "--run-blind" if mode == "regex" else "--run-blind-reads"
     rc, out = run(prefix + [runner, flag, str(path)] + args, env=env)
-    # -1 means the runner never got to write a count. That is NOT zero: a script that
+    # -1 means the runner never got to write a count. That is not zero: a script that
     # re-execs itself (several here do, to provision capstone under `uv run`) replaces the
     # process, discarding both the blinding and the atexit hook. Reporting that as "0 regex
     # calls" would be this tool committing the exact sin it exists to find.
@@ -503,7 +503,7 @@ def sweep(only: str | None, out_json: Path | None, mode: str = "regex") -> int:
             if companion is not None and companion.exists() and companion.name in invocations:
                 path, args = companion, []
             elif name.startswith("test-"):
-                pass  # a test-*.py IS the test; run it bare
+                pass  # a test-*.py is the test; run it bare
             else:
                 rows.append(
                     {
@@ -537,7 +537,7 @@ def sweep(only: str | None, out_json: Path | None, mode: str = "regex") -> int:
         print(f"{name:<44}  {verdict:<19}  {detail}", flush=True)
 
     # The unjudged python rows are printed here rather than in the loop above; the shell branch
-    # prints its own (including its NO-SELFTEST rows), so re-printing them here doubled every
+    # prints its own (including its no-SELFTEST rows), so re-printing them here doubled every
     # one of them in the output.
     for r in rows:
         if "ran" not in r and not r["script"].endswith(".sh"):
@@ -584,7 +584,7 @@ def judge_one(path: Path, mode: str = "regex") -> int:
 
 # --------------------------------------------------------------------------
 def selftest() -> int:
-    """The blind runner must blind the GATE, count what it blinded, and leave
+    """The blind runner must blind the gate, count what it blinded, and leave
     the stdlib (argparse in particular) alone."""
     failures = []
     import tempfile
@@ -625,7 +625,7 @@ def selftest() -> int:
             if n != 0:
                 failures.append(f"regex-free script should blind 0 calls, counted {n}")
 
-            # A RELATIVE path to a gate must blind exactly as an absolute one does. This is
+            # A relative path to a gate must blind exactly as an absolute one does. This is
             # the tool's own version of the bug it hunts: co_filename follows the spelling of
             # the path it was given, and a prefix test against an absolute scripts/ dir then
             # matched nothing and reported a confident "0 regex calls".
@@ -651,8 +651,8 @@ def selftest() -> int:
                     "a false zero here is this tool committing the sin it hunts"
                 )
 
-            # THE SHELL BLINDER, which has no `re` to neuter and shims the comparators
-            # instead. The toy gate DETECTS A DIFFERENCE, so forcing `cmp` to agree must
+            # The shell BLINDER, which has no `re` to neuter and shims the comparators
+            # instead. The toy gate detects a difference, so forcing `cmp` to agree must
             # flip it -- the same shape as the fallback-stub arm in
             # check-git-hooks-installed.sh, which is the gate this path exists to judge.
             sh_probe = holder / "toy_gate.sh"
@@ -676,7 +676,7 @@ def selftest() -> int:
                 failures.append(f"shell blinder should have counted 1 comparator call, counted {n}")
 
             # ...and a shell gate that compares nothing must be untouched, and counted zero,
-            # so NO-MATCHER-RUN stays distinguishable from ASSERTED.
+            # so no-MATCHER-run stays distinguishable from asserted.
             sh_inert = holder / "toy_inert.sh"
             sh_inert.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
             sh_inert.chmod(0o755)
@@ -686,7 +686,7 @@ def selftest() -> int:
             if n != 0:
                 failures.append(f"comparator-free shell script should blind 0 calls, counted {n}")
 
-            # THE DELEGATE SHIM, whose subject is the gate that never runs a comparator at all
+            # The delegate SHIM, whose subject is the gate that never runs a comparator at all
             # and hands its verdict to a subprocess. Forcing that subprocess's exit status to 0
             # must flip the gate.
             sh_deleg = holder / "toy_delegate.sh"
@@ -708,8 +708,8 @@ def selftest() -> int:
             if n < 1:
                 failures.append(f"delegate shim should have counted a python3 call, counted {n}")
 
-            # ...AND THE SAFETY PROPERTY THAT MAKES THAT SHIM USABLE AT ALL. It forces the exit
-            # status and NOTHING ELSE: a gate that reads a VALUE out of its delegate must still
+            # ...AND the SAFETY property that makes that SHIM usable at all. It forces the exit
+            # status and nothing ELSE: a gate that reads a value out of its delegate must still
             # read the real value. Suppressing that output would break the gate's plumbing, the
             # gate would go red because the harness broke it, and this tool would report PROVABLE
             # -- manufactured confidence in a gate, which is the one failure it must never
@@ -731,9 +731,9 @@ def selftest() -> int:
                     "false PROVABLE"
                 )
 
-            # THE SUBJECT STUB, and its shadow root. A harness that checks its subject must go red
+            # The subject stub, and its shadow root. A harness that checks its subject must go red
             # when that subject is replaced by `exit 0`; one that ignores its subject must not, or
-            # ASSERTED would be unreachable and every harness would read as proven.
+            # asserted would be unreachable and every harness would read as proven.
             subject = holder / "subj_probe.sh"
             subject.write_text(
                 "#!/usr/bin/env bash\nprintf 'verdict=real\\n'\nexit 5\n", encoding="utf-8"
@@ -767,8 +767,8 @@ def selftest() -> int:
                 failures.append("subject stubbing failed to blind: the harness passed against a "
                                 "subject that does nothing")
 
-            # THE NEGATIVE CONTROL FOR IT: a harness that never consults its subject must stay
-            # green when the subject is stubbed, so this path can still report ASSERTED.
+            # The negative control for IT: a harness that never consults its subject must stay
+            # green when the subject is stubbed, so this path can still report asserted.
             blind_harness = holder / "test-subj_probe_blind.sh"
             (holder / "subj_probe_blind.sh").write_text(
                 "#!/usr/bin/env bash\nexit 5\n", encoding="utf-8"
@@ -785,7 +785,7 @@ def selftest() -> int:
                     "then unreachable and every harness would read as proven"
                 )
 
-            # THE SHADOW ROOT MUST NOT CARRY .git. A harness that reached the real repository
+            # The shadow root must not carry .git. A harness that reached the real repository
             # through it could rewrite the config of a checkout several agents are working in.
             import tempfile as _tf
             with _tf.TemporaryDirectory() as _td:
@@ -794,7 +794,7 @@ def selftest() -> int:
                     failures.append("the shadow root links .git -- a harness could reach the real "
                                     "repository and rewrite a shared checkout's config")
 
-            # NEGATIVE CONTROL: a fixture OUTSIDE scripts/ must NOT be blinded,
+            # Negative CONTROL: a fixture outside scripts/ must not be blinded,
             # so the runner cannot pass this suite by neutering everything.
             outsider = Path(td) / "toy_outsider.py"
             outsider.write_text(

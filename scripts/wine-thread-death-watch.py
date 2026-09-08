@@ -9,7 +9,7 @@ whose stack we want no longer exists.  So this tool captures the death *as it ha
 
 Two independent tiers, deliberately ordered by risk to the live game:
 
-  TIER 1  `--watch`  (default, ZERO risk)
+  Tier 1  `--watch`  (default, zero risk)
       Pure `/proc` flight recorder.  No ptrace, no debugger, no sudo, no writes to the
       target -- it cannot perturb or stop the game.  Samples the focus thread (default:
       the initial thread, tid == pid) at a high rate, keeping a ring buffer of its
@@ -17,26 +17,26 @@ Two independent tiers, deliberately ordered by risk to the live game:
       eldenring.exe / er_quickload.dll.  The instant the focus thread dies, it dumps
       the last N samples -- i.e. where the thread was immediately before it died -- plus
       a full snapshot of every surviving thread.
-      CANNOT see a thread that dies while in state R (running in userspace): `/proc`
+      Cannot see a thread that dies while in state R (running in userspace): `/proc`
       exposes no stack pointer for a thread that is not blocked in a syscall.
 
-  TIER 2  `--gdb`  (definitive; ptrace, brief stops)
-      Attaches gdb during the HEALTHY window and leaves breakpoints on Wine's
+  Tier 2  `--gdb`  (definitive; ptrace, brief stops)
+      Attaches gdb during the healthy window and leaves breakpoints on Wine's
       thread-death chokepoints.  On hit it records the thread, registers and a PE stack
       scan, then auto-continues, so the game keeps running.  This yields the exact death
       site including the R-state case Tier 1 misses.
 
 Wine specifics this relies on (all verified on this machine, see --selftest):
-  * Wine runs unix and PE code on ONE stack, so the SP reported by
+  * Wine runs unix and PE code on one stack, so the SP reported by
     /proc/<pid>/task/<tid>/syscall points into the PE thread stack and can be scanned
     for eldenring.exe return addresses.
-  * Proton/pressure-vessel processes are ptrace-attachable by the same uid with NO sudo
+  * Proton/pressure-vessel processes are ptrace-attachable by the same uid with no sudo
     (plain non-Proton processes of the same user are not, under kernel.yama.ptrace_scope=1).
   * gdb loads Wine's PE modules as symbol-bearing shared objects, so `NtTerminateThread`
-    resolves by NAME at both the PE ntdll.dll stub and the unix ntdll.so implementation.
+    resolves by name at both the PE ntdll.dll stub and the unix ntdll.so implementation.
     No address arithmetic is required.
 
-eldenring.exe 1.16.2 has a ZERO .text shift, so every eldenring.exe address printed here
+eldenring.exe 1.16.2 has a zero .text shift, so every eldenring.exe address printed here
 is already a deobf/Ghidra VA: feed it straight to the Ghidra MCP on localhost:8765
 (`python3 scripts/ghidra/mcp_query.py getFunctionByAddress ...`).
 """
@@ -68,52 +68,52 @@ DEFAULT_BREAK_SYMBOLS = (
 # Optional: the chokepoint every user-mode Windows exception passes through *before* the
 # thread unwinds away.  Catches a Rust panic's raise and a stack overflow at the fault site.
 #
-# THE `+0x25` IS LOAD-BEARING; BREAKING AT THE SYMBOL ITSELF CAPTURES NOTHING.
+# The `+0x25` is load-bearing; Breaking at the symbol itself captures nothing.
 #
-# Wine's KiUserExceptionDispatcher does NOT receive the exception record and context in
-# registers -- it BUILDS them from its own stack frame.  Disassembled from Proton
+# Wine's KiUserExceptionDispatcher does not receive the exception record and context in
+# registers -- it builds them from its own stack frame.  Disassembled from Proton
 # Experimental's ntdll.dll (export rva 0x10b00):
 #
 #     +0x00  cld
 #     +0x01  mov  <hook slot>(%rip),%rax
 #     +0x08  test %rax,%rax
 #     +0x0b  je   +0x1a
-#     +0x0d  mov  %rsp,%rdx                 <- CONTEXT
+#     +0x0d  mov  %rsp,%rdx                 <- context
 #     +0x10  lea  0x4f0(%rsp),%rcx          <- EXCEPTION_RECORD
 #     +0x18  call *%rax                     (debugger hook, only when the slot is set)
 #     +0x1a  mov  %rsp,%rdx                 }  the same two args, rebuilt for the real call
 #     +0x1d  lea  0x4f0(%rsp),%rcx          }
-#     +0x25  call <dispatch>                <- BREAK HERE: rcx/rdx are finally the real args
+#     +0x25  call <dispatch>                <- break HERE: rcx/rdx are finally the real args
 #     +0x2a  int3                           (the dispatch does not return)
 #
-# MEASURED 2026-09-03: breaking at `+0x00` produced two captures reading
+# Measured 2026-09-03: breaking at `+0x00` produced two captures reading
 # `rcx=0x1339f8b5a1680000`, `rdx=0x0` -- the faulting thread's leftover register values, because
 # at the `cld` neither argument exists yet.  That looked like a target quirk and was actually the
 # breakpoint being one prologue too early, so a whole run's evidence was empty.
 #
-# `+0x2a` is NOT the fix even though it is what shows up as a stack frame in our crash logs: it is
+# `+0x2a` is not the fix even though it is what shows up as a stack frame in our crash logs: it is
 # the `int3` after a non-returning call, i.e. a return address that is never returned to.
 #
 # If a future Proton reshuffles this prologue, re-derive the offset rather than nudging the number:
 # the invariant is "immediately before the dispatch call", not the literal 0x25.
 #
-# The `*(...)` is gdb LOCATION SYNTAX and is required: a bare `NAME+0x25` is parsed as a function
-# NAME, and gdb answers `Function "KiUserExceptionDispatcher+0x25" not defined.` then leaves the
-# breakpoint PENDING -- armed-looking in the log, never resolved, catching nothing. Measured
+# The `*(...)` is gdb location syntax and is required: a bare `NAME+0x25` is parsed as a function
+# name, and gdb answers `Function "KiUserExceptionDispatcher+0x25" not defined.` then leaves the
+# breakpoint pending -- armed-looking in the log, never resolved, catching nothing. Measured
 # 2026-09-03, one wasted run. The `*` makes it an expression location instead.
 EXCEPTION_SYMBOLS = ("*(KiUserExceptionDispatcher+0x25)",)
 
 # Signals gdb must hand straight back to Wine.
 #
 # This list is load-bearing, not defensive padding. gdb stops on any signal it is not told
-# to pass, and in `-batch` mode an unexpected stop makes it DETACH AND QUIT -- silently
+# to pass, and in `-batch` mode an unexpected stop makes it DETACH and quit -- silently
 # ending the capture long before the thread we care about dies. Wine drives its Windows
 # exception emulation on SIGSEGV (and Arxan faults land there too), and uses SIGUSR1/USR2
 # plus the real-time signals for thread suspend/context; leaving any of them out means the
 # watch dies within seconds of arming. Verified by observation: a single unhandled SIGTERM
 # tore down an armed session before any breakpoint could fire.
 #
-# SIGTRAP is deliberately ABSENT -- gdb needs it to deliver breakpoint hits.
+# SIGTRAP is deliberately absent -- gdb needs it to deliver breakpoint hits.
 WINE_PASSTHROUGH_SIGNALS = (
     "SIGUSR1 SIGUSR2 SIG33 SIG34 SIGPIPE SIGSYS SIGSEGV SIGBUS SIGILL SIGFPE "
     "SIGTERM SIGHUP SIGQUIT SIGCHLD SIGWINCH SIGALRM SIGVTALRM SIGPROF SIGXCPU SIGXFSZ"
@@ -145,7 +145,7 @@ def read_text(path: str, limit: int = 4096) -> str | None:
 def find_pids_by_comm(name: str) -> list[int]:
     """Locate processes by /proc/<pid>/comm.
 
-    Deliberately does NOT shell out to pgrep: the repo's cupcake policy blocks manual
+    Deliberately does not shell out to pgrep: the repo's cupcake policy blocks manual
     pgrep, and pgrep self-matches and false-negatives on this setup.
     """
     out: list[int] = []
@@ -239,9 +239,9 @@ class MemReader:
 
     @staticmethod
     def _open_through_a_live_thread(pid: int) -> int:
-        """`/proc/<pid>/mem`, falling back to a live thread's when the LEADER is a zombie.
+        """`/proc/<pid>/mem`, falling back to a live thread's when the leader is a zombie.
 
-        `/proc/<pid>/mem` IS `/proc/<pid>/task/<leader>/mem`, so once the thread-group leader
+        `/proc/<pid>/mem` is `/proc/<pid>/task/<leader>/mem`, so once the thread-group leader
         becomes a zombie that open fails with ESRCH -- while the process is alive and every other
         thread is readable. This tool's whole subject is a game whose initial thread dies and
         leaves ~60 threads running, i.e. exactly that state, and the failure was silent: it
@@ -345,7 +345,7 @@ CALL_INDIRECT = 0xFF
 
 
 def looks_like_return_address(prefix: bytes) -> bool:
-    """True when `prefix` (bytes immediately BEFORE a candidate) ends in a call.
+    """True when `prefix` (bytes immediately before a candidate) ends in a call.
 
     Cheap, deliberately permissive filter to separate genuine return addresses from
     stale data that happens to fall inside a module. `E8 rel32` is the direct call;
@@ -709,8 +709,8 @@ def run_gdb(args) -> int:
     print(f"[gdb] script={script_path}  records -> {out}", flush=True)
     print("[gdb] SAFE ABORT: press Ctrl-C, or from another shell send SIGTERM to this gdb. "
           "If gdb is killed outright the kernel auto-detaches and RESUMES the target.", flush=True)
-    # Popen rather than subprocess.run(timeout=): this child is bounded by the GAME-runtime
-    # cap, not the 30s non-game cap, and on expiry we want gdb to shut down GRACEFULLY --
+    # Popen rather than subprocess.run(timeout=): this child is bounded by the game-runtime
+    # cap, not the 30s non-game cap, and on expiry we want gdb to shut down gracefully --
     # SIGTERM makes gdb detach and leave the target running, whereas a hard kill relies on
     # the kernel's auto-detach. The real stop signal is the thread dying, not this deadline.
     cmd = ["gdb", "-q", "-batch", "-x", str(script_path)]
@@ -868,7 +868,7 @@ def selftest() -> int:
                 print(f"    {sym:<24} {count} location(s)")
 
     print("== 8. gdb capture path actually fires and auto-continues ==")
-    # Exercises the REAL generated script (DeathBP.stop -> registers, read_memory, module
+    # Exercises the real generated script (DeathBP.stop -> registers, read_memory, module
     # attribution, stack scan, JSON write, return False to resume). gdb launches this child
     # itself, which is the one case kernel.yama.ptrace_scope=1 always permits.
     fired = _selftest_capture_path()
@@ -979,7 +979,7 @@ def _find_any_wine_pid() -> int | None:
 
 
 def _gdb_probe_symbols(pid: int, symbols: list[str]) -> dict[str, int] | None:
-    """Attach, resolve breakpoints by NAME, detach. Sets no breakpoint that survives."""
+    """Attach, resolve breakpoints by name, detach. Sets no breakpoint that survives."""
     cmd = ["gdb", "-q", "-p", str(pid), "-batch",
            "-ex", "set debuginfod enabled off", "-ex", "set pagination off",
            "-ex", "set confirm off"]

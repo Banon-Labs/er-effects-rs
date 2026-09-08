@@ -3,7 +3,7 @@
 
 Written for bd `er-effects-rs-uuly`, the P0 where a garbage non-NULL `key` from Steam/Seamless
 walked into MSVC `strlen` and took the game down. The fix (`er_game_base::mem::safe_read_cstr`)
-is a source change; the question a reviewer actually needs answered is whether the EMITTED code
+is a source change; the question a reviewer actually needs answered is whether the emitted code
 still has the edge. Reading the source back cannot answer that -- inlining, tail calls and
 `memcmp`/`strlen` idiom recognition all happen after the source is written.
 
@@ -26,8 +26,8 @@ Usage:
   --find SUBSTR   Print the RVA of every symbol whose name contains SUBSTR and exit. Use this to
                   turn a Rust path into the address the walk needs. A detour body often has no
                   public symbol at all (it is only ever referenced by address), in which case find
-                  its INSTALL function and read the `lea` that passes the detour to `MhHook::new`.
-  targets   comma-separated `0xRVA=label` -- the functions that must NOT be reachable.
+                  its install function and read the `lea` that passes the detour to `MhHook::new`.
+  targets   comma-separated `0xRVA=label` -- the functions that must not be reachable.
   roots     comma-separated `0xRVA=label` -- where to start the walk.
 """
 

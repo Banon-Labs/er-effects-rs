@@ -1,12 +1,12 @@
 //! Installing the three world-map detours.
 //!
 //! Split out of `map_hooks` on 2026-08-30, when that file stood 29 lines under the 3200-line
-//! FAIL threshold in `scripts/check-rust-file-sizes.py`. The seam is a real one: everything here
-//! runs ONCE, from the game task thread, and decides only WHERE a hook goes and whether it may go
+//! fail threshold in `scripts/check-rust-file-sizes.py`. The seam is a real one: everything here
+//! runs once, from the game task thread, and decides only where a hook goes and whether it may go
 //! there. What the hooks then do every frame -- the ctor handler, the row filter, the injection --
 //! stays in the parent, which is what those three actually have in common with each other.
 //!
-//! THE ONE INVARIANT THIS FILE EXISTS TO HOLD: the three installs are INDEPENDENT. They used to
+//! The one invariant this file exists to HOLD: the three installs are independent. They used to
 //! be a chain, and a single refused seam silently disarmed two unrelated features -- including the
 //! softlock fix. See [`install_map_observers`], which spells out why, and do not re-couple them
 //! when moving code past this point.
@@ -29,16 +29,16 @@ pub unsafe fn install_map_observers() -> usize {
     if CTOR_HOOK_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
         return 0;
     }
-    // THREE INDEPENDENT HOOKS, INSTALLED INDEPENDENTLY.
+    // Three independent hooks, installed independently.
     //
     // This used to be a chain: the ViewModel ctor was hooked first and the other two were
-    // installed only from its SUCCESS arm. So one refused seam disarmed two unrelated features
+    // installed only from its success arm. So one refused seam disarmed two unrelated features
     // that had nothing to do with it, and did so silently -- the log carried the ctor's refusal
     // and not a word about the two installs that never happened.
     //
     // The ctor seam is not expected to refuse on 1.17 as things stand: its row is in the map
     // (0x8855b0 -> 0x8865a0) and its recorded 12-byte prologue was byte-checked against
-    // `eldenring-deobf-1.17.bin` at the destination and MATCHES, as do the other two. That is
+    // `eldenring-deobf-1.17.bin` at the destination and matches, as do the other two. That is
     // precisely why the coupling has to go now rather than after it bites: a chain that happens
     // to work is one map regeneration, one recompiled prologue or one MinHook error away from
     // taking the softlock fix down with it, and the failure would be silent.
@@ -48,7 +48,7 @@ pub unsafe fn install_map_observers() -> usize {
     // the engine cannot resolve and which hangs the loading screen if it reaches
     // `CallLua_Warp`. Its handler is gated on that id band alone, so with no pins injected it is
     // a pure no-op -- there is no state it needs from the ctor hook and no cost to arming it.
-    // Losing it because a DIFFERENT seam moved trades a missing feature for a frozen game.
+    // Losing it because a different seam moved trades a missing feature for a frozen game.
     //
     // See bd `one-refused-hook-must-not-abort-the-installer-2026-08-30`.
     let mut bound = unsafe { install_viewmodel_ctor_hook() };

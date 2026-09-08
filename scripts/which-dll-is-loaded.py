@@ -2,11 +2,11 @@
 """Report which `er_quickload.dll` a live Elden Ring actually mapped, and whether it
 is the build you meant to test.
 
-Why this exists (2026-08-12): `~/Elden/launch.sh`'s default profile hard-codes the MAIN
+Why this exists (2026-08-12): `~/Elden/launch.sh`'s default profile hard-codes the main
 tree's `target/x86_64-pc-windows-msvc/release/er_quickload.dll`. Launching it from a
 worktree silently validates main's build instead of the branch's, and a whole runtime
 result got attributed to a fix that was never loaded. The DLL debug log's per-line
-`dll:<8 hex>` tag IS the first 8 hex of the loaded file's md5 (see
+`dll:<8 hex>` tag is the first 8 hex of the loaded file's md5 (see
 `crates/er-quickload/src/telemetry/save_policy_logs.rs::dll_md5_short`), so the mapped
 file, its md5, and that tag are all cross-checkable -- this does it in one command.
 

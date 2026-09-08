@@ -4,7 +4,7 @@ submodule, preserving behavior (pure code motion).
 
     extract-experiments-module.py <module> <start_line> <end_line>
 
-Line numbers are 1-based inclusive, referring to the CURRENT mod.rs. The moved
+Line numbers are 1-based inclusive, referring to the current mod.rs. The moved
 range is written to crates/er-quickload/src/experiments/<module>.rs with a copy of mod.rs's import
 preamble plus `use super::*;` (so it sees every pub(crate) sibling item), and a
 `mod <module>; pub(crate) use <module>::*;` declaration is inserted into mod.rs

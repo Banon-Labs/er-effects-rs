@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Watch a lobby's member count while hosting, to measure that a NON-DLL invader still finds us.
+"""Watch a lobby's member count while hosting, to measure that a non-DLL invader still finds us.
 
-WHAT THIS SETTLES
+What this settles
 -----------------
-Publishing `er_invasion_warp_map` ADDS a key to the host's Steam lobby. The claim that this costs a
+Publishing `er_invasion_warp_map` adds a key to the host's Steam lobby. The claim that this costs a
 host nothing -- that a vanilla Seamless invader, whose five filters never name our key, still
 matches -- follows from how equality filters work but has never been observed from the other side.
 Self-exclusion (Steam omits your own lobby from your own query) makes it unobservable from one
-seat... unless somebody else does the observing FOR us by actually invading.
+seat... unless somebody else does the observing for us by actually invading.
 
-That is what this watches. The DLL population is one person, so ANY invader who arrives is a
+That is what this watches. The DLL population is one person, so any invader who arrives is a
 non-DLL invader by construction. An arrival, while the lobby demonstrably carries our key, is the
 measurement: the extra key did not make this host invisible.
 
@@ -17,7 +17,7 @@ The pairing matters. `members` alone proves someone joined; `our key present` al
 published. Only both at the same instant say a host carrying our key was reachable, so they are
 sampled together and reported together.
 
-READ ONLY: GetNumLobbyMembers / GetLobbyMemberByIndex / GetLobbyData. Nothing is written, no
+Read ONLY: GetNumLobbyMembers / GetLobbyMemberByIndex / GetLobbyData. Nothing is written, no
 session is started, no match is affected.
 
     uv run --with frida python3 scripts/frida-lobby-watch-members.py --lobby 0x186000016bc4229
@@ -112,8 +112,8 @@ rpc.exports = {
 def classify(sample: dict, baseline: int | None) -> dict:
     """What one sample means for the compatibility claim.
 
-    `baseline` is the member count while hosting alone. An arrival is a count ABOVE it, and it
-    only counts as evidence when our key is present in the SAME sample -- a join observed while
+    `baseline` is the member count while hosting alone. An arrival is a count above it, and it
+    only counts as evidence when our key is present in the same sample -- a join observed while
     the key was missing says nothing about whether the key costs a host reach.
     """
     members = sample.get("members", -1)
@@ -159,7 +159,7 @@ def _selftest() -> int:
     check(classify({"members": 1, "key_value": "m28_00_00_00"}, 1)["state"] == "waiting",
           "an unchanged count is not an arrival")
 
-    # THE TRAP: counting a join that happened while the key was absent. That is a vanilla
+    # The TRAP: counting a join that happened while the key was absent. That is a vanilla
     # invasion of a vanilla-looking host and proves nothing about publishing.
     v = classify({"members": 2, "key_value": ""}, 1)
     check(v["state"] == "arrival-without-key",

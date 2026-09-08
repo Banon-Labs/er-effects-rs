@@ -9,25 +9,25 @@
 //! [`TARGETS`] lists every movie whose grid/slot tile carries the dormant `ArtsIcon` child:
 //! the equip menu (`02_011_equip`, Right/Left Hand Armament slots), the inventory
 //! (`02_020_inventory`, melee armaments / ranged weapons / shields tabs) and the sort chest
-//! (`03_050_itembox`, the same tabs). The native side needs NO new hook: the tile-populate
+//! (`03_050_itembox`, the same tabs). The native side needs no new hook: the tile-populate
 //! function the DLL already hooks is shared -- run 20260727-224115 shows it firing on
 //! inventory tiles (`inadequacy`/`StockNum` children) as well as equip tiles, and those
 //! tiles were skipped only because their `ArtsIcon` was still the dormant vanilla stub.
 //!
-//! # WHY ArtsIcon
+//! # why ArtsIcon
 //!
-//! Every one of those tiles already places `ArtsIcon` at (-32, +37) -- the BOTTOM-LEFT slot
+//! Every one of those tiles already places `ArtsIcon` at (-32, +37) -- the bottom-left slot
 //! (`AttributeIcon` is bottom-right, `ItemIcon` is centred) -- and it is the game's own
 //! Ash-of-War slot, so driving it shows the AoW where the game already intended to.
 //!
-//! WHY NOT a new child: injecting one does not work. With the swap proven to land, an
+//! Why not a new child: injecting one does not work. With the swap proven to land, an
 //! injected `AutoReplenish` stayed unbound on every tile, because Scaleform instantiates a
 //! named timeline child only where the parent's AS3 class declares a matching member. This
 //! edit adds no name -- `ArtsIcon` is vanilla and already declared -- so that gate never
 //! applies.
 //!
 //! `ArtsIcon` renders nothing in vanilla only because it points at a stub: a 4-frame
-//! animation with no stable placeholder rect in `02_011`, and a completely EMPTY sprite in
+//! animation with no stable placeholder rect in `02_011`, and a completely empty sprite in
 //! `02_020`/`03_050`. The edit re-points that single character reference at a clip built to
 //! be structurally identical to the icon slot the game already draws into.
 //!
@@ -43,18 +43,18 @@ use crate::{
 };
 use er_game_base::fnv1a::fnv1a64;
 
-/// Instance name of the tile child the badge DLL binds and draws into. This is a VANILLA
+/// Instance name of the tile child the badge DLL binds and draws into. This is a vanilla
 /// child, not an injected one.
 pub const BADGE_INSTANCE_NAME: &str = "ArtsIcon";
 /// Nested instance name the native slot binder and icon setter target. `SetIcon` recurses
-/// into this child and scales the drawn quad by ITS local rect.
+/// into this child and scales the drawn quad by its local rect.
 pub const BADGE_ICONIMAGE_INSTANCE_NAME: &str = "IconImage";
 /// The centred item icon. Its container is the structural template for the badge clip, and
 /// its placeholder shape supplies the icon's native atlas cell size.
 const ITEM_INSTANCE_NAME: &str = "ItemIcon";
-/// The vanilla bottom-RIGHT corner badge (infusion/affinity). Its placement is the
+/// The vanilla bottom-right corner badge (infusion/affinity). Its placement is the
 /// authoritative reference the Ash-of-War badge mirrors: same scale and vertical offset,
-/// reflected about the tile centre to land bottom-LEFT.
+/// reflected about the tile centre to land bottom-left.
 const ATTRIBUTE_INSTANCE_NAME: &str = "AttributeIcon";
 
 /// Rendered size of the badge, in tile-local px before the mirrored placement scale -- what
@@ -62,17 +62,17 @@ const ATTRIBUTE_INSTANCE_NAME: &str = "AttributeIcon";
 /// badge the game already draws on these tiles.
 const BADGE_RENDER_PX: f32 = 37.0;
 
-/// The Ash-of-War backing plate: a `GFX_DefineExternalImage2` resolved by NAME out of the
+/// The Ash-of-War backing plate: a `GFX_DefineExternalImage2` resolved by name out of the
 /// shared `01_common` atlas (`SB_FE_01.layout` -> `MENU_FL_Arts_waku.png`, 182x184).
 ///
 /// This is the game's own frame -- `01_000_fe.gfx` declares it as character 232 and draws it
-/// UNDER its Ash-of-War icon (sprite 450: plate at depth 1, `BaseIcon` at depth 5), which is
+/// under its Ash-of-War icon (sprite 450: plate at depth 1, `BaseIcon` at depth 5), which is
 /// why the same plate appears everywhere the game shows an ash. Name resolution is global,
 /// not per-movie: `MENU_FL_Arts_waku2` is declared with different character ids in eight
 /// different movies, and the movies we edit already resolve names from several different
 /// atlas sheets inside the same `01_common.tpf`.
 ///
-/// NOT a `DefineShape`: the vanilla placeholder shapes are flat placeholder FILLS, so using
+/// Not a `DefineShape`: the vanilla placeholder shapes are flat placeholder fills, so using
 /// one as a plate rendered a solid green square.
 const PLATE_IMAGE_NAME: &str = "MENU_FL_Arts_waku";
 /// Bitmap format word the vanilla external-image tags use for these atlas sprites.
@@ -104,10 +104,10 @@ pub struct BadgeTarget {
     /// Derived and verified by `tests/arts_badge.rs`.
     pub edited_len: usize,
     pub edited_fnv1a64: u64,
-    /// Extra named children a tile must ALSO place to be badge-able in this movie.
+    /// Extra named children a tile must also place to be badge-able in this movie.
     ///
     /// Empty for the menu movies, where every `ItemIcon`+`AttributeIcon` tile is a real item
-    /// slot. The HUD movie needs it: `01_000_fe` holds the quick-slot strip AND both
+    /// slot. The HUD movie needs it: `01_000_fe` holds the quick-slot strip and both
     /// item-acquisition banners, and the banners are populated by a path we do not hook -- a
     /// badge there would be a bare plate nothing ever fills. The quick-slots are the only
     /// tiles that also place `Dish` (their round backing), so that is the discriminator.
@@ -117,12 +117,12 @@ pub struct BadgeTarget {
     pub require_children: &'static [&'static str],
     /// Emit the injected (nested) badge placement with `visible = 0`.
     ///
-    /// ONLY the HUD movie. There, every quick-slot shares one `ItemIcon` container, so the
+    /// Only the HUD movie. There, every quick-slot shares one `ItemIcon` container, so the
     /// badge necessarily exists on slots nothing populates and must not show its un-set
     /// placeholder (run 20260728-082544: green squares on the quick-item previews, which no
     /// hook of ours binds and therefore cannot hide natively).
     ///
-    /// The menus must stay VISIBLE-by-default: `02_010_equiptop` is the one menu using the
+    /// The menus must stay visible-by-default: `02_010_equiptop` is the one menu using the
     /// nested mount, and making it hidden removed its badges outright while the three
     /// re-pointed menus kept theirs (reported 2026-07-28). Their populate path shows and hides
     /// per tile already, so they need no help and tolerate no interference.
@@ -131,18 +131,18 @@ pub struct BadgeTarget {
 
 /// Every movie the badge is applied to. Fingerprints are UXM-unpacked 1.16.2.
 ///
-/// A `static`, deliberately: a `const` slice is materialized separately at EVERY use site,
+/// A `static`, deliberately: a `const` slice is materialized separately at every use site,
 /// so callers in different crates see different addresses for "the same" entry. Identifying
 /// a target by pointer across that boundary silently failed (run 20260727-231706: the
 /// per-movie derived-movie cache keyed on `ptr::eq` never matched, fell back to slot 0, and
-/// served the inventory movie's bytes for the equip AND sort-chest movies). The lookups
-/// below therefore return an INDEX, and nothing depends on pointer identity.
+/// served the inventory movie's bytes for the equip and sort-chest movies). The lookups
+/// below therefore return an index, and nothing depends on pointer identity.
 pub static TARGETS: [BadgeTarget; 5] = [
     // The in-game HUD armament quick-slot strip. Its tiles are AS3 class-bound and place no
     // `ArtsIcon`, so the badge nests in the `ItemIcon` container they all share. Scoped by
-    // `Dish` because this movie ALSO holds both item-acquisition banners, which no hook of
+    // `Dish` because this movie also holds both item-acquisition banners, which no hook of
     // ours populates -- a badge there would be a plate that never fills. Populated by the
-    // dedicated HUD hooks in `er-armament-icons::hud_badge`, NOT by the menu tile-populate.
+    // dedicated HUD hooks in `er-armament-icons::hud_badge`, not by the menu tile-populate.
     BadgeTarget {
         file_name: "01_000_fe.gfx",
         url_needle: b"01_000_fe",
@@ -153,7 +153,7 @@ pub static TARGETS: [BadgeTarget; 5] = [
         require_children: &["Dish"],
         default_hidden: true,
     },
-    // The Equipment screen's loadout grid. Its tile (sprite 59) places NO `ArtsIcon`, so the
+    // The Equipment screen's loadout grid. Its tile (sprite 59) places no `ArtsIcon`, so the
     // badge is nested inside the `ItemIcon` container instead -- see `BadgeMount`.
     BadgeTarget {
         file_name: "02_010_equiptop.gfx",
@@ -230,7 +230,7 @@ pub enum BadgeError {
         want_len: usize,
         want_fnv1a64: u64,
     },
-    /// We could not reproduce the INPUT movie byte-for-byte, so we do not model every tag it
+    /// We could not reproduce the input movie byte-for-byte, so we do not model every tag it
     /// contains and must not re-serialise it. Only reachable on the unknown-input path: a
     /// movie some other mod supplied through ME3 that we have no baked fingerprint for.
     NotReproducible {
@@ -317,10 +317,10 @@ fn placement_transform(tag: &Tag) -> Option<(f32, f32, f32)> {
     ))
 }
 
-/// A `MATRIX` with a uniform scale and a translation given in PIXELS.
+/// A `MATRIX` with a uniform scale and a translation given in pixels.
 ///
 /// The badge's placements are built explicitly rather than cloned from a vanilla one.
-/// Cloning carries the SOURCE's transform, which is authored for the SOURCE's content:
+/// Cloning carries the source's transform, which is authored for the source's content:
 /// the item `IconImage` clip is placed at (-80, -80) to centre the 160px placeholder, so
 /// reusing that placement for the badge threw it off the tile entirely (run
 /// 20260727-220127: `ArtsIcon_post` local `[-84,-15]` instead of `[-32,37]`).
@@ -368,13 +368,13 @@ fn place(character_id: u16, depth: u16, name: Option<&str>, scale: f32, x: f32, 
 
 /// The same placement as [`place`], but emitted as `PlaceObject3` with `visible = 0`.
 ///
-/// Used for every INJECTED (nested) badge, because a badge that nothing populates must be
+/// Used for every injected (nested) badge, because a badge that nothing populates must be
 /// invisible rather than showing its un-set placeholder. The HUD movie makes this mandatory:
 /// sprite 343 is the `ItemIcon` container for the left weapon, the right weapon, the quick-item
-/// slot AND its two small cycle previews (see `tests/hud_tree_probe.rs`), so injecting there
+/// slot and its two small cycle previews (see `tests/hud_tree_probe.rs`), so injecting there
 /// necessarily gives all of them a badge while only the two weapon slots are ever populated.
 ///
-/// Hiding from the NATIVE side cannot cover them: it only reaches clips something binds, and the
+/// Hiding from the native side cannot cover them: it only reaches clips something binds, and the
 /// cycle previews are bound by a path that resolves `ItemIcon/IconImage` alone -- which is why
 /// run 20260728-082544 left green placeholder squares on exactly those two tiles and nowhere
 /// else. Default-hidden in the movie needs no binder at all: the slot stays invisible until code
@@ -452,20 +452,20 @@ enum BadgeMount {
     /// The tile has the game's own dormant `ArtsIcon` child: re-point that placement. The
     /// name is already declared by the tile's AS3 class, so it is already instantiated.
     RepointArtsIcon,
-    /// The tile has NO arts slot -- the equipment loadout grid (`02_010_equiptop` sprite 59)
+    /// The tile has no arts slot -- the equipment loadout grid (`02_010_equiptop` sprite 59)
     /// places only `ItemIcon`/`AttributeIcon`/`inadequacy`/`HitArea`/`Cursor`/`StockNum`, so
-    /// there is nothing to re-point and a new child on the TILE would not instantiate (its
+    /// there is nothing to re-point and a new child on the tile would not instantiate (its
     /// AS3 class declares the members).
     ///
     /// So the badge goes one level down instead, as a named child of the `ItemIcon`
-    /// CONTAINER. That sprite is classless -- it carries no `SymbolClass` entry -- and a
+    /// container. That sprite is classless -- it carries no `SymbolClass` entry -- and a
     /// classless sprite instantiates its named children normally, which is exactly why the
     /// `IconImage` we inject into our own badge clip binds and draws. The DLL drives it at
     /// the path `ItemIcon/ArtsIcon`.
     NestInItemIcon,
 }
 
-/// Everything the edit needs for ONE tile, read out of the movie being edited.
+/// Everything the edit needs for one tile, read out of the movie being edited.
 struct TileLayout {
     /// Index of the grid/slot tile `DefineSprite` in the top-level tag stream.
     tile_idx: usize,
@@ -507,8 +507,8 @@ fn sprite_index(movie: &Movie, id: u16) -> Option<usize> {
         .position(|t| matches!(t, Tag::DefineSprite { id: sid, .. } if *sid == id))
 }
 
-/// Every badge-able tile in the movie: a sprite placing `ItemIcon` AND `AttributeIcon` (the
-/// mirror reference the badge's position is derived from). Tiles WITH `ArtsIcon` are
+/// Every badge-able tile in the movie: a sprite placing `ItemIcon` and `AttributeIcon` (the
+/// mirror reference the badge's position is derived from). Tiles with `ArtsIcon` are
 /// re-pointed; tiles without get the nested mount.
 fn resolve_layouts(
     movie: &Movie,
@@ -544,9 +544,9 @@ fn resolve_layouts(
         let item_container_id = placement_char(tile, ITEM_INSTANCE_NAME)
             .ok_or(BadgeError::Structure("ItemIcon placement has no character"))?;
 
-        // ItemIcon's TWO-LEVEL structure is the template: container -> child named
+        // ItemIcon's two-level structure is the template: container -> child named
         // `IconImage` -> the placeholder shape. `SetIcon` recurses into `IconImage` and scales
-        // the drawn quad by THAT clip's rect, so a one-level target leaves it nothing to
+        // the drawn quad by that clip's rect, so a one-level target leaves it nothing to
         // recurse into and it paints a tiny quad inside an otherwise correctly-sized slot
         // (run 20260727-215127).
         let container_tags = sprite_tags(movie, item_container_id)
@@ -584,7 +584,7 @@ fn resolve_layouts(
             .ok_or(BadgeError::Structure(
                 "placeholder shape is not a DefineShape",
             ))?;
-        // The icon clip must keep its NATIVE cell extent: `SetIcon` maps the icon out of a
+        // The icon clip must keep its native cell extent: `SetIcon` maps the icon out of a
         // texture atlas using the target clip's local rect, so a rect that is not the icon's
         // cell size mis-maps the UVs and smears the whole atlas page into the quad --
         // observed as "I can see all of the ashes of war" in one badge. A cell that is not
@@ -637,7 +637,7 @@ fn resolve_layouts(
 
 /// First character id not already used by the movie.
 ///
-/// New DICTIONARY characters are safe: only instance NAMES are AS3-declaration gated, and the
+/// New dictionary characters are safe: only instance names are AS3-declaration gated, and the
 /// badge clip is placed under a name that is either vanilla (`ArtsIcon` on the tile) or lives
 /// inside a classless container.
 fn first_free_id(movie: &Movie) -> Result<u16, BadgeError> {
@@ -684,7 +684,7 @@ pub fn arts_badge_scoped(
     let plate_id = next_id;
     next_id += 1;
 
-    // The new characters are inserted as ONE block with the movie's other external images,
+    // The new characters are inserted as one block with the movie's other external images,
     // which sit ahead of every sprite -- so each definition precedes the sprite that places
     // it without any per-tile index bookkeeping. Verified rather than assumed.
     let last_image_idx = movie
@@ -725,10 +725,10 @@ pub fn arts_badge_scoped(
             .checked_add(2)
             .ok_or(BadgeError::Structure("character id space exhausted"))?;
 
-        // Inner clip == the item `IconImage`'s role: holds the SAME placeholder the item icon
+        // Inner clip == the item `IconImage`'s role: holds the same placeholder the item icon
         // does, at identity, so its local rect is the icon's native cell size and `SetIcon`'s
-        // atlas UV maths land on exactly one cell. Shrinking THIS clip is what smeared the
-        // whole atlas page; the corner size comes from the PARENT placement instead.
+        // atlas UV maths land on exactly one cell. Shrinking this clip is what smeared the
+        // whole atlas page; the corner size comes from the parent placement instead.
         new_tags.push(Tag::DefineSprite {
             id: icon_clip_id,
             frame_count: 1,
@@ -741,7 +741,7 @@ pub fn arts_badge_scoped(
         });
 
         // Outer clip == the item icon container's role: its single named child is `IconImage`,
-        // the name `SetIcon` recurses into, plus the plate as a sibling BEHIND it. Both are
+        // the name `SetIcon` recurses into, plus the plate as a sibling behind it. Both are
         // scaled to the badge box and anchored on the placeholder's own origin, so plate and
         // icon are concentric exactly as in the game's HUD composition.
         let icon_scale = BADGE_RENDER_PX / layout.cell_w;
@@ -773,10 +773,10 @@ pub fn arts_badge_scoped(
             force_long: false,
         });
 
-        // AUTHORITATIVE POSITION: mirror the vanilla infusion badge instead of hand-tuning.
+        // Authoritative POSITION: mirror the vanilla infusion badge instead of hand-tuning.
         // `AttributeIcon` is the game's own corner badge on this exact tile, so reflecting its
         // transform about the tile's centre (x = 0, where `ItemIcon` sits) yields the
-        // bottom-LEFT counterpart -- same scale, same vertical offset, same inset from its
+        // bottom-left counterpart -- same scale, same vertical offset, same inset from its
         // edge. `AttributeIcon` spans [attr_x, attr_x + rendered]; its mirror spans the same
         // distance in from the opposite side, so the mirrored left edge is -(right edge).
         let badge_rendered = BADGE_RENDER_PX * layout.attr_scale;
@@ -807,7 +807,7 @@ pub fn arts_badge_scoped(
                     return Err(BadgeError::Structure("tile ArtsIcon character drifted"));
                 }
                 *character_id = Some(badge_clip_id);
-                // Vanilla `ArtsIcon` sits at (-32, +37), which is NOT the mirror of the
+                // Vanilla `ArtsIcon` sits at (-32, +37), which is not the mirror of the
                 // infusion badge. Replace it with the mirrored transform so the two corner
                 // badges are symmetric.
                 *matrix = Some(placed_matrix(layout.attr_scale, badge_tile_x, badge_tile_y));
@@ -911,11 +911,11 @@ fn attribute_placements(movie: &Movie) -> Vec<(u16, Vec<String>)> {
         .collect()
 }
 
-/// The runtime form of the `arts_badge_diff` test invariant: prove the edit only ADDED, and
+/// The runtime form of the `arts_badge_diff` test invariant: prove the edit only added, and
 /// only re-pointed placements named [`BADGE_INSTANCE_NAME`].
 ///
 /// For a movie we have baked fingerprints for this is redundant with [`derive`]'s exact-bytes
-/// check. For a movie we do NOT know -- one another mod supplied through ME3 -- it is the only
+/// check. For a movie we do not know -- one another mod supplied through ME3 -- it is the only
 /// thing standing between a structural derivation and a corrupted HUD, so it is checked
 /// against the parsed output rather than trusted from the code that produced it.
 pub fn validate_additive(vanilla: &[u8], edited: &[u8]) -> Result<(), BadgeError> {
@@ -932,8 +932,8 @@ pub fn validate_additive(vanilla: &[u8], edited: &[u8]) -> Result<(), BadgeError
     if e_ids.len() <= v_ids.len() {
         return Err(BadgeError::NotAdditive("no character was added"));
     }
-    // The vanilla infusion badge is the badge's POSITION reference and is only ever read.
-    // Compare per PRE-EXISTING sprite: the edit legitimately adds sprites of its own, so the
+    // The vanilla infusion badge is the badge's position reference and is only ever read.
+    // Compare per pre-existing sprite: the edit legitimately adds sprites of its own, so the
     // two whole-movie lists are expected to differ in length.
     let e_attrs = attribute_placements(&e);
     for (id, want) in attribute_placements(&v) {
@@ -944,7 +944,7 @@ pub fn validate_additive(vanilla: &[u8], edited: &[u8]) -> Result<(), BadgeError
             ));
         }
     }
-    // Every pre-existing sprite that changed may differ ONLY by placements named `ArtsIcon`.
+    // Every pre-existing sprite that changed may differ only by placements named `ArtsIcon`.
     for vt in &v.tags {
         let Tag::DefineSprite { id, tags: vs, .. } = vt else {
             continue;
@@ -977,14 +977,14 @@ pub fn validate_additive(vanilla: &[u8], edited: &[u8]) -> Result<(), BadgeError
     Ok(())
 }
 
-/// Derive the badge for a movie we have NO baked fingerprint for -- i.e. one another mod
+/// Derive the badge for a movie we have no baked fingerprint for -- i.e. one another mod
 /// supplied through ME3.
 ///
 /// The edit itself is already movie-agnostic: it locates tiles by their named children,
 /// mirrors the tile's own `AttributeIcon` for position (so a mod that moved or rescaled the
 /// tile is followed automatically), reads the atlas cell off the tile's own placeholder shape,
 /// and allocates character ids above whatever the movie already uses. What it cannot assume is
-/// that we UNDERSTAND the whole file, so two gates bracket it:
+/// that we understand the whole file, so two gates bracket it:
 ///
 /// 1. `parse -> write` must reproduce the input byte-for-byte. If a tag we do not model is in
 ///    there, re-serialising would silently reshape it, so we refuse to touch the movie at all.

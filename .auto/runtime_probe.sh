@@ -18,7 +18,7 @@ cleanup_runtime() {
     kill "$host_process_sampler_pid" 2>/dev/null || true
     wait "$host_process_sampler_pid" 2>/dev/null || true
   fi
-  # Put back whatever THIS script staged away, whichever mode asked for it.
+  # Put back whatever this script staged away, whichever mode asked for it.
   #
   # This condition used to also require `RUNTIME_EXPECTED_MODE == "seamless"`, which made it
   # unreachable: staging only ever happens in `vanilla` mode (see stage_runtime_mode_payload),
@@ -27,7 +27,7 @@ cleanup_runtime() {
   # uninstalling Seamless Co-op from the game directory. The next launch is a co-op profile with
   # no co-op DLL, which presents as "Seamless broke", not as "a probe moved your file".
   #
-  # The restore is guarded on the FILES instead of on the mode, which is what the operation
+  # The restore is guarded on the files instead of on the mode, which is what the operation
   # actually depends on: a staged copy exists and nothing occupies the live path. That also makes
   # it self-healing -- a run killed before this trap fired leaves the staged file behind, and the
   # next run of any mode restores it.
@@ -223,7 +223,7 @@ PY
 }
 
 setup_runtime_payload() {
-  # Crash logging ON BY DEFAULT for every probe (file channel -- reliable through Proton, unlike
+  # Crash logging on by default for every probe (file channel -- reliable through Proton, unlike
   # env vars; the DLL reads the flag from the exe dir). Installs the vectored AV handler (logs the
   # faulting RVA + caller stack of an access violation, e.g. a wrong-arg native call) + the
   # process-exit hooks, into er-quickload-crash.log. Opt out by exporting
@@ -233,9 +233,9 @@ setup_runtime_payload() {
   else
     : > "$GAME_DIR/er-quickload-crash-log.txt"
   fi
-  # me3 is the ONLY loader (LazyLoader removed 2026-07-04): the me3 mod host loads the DLL from a
+  # me3 is the only loader (LazyLoader removed 2026-07-04): the me3 mod host loads the DLL from a
   # [[natives]] profile entry written by the launcher script. A leftover dinput8 proxy would
-  # DOUBLE-LOAD the DLL (two modules, two DllMains, double hooks); fail closed so such a run can
+  # double-load the DLL (two modules, two DllMains, double hooks); fail closed so such a run can
   # never be scored.
   if [[ -f "$GAME_DIR/dinput8.dll" ]]; then
     echo "$GAME_DIR/dinput8.dll is present (removed LazyLoader proxy) -- refusing the double-load run; delete or stage away the proxy" >&2
@@ -258,7 +258,7 @@ watch_extra_args=()
 if [[ "${RUNTIME_SKIP_VISUAL_CAPTURE:-0}" == "1" ]]; then
   watch_extra_args+=(--skip-visual-capture)
 fi
-# Propagate the TRUE bash launch epoch (captured at the eldenring.exe fire) so the watcher computes
+# Propagate the true bash launch epoch (captured at the eldenring.exe fire) so the watcher computes
 # every milestone delta + the world-load fail-fast deadline from the real launch, not watcher-start.
 # The watcher also reads ER_PROBE_LAUNCH_EPOCH directly; passing --launch-epoch is the explicit form.
 if [[ -n "${ER_PROBE_LAUNCH_EPOCH:-}" ]]; then
@@ -275,7 +275,7 @@ if [[ -n "${RUNTIME_EXTRA_WATCH_ARGS:-}" ]]; then
   watch_extra_args+=(${RUNTIME_EXTRA_WATCH_ARGS})
 fi
 # Agent-owned System->Quit self-drive probes must not let the generic world-stable oracle tear the
-# process down before the scripted menu movement reaches its explicit DONE state. The runtime cap still
+# process down before the scripted menu movement reaches its explicit done state. The runtime cap still
 # bounds failed/stuck probes, but success now means the harness movement completed exactly.
 if [[ "${ER_QUICKLOAD_SYSTEM_QUIT_REPRO:-0}" == "1" ]]; then
   watch_extra_args+=(--wait-for-sq-repro-complete)

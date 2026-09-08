@@ -1,19 +1,19 @@
-//! WHY A POSSESSED CREATURE CANNOT HURT ANOTHER PLAYER, AND WHY THEY CANNOT HURT IT BACK.
+//! Why a possessed creature cannot hurt another player, and why they cannot hurt it back.
 //!
 //! The user's report was "I can't damage other players in a seamless invasion", then "they can't
 //! damage me either -- neither HP bar goes down". Both halves have an answer in the binary, and
-//! they are NOT the same answer. This module carries the first one as data, because it is a
+//! they are not the same answer. This module carries the first one as data, because it is a
 //! decision the game makes from a table and a table can be transcribed and tested.
 //!
 //! # The routing matrix
 //!
-//! A chr-vs-chr hit that survives the team/immunity filter reaches the VICTIM's
+//! A chr-vs-chr hit that survives the team/immunity filter reaches the victim's
 //! `CSChrDamageModule` vtable slot 7. For an ordinary character that is `FUN_140445060` (1.16.2
 //! `0x140445060`, 1.17 candidate `0x1404455c0`); the player's `CSPlayerDamageModule` overrides it
 //! with `FUN_14044caf0` (1.17 `0x14044d050`), which applies the hit immediately when the victim is
 //! the local main player and otherwise falls through to the same generic routine.
 //!
-//! That routine classifies BOTH characters with `FUN_14044a1b0` (1.17 candidate `0x14044a710`)
+//! That routine classifies both characters with `FUN_14044a1b0` (1.17 candidate `0x14044a710`)
 //! into one of seven categories -- see [`Category`] -- and looks the pair up in a 7x7 table of
 //! `u32` modes:
 //!
@@ -24,7 +24,7 @@
 //! ```
 //!
 //! Both tables were located in `eldenring-deobf-1.17.bin` by an exact 196-byte content match with
-//! a UNIQUE hit, so the installed build routes damage the same way 1.16.2 does. What each mode
+//! a unique hit, so the installed build routes damage the same way 1.16.2 does. What each mode
 //! does is a second, tiny table (`DAT_142a36598`) plus the `if/else` chain around it -- transcribed
 //! into [`Route`].
 //!
@@ -36,18 +36,18 @@
 //!
 //! Mode 0 is [`Route::ComputeOnly`]: it calls `FUN_140445f00`, which resolves the guard behaviour,
 //! looks up the `AtkParam` row and computes the damage numbers into the `AttackDamageInfo` -- and
-//! then stops. `DAT_142a36598[0]` has its high byte set, so `HitChr` is NOT called, so no HP is
+//! then stops. `DAT_142a36598[0]` has its high byte set, so `HitChr` is not called, so no HP is
 //! subtracted; `cVar14` stays zero, so neither `Packet15` nor the vitals packet is built. The one
 //! remaining call is `victim->GetManipulator()->vtable[+0x70](info)`, and that slot is
-//! `FUN_1403cd970` -- a bare `ret` -- in BOTH the `PadManipulator` vtable (`0x142a2b778`) and the
+//! `FUN_1403cd970` -- a bare `ret` -- in both the `PadManipulator` vtable (`0x142a2b778`) and the
 //! `NetworkManipulator` vtable (`0x142a2b1a8`). The hit is computed and dropped.
 //!
 //! **The only attacker category that can put damage on a remote player is category 1,
 //! `CS::PlayerIns::IsMainPlayerIns` -- the local player's own `PlayerIns`.** That cell is mode 4,
 //! [`Route::SendPvpDamage`], which calls `CSPlayerDamageModule` slot 21 (`0x14044ce40`, 1.17
 //! candidate `0x14044d3a0`): build a `Packet15`, fetch the victim's `PlayerNetworkSession` and
-//! `SendHitPacket`. Player-versus-player damage is resolved on the ATTACKER's client and shipped
-//! to the victim; enemy-versus-player damage is resolved on the VICTIM's own client and never
+//! `SendHitPacket`. Player-versus-player damage is resolved on the attacker's client and shipped
+//! to the victim; enemy-versus-player damage is resolved on the victim's own client and never
 //! sent at all (their row 1 column 3/4 is mode 1, apply locally).
 //!
 //! So a creature's attack has no path to another player's HP from the possessing player's machine,
@@ -59,7 +59,7 @@
 //! # Nor can it be forged
 //!
 //! Even a hit that reached mode 4 would not land. The `Packet15` receiver
-//! (`WorldChrManImp` pump `FUN_14050e4a0`) resolves BOTH handles before it touches anything:
+//! (`WorldChrManImp` pump `FUN_14050e4a0`) resolves both handles before it touches anything:
 //!
 //! ```text
 //! victim  = GetChrInsByP2PEntityHandle(packet.victim);   if (victim  == null) skip
@@ -78,20 +78,20 @@
 //! Making the hit belong to the player would mean the attack itself being player-owned -- the
 //! game's own mechanism for that is a player-owned bullet, not a relabelled NPC swing.
 //!
-//! Possessing a creature the MAP placed does not change the verdict either. That character has a
+//! Possessing a creature the map placed does not change the verdict either. That character has a
 //! real handle, but the swing does not: this crate fires attacks by writing
 //! `CSChrEventModule+0x18 requestAnimationId`, a field the engine consumes locally and publishes
 //! nowhere. The other client's copy of that enemy is animating whatever its own owner drives it
 //! to, so the attack the possessing player is watching exists on one machine.
 //!
-//! # The incoming half is a DIFFERENT mechanism, and the obvious suspect is not it
+//! # The incoming half is a different mechanism, and the obvious suspect is not it
 //!
 //! It is tempting to blame this crate's own body neuter: `NpcPossessionEngine::neuter` sets
 //! `ChrIns.chrFlags1c5 |= 0x10`, and `ChrIns::IsImmuneToAttack` reads exactly that bit. But the
 //! bit lives in the possessing player's process, and the receive path quoted above calls `SetHP`
 //! **unconditionally** -- there is no `IsImmuneToAttack`, no `FUN_1404443e0`, no team check on an
-//! arriving `Packet15`. So the invincibility bit does NOT make a possessing player unkillable by
-//! another player; what it refuses is every hit resolved LOCALLY, which for a player victim means
+//! arriving `Packet15`. So the invincibility bit does not make a possessing player unkillable by
+//! another player; what it refuses is every hit resolved locally, which for a player victim means
 //! NPCs, environment and falls. Saying otherwise gets the fix wrong.
 //!
 //! What the other player has to hit is the player's own body, which co-location keeps at the
@@ -107,9 +107,9 @@
 //! | damage | `CanTeamTypeDamageEachOther` / `canTeamTypeHitAnother` | `0x143b180e0` | `0x143b1c0e0` |
 //! | targeting | `CS::ChrIns::CanTargetTeamType` | `0x143b243f0` | `0x143b283f0` |
 //!
-//! In the DAMAGE table, Charmed is `CSTeamTypeRival` against every player team (1, 2 and 4) in
+//! In the damage table, Charmed is `CSTeamTypeRival` against every player team (1, 2 and 4) in
 //! both directions, and `Rival::Validate` returns true for an attack that sets `opposeTarget` --
-//! which every ordinary attack does. In the TARGETING table those same cells are
+//! which every ordinary attack does. In the targeting table those same cells are
 //! `CSTeamTypeFriend`. Identical on both builds; `scripts/ghidra/team-relation-report.py`
 //! reproduces it. So the team write costs lock-on against players and costs no damage.
 
@@ -200,7 +200,7 @@ pub(crate) enum Route {
     /// `CS::ChrIns::IsValidForThrowNetworking` accepts the attacker.
     ApplyAndSendDamage,
     /// Mode 4. `CSPlayerDamageModule` slot 21 -> `Packet15` -> `PlayerNetworkSession::SendHitPacket`,
-    /// then `HitChr(.., true)`. The player-versus-player path, and the ONLY route that puts damage
+    /// then `HitChr(.., true)`. The player-versus-player path, and the only route that puts damage
     /// on another human's character.
     SendPvpDamage,
     /// Mode 5. `HitChr(.., true)` with no packet: a local prediction on a character somebody else
@@ -323,20 +323,20 @@ const fn yes_no(value: bool) -> &'static str {
     if value { "YES" } else { "NO" }
 }
 
-/// Which attacker kinds can put damage on `victim`'s AUTHORITATIVE HP, derived from the table
+/// Which attacker kinds can put damage on `victim`'s authoritative HP, derived from the table
 /// rather than asserted.
 ///
-/// Printed once per possession because it IS the answer to "why can I not hurt them": the list
+/// Printed once per possession because it is the answer to "why can I not hurt them": the list
 /// for a remote-player victim has exactly one entry, and it is not the category a possessed
 /// creature is in.
 ///
 /// "Authoritative" is what makes this different from [`Route::reaches_victim`], and the
 /// distinction is not pedantry -- it is the reason a naive reading of the table gets the wrong
-/// answer. A character somebody else's machine owns has its HP decided THERE, so a local
-/// `HitChr` on our copy of it is a PREDICTION that their next sync overwrites; only a damage
+/// answer. A character somebody else's machine owns has its HP decided there, so a local
+/// `HitChr` on our copy of it is a prediction that their next sync overwrites; only a damage
 /// message changes the number they see. That is why a null attacker (mode 5, `ApplyPredicted`)
 /// shows up as reaching a remote player and still cannot hurt one. For a character this machine
-/// owns -- the local player above all -- the local application IS the damage.
+/// owns -- the local player above all -- the local application is the damage.
 pub(crate) fn attackers_that_can_reach(victim: Category) -> Vec<Category> {
     Category::ALL
         .into_iter()
@@ -427,7 +427,7 @@ impl ReceivedPacket {
 /// The set holds at most a handful of characters so the walk is cheap, but the log opens and
 /// closes its file per line and a per-frame HP report on six players would be several hundred
 /// writes a second. Deltas are still exact: the ledger compares against its own last sample, so a
-/// slower cadence loses resolution in TIME, never in total.
+/// slower cadence loses resolution in time, never in total.
 const SAMPLE_FRAMES: u64 = 30;
 
 /// One remembered player, so the next sample can be a delta rather than a number.
@@ -439,8 +439,8 @@ struct Tracked {
 
 /// The per-possession ledger: who else is in the session, and whether their HP is moving.
 ///
-/// It cannot observe a HIT -- that would need a detour on the damage path, and this crate claims
-/// no prologue. What it observes is the CONSEQUENCE, which is the thing the user actually reported
+/// It cannot observe a hit -- that would need a detour on the damage path, and this crate claims
+/// no prologue. What it observes is the consequence, which is the thing the user actually reported
 /// as missing: "neither HP bar goes down". A line saying a remote player's HP has not moved across
 /// N samples, next to the routing verdict that says it cannot, turns "I can't damage them" into
 /// something readable.
@@ -453,7 +453,7 @@ pub(crate) struct Ledger {
     last_sample: Option<u64>,
     /// How many samples have been taken, so a report can say "unchanged across N".
     samples: u64,
-    /// THE RECEIVE ORACLE'S LAST READING, so an arrival is reported as a CHANGE.
+    /// The receive oracle'S last reading, so an arrival is reported as a change.
     ///
     /// `None` until the first sample, and `Some` of an empty packet when the buffer has never
     /// been written -- different states, not to be collapsed.
@@ -539,7 +539,7 @@ impl Ledger {
             );
         }
 
-        // THE RECEIVE ORACLE, reported as a CHANGE: the buffer holds the last packet forever, so
+        // The receive oracle, reported as a CHANGE: the buffer holds the last packet forever, so
         // a repeated reading is not a repeated arrival.
         let local_hp_moved = world.iter().any(|seen| {
             seen.is_main_player
@@ -655,7 +655,7 @@ mod tests {
         }
     }
 
-    /// THE CELL THE WHOLE BUG IS. Both NPC categories, against a remote player, drop the hit.
+    /// The cell the whole bug is. Both NPC categories, against a remote player, drop the hit.
     #[test]
     fn a_possessed_creature_cannot_reach_another_players_hp() {
         for attacker in [Category::LocalNpc, Category::RemoteNpc] {
@@ -673,7 +673,7 @@ mod tests {
         }
     }
 
-    /// ...and the only column of that row that CAN is the local player's own `PlayerIns`.
+    /// ...and the only column of that row that can is the local player's own `PlayerIns`.
     #[test]
     fn only_the_local_players_own_body_can_damage_a_remote_player() {
         let reaching: Vec<Category> = Category::ALL
@@ -687,7 +687,7 @@ mod tests {
         );
     }
 
-    /// The mirror image: an NPC hurts the LOCAL player, and it does so entirely locally.
+    /// The mirror image: an NPC hurts the local player, and it does so entirely locally.
     ///
     /// This is why enemy damage never needed a packet, and why the possession's invincibility bit
     /// is the thing that stops enemies hurting the possessing player.
@@ -701,7 +701,7 @@ mod tests {
         }
     }
 
-    /// A remote player's hit on the local player is dropped HERE, because it arrives as a packet.
+    /// A remote player's hit on the local player is dropped here, because it arrives as a packet.
     #[test]
     fn a_remote_players_hit_on_the_local_player_is_resolved_on_their_machine() {
         assert_eq!(
@@ -757,7 +757,7 @@ mod tests {
 
     /// The list the log prints, derived rather than asserted -- and it has exactly one entry.
     ///
-    /// A null attacker is the trap this test pins: mode 5 DOES apply locally to a remote player's
+    /// A null attacker is the trap this test pins: mode 5 does apply locally to a remote player's
     /// ghost, and that is a prediction on our own copy, not damage on the character they are
     /// playing. Counting it would make the log claim two ways to hurt somebody when there is one.
     #[test]
@@ -768,7 +768,7 @@ mod tests {
         );
         assert!(route(Category::None, Category::RemotePlayer, false).reaches_victim());
         assert!(!route(Category::None, Category::RemotePlayer, false).sends_message());
-        // ...while the LOCAL player can be reached by almost everything, which is why enemies
+        // ...while the local player can be reached by almost everything, which is why enemies
         // hurting the possessing player was never the networked half of this problem.
         let local = super::attackers_that_can_reach(Category::MainPlayer);
         assert!(local.contains(&Category::LocalNpc), "{local:?}");
@@ -836,7 +836,7 @@ mod tests {
         assert!(ledger.due(130));
     }
 
-    /// An unread receive buffer is reported as a GAP, once, rather than silently read as "no
+    /// An unread receive buffer is reported as a gap, once, rather than silently read as "no
     /// packets" -- the two answers point at opposite halves of the problem.
     #[test]
     fn an_unreadable_receive_buffer_is_reported_as_a_gap_and_only_once() {
@@ -873,7 +873,7 @@ mod tests {
         );
     }
 
-    /// An arrival is a CHANGE, and it is paired with whether our HP moved -- which is the whole
+    /// An arrival is a change, and it is paired with whether our HP moved -- which is the whole
     /// discriminator: the pump subtracts unconditionally, so an arrival with a still HP bar means
     /// the packet was not addressed to us.
     #[test]

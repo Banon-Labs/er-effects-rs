@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Reproduce (or refute) the shared-temp-directory test flake by running N copies of one crate's
-# windows test binary AT ONCE under wine.
+# windows test binary at once under wine.
 #
-# WHY THIS EXISTS. A test scratch path built from a fixed name under `std::env::temp_dir()` is
+# Why this exists. A test scratch path built from a fixed name under `std::env::temp_dir()` is
 # the same directory in every process, because under this repo's wine runner `%TEMP%` resolves to
 # the host `/tmp`. One run of `cargo test` therefore passes 100% of the time and proves nothing;
 # the defect only appears when two copies overlap, which is the ordinary case here (two agents
 # running `scripts/check.sh` at once, the host `cargo test` racing the wine `cargo xwin test`, or
-# a second checkout). Every failure it produces ACCUSES CORRECT PRODUCT CODE -- `WrongSize
+# a second checkout). Every failure it produces accuses correct product code -- `WrongSize
 # { len: 0 }`, `MissingOrNotFile`, `BridgeWriteFailed`, an identity probe answering `Unknown` --
 # so without this harness the reader is sent into code that is not wrong.
 #
@@ -20,7 +20,7 @@
 #   bash scripts/repro-shared-temp-flake.sh er-save-redirect 10          # 10 rounds of 8
 #   CONCURRENCY=16 bash scripts/repro-shared-temp-flake.sh er-soulsformats
 #
-# Exit status is the number of RED runs, capped at 250 -- so `if bash ... ; then` reads as
+# Exit status is the number of red runs, capped at 250 -- so `if bash ... ; then` reads as
 # "the crate is isolated", and a reintroduced defect is a non-zero exit.
 set -uo pipefail
 

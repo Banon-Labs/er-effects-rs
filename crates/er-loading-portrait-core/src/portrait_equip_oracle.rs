@@ -7,15 +7,15 @@
 
 use crate::prelude::*;
 
-// LOADING-SCREEN PORTRAIT ARMOR ORACLE -- Layer 1 of bd er-effects-rs-91l5.
+// Loading-screen portrait armor oracle -- Layer 1 of bd er-effects-rs-91l5.
 //
-// WHY THE PREVIOUS ORACLE IS GONE RATHER THAN TUNED. `oracle_portrait_equip_slot_resolved` reported a
-// clean 4/4 pass on the 2026-07-31 run the user saw render ENTIRELY nude. It was structurally
+// Why the previous oracle is gone rather than tuned. `oracle_portrait_equip_slot_resolved` reported a
+// clean 4/4 pass on the 2026-07-31 run the user saw render entirely nude. It was structurally
 // incapable of catching the class, in four independent ways, and each one is inverted here:
-//   (a) it read the renderer's ChrAsm at +0x548 -- the INBOX, which `STEP_Init_Setup` snapshots once
+//   (a) it read the renderer's ChrAsm at +0x548 -- the inbox, which `STEP_Init_Setup` snapshots once
 //       and never dereferences again. The value the model is built from is stage 0 at +0x130, which
-//       `STEP_Wait_Play` re-reads EVERY frame. This samples +0x130.
-//   (b) it sampled ONCE, microseconds after our own write, so nothing that changed the ChrAsm
+//       `STEP_Wait_Play` re-reads every frame. This samples +0x130.
+//   (b) it sampled once, microseconds after our own write, so nothing that changed the ChrAsm
 //       afterwards could be seen. This samples every game tick a portrait model exists.
 //   (c) it published through a bare `.store()`, so the emitted value belonged to no particular load
 //       and a later good sample erased an earlier bad one. This publishes through per-window
@@ -23,10 +23,10 @@ use crate::prelude::*;
 //       a session total that nothing can decrement.
 //   (d) it measured `equipment_param_ids`, which `FUN_1409e6fb0` OVERRIDES from `unkd4`/`unkd8`/`unk0`
 //       -- a field with no causal power over the rendered result in the failing case. This replicates
-//       the override arithmetic and publishes the EFFECTIVE ids the renderer actually resolves.
+//       the override arithmetic and publishes the effective ids the renderer actually resolves.
 //
 // This is a RAM oracle over the game's own memory. It proves which `EquipParamProtector` rows the
-// engine asked for; it does NOT prove pixels. Layers 2 (per-part `CSPartsModelIns` binding) and 3
+// engine asked for; it does not prove pixels. Layers 2 (per-part `CSPartsModelIns` binding) and 3
 // (torso pixel check on the captured RT) remain open on er-effects-rs-91l5.
 
 pub use crate::portrait_equip::{
@@ -84,8 +84,8 @@ pub fn portrait_equip_roll_window(window: usize) {
     }
 }
 
-/// Read the LIVE stage-0 `ChrAsm` of `slot`'s profile renderer, or `None` when there is nothing
-/// meaningful to measure this tick. The pool pointer is re-read on EVERY call and vtable-guarded --
+/// Read the live stage-0 `ChrAsm` of `slot`'s profile renderer, or `None` when there is nothing
+/// meaningful to measure this tick. The pool pointer is re-read on every call and vtable-guarded --
 /// `FUN_1409af3a0` deletes and reconstructs all ten renderers on every `TitleTopDialog` construction,
 /// so a cached pointer goes stale mid-session.
 ///
@@ -100,14 +100,14 @@ pub fn portrait_equip_roll_window(window: usize) {
 ///   * any of the fault-guarded reads comes back unmapped, including the one-per-window read of the
 ///     target record's own protector ids (the next tick simply retries).
 ///
-/// A window that produces zero samples is itself a FAILURE verdict -- see `oracle_portrait_equip_sampled_frames`.
+/// A window that produces zero samples is itself a failure verdict -- see `oracle_portrait_equip_sampled_frames`.
 ///
 /// # Safety
 ///
 /// `base` must be the game module base and `summary` a live `CS::ProfileSummary`. Every read of
 /// game memory below goes through the fault-guarded `safe_read_*` helpers and every pointer is
 /// vtable- or null-checked before use, so a stale `summary` yields `None` rather than a fault --
-/// but a pointer into a DIFFERENT object would be read as one, and the verdict would be wrong.
+/// but a pointer into a different object would be read as one, and the verdict would be wrong.
 pub unsafe fn portrait_equip_read_sample(
     base: usize,
     summary: usize,
@@ -146,7 +146,7 @@ pub unsafe fn portrait_equip_read_sample(
     if param_ids.iter().all(|id| *id < 0) {
         return None; // ctor-fresh stage 0: the renderer has not been fed yet.
     }
-    // The record's own ids are read ONCE per window and then served from the latch. Two reasons, and
+    // The record's own ids are read once per window and then served from the latch. Two reasons, and
     // the second is the load-bearing one: it keeps 4 `ReadProcessMemory` calls off a per-tick path
     // that already runs dozens, and it freezes the pass criterion for the whole window, so a mid-window
     // rewrite of the record cannot retroactively make an earlier bad frame look correct.
@@ -184,12 +184,12 @@ pub unsafe fn portrait_equip_read_sample(
 
 /// Sample the live stage-0 `ChrAsm` of the profile renderer the loading-screen pipeline is driving,
 /// and fold the result into this load window's accumulators. Called from `force_profile_render_tick`
-/// on EVERY game tick the pipeline runs, with the same `target_slot` the tick kicks and captures --
+/// on every game tick the pipeline runs, with the same `target_slot` the tick kicks and captures --
 /// so the oracle can never end up measuring a renderer other than the displayed one.
 ///
-/// The MANDATORY capture-frame sample rides the same tick loop: when `PROFILE_BAKE_RGBA_CAPTURED`
+/// The mandatory capture-frame sample rides the same tick loop: when `PROFILE_BAKE_RGBA_CAPTURED`
 /// reads set and this window has not recorded a capture verdict yet, the sample is additionally
-/// latched into the `..._capture_*` oracles. Stated plainly, that is the first GAME TICK on which the
+/// latched into the `..._capture_*` oracles. Stated plainly, that is the first game tick on which the
 /// latch is observable, not literally the worker's own frame -- the readback worker sets the latch off
 /// the game thread and must not read game memory. Stage 0 only changes at `STEP_Finish_Setup`, so a
 /// one-tick skew cannot straddle a rebuild without `sampled_frames` also showing it.
@@ -197,7 +197,7 @@ pub unsafe fn portrait_equip_read_sample(
 /// # Safety
 ///
 /// Same contract as [`portrait_equip_read_sample`]: `base` is the game module base, `summary` a
-/// live `CS::ProfileSummary`. Must be called from the GAME thread -- it reads renderer state the
+/// live `CS::ProfileSummary`. Must be called from the game thread -- it reads renderer state the
 /// render thread mutates.
 pub unsafe fn portrait_equip_oracle_sample(base: usize, summary: usize, target_slot: i32) {
     portrait_equip_roll_window(PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst));
@@ -209,16 +209,16 @@ pub unsafe fn portrait_equip_oracle_sample(base: usize, summary: usize, target_s
     if sampled == 1 {
         PORTRAIT_EQUIP_WINDOWS_SAMPLED.fetch_add(1, Ordering::SeqCst);
         PORTRAIT_EQUIP_ORACLE_SLOT.store((target_slot + 1) as usize, Ordering::SeqCst);
-        // The model the window OPENED against. If every bad frame carries this value and the clean
+        // The model the window opened against. If every bad frame carries this value and the clean
         // ones carry a different one, the mismatch is a pre-propagation sampling artifact and the
-        // counting edge is `model_ins != this`. If a bad frame carries a DIFFERENT model, it is a
+        // counting edge is `model_ins != this`. If a bad frame carries a different model, it is a
         // real post-rebuild defect. One run decides it; nothing here assumes which.
         PORTRAIT_EQUIP_WINDOW_OPEN_MODEL_INS.store(sample.model_ins, Ordering::SeqCst);
     }
-    // THE ARMAMENT HALF, read off the same live ChrAsm. `FUN_1409e6fb0` resolves weapons
+    // The armament half, read off the same live ChrAsm. `FUN_1409e6fb0` resolves weapons
     // (`EquipParamWeapon::GetEntry`) and handedness
     // (`getSelectedWeaponSlotIndex(&equipment.armStyle, 0|1)` -> `selectedWeaponSlotIndex`) from
-    // exactly this object, so a non-empty id here is the model build being ASKED for a weapon.
+    // exactly this object, so a non-empty id here is the model build being asked for a weapon.
     // `ChrAsmEquipment` is `{ armStyle @ +0 (4 bytes), selectedSlots @ +4 }` and sits at ChrAsm+0x08.
     unsafe {
         let mut right = PORTRAIT_EQUIP_OVERRIDE_ABSENT;

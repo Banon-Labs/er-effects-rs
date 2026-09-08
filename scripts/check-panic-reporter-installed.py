@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """Every ME3-loadable shell must install `er_game_base::panic_report::report_panics_to`.
 
-WHY THIS IS A GATE AND NOT A CONVENTION
+Why this is a gate and not a convention
 ---------------------------------------
 A Rust panic inside a cdylib loaded into ELDEN RING is invisible by default. `stderr` under me3 +
 Proton is nobody's file, and the unwind then crosses an `extern "system"` boundary -- a detour
-handler, a per-frame callback -- where Rust turns it into an ABORT. An abort does not dispatch to
+handler, a per-frame callback -- where Rust turns it into an abort. An abort does not dispatch to
 a vectored exception handler, so `er_crash_logging` writes NOTHING: no record, no `-latest`, no
 module list. The process is simply gone.
 
 That is not a hypothetical failure mode; it is a whole afternoon. On 2026-09-04 `er_invasion_warp`
 killed the game repeatedly on the F9 cross-area warp and every run's `er-crash-log.txt` held only
-its build header -- zero records -- while the same DLL's OTHER crash (an illegal instruction at
+its build header -- zero records -- while the same DLL's other crash (an illegal instruction at
 0x140010043) produced full records every time. The difference was not the severity of the bug, it
 was that one of them raised an exception and the other aborted. Hours went into the fault that had
 evidence, because the one that produced none did not look like a bug with a location at all.
@@ -20,18 +20,18 @@ evidence, because the one that produced none did not look like a bug with a loca
 before the unwind starts. It does not make the panic survivable -- the process still dies -- but a
 named line can be fixed where an anonymous death gets rediscovered next week.
 
-The hook is installed PER DLL. Every cdylib statically links its own copy of `er-game-base`, so
+The hook is installed per DLL. Every cdylib statically links its own copy of `er-game-base`, so
 one shell calling `report_panics_to` does nothing whatsoever for the shell next to it. That is
 precisely why a checklist item fails here and a check does not: the omission is invisible in review
 (the crate compiles, links, loads and runs) and only shows up as silence during an incident.
 
-WHAT COUNTS AS INSTALLED
+What counts as installed
 ------------------------
-A call to `report_panics_to(` anywhere in the crates that compile INTO that DLL -- the shell crate
+A call to `report_panics_to(` anywhere in the crates that compile into that DLL -- the shell crate
 plus its in-repo path-dependency closure, the same closure `er-dll-provenance.py` hashes. Searching
 only the shell crate would report a false gap for a shell that installs the hook from its `-core`.
 
-USAGE
+Usage
     python3 scripts/check-panic-reporter-installed.py            # audit; exit 1 on a gap
     python3 scripts/check-panic-reporter-installed.py --selftest
 """
@@ -50,10 +50,10 @@ CRATES_DIR = REPO_ROOT / "crates"
 SUBPROCESS_TIMEOUT = 20
 
 # The call this gate is looking for. Matched as a call, not a bare mention, so the doc comment in
-# `panic_report.rs` that NAMES the function does not count as installing it.
+# `panic_report.rs` that names the function does not count as installing it.
 INSTALL_CALL = re.compile(r"\breport_panics_to\s*\(")
 
-# The crate that DEFINES the hook. It obviously mentions the name; it is not a shell and is not
+# The crate that defines the hook. It obviously mentions the name; it is not a shell and is not
 # audited as one.
 DEFINING_CRATE = "er-game-base"
 
@@ -152,7 +152,7 @@ def selftest() -> int:
         if not condition:
             failures += 1
 
-    # The matcher is the whole gate, so it is what gets tested: it must see a call and must NOT be
+    # The matcher is the whole gate, so it is what gets tested: it must see a call and must not be
     # satisfied by prose that merely names the function -- which is the shape of the doc comment in
     # the defining crate, and would have exempted every shell from this check.
     check(

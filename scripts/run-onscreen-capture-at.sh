@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ON-SCREEN run that captures a FULL-RES screenshot of the ER window at a target
+# On-screen run that captures a full-RES screenshot of the ER window at a target
 # wall-clock offset after launch, then tears the game down. Self-bounded.
 #
 #   CAPTURE_AT_MS  : offset after launch-epoch to capture (default 15000)
@@ -34,7 +34,7 @@ teardown() {
 }
 trap teardown EXIT INT TERM HUP
 
-# Launch the on-screen no-teardown runner in its OWN session so we can kill the
+# Launch the on-screen no-teardown runner in its own session so we can kill the
 # whole tree. It sources .envs/native-continue-probe.env (gold save + triggers).
 setsid env ARTIFACT_DIR="$ARTIFACT_DIR" bash "$REPO_ROOT/scripts/run-watch-onscreen.sh" \
   > "$ARTIFACT_DIR/orchestrator-runner.out" 2>&1 &

@@ -1,15 +1,15 @@
-//! Publish this host's current map on its own Steam lobby, so invaders can ASK for a location
+//! Publish this host's current map on its own Steam lobby, so invaders can ask for a location
 //! instead of sampling and rejecting.
 //!
 //! # Why this exists, and what it is worth
 //!
 //! Seamless decides an invasion destination server-side and pushes it to the client. Filtering that
-//! after the fact works (see [`crate::local_invasion_filter`]) but it is REJECTION SAMPLING, and
+//! after the fact works (see [`crate::local_invasion_filter`]) but it is rejection sampling, and
 //! rejection sampling has no upper bound: measured 2026-08-06, a query returns 13 hosts worldwide
 //! in one bracket, so reaching one specific host takes ~13 draws on average and the tail never
 //! closes. Every rejection costs a full match negotiation and cancel.
 //!
-//! Narrowing the QUERY removes the sampling entirely. Seamless already does exactly this -- it
+//! Narrowing the query removes the sampling entirely. Seamless already does exactly this -- it
 //! attaches five filters to its lobby-list request, every one of them a key some host published:
 //!
 //! ```text
@@ -20,17 +20,17 @@
 //!   AddRequestLobbyListStringFilter("lobby_key", "<sha256>")
 //! ```
 //!
-//! None of them carries the host's LOCATION -- that is the gap this module fills, and the reason a
-//! host must run this DLL for it to work at all: only a lobby's OWNER may call `SetLobbyData`, so
+//! None of them carries the host's location -- that is the gap this module fills, and the reason a
+//! host must run this DLL for it to work at all: only a lobby's owner may call `SetLobbyData`, so
 //! an invader cannot annotate someone else's lobby.
 //!
 //! # Why publishing here is safe for everyone else
 //!
-//! MEASURED 2026-08-06: a lobby that lacks a filtered key is EXCLUDED from the results (a baseline
+//! Measured 2026-08-06: a lobby that lacks a filtered key is excluded from the results (a baseline
 //! of 13 lobbies went to 0 when one filter on an unpublished key was added, reproduced twice). That
 //! cuts both ways and the second direction is the important one:
 //!
-//! * a vanilla Seamless invader never filters on our key, so publishing it changes NOTHING for
+//! * a vanilla Seamless invader never filters on our key, so publishing it changes nothing for
 //!   them -- they still match this host exactly as before; and
 //! * `lobby_key` and `lobby_type`, the two keys that decide who can see whom at all, are never
 //!   written or filtered on here. Those stay Seamless's alone.
@@ -41,7 +41,7 @@
 //!
 //! # Republishing, and why it is not optional
 //!
-//! Seamless writes its whole advertisement ONCE, at `CreateLobby`, and never touches it again --
+//! Seamless writes its whole advertisement once, at `CreateLobby`, and never touches it again --
 //! measured on a live host session: 7 `SetLobbyData` calls at creation, zero afterwards, including
 //! across a Dried Finger use that visibly changed the host's invasion state. A location key written
 //! only at creation would therefore go stale the moment the host walks to another map, and would
@@ -50,16 +50,16 @@
 //!
 //! # Hooks: exactly one, and not in `ersc.dll`
 //!
-//! PUBLISHING installs ONE read-only observer, on `SetLobbyData`, and alters nothing it sees. It
+//! Publishing installs one read-only observer, on `SetLobbyData`, and alters nothing it sees. It
 //! exists because the lobby id cannot be derived: the session struct's lobby field and the lobby
-//! Seamless actually advertises on are DIFFERENT objects (captured live -- see
+//! Seamless actually advertises on are different objects (captured live -- see
 //! `SESSION_LOBBY_ID_OFFSET`), and three independent guards (ownership, the `lobby_type` marker,
 //! and a read-back of the written value) all passed while describing the wrong one. Watching
 //! Seamless declare its own advertisement is definitional rather than inferential.
 //!
-//! HUNT MODE needs one, because a filter has to be added between Seamless's last
+//! Hunt mode needs one, because a filter has to be added between Seamless's last
 //! `AddRequestLobbyList*` and the request going out, and only Seamless knows when that is. So
-//! `RequestLobbyList` is detoured -- in `steamclient64.dll`'s interface vtable, NOT in `ersc.dll`.
+//! `RequestLobbyList` is detoured -- in `steamclient64.dll`'s interface vtable, not in `ersc.dll`.
 //! That distinction is the point: ersc is Themida-protected and an inline patch there is
 //! unproven-safe, whereas Steam's own interface is ordinary code this DLL already calls into.
 
@@ -89,7 +89,7 @@ pub const MATCHMAKING_ACCESSOR: &str = "SteamAPI_SteamMatchmaking_v009\0";
 
 /// Offset of a lobby `CSteamID` within Seamless's session object.
 ///
-/// NO LONGER USED FOR PUBLISHING, and kept only because other readers of the session struct still
+/// No longer used for publishing, and kept only because other readers of the session struct still
 /// reference it. Its docstring called itself a candidate and predicted exactly how it would fail;
 /// it then failed that way. Captured live 2026-08-06, seconds apart:
 ///
@@ -98,21 +98,21 @@ pub const MATCHMAKING_ACCESSOR: &str = "SteamAPI_SteamMatchmaking_v009\0";
 ///   our publish       -> 0x186000016d0061f   er_invasion_warp_map
 /// ```
 ///
-/// Seamless builds a FRESH advertisement lobby each time the world opens to invaders; this field
+/// Seamless builds a fresh advertisement lobby each time the world opens to invaders; this field
 /// lags on the previous one. Publishing now watches Seamless declare its advertisement instead of
 /// deriving it -- see `live::advertisement_lobby`.
 pub const SESSION_LOBBY_ID_OFFSET: usize = 0x178;
 
 /// `ISteamMatchmaking::GetLobbyData` -- vtable slot 19.
 ///
-/// READ ONLY, and that distinction is the whole reason this is allowed to name a Seamless key at
+/// Read only, and that distinction is the whole reason this is allowed to name a Seamless key at
 /// all: reading lobby data changes nothing for any other player, whereas writing or filtering on
 /// one of their keys changes what everybody matches.
 pub const GET_LOBBY_DATA_SLOT: usize = 19;
 
 /// `ISteamMatchmaking::GetLobbyOwner` -- vtable slot 35.
 ///
-/// THE CHECK THAT WAS MISSING. `SetLobbyData` persists only for a lobby's OWNER; a non-owner write
+/// The check that was missing. `SetLobbyData` persists only for a lobby's owner; a non-owner write
 /// returns `true`, is accepted into the local copy, and is then replaced by the server's version.
 /// Measured 2026-08-06 in one session, same code, two lobbies:
 ///
@@ -134,13 +134,13 @@ pub const USER_GET_STEAM_ID_SLOT: usize = 2;
 /// exports; a miss returns `None` and publishing refuses rather than assuming we are the owner.
 pub const USER_ACCESSOR: &str = "SteamAPI_SteamUser_v021\0";
 
-/// The key whose presence PROVES a lobby is the one invaders query.
+/// The key whose presence proves a lobby is the one invaders query.
 ///
 /// Seamless filters its lobby list on `lobby_type == yknx3_seamless_master_lobby`, so by definition
 /// the only lobbies an invader can ever see are the ones carrying that pair. Reading it back off
 /// our publish target turns "the offset is probably the advertisement lobby" into a fact checked on
 /// every write -- and if the offset is ever wrong, or Seamless reorders its lobbies in a future
-/// version, publishing REFUSES instead of writing somewhere nobody reads.
+/// version, publishing refuses instead of writing somewhere nobody reads.
 pub const ADVERTISEMENT_MARKER_KEY: &str = "lobby_type\0";
 /// The value [`ADVERTISEMENT_MARKER_KEY`] carries on the advertisement lobby.
 pub const ADVERTISEMENT_MARKER_VALUE: &str = "yknx3_seamless_master_lobby";
@@ -148,7 +148,7 @@ pub const ADVERTISEMENT_MARKER_VALUE: &str = "yknx3_seamless_master_lobby";
 /// How the block id is spelled on the wire.
 ///
 /// The engine's own debug spelling (`m60_51_36_00`), because both sides must format identically for
-/// an EQUALITY filter to match and a canonical human-readable form is far harder to get subtly
+/// an equality filter to match and a canonical human-readable form is far harder to get subtly
 /// wrong than a raw integer whose endianness and BCD index byte have both bitten this repo before.
 #[must_use]
 pub fn map_value(block: BlockKey) -> String {
@@ -160,7 +160,7 @@ pub fn map_value(block: BlockKey) -> String {
 /// Returns `None` when the advertisement is already correct, so the common case costs nothing and
 /// a host standing still does not rewrite its lobby every tick.
 ///
-/// A block of `None` -- no resolvable location -- publishes NOTHING rather than clearing the key.
+/// A block of `None` -- no resolvable location -- publishes nothing rather than clearing the key.
 /// Clearing would be worse than staleness: an invader filtering for a location would silently stop
 /// matching a host who is still perfectly reachable, and the failure would look like "nobody is
 /// online" rather than like a bug.
@@ -175,7 +175,7 @@ pub fn pending_publish(current: Option<BlockKey>, last_published: Option<&str>) 
 
 /// `ISteamMatchmaking::RequestLobbyList` -- vtable slot 4, where a filter must be added.
 ///
-/// Filters accumulate and are CONSUMED by this call, so ours has to land between Seamless's last
+/// Filters accumulate and are consumed by this call, so ours has to land between Seamless's last
 /// `AddRequestLobbyList*` and the request going out. Proven live 2026-08-06: injecting one filter
 /// in this function's prologue took a 13-lobby result set to 0, twice.
 pub const REQUEST_LOBBY_LIST_SLOT: usize = 4;
@@ -185,18 +185,18 @@ pub const ADD_STRING_FILTER_SLOT: usize = 5;
 
 /// Which single location hunt mode should ask Steam for.
 ///
-/// # Why ONE location and not a set
+/// # Why one location and not a set
 ///
-/// A Steam string filter is an EQUALITY test on one value -- there is no OR. Seamless attaches five
-/// of them and they AND together. So hunt mode can narrow to one place, and asking for two would
+/// A Steam string filter is an equality test on one value -- there is no or. Seamless attaches five
+/// of them and they and together. So hunt mode can narrow to one place, and asking for two would
 /// silently return nothing at all (a lobby cannot equal both). Rather than let that happen, several
-/// marked blocks REFUSE to hunt and say so; the reject filter still handles the multi-location case,
+/// marked blocks refuse to hunt and say so; the reject filter still handles the multi-location case,
 /// slowly but correctly.
 ///
 /// # What it picks
 ///
 /// * one marked block  -> that one, because marking a single place is unambiguous intent
-/// * several marked    -> `None`; a string filter cannot express OR
+/// * several marked    -> `None`; a string filter cannot express or
 /// * none marked       -> where the player is standing, which is "invade locally"
 ///
 /// # Exclusions are honoured here too
@@ -304,10 +304,10 @@ mod live {
     type MatchmakingAccessor = unsafe extern "system" fn() -> usize;
     /// `bool SetLobbyData(this, CSteamID lobby, const char *key, const char *value)`.
     ///
-    /// The `CSteamID` is an 8-byte POD passed BY VALUE, which is why it is a plain `u64` here and
+    /// The `CSteamID` is an 8-byte POD passed by value, which is why it is a plain `u64` here and
     /// not a pointer -- getting that wrong would shift every argument after it.
     type SetLobbyDataFn = unsafe extern "system" fn(usize, u64, *const u8, *const u8) -> bool;
-    /// `CSteamID GetLobbyOwner(this, CSteamID lobby)` -- returned through a HIDDEN SRET POINTER.
+    /// `CSteamID GetLobbyOwner(this, CSteamID lobby)` -- returned through a hidden SRET pointer.
     ///
     /// The 8-byte return does not come back in a register here; the caller passes a slot for it.
     /// Declaring it `-> u64` puts our lobby argument where the sret pointer belongs and the callee
@@ -315,7 +315,7 @@ mod live {
     type GetLobbyOwnerFn = unsafe extern "system" fn(usize, *mut u64, u64) -> usize;
     /// `CSteamID GetSteamID(this)` on `ISteamUser` -- same sret convention.
     type GetSteamIdFn = unsafe extern "system" fn(usize, *mut u64) -> usize;
-    /// `const char *GetLobbyData(this, CSteamID lobby, const char *key)` -- READ ONLY.
+    /// `const char *GetLobbyData(this, CSteamID lobby, const char *key)` -- Read only.
     type GetLobbyDataFn = unsafe extern "system" fn(usize, u64, *const u8) -> *const i8;
 
     /// Cached interface pointer. Steam hands out a process-wide singleton, so this is resolved once
@@ -365,7 +365,7 @@ mod live {
         Some(BlockKey::from_raw(raw))
     }
 
-    /// Do WE own this lobby? Only an owner's `SetLobbyData` survives the server.
+    /// Do we own this lobby? Only an owner's `SetLobbyData` survives the server.
     ///
     /// `None` means the question could not be answered -- an unresolvable interface, a missing
     /// export, a vtable that would not read. The caller must treat that as "not ours", because
@@ -378,7 +378,7 @@ mod live {
 
     /// `GetLobbyOwner`, called through the hidden-return-pointer convention.
     ///
-    /// An 8-byte `CSteamID` return is NOT a plain integer return in this build: it goes through an
+    /// An 8-byte `CSteamID` return is not a plain integer return in this build: it goes through an
     /// sret pointer, the same shape `GetLobbyByIndex` needs. Calling it as `-> u64` put a sentinel
     /// in the argument slot and faulted on `0xbeef`.
     fn lobby_owner(iface: usize, lobby: u64) -> Option<u64> {
@@ -422,7 +422,7 @@ mod live {
         (out != 0).then_some(out)
     }
 
-    /// Read our key back off the lobby, so a publish is only counted when the value is THERE.
+    /// Read our key back off the lobby, so a publish is only counted when the value is there.
     ///
     /// `SetLobbyData` returning `true` proved nothing: the non-owner write returned true and
     /// vanished. This is the direct measurement of the effect rather than the call.
@@ -430,7 +430,7 @@ mod live {
         let read = get_lobby_data(iface)?;
         let key = format!("{LOBBY_MAP_KEY}\0");
         let got = unsafe { read(iface, lobby, key.as_ptr()) };
-        // Steam's RETURN is a foreign pointer for exactly the same reason its arguments are, and
+        // Steam's return is a foreign pointer for exactly the same reason its arguments are, and
         // `is_null` is exactly the guard that let `0x011000010e05acda` into `strlen` on the
         // argument side of this file. Documented to be `""` on a missing key is not the same as
         // observed to be a valid pointer, and ersc.dll sits between us and Steam here.
@@ -442,7 +442,7 @@ mod live {
     /// Is this the lobby an invader's query can actually see?
     ///
     /// Seamless filters its lobby list on `lobby_type == yknx3_seamless_master_lobby`, so a lobby
-    /// carrying that pair is BY DEFINITION one the query can return, and a lobby without it is
+    /// carrying that pair is by definition one the query can return, and a lobby without it is
     /// invisible no matter what we write there. Reading it costs one call and converts a guessed
     /// struct offset into a fact re-checked on every publish.
     ///
@@ -469,7 +469,7 @@ mod live {
 
     /// Publish this host's map if it changed. Safe to call every tick.
     ///
-    /// Every failure path is a silent no-op ON PURPOSE. Not being findable by location is a missing
+    /// Every failure path is a silent no-op on purpose. Not being findable by location is a missing
     /// convenience; a DLL that panics or spams because Steam was not ready would be a broken game.
     pub fn publish_current_map() {
         let Some(value) = pending_publish(current_block(), last_published().as_deref()) else {
@@ -479,15 +479,15 @@ mod live {
             REFUSALS.fetch_add(1, Ordering::SeqCst);
             return;
         };
-        // OBSERVED, not derived. The session struct's lobby field pointed at a different lobby
+        // Observed, not derived. The session struct's lobby field pointed at a different lobby
         // from the one Seamless advertises on -- captured live, two ids seconds apart -- so our
         // key was never on the lobby invaders query. `None` here means Seamless has not declared
         // an advertisement yet, which is the ordinary state until the world is opened.
         let Some(lobby) = advertisement_lobby() else {
             return;
         };
-        // REFUSE rather than write somewhere nobody queries. The struct offset that produced this
-        // lobby id was an assumption; this is the check that makes being wrong LOUD instead of
+        // Refuse rather than write somewhere nobody queries. The struct offset that produced this
+        // lobby id was an assumption; this is the check that makes being wrong loud instead of
         // silent, because the silent failure mode is a filter matching nobody while every log line
         // says success.
         if !is_advertisement_lobby(iface, lobby) {
@@ -500,8 +500,8 @@ mod live {
             }
             return;
         }
-        // OWNERSHIP, before anything is written. Only the owner's lobby data survives the server,
-        // and while an invader is searching this session field holds the HOST's lobby -- writing
+        // Ownership, before anything is written. Only the owner's lobby data survives the server,
+        // and while an invader is searching this session field holds the host's lobby -- writing
         // there returns true and evaporates.
         if we_own(iface, lobby) != Some(true) {
             if REFUSALS.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -528,12 +528,12 @@ mod live {
         let ok = unsafe { write(iface, lobby, key.as_ptr(), payload.as_ptr()) };
         IN_OUR_OWN_WRITE.store(false, Ordering::SeqCst);
         if !ok {
-            // Steam refused. Do NOT record it as published, or a transient failure would be
+            // Steam refused. Do not record it as published, or a transient failure would be
             // remembered as success and never retried.
             REFUSALS.fetch_add(1, Ordering::SeqCst);
             return;
         }
-        // READ IT BACK. `ok` is what the call SAID; this is what the lobby HAS. The non-owner
+        // Read it back. `ok` is what the call said; this is what the lobby has. The non-owner
         // write said true and left nothing behind, so the return value alone is not evidence and
         // a counter built on it reports publishes that never happened.
         match published_value(iface, lobby) {
@@ -563,11 +563,11 @@ mod live {
     }
 
     // -----------------------------------------------------------------------------------------
-    // HUNT MODE: narrow the outgoing query instead of rejecting its answers
+    // Hunt MODE: narrow the outgoing query instead of rejecting its answers
     // -----------------------------------------------------------------------------------------
 
     // ---------------------------------------------------------------------------------------
-    // WHICH LOBBY IS THE ADVERTISEMENT: observed, not derived
+    // Which lobby is the ADVERTISEMENT: observed, not derived
     // ---------------------------------------------------------------------------------------
 
     /// The lobby id Seamless last wrote its own `lobby_type` marker to.
@@ -582,7 +582,7 @@ mod live {
     ///   our publish       -> 0x186000016d0061f   er_invasion_warp_map
     /// ```
     ///
-    /// Two different lobbies. Seamless builds a FRESH advertisement lobby every time the world is
+    /// Two different lobbies. Seamless builds a fresh advertisement lobby every time the world is
     /// opened to invaders, while the session field still points at the previous one -- so our key
     /// has never been on the lobby an invader queries, in any run.
     ///
@@ -591,7 +591,7 @@ mod live {
     /// read-back passes: it proves the value reached *a* lobby, not the right one. Three
     /// independent confirmations, all green, all describing the wrong object.
     ///
-    /// So this stops deriving the answer and OBSERVES it. Seamless itself declares which lobby is
+    /// So this stops deriving the answer and observes it. Seamless itself declares which lobby is
     /// the advertisement, by writing the marker to it; watching that write is definitional rather
     /// than inferential, and it needs no offset, no ownership reasoning, and no candidate probing.
     static ADVERTISEMENT_LOBBY: AtomicU64 = AtomicU64::new(0);
@@ -603,7 +603,7 @@ mod live {
     /// What Seamless computed before any substitution, so the toggle can be undone as well as
     /// applied. Seamless never republishes it, so this is the only copy that exists.
     static VANILLA_LOBBY_KEY: Mutex<Option<String>> = Mutex::new(None);
-    /// Which pool the CURRENTLY ADVERTISED lobby is in, as opposed to which one the config asks
+    /// Which pool the currently advertised lobby is in, as opposed to which one the config asks
     /// for. A difference between the two is what `reapply_pool_if_toggled` exists to close.
     static POOL_APPLIED: AtomicBool = AtomicBool::new(false);
     static FILTER_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
@@ -639,7 +639,7 @@ mod live {
                     let lobby = lobby as u64;
                     let previous = ADVERTISEMENT_LOBBY.swap(lobby, Ordering::SeqCst);
                     if previous != lobby {
-                        // A NEW advertisement lobby means whatever we published before is on a
+                        // A new advertisement lobby means whatever we published before is on a
                         // dead one. Clearing this forces a republish rather than leaving the new
                         // lobby bare because the map has not changed since.
                         *LAST_PUBLISHED.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -668,12 +668,12 @@ mod live {
     /// Seamless's own key for the value that decides which pool a lobby belongs to.
     pub const LOBBY_KEY_NAME: &str = "lobby_key";
 
-    /// Steam's own ceiling on a lobby-data KEY (`k_nMaxLobbyKeyLength`). Used as the read bound
+    /// Steam's own ceiling on a lobby-data key (`k_nMaxLobbyKeyLength`). Used as the read bound
     /// in [`pooled_key_for`] so a junk pointer that happens to land in mapped memory cannot walk
     /// the process looking for a NUL that was never there.
     const MAX_LOBBY_KEY_LEN: usize = 255;
 
-    /// Steam's ceiling on a lobby-data VALUE (`k_cubChatMetadataMax`). Same purpose as
+    /// Steam's ceiling on a lobby-data value (`k_cubChatMetadataMax`). Same purpose as
     /// [`MAX_LOBBY_KEY_LEN`]; the real `lobby_key` value is 16 characters, so this is a bound
     /// rather than an expectation.
     const MAX_LOBBY_VALUE_LEN: usize = 8192;
@@ -686,7 +686,7 @@ mod live {
     fn pooled_key_for(key: usize, value: usize) -> Option<std::ffi::CString> {
         // These two pointers come from Seamless/Steam, not from us, and a NULL check is not
         // enough to make them safe to hand to `CStr::from_ptr`. Both of the crashes reported on
-        // 2026-08-23 were a garbage NON-NULL `key` (`0x011000010e05acda` and
+        // 2026-08-23 were a garbage non-NULL `key` (`0x011000010e05acda` and
         // `0x0110000107be5e2c`) walking into `strlen` and taking the game down from inside this
         // exact call -- see bd `ersc-steam-garbage-key-ptr-crashes-lobby-publish-2026-08-24`.
         // `safe_read_cstr` reads through `ReadProcessMemory`, which fails closed on an unmapped
@@ -699,7 +699,7 @@ mod live {
         let value_bytes = unsafe { er_game_base::mem::safe_read_cstr(value, MAX_LOBBY_VALUE_LEN) }?;
         let original = std::str::from_utf8(&value_bytes).ok()?;
         // Remember what Seamless computed, so the toggle can be applied or undone on a lobby that
-        // already exists. Seamless publishes its advertisement ONCE at CreateLobby and never again,
+        // already exists. Seamless publishes its advertisement once at CreateLobby and never again,
         // so without a recorded original there is nothing to convert back to and no way to move an
         // existing lobby into the pool -- see `reapply_pool_if_toggled`.
         if !original.is_empty() {
@@ -723,17 +723,17 @@ mod live {
         std::ffi::CString::new(pooled).ok()
     }
 
-    /// Move an EXISTING advertisement into or out of the DLL pool when the option is toggled.
+    /// Move an existing advertisement into or out of the DLL pool when the option is toggled.
     ///
     /// # Why the toggle needs this at all
     ///
-    /// The two halves of the swap do not have the same reach. The SEARCH half is live: the next
-    /// query filters on whatever the config says right now. The PUBLISH half rides Seamless's own
-    /// `SetLobbyData`, and Seamless writes its advertisement exactly ONCE, at `CreateLobby` --
+    /// The two halves of the swap do not have the same reach. The search half is live: the next
+    /// query filters on whatever the config says right now. The publish half rides Seamless's own
+    /// `SetLobbyData`, and Seamless writes its advertisement exactly once, at `CreateLobby` --
     /// measured on a live host session as 7 calls at creation and zero afterwards.
     ///
-    /// So without this, flipping the option while already hosting leaves the player SEARCHING in
-    /// one pool while still ADVERTISING in the other: invisible to the friend they turned it on
+    /// So without this, flipping the option while already hosting leaves the player searching in
+    /// one pool while still advertising in the other: invisible to the friend they turned it on
     /// for, and still visible to the strangers they turned it on to avoid. Silently asymmetric,
     /// which is the worst shape a matchmaking switch can take.
     ///
@@ -763,7 +763,7 @@ mod live {
             return;
         };
         // Only the owner's lobby data survives the server; while searching, that field is the
-        // HOST's lobby and a write there would return true and evaporate.
+        // host's lobby and a write there would return true and evaporate.
         if we_own(iface, lobby) != Some(true) {
             return;
         }
@@ -869,7 +869,7 @@ mod live {
             return 0;
         }
         let Some(iface) = matchmaking() else {
-            // SAY SO, ONCE. This path returns silently and retries every tick, which makes the
+            // Say so, once. This path returns silently and retries every tick, which makes the
             // absence of an install line ambiguous: it reads identically to `steam_hooks = false`.
             // Measured 2026-09-04, that ambiguity cost a whole A/B arm -- a 110s run with
             // `steam_hooks = true` produced no install line, and only reading this function showed
@@ -950,9 +950,9 @@ mod live {
 
     /// Add our location filter to the query Seamless is about to send.
     ///
-    /// Runs BEFORE the original, because filters are accumulated and then consumed by this call.
+    /// Runs before the original, because filters are accumulated and then consumed by this call.
     ///
-    /// Adding a filter narrows OUR OWN results and nothing else -- no other player's matching
+    /// Adding a filter narrows our own results and nothing else -- no other player's matching
     /// changes, nothing is published, no game state is written. The cost is entirely ours: hosts
     /// without this DLL do not carry the key, so they stop being visible while hunt is on. That is
     /// why it is opt-in and why the refusal above explains itself rather than failing silently.
@@ -1110,7 +1110,7 @@ mod tests {
             hunt_filter_value(true, &[], &[here.raw()], Some(here)),
             None
         );
-        // Un-excluded, the same input DOES hunt -- so the guard is the exclusion, not the fallback.
+        // Un-excluded, the same input does hunt -- so the guard is the exclusion, not the fallback.
         assert_eq!(
             hunt_filter_value(true, &[], &[], Some(here)),
             Some("m60_51_36_00".to_string())
@@ -1119,7 +1119,7 @@ mod tests {
 
     #[test]
     fn one_mark_surviving_exclusion_is_still_a_single_unambiguous_target() {
-        // Two marks would refuse (no OR in a Steam filter), but if an exclusion removes one of
+        // Two marks would refuse (no or in a Steam filter), but if an exclusion removes one of
         // them the intent is unambiguous again and hunt should proceed rather than refuse.
         let keep = 0x0f00_0000;
         let drop = 0x3c35_3800;
@@ -1187,7 +1187,7 @@ mod tests {
         );
     }
 
-    /// Losing the location must not RETRACT it. A host whose anchor briefly fails to resolve is
+    /// Losing the location must not retract it. A host whose anchor briefly fails to resolve is
     /// still reachable, and clearing the key would make them vanish from a filtered search in a way
     /// that reads as "nobody online" rather than as a fault.
     #[test]
@@ -1217,28 +1217,28 @@ mod tests {
     /// This is the same boundary `local_invasion_filter` enforces, restated here because the ban
     /// has to travel with the code that could break it -- a guard living in another file protects
     /// that file, not this one.
-    /// REFINED 2026-08-06, because the blanket version was both too broad and, once the marker read
+    /// Refined 2026-08-06, because the blanket version was both too broad and, once the marker read
     /// was added, accidentally passing.
     ///
-    /// Too broad: the harm these keys carry is in WRITING or FILTERING on them -- that changes what
-    /// every other player matches. READING one changes nothing for anybody, and reading `lobby_type`
+    /// Too broad: the harm these keys carry is in writing or filtering on them -- that changes what
+    /// every other player matches. Reading one changes nothing for anybody, and reading `lobby_type`
     /// is the only way to prove we are not publishing into a lobby no invader queries.
     ///
     /// Accidentally passing: the marker constant is `"lobby_type\0"`, which does not contain the
-    /// substring `"lobby_type"` WITH its closing quote, so a literal-substring ban let it through by
+    /// substring `"lobby_type"` with its closing quote, so a literal-substring ban let it through by
     /// luck rather than by rule. A guard that passes for the wrong reason is worse than no guard,
     /// because it will keep passing when the reason stops holding.
     ///
     /// So this pins the rule instead: `lobby_key` never appears at all, and `lobby_type` appears
-    /// ONLY in the marker declaration that the read uses.
+    /// only in the marker declaration that the read uses.
     #[test]
     fn the_keys_that_decide_visibility_are_read_but_never_written_here() {
         let code = product_code();
-        // NARROWED 2026-08-06. This used to ban `lobby_key` outright, and that was the right rule
-        // until the DLL pool existed: substituting it is now a FEATURE, opt-in, and the whole point
+        // Narrowed 2026-08-06. This used to ban `lobby_key` outright, and that was the right rule
+        // until the DLL pool existed: substituting it is now a feature, opt-in, and the whole point
         // of it is to change who can see whom.
         //
-        // What must not come back is an UNCONDITIONAL touch. The substitution is legitimate only
+        // What must not come back is an unconditional touch. The substitution is legitimate only
         // because `pooled_lobby_key` returns `None` unless the user set `dll_users_only`, so every
         // mention of the key has to route through that one function -- which fails closed, is
         // unit-tested, and is the only place the decision lives. A direct write or filter of
@@ -1265,7 +1265,7 @@ mod tests {
             code.contains("config.dll_users_only"),
             "the substitution must be gated on the user's own opt-in, never unconditional"
         );
-        // `lobby_type` is permitted exactly once, as the marker the advertisement check READS.
+        // `lobby_type` is permitted exactly once, as the marker the advertisement check reads.
         let mentions: Vec<&str> = code
             .lines()
             .filter(|line| line.contains("lobby_type"))
@@ -1280,7 +1280,7 @@ mod tests {
             "the one lobby_type mention must be the read marker, not a write: {}",
             mentions[0]
         );
-        // And the only key this module ever WRITES is its own.
+        // And the only key this module ever writes is its own.
         let writes: Vec<&str> = code
             .lines()
             .filter(|line| line.contains("write(iface"))
@@ -1291,7 +1291,7 @@ mod tests {
                 "the publish call must write the key built from LOBBY_MAP_KEY: {line}"
             );
         }
-        // TWO write sites, and the count is pinned so a third has to be justified rather than
+        // Two write sites, and the count is pinned so a third has to be justified rather than
         // appear: `publish_current_map` writes our own map key, and `reapply_pool_if_toggled`
         // re-advertises the match key when the user flips `dll_users_only` on an existing lobby.
         // The second exists because Seamless publishes its advertisement once at CreateLobby and
@@ -1313,7 +1313,7 @@ mod tests {
     ///
     /// A module holding a live `ISteamMatchmaking` pointer is exactly where person-targeting would
     /// be easiest to add: the interface that publishes is the interface that can enumerate lobby
-    /// owners and members. Filtering may DECLINE, it may never SELECT A PERSON.
+    /// owners and members. Filtering may decline, it may never select a person.
     #[test]
     fn no_person_targeting_primitive_is_reachable_from_here() {
         let code = product_code();
@@ -1331,7 +1331,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------------------------
-    // HUNT MODE
+    // Hunt mode
     // -----------------------------------------------------------------------------------------
 
     const HERE: u32 = 0x3C_33_2B_00; // m60_51_43_00
@@ -1363,16 +1363,16 @@ mod tests {
     #[test]
     fn one_marked_location_is_the_one_asked_for() {
         let standing = BlockKey::from_raw(HERE);
-        // The MARK wins over where you stand -- marking a place is the user naming a destination.
+        // The mark wins over where you stand -- marking a place is the user naming a destination.
         assert_eq!(
             hunt_filter_value(true, &[THERE], &[], Some(standing)),
             Some("m61_46_43_00".to_owned())
         );
     }
 
-    /// THE TRANSPORT CONSTRAINT, pinned so nobody "improves" this into a silent no-match.
+    /// The transport constraint, pinned so nobody "improves" this into a silent no-match.
     ///
-    /// A Steam string filter is an equality test on ONE value and the filters AND together, so
+    /// A Steam string filter is an equality test on one value and the filters and together, so
     /// asking for two locations returns nothing at all -- a lobby cannot equal both. Refusing and
     /// saying why beats issuing a query that is guaranteed empty.
     #[test]
