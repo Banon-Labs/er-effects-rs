@@ -3050,6 +3050,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-lockon-filter"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+ "er-hook",
+ "iced-x86",
+]
+
+[[package]]
 name = "er-net-effects"
 version = "0.1.0"
 dependencies = [

@@ -408,6 +408,26 @@ like "no hosts online" -- the worst possible way for a DLL to arrive uninvited o
 dependency-closure walk. Load it only when death-persistence IS the experiment, and expect not to \
 invade during that run: `--with er-death-persist`."""
 
+"er-lockon-filter" = """Removes fellow invaders from your lock-on candidate set while you \
+are invading. The player sees their lock-on and their left/right target switch skip a red who is \
+standing right there -- correct when the filter is the point, and indistinguishable from a broken \
+lock-on button when it arrived uninvited. That is the whole reason it is default-off rather than \
+[compatible]: it corrupts nothing, contends no prologue and would pass the merits, but it changes \
+what happens when the player presses a button, and a dependency-closure walk is not consent.
+
+MECHANISM, so the co-load question is answerable rather than asserted. One detour, on the lock-on \
+system's point-owner resolver (1.16.2 `0x140713db0`, 1.17 `0x140714c00`), registered through \
+`er_hook::register_union_hook` -- so a second DLL that ever wants that prologue chains rather than \
+overwriting a trampoline, which is the failure the first [[shared]] row above records. No other \
+crate in this workspace declares that address, and `check-shared-hook-rvas.py` keys on resolved \
+values, so that stays checkable. It writes no game memory, patches no param row and touches no \
+swapchain; damage in both directions and nameplates are unchanged.
+
+NOT YET RUNTIME-PROVEN. The seam, the offsets it reads and the 1.16.2 -> 1.17 pair are byte-proven \
+in both images, and a live Seamless run has the detour installed and its census logging, but the \
+filter has never been observed to fire -- that needs two players invading one world. Load it when \
+invader-vs-invader lock-on is the experiment: `--with er-lockon-filter`."""
+
 [compatible]
 "er-focus-input" = """CO-LOADABLE WITH EVERYTHING, INCLUDING THE PRODUCT, and the reason is \
 structural rather than a run that happened to survive: this shell INSTALLS NO DETOUR. Its entire \

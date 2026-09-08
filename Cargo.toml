@@ -52,6 +52,11 @@ members = [
   # depends on the reverse engineering the later layers need.
   "crates/er-npc-possess",
   "crates/er-player-name-filter",
+  # While you are invading, fellow invaders stop being lock-on targets. One detour on the
+  # lock-on system's point-owner resolver, which answers "no character owns this point" for
+  # another invader -- its own value for a point with nobody behind it. Standalone shell with
+  # no product dependency; writes no game memory and touches no other targeting rule.
+  "crates/er-lockon-filter",
   "crates/er-save-disable",
   "crates/er-save-suppress",
   "crates/mushroom-man-runtime",
