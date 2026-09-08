@@ -1691,6 +1691,13 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry-core --lib
 # bytes are ground-truthed separately, against eldenring-deobf.bin, by the crate's build.rs.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-seamless-bugfixes --lib
 
+# er-lockon-filter's rule. The crate is one detour plus one predicate over two integers, and the
+# predicate is the whole feature: which character kinds stop being lock-on targets, and which kinds
+# you have to be for that to happen. It cannot be exercised offline any other way -- the live check
+# needs two players invading one world -- and both of its failure modes are silent, so the host run
+# is the only thing standing between a wrong constant and an invasion spent locking the wrong red.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-lockon-filter --lib
+
 # er-hook's raw code-patch primitives. This crate is linked into 15 of the 23 cdylibs, the shipped
 # er_quickload.dll among them, so a defect in a byte-patch primitive here is a defect in all of
 # them at once -- and it is the crate least able to report one: it carries a crate-level
