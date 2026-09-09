@@ -15,21 +15,22 @@ import rego.v1
 
 import data.cupcake.system.commands
 
-# This policy does not fire, and `scripts/check-runtime-evidence.sh` is the enforcement.
+# This policy fires, and `scripts/check-runtime-evidence.sh` is the second enforcement point.
 #
-# Read that sentence before trusting anything below it. Written 2026-09-09 with 17 passing OPA
-# tests, this was driven through `cupcake eval` and produced zero decisions. A literal probe added
-# to this same file fired on its own and stopped firing the moment any rule referenced
-# `input.signals` -- including `current_branch`, which the sibling `git_block_main_push` reads
-# successfully in production. Every parsing form was tried and none of them mattered: a colon split
-# rejoined with `array.slice`, a pipe split without it, `else` chains, `default` rules, and a bare
-# signal read with no parsing at all. The cause is inside cupcake's optimised WASM lowering and is
-# not visible from outside it; `opa test`, `opa check` and the `cupcake.system.evaluate`
-# aggregation entrypoint all agree the policy is correct.
+# It was inert for its first hours, and the header here said so at length and blamed
+# `input.signals`, because a literal probe stopped firing the moment any rule read a signal. That
+# diagnosis was wrong. The cause was `sprintf` in the deny reason: Cupcake's optimised WASM runtime
+# does not implement it, so the builtin returns undefined and every rule whose body reaches one
+# silently never fires while `cupcake eval` reports ALLOW and exits 0. The probe "stopped firing on
+# `input.signals`" only because the signal-reading versions were the ones that also interpolated a
+# note. Replacing it with `concat` made the policy deny on the first try.
 #
-# It is kept rather than deleted because the tests document the contract and a later cupcake may
-# lower it, and it is labelled rather than left quiet because a guard that looks present and does
-# nothing is the exact failure this file was written about. Do not cite it as coverage.
+# This repo already had a gate that names the whole class -- `scripts/check-cupcake-wasm-builtins.py`
+# verifies 25 builtins against the live WASM runtime and prints the offending file. It was never run
+# against this file, because `scripts/check.sh` was piped into `tail` once (which discards the
+# verdict) and killed by a 120-second timeout the next time. The lesson is not about `sprintf`: a
+# green `opa test` says nothing about production, and the gate that does say something was sitting
+# in the suite the whole time.
 #
 # A push of code that runs inside ELDEN RING is a claim that the code works. This refuses that
 # claim when no run has executed the code being pushed.
@@ -65,10 +66,14 @@ deny contains decision if {
 
 	decision := {
 		"rule_id": "ER-EFFECTS-REQUIRE-RUNTIME-EVIDENCE",
-		"reason": sprintf(
-			"This push carries changes under crates/ that have never run. %s. Build (scripts/er-build-dlls.sh), launch, and let the DLL write its log before pushing -- or push a commit that does not change game code. Override deliberately with ER_ALLOW_UNPROVEN_PUSH=1 in the signal's environment if you are pushing something you know is unproven and have said so.",
-			[evidence_note],
-		),
+		"reason": concat("", [
+			"This push carries changes under crates/ that have never run. ",
+			evidence_note,
+			". Build (scripts/er-build-dlls.sh), launch, and let the DLL write its log before ",
+			"pushing -- or push a commit that does not change game code. Override deliberately ",
+			"with ER_ALLOW_UNPROVEN_PUSH=1 in the signal's environment if you are pushing ",
+			"something you know is unproven and have said so.",
+		]),
 		"severity": "HIGH",
 	}
 }
@@ -90,17 +95,14 @@ is_git_push(cmd) if {
 	regex.match(git_push_command_pattern, cmd)
 }
 
-# The signal is a bare word and this is a string comparison, which is the whole design.
+# The signal is a bare word and this is a string comparison, which keeps the parsing in bash where
+# it can be selftested. That was originally chosen for a wrong reason -- see the header: the
+# parsing forms that "did not survive the round trip" were not failing on parsing at all, they
+# were failing on `sprintf` in the deny reason. The shape is kept because it is still the better
+# one, not because the alternatives were measured to be broken.
 #
-# Measured on 2026-09-09, and the reason this file looks simpler than its siblings: every parsing
-# form tried here passed `opa test` and produced ZERO decisions inside cupcake's optimised WASM
-# module. A colon-split rejoined with `array.slice`, a pipe-split without it, `else` chains and
-# `default` rules were each confirmed inert by a literal probe that fired on its own and stopped
-# firing the moment the rule referenced a parsed value. String equality against a signal that does
-# its own parsing in bash is the one shape measured to survive the round trip.
-#
-# The lesson generalises past this file: a cupcake policy is only real if it has been driven
-# through `cupcake eval`. `opa test` green is necessary and is not evidence.
+# The lesson that does generalise: a cupcake policy is only real once it has been driven through
+# `cupcake eval` and seen to DENY. A green `opa test` is necessary and is not evidence.
 default evidence_verdict := "UNKNOWN"
 
 evidence_verdict := trim_space(input.signals.runtime_evidence_for_head)

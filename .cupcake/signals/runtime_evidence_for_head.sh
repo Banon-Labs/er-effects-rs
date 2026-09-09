@@ -88,28 +88,29 @@ fi
 #
 # `+dirty` disqualifies the run as well. It means the tree carried uncommitted changes when that DLL
 # was built, so the binary is not the commit even when the sha matches.
-python3 - "$run_root" "$head_sha" "$head_epoch" <<'PY'
+python3 - "$run_root" "$head_sha" <<'PY'
 import pathlib
 import re
+import subprocess
 import sys
 
 run_root = pathlib.Path(sys.argv[1])
 head_sha = sys.argv[2]
-head_epoch = int(sys.argv[3])
 
 BUILD_LINE = re.compile(r"^build git=([0-9a-f]+)(\+dirty)?\b")
 
-newest_epoch = 0
-newest_run = "-"
-note = "no DLL log under any run directory"
-matched = None
+
+def names_head(built):
+    return built.startswith(head_sha) or head_sha.startswith(built)
+
+
+clean_builds = []
 
 for run in sorted(run_root.iterdir()):
     if not run.is_dir():
         continue
-    for artifact in run.glob("er-*.log"):
+    for artifact in sorted(run.glob("er-*.log")):
         try:
-            mtime = int(artifact.stat().st_mtime)
             with artifact.open(encoding="utf-8", errors="replace") as handle:
                 first = handle.readline()
         except OSError:
@@ -118,24 +119,41 @@ for run in sorted(run_root.iterdir()):
         if not found:
             continue
         built, dirty = found.group(1), bool(found.group(2))
-        if mtime > newest_epoch:
-            newest_epoch, newest_run = mtime, run.name
-            if dirty:
-                note = f"{artifact.name} was built from a DIRTY tree at {built[:8]}"
-            elif not (built.startswith(head_sha) or head_sha.startswith(built)):
-                note = f"{artifact.name} was built from {built[:8]}, not {head_sha}"
-            else:
-                note = f"{artifact.name} was built from {head_sha} and ran"
-        if not dirty and (built.startswith(head_sha) or head_sha.startswith(built)):
-            matched = (run.name, mtime, artifact.name)
+        if dirty:
+            continue
+        if names_head(built):
+            print("OK", end="")
+            raise SystemExit(0)
+        clean_builds.append(built)
 
-if matched:
-    run_name, mtime, name = matched
-    print(
-        "OK", end="",
+# No log names this commit, but a run may still have executed the same code. The tip proves out
+# when it adds nothing cargo would compile on top of a sha that ran -- otherwise this guard demands
+# a rebuild and a relaunch to publish a shell script, and a guard that fires on everything is one
+# the next agent overrides by reflex.
+#
+# scripts/er-change-scope.py answers it, the same reverse-dependency walk the compile gate uses:
+# `--rust-touched` exits 3 for "provably no cargo work required" and 0 otherwise, and it fails open
+# on a git failure, an unresolvable base, or any build input outside a single crate directory. So it
+# can only forgive a diff that provably cannot change a DLL. Kept identical to
+# scripts/check-runtime-evidence.sh on purpose: two enforcement points that disagree about one push
+# teach the next agent to ignore whichever is louder.
+for built in reversed(clean_builds):
+    probe = subprocess.run(
+        [
+            "python3",
+            "scripts/er-change-scope.py",
+            "--rust-touched",
+            "--base",
+            built,
+            "--rev",
+            head_sha,
+        ],
+        capture_output=True,
+        check=False,
     )
-else:
-    print(
-        "MISSING", end="",
-    )
+    if probe.returncode == 3:
+        print("OK", end="")
+        raise SystemExit(0)
+
+print("MISSING", end="")
 PY
