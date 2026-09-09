@@ -117,5 +117,30 @@ fi
 # fall behind. What changed is only that a cargo step the diff cannot have broken is reported
 # SKIPPED -- "NOT SELECTED FOR THIS DIFF" -- instead of being run. SKIPPED is not `passed` in
 # check.sh's summary and never has been, so a narrowed run says out loud what it did not cover.
+# A PUSH OF GAME CODE IS A CLAIM THAT THE CODE RUNS. This refuses the claim when nothing has run it.
+#
+# 2026-09-09: two commits were authored and a push attempted for both -- an F3 key that had never
+# been pressed in the game, and a stall-watchdog fix whose code had never executed, because the DLL
+# in the running process had been built two commits earlier. The user stopped the push by hand and
+# asked for enforcement. AGENTS.md already carried the rule as prose ("commit after a runtime
+# validation run COMPLETES, and only if the changes are worth keeping"); prose did not stop it.
+#
+# WHY IT LIVES HERE AND NOT IN .cupcake. A cupcake policy was written first, with 17 passing OPA
+# tests, and it was INERT: driven through `cupcake eval` it produced zero decisions, and a literal
+# probe in the same file fired until the rule referenced `input.signals` at all -- including
+# `current_branch`, a signal the sibling main-push guard reads successfully. The cause is somewhere
+# inside cupcake's optimised WASM lowering and is not visible from outside it. A guard that cannot
+# be shown to fire is not a guard, so the enforcement is here, in bash, where one command proves it:
+#
+#     bash scripts/check-runtime-evidence.sh --selftest
+#
+# The check reads the tip's DLL logs for `build git=<sha>`, not file timestamps. The first draft of
+# the signal compared mtimes and answered "evidence present" on a log written by a build two commits
+# old that happened to still be running -- newer file, older code. Reading a clock and calling it
+# provenance is the mistake being guarded, made inside the guard.
+if ! bash scripts/check-runtime-evidence.sh "${pushed_shas[@]:-}"; then
+	exit 1
+fi
+
 printf 'pre-push: running scripts/check.sh (the same suite CI runs)\n' >&2
 exec bash scripts/check.sh

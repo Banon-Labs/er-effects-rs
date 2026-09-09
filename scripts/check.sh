@@ -839,6 +839,7 @@ opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policie
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/edit_no_comment_caps_guard.rego" "$repo_root/.cupcake/tests/edit_no_comment_caps_guard_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_unbacked_claim.rego" "$repo_root/.cupcake/tests/no_unbacked_claim_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_described_next_step.rego" "$repo_root/.cupcake/tests/no_described_next_step_test.rego"
+opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_require_runtime_evidence.rego" "$repo_root/.cupcake/tests/git_require_runtime_evidence_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_repo_network_banners_prompt_context.rego" "$repo_root/.cupcake/tests/no_repo_network_banners_prompt_context_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/require_scoped_cargo.rego" "$repo_root/.cupcake/tests/require_scoped_cargo_test.rego"
 # And the half `opa test` cannot reach. A green policy suite does not mean production-allowed or
@@ -913,6 +914,10 @@ python3 "$repo_root/scripts/check-no-unguarded-cstr-from-ptr.py"
 # trusted on its own say-so.
 python3 "$repo_root/scripts/check-no-thread-suspension.py" --selftest
 python3 "$repo_root/scripts/check-no-thread-suspension.py"
+# The pre-push refusal that stops a push of game code nothing has run. Wired here so its own
+# selftest is part of the suite: the cupcake policy written for this first passed 17 OPA tests
+# and was inert in production, which is why the enforcement is bash the hook calls directly.
+bash "$repo_root/scripts/check-runtime-evidence.sh" --selftest
 # A detour's expected prologue must be generated from named iced-x86 instructions in a build.rs,
 # never hand-typed: `mov rax, rsp` has two legal encodings, the game ships 48 8b c4, an assembler
 # left to choose emits 48 89 e0, and a prologue that is one byte off byte-checks its own hook off
