@@ -95,9 +95,14 @@ const _: () = {
         core::mem::offset_of!(CsChrIns, tint_alpha_multiplier_modifier)
             == chr_ins::TINT_ALPHA_MULTIPLIER_MODIFIER
     );
-    // The crate models the 1.16.2 position of `debugFlags`; the engine picks 1.16.2 or 1.17 at
-    // runtime. Asserting the crate against the 1.16.2 constant is what pins the pair.
-    assert!(core::mem::offset_of!(CsChrIns, debug_flags) == chr_ins::DEBUG_FLAGS_1162);
+    // The sibling mirror models the 1.17 position of `debugFlags` since it was refreshed on
+    // 2026-09-08 (upstream `b080915`, adopted at `16d2661`); before that it modelled 1.16.2 and
+    // this line named the other constant. The engine still picks 1.16.2 or 1.17 at runtime, and
+    // asserting the mirror against whichever build it models is what pins the pair -- so the day
+    // this assertion needs flipping is the day the mirror moved, which is precisely when every
+    // `offset_of!` answer in the crate changed and somebody has to look. Measured, not assumed:
+    // 0x538 came out of a type error, the same way the `PlayerGameData` size did.
+    assert!(core::mem::offset_of!(CsChrIns, debug_flags) == chr_ins::DEBUG_FLAGS_1170);
     assert!(core::mem::offset_of!(CsChrCtrl, owner) == chr_ctrl::OWNER);
     assert!(core::mem::offset_of!(CsChrCtrl, manipulator) == chr_ctrl::MANIPULATOR);
     assert!(core::mem::offset_of!(CsChrCtrl, modifier) == chr_ctrl::MODIFIER);

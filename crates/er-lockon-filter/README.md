@@ -16,10 +16,12 @@ Build it with `bash scripts/er-build-dlls.sh er-lockon-filter`, which is the sam
 invocation as a bare `cargo xwin build -p er-lockon-filter` plus the provenance record every
 launch script gates on.
 
-`scripts/me3-dll-conflicts.toml` classifies it `[opt_in_only]`, so a generated profile never
-picks it up on its own -- name it: `scripts/er-run-branch.py --with er-lockon-filter`. It
-contends no prologue and corrupts nothing, but it changes what happens when you press lock-on,
-and a dependency-closure walk is not consent for that.
+`scripts/me3-dll-conflicts.toml` lists it under `[always]`, so `scripts/er-run-branch.py` loads
+it into every launch whether or not the branch touched this crate -- on by user directive,
+2026-09-08. It was `[opt_in_only]` for the first day of its life, on the argument that changing
+what happens when the player presses lock-on needs consent a dependency-closure walk cannot
+give. The consent was given; the mechanics never objected. `--without er-lockon-filter` still
+takes it back out of a single run.
 
 ## What it actually does
 
@@ -82,7 +84,13 @@ typing remote players `Local` (0).
 
 ## Status
 
-Statically settled, never yet run in a live double invasion. The candidate walk, the detour
+Statically settled, never yet run in a live double invasion, and being on by default does not
+change that. There is a specific way it can be quietly absent: under Seamless Co-op the local
+player has been measured typing as `Local` (0) or `Duelist` (2) with `summonParamType` 0 or
+-12, none of which is an invader kind, so the gate may never arm. If you invade and the other
+red is still under your reticle, the census lines say which of the two fields read what.
+
+The candidate walk, the detour
 target, the offsets it reads (`ChrIns::chr_type` at `+0x68`, `WorldChrManImp::mainPlayer` at
 `+0x1e508`, `GameMan::summonParamType` at `+0xd84`) and the 1.16.2 -> 1.17 pair are all
 byte-proven in both images; what no offline evidence can settle is which `ChrType` the game and

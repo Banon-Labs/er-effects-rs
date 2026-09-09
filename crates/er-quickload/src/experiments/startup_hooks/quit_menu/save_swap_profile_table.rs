@@ -630,11 +630,12 @@ pub(crate) unsafe fn patch_profile_offscreen_size_for_slot(base: usize, target: 
         return false;
     }
     let cur = unsafe { safe_read_usize(row) }.unwrap_or(0);
-    let patched = if cur == PROFILE_OFFSCREEN_SIZE_TARGET {
+    let size_target = profile_offscreen_size_target();
+    let patched = if cur == size_target {
         true
     } else if cur == PROFILE_OFFSCREEN_SIZE_INIT {
         unsafe {
-            core::ptr::write_volatile(row as *mut u64, PROFILE_OFFSCREEN_SIZE_TARGET as u64);
+            core::ptr::write_volatile(row as *mut u64, size_target as u64);
             core::ptr::write_volatile(
                 (row + PROFILE_OFFSCREEN_SIZE_SUPERSAMPLE_FLAG_OFFSET) as *mut u8,
                 0,
@@ -647,8 +648,8 @@ pub(crate) unsafe fn patch_profile_offscreen_size_for_slot(base: usize, target: 
     if patched {
         PROFILE_SIZE_PATCHED.fetch_or(bit, Ordering::SeqCst);
     }
-    let target_w = PROFILE_OFFSCREEN_SIZE_TARGET & 0xffff_ffff;
-    let target_h = (PROFILE_OFFSCREEN_SIZE_TARGET >> 32) & 0xffff_ffff;
+    let target_w = size_target & 0xffff_ffff;
+    let target_h = (size_target >> 32) & 0xffff_ffff;
     append_autoload_debug(format_args!(
         "portrait-res: pre-builder target slot {target} row=0x{cur:x} patched={} -> base {target_w}x{target_h}, native supersample off (expected RT {target_w}x{target_h}); other slots left native 128",
         if patched { 1 } else { 0 }

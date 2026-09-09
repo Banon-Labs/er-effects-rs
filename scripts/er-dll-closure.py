@@ -40,6 +40,16 @@ resolved in the product's favour and the exclusion is carried everywhere the run
 described: this output, the profile header, the running block, and the run state. An
 excluded DLL is a stated non-result, not an omission.
 
+Default-on shells, and why the diff is not the only input
+--------------------------------------------------------
+Selecting on the diff answers "what is this run testing". It does not answer "what does the
+player expect to be playing", and the two came apart on 2026-09-08: `er-quickload` has no
+reverse dependents, so a branch editing only the product closes over exactly one shell and
+every gameplay companion leaves the profile without a word. The `[always]` table in the
+conflict file is the standing half of `--with` -- packages unioned into every closure after
+the diff has been walked. They are not pinned, so conflict ranking still drops them, and
+`--without` still removes them; what they skip is having to be named on the command line.
+
 Two cases still refuse outright, because neither can be resolved without guessing:
   * a conflict between two non-product DLLs -- nothing ranks them;
   * a DLL named explicitly with `--with` that a conflict would exclude -- an explicit
@@ -327,6 +337,9 @@ def compute(
             f"ranked against and the owner of the hook union the companions chain onto"
         )
 
+    with CONFLICTS_TOML.open("rb") as handle:
+        table = tomllib.load(handle)
+
     candidates = set(affected & shipped) | pinned
     fallback = None
     if not candidates:
@@ -334,7 +347,11 @@ def compute(
         # something, and the product is the baseline every conflict is expressed against --
         # and a one-DLL closure has nothing for it to conflict with.
         candidates = {PRODUCT_PACKAGE}
-        fallback = "no changed file feeds any cdylib; falling back to the product DLL alone"
+        # Not "the product alone": `[always]` is unioned in below, and a fallback line that
+        # said "alone" beside a two-DLL list would be the report contradicting itself.
+        fallback = (
+            "no changed file feeds any cdylib; falling back to the product DLL as the baseline"
+        )
     elif PRODUCT_PACKAGE not in candidates:
         # The product is never optional (bd er-effects-rs-l9tu, fixed 2026-09-04). `--with X` on a
         # tree whose changes feed no cdylib used to produce a closure of exactly X: naming any
@@ -354,8 +371,16 @@ def compute(
             f"sidecar and the launcher's load testimony both name"
         )
 
-    with CONFLICTS_TOML.open("rb") as handle:
-        table = tomllib.load(handle)
+    # The standing half of `--with`, read from `[always]`. It is unioned in after the two
+    # fallbacks above so neither is disturbed: "no changed file feeds any cdylib" stays a true
+    # statement about the diff, and the product is still added for its own reasons rather than
+    # because a companion dragged it in. These packages are not pinned, so a conflict against the
+    # product still drops them and still reports them in `excluded` -- being default-on is a
+    # decision about consent, never a licence to co-load something that corrupts the run.
+    always = set(table.get("always", {})) & shipped
+    added_by_default = sorted(always - candidates)
+    candidates |= always
+
     kept, excluded, unresolvable, accepted = resolve_conflicts(
         candidates, table, pinned, agent_driven
     )
@@ -399,6 +424,8 @@ def compute(
         "seed_crates": sorted(seeds),
         "affected_crates": sorted(affected),
         "pinned": sorted(pinned),
+        "always": sorted(always),
+        "added_by_default": added_by_default,
         "agent_driven": bool(agent_driven),
         "accepted_conflicts": accepted,
         "withheld": sorted(dropped),
@@ -426,6 +453,14 @@ def render(result: dict) -> str:
     lines.extend(f"  {artifact}" for artifact in result["artifacts"])
     if result["fallback"]:
         lines.append(f"  ^ {result['fallback']}")
+    # A DLL the diff never reached is still in the profile, so say which and why. Silence here is
+    # the same defect as a silent exclusion: someone reads this to know what the run was.
+    if result.get("added_by_default"):
+        lines.append(
+            f"  ^ on by default, not because this branch reached them: "
+            f"{', '.join(result['added_by_default'])} "
+            f"(scripts/me3-dll-conflicts.toml [always])"
+        )
     if result["excluded"]:
         lines.append("")
         lines.append("EXCLUDED -- affected by this branch, but NOT loaded, so NOT tested here:")
@@ -628,6 +663,71 @@ def selftest() -> int:
     check(
         "mushroom-man-runtime" not in kept_all,
         "even a closure that selects EVERY shell does not load the mushroom mod",
+    )
+
+    # --- [always]: the standing half of --with ------------------------------------------
+    # The regression this pins is the one the user reported on 2026-09-08. `er-lockon-filter`
+    # was [opt_in_only], so it was absent from every launch that did not name it, and the
+    # lock-on the user was describing was vanilla lock-on. Reclassifying it [compatible] is not
+    # enough on its own: `er-quickload` has no reverse dependents, so a branch editing only the
+    # product closes over one shell and the filter would go missing again.
+    always_table = {"always": {"tag": "on by user directive"}}
+    always_live = set(always_table["always"])
+    candidates = {PRODUCT_PACKAGE}
+    added = sorted(always_live - candidates)
+    candidates |= always_live
+    kept_always, _, _, _ = resolve_conflicts(candidates, always_table, set())
+    check(
+        "tag" in kept_always and added == ["tag"],
+        "an [always] package joins a closure the diff never reached, and is reported as added",
+    )
+    # Not a licence to co-load: an [always] package that conflicts with the product still loses.
+    conflicting = {
+        "always": {"tag": "on by default"},
+        "conflict": [
+            {"a": PRODUCT_PACKAGE, "b": "tag", "kind": "hook-collision", "reason": "r", "evidence": "e"}
+        ],
+    }
+    kept_conflict, excluded_conflict, _, _ = resolve_conflicts(
+        {PRODUCT_PACKAGE, "tag"}, conflicting, set()
+    )
+    check(
+        "tag" not in kept_conflict and [e["package"] for e in excluded_conflict] == ["tag"],
+        "[always] does not override conflict ranking; the loser is still dropped and reported",
+    )
+    check(
+        "on by default, not because this branch reached them" in render(
+            {
+                "base_ref": "origin/main",
+                "merge_base": "0" * 12,
+                "head": "1" * 12,
+                "dirty": False,
+                "changed_file_count": 0,
+                "changed_outside_crates": 0,
+                "seed_crates": [],
+                "affected_crates": [],
+                "artifacts": ["er_quickload.dll", "er_lockon_filter.dll"],
+                "fallback": None,
+                "added_by_default": ["er-lockon-filter"],
+                "excluded": [],
+                "unresolvable": [],
+            }
+        ),
+        "the rendered report names a DLL that arrived from [always] rather than from the diff",
+    )
+    # The live table, against the real shipped set: the lock-on filter is on by default.
+    check(
+        "er-lockon-filter" in live.get("always", {})
+        and "er-lockon-filter" not in live.get("opt_in_only", {}),
+        "er-lockon-filter is declared [always] in the shipped table, and is no longer opt-in-only",
+    )
+    always_real = set(live.get("always", {})) & {package for package, _ in shipped_pairs()}
+    kept_default, _, _, _ = resolve_conflicts(
+        {PRODUCT_PACKAGE} | always_real, live, set()
+    )
+    check(
+        "er-lockon-filter" in kept_default,
+        "a product-only closure still loads er_lockon_filter.dll: it is on by default",
     )
 
     print("selftest:", "PASS" if ok else "FAIL")

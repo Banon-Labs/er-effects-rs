@@ -390,6 +390,11 @@ def running_block(context: dict) -> str:
         lines.append(f"    {'ersc.dll (game install)':34} referenced, not bundled")
     for entry in context.get("excluded", []):
         lines.append(f"    EXCLUDED {entry['artifact']:25} {entry['kind']} -- not tested in this run")
+    # The mirror of the line above. A shell the diff never reached is in this process because
+    # `scripts/me3-dll-conflicts.toml [always]` says it is on by default, and a reader deciding
+    # what this run proved needs to know which half of the profile the branch actually selected.
+    for package in context.get("added_by_default", []):
+        lines.append(f"    DEFAULT-ON {package:23} not selected by this branch's changes")
     # A run that loads the input harness is one the player is not driving. The closure only lets
     # that through when --agent-driven declared it (kind `drives-input`), and the declaration is
     # worthless if the artifact does not carry it: AGENTS.md forbids claiming the user is in
@@ -402,7 +407,13 @@ def running_block(context: dict) -> str:
     lines.append("")
     if save:
         lines += [
-            f"  character     {save['name']}  RL{save['level']}  slot {save['slot']}",
+            f"  character     {save['name']}  RL{save['level']}"
+            + (
+                f"  weapon +{save['matchmaking_weapon_level']}"
+                if save.get("matchmaking_weapon_level") is not None
+                else "  weapon +?"
+            )
+            + f"  slot {save['slot']}",
             f"  save          {save['save_file']}",
             f"  container     .{save['container']}"
             + ("   SOURCE WRITABLE" if save.get("source_writable") else "   source read-only"),
@@ -774,6 +785,7 @@ def launch(args) -> int:
                 ],
                 "ersc": staged["ersc"],
                 "excluded": closure.get("excluded", []),
+                "added_by_default": closure.get("added_by_default", []),
                 "accepted_conflicts": closure.get("accepted_conflicts", []),
                 "save": save,
                 "profile": staged["profile"],

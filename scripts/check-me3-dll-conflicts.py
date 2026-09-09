@@ -7,7 +7,7 @@ goes stale is not by being wrong -- it is by a new cdylib crate appearing and no
 classifying it. The closure walk in `er-dll-closure.py` would then happily include that new
 DLL next to the product with no idea whether the two can share a process.
 
-So this gate asserts five things:
+So this gate asserts six things:
 
 1. **Coverage.** Every package in the `me3_shells` array (the single source of truth for
    "which cdylibs does this workspace ship", parsed via `me3-dll-list.py`) is classified --
@@ -25,6 +25,11 @@ So this gate asserts five things:
    prove each detour reaches a union registrar and never an `MhHook::new`. A pair may not be
    declared shared and conflicting at once: the closure walk reads `[[conflict]]` only, and would
    co-load a pair it had been told to keep apart.
+6. **`[always]` is earned, not asserted.** A package the closure loads into every run has to
+   have been found to conflict with nothing at all, so it must also be listed in `[compatible]`
+   -- a `[[conflict]]` pair would otherwise become a permanent condition of every launch instead
+   of an occasional one. Being in `[always]` and `[opt_in_only]` at once is refused outright:
+   those are the two opposite answers to the same consent question.
 
 Usage:
     python3 scripts/check-me3-dll-conflicts.py
@@ -98,6 +103,7 @@ def audit(table: dict, packages: list[str]) -> list[str]:
     conflicts = table.get("conflict", [])
     compatible = table.get("compatible", {})
     opt_in_only = table.get("opt_in_only", {})
+    always = table.get("always", {})
 
     conflicted: set[str] = set()
     for index, entry in enumerate(conflicts):
@@ -202,6 +208,33 @@ def audit(table: dict, packages: list[str]) -> list[str]:
             f"{name!r} is in [compatible] AND [opt_in_only] -- [compatible] lets the closure "
             f"load it freely, [opt_in_only] forbids that without --with; pick one"
         )
+
+    # [always] is a load policy, not a compatibility finding, so it does not classify anything --
+    # it says a package the table has already cleared is loaded whether or not the diff reached it.
+    # `er-dll-closure.py` unions these into every closure, so a mistake here is present in every
+    # launch rather than in the runs that happen to touch one crate.
+    for name, reason in always.items():
+        if name not in shipped:
+            failures.append(
+                f"[always]: {name!r} is not a shipped cdylib (renamed or removed?)"
+            )
+            continue
+        if not str(reason).strip():
+            failures.append(
+                f"[always]: {name!r} has an empty reason -- say who asked for it on by default "
+                f"and when. Default-on is a decision someone made, not a property of the code."
+            )
+        if name in opt_in_only:
+            failures.append(
+                f"{name!r} is in [always] AND [opt_in_only] -- one loads it into every run, the "
+                f"other refuses to load it without --with; pick one"
+            )
+        if name not in compatible:
+            failures.append(
+                f"[always]: {name!r} is loaded into every run but is not listed [compatible]. "
+                f"Only a package found to conflict with nothing at all can be unconditional: a "
+                f"[[conflict]] pair would become a permanent condition of every launch."
+            )
 
     unclassified = shipped - conflicted - set(compatible) - set(opt_in_only)
     for name in sorted(unclassified):
@@ -375,6 +408,54 @@ def selftest() -> int:
         "a package in BOTH [compatible] and [opt_in_only] is caught",
     )
 
+    # --- [always], the load policy laid over those classifications -----------------------
+    always_sound = {
+        "conflict": [pair("prod", "bad")],
+        "compatible": {"safe": "installs no detour"},
+        "always": {"safe": "on by user directive 2026-01-01"},
+    }
+    check(audit(always_sound, packages) == [], "a [compatible] package may be [always]")
+
+    always_empty = {
+        "conflict": [pair("prod", "bad")],
+        "compatible": {"safe": "installs no detour"},
+        "always": {"safe": "  "},
+    }
+    check(
+        any("[always]" in f and "empty reason" in f for f in audit(always_empty, packages)),
+        "an [always] entry with no reason is caught",
+    )
+
+    always_unknown = {
+        "conflict": [pair("prod", "bad")],
+        "compatible": {"safe": "y"},
+        "always": {"ghost": "renamed away"},
+    }
+    check(
+        any("[always]" in f and "'ghost'" in f for f in audit(always_unknown, packages)),
+        "an [always] entry naming a package that no longer ships is caught",
+    )
+
+    always_and_opt_in = {
+        "conflict": [pair("prod", "bad")],
+        "opt_in_only": {"safe": "never load me unasked"},
+        "always": {"safe": "load me every time"},
+    }
+    check(
+        any("[always] AND [opt_in_only]" in f for f in audit(always_and_opt_in, packages)),
+        "a package in BOTH [always] and [opt_in_only] is caught",
+    )
+
+    always_conflicting = {
+        "conflict": [pair("prod", "bad")],
+        "compatible": {"safe": "y"},
+        "always": {"bad": "on by default anyway"},
+    }
+    check(
+        any("not listed [compatible]" in f for f in audit(always_conflicting, packages)),
+        "a package that conflicts with the product cannot be [always]",
+    )
+
     print("selftest:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 
@@ -407,6 +488,7 @@ def main() -> int:
         f"{shared_count} shared-address pair{'' if shared_count == 1 else 's'}, "
         f"{len(table.get('compatible', {}))} compatible entries, "
         f"{len(table.get('opt_in_only', {}))} opt-in-only entries, "
+        f"{len(table.get('always', {}))} loaded into every run, "
         f"{len(shipped_packages())} shipped shells all classified"
     )
     return 0
