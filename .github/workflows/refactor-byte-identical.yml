@@ -50,7 +50,7 @@ env:
   # singleton (`T::instance_ptr()`) resolves through upstream's own version-keyed
   # RVA bundle and PANICS on a build that bundle does not list. `1027d24` is the
   # first revision that knows 2.7.0.0 (patch 1.17) while keeping 2.6.2.0.
-  FROMSOFTWARE_RS_REV: 1027d24920c0d71fcc17666194d331af0666fc3a
+  FROMSOFTWARE_RS_REV: 16d266146bcc7e896ac0d9a2c020e0d4c07baf52
   # WHICH REMOTE THE PIN ABOVE ACTUALLY EXISTS ON -- and the half of "lockstep with
   # check.yml" that this file was missing until 2026-09-01. `1027d24` and its parent
   # `4284a05` (the 2.7.0.0 / patch 1.17 RVA bundle) exist ONLY on the fork; upstream

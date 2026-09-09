@@ -165,13 +165,27 @@ const _: () = assert!(core::mem::offset_of!(PlayerGameData, face_data) == 0x760)
 /// or above it would need a version-aware offset, and this workspace has none.
 pub const PGD_FIRST_MOVED_OFFSET_1170: usize = 0x960;
 
-// The pins above protect individual fields. This protects the shape. The sibling binding is a
-// 1.16.2 model; if it is ever refreshed to the 1.17 layout, every `offset_of!` answer in the
-// workspace changes at once while all 25 pins above still pass -- none of them sits in a band
-// that moved. The object's size is the one number that does change (0xae8 -> 0xaf0), so it is the
-// only tripwire for that update, and the highest offset actually referenced is asserted to stay
-// under the boundary so a binding edit cannot walk a field across it unnoticed.
-const _: () = assert!(core::mem::size_of::<PlayerGameData>() == 0xae8);
+// The pins above protect individual fields. This protects the shape, and it has now fired once,
+// which is what it was written for.
+//
+// The sibling binding was a 1.16.2 model. It was refreshed to the 1.17 layout by
+// `fromsoftware-rs` a5f0e1f ("More of quickmatch stuff", merged as #308): `unkaa4: i32` became
+// `quick_match_spawn_slot_fraction: f32`, `quick_match_desired_team` became an enum, two bools
+// were named out of `unkaa9`/`unkb2`, and the tail filler `unkab4` gave up two bytes to
+// `host_scadutree_blessing` and `host_scaling_applied`. Every one of those edits is at or above
+// 0xa90, so no `offset_of!` answer this workspace consumes moved -- and that is not an argument,
+// it is the compiler's: all 25 pins above were the only other asserts in this file and they
+// compiled clean against the refreshed binding while this one failed alone.
+//
+// The object's size is the one number the refresh does change, 0xae8 -> 0xaf0, exactly as this
+// comment predicted before it happened. The number is still measured rather than trusted: the way
+// to read it is to replace this assertion with `const _: [(); 0] = [(); size_of::<PlayerGameData>()];`
+// and take `found one with a size of 2800` out of the type error. Do that on the next refresh
+// instead of editing the constant until the build passes -- a guess that happens to be right and a
+// measurement look identical afterwards. So the literal moves to 0xaf0 and the tripwire is armed
+// again for the next binding edit. The highest offset actually referenced stays asserted under
+// `PGD_FIRST_MOVED_OFFSET_1170` so such an edit cannot walk a field across the boundary unnoticed.
+const _: () = assert!(core::mem::size_of::<PlayerGameData>() == 0xaf0);
 const _: () =
     assert!(core::mem::offset_of!(PlayerGameData, face_data) < PGD_FIRST_MOVED_OFFSET_1170);
 

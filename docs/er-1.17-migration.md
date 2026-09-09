@@ -1,5 +1,50 @@
 # ELDEN RING 1.17 migration status
 
+## The installed game is 1.17.1 since 2026-09-08, not 1.17.0
+
+Everything below this section describes the 1.16.2 to **1.17.0** gap, and that is still the hard
+part -- 1.17.0 moved code by an amount that changes over spans as short as 0xb00 bytes, which is
+why the mapper hunts masked signatures. Read it with one correction applied: the game on this
+machine is now `FileVersion` **2.7.1.0**, and 1.17.0 no longer exists here, because Steam
+overwrote it.
+
+The 1.17.0 to 1.17.1 step is nothing like the one below it. It is a single constant, read
+exhaustively out of both de-Arxan'd images' `.pdata`:
+
+* every function entry **below rva `0xafefe9`** keeps its address, and
+* every one of the **174,389** entries at or above it moves by exactly **`+0x70`**, with none left
+  over and none needing a signature match.
+
+One function grew -- `0xafeea0`, from 329 bytes to 441 -- and everything downstream slid by the
+difference. One other changed without moving anything: `0x82dc20` grew `0x126` to `0x12e` out of
+its own alignment padding, so its address is unchanged and its body is not. Nothing else moved at
+all: the section table is byte-identical between the two builds, so `.rdata`, `.data` and `.pdata`
+keep their addresses, and `u"%s/EldenRing/%s/"` is at rva `0x2bdd9b8` in both. The shift is
+therefore bounded to the primary `.text`; applied to anything above the boundary it would move
+every vtable and every global, which did not move. Only the Arxan section at `0x4c13000` changed
+size (`+0x4400`), and it re-randomises per build, so nothing in it carries forward.
+
+```bash
+python3 scripts/map-rvas-1170-to-1171.py 0x140b00000     # one address, or a whole bundle
+python3 scripts/map-rvas-1170-to-1171.py --selftest      # re-derives the model from both images
+python3 scripts/audit-1171-stale-constants.py            # product constants the shift invalidated
+```
+
+**Do not diff the two images byte-for-byte to check this.** 8.87% of `.text` differs even between
+the two de-Arxan'd images: Arxan re-randomises its inline obfuscation every build and `dearxan`
+neutralises stubs rather than un-mutating bodies. `.pdata` is the structural evidence, and
+`dearxan` does not rewrite it. Comparing a raw `.exe` against a deobf image is worse again -- that
+is deobfuscated against obfuscated, and it reports ~50% of functions as changed.
+
+What has been carried forward, and what has not:
+
+| | state |
+| --- | --- |
+| `eldenring-deobf-1.17.1.bin` | generated (1597 stubs, all ok; 1347 regions; 88,875 bytes -- the same shape as 1.17.0, so no new obfuscation technique). Gitignored, like every other game image |
+| `fromsoftware-rs` RVA bundle | `rva_ww_271.rs` generated from `rva_ww_270.rs` by the mapper and wired to a `(LANG_ID_EN, "2.7.1.0")` arm. 5 of its 96 fields moved; the rest are below the boundary or are `.rdata`/`.data`. `scripts/check-game-version-supported.py` passes |
+| `er-game-base` address translation | carries the map's 1.17.0 destinations onto the running build, and now **refuses every game address on a build it has not been told about** rather than handing out 1.17.0 addresses to whatever is installed, which is what it did before 1.17.1 shipped |
+| Constants spelled at 1.17.0 addresses | **nothing to repair.** Exactly three `PrologueSpec`s carry `image: Image::EldenRing1170` -- the only addresses that bypass the map -- and all three are below the boundary, so the patch did not move any of them: `SAVE_REQUEST_RETRACT_B72_SIG` `0x140679590`, `SAVE_REQUEST_RETRACT_B73_SIG` `0x140679560`, `QUIT_PHASE_SETTLE_SIG` `0x14067b7d0`. `scripts/audit-1171-stale-constants.py` re-derives that. Two earlier answers here were wrong and are worth knowing about, because both look convincing: classifying by FILE said 13 constants were stale, which is what happens when a `build.rs` holding one 1.17.0 spec and twenty 1.16.2 ones is read as a 1.17.0 file; classifying by ledger membership missed the real ones, because an address can be a function start in both builds at once. The `image` field of the spec is the only thing that settles it |
+
 ELDEN RING updated to **1.17** on 2026-08-27 (PE `FileVersion` 2.7.0.0, Steam buildid 23850278).
 Every game address in this workspace was reverse-engineered against **1.16.2** (2.6.2.0). This file
 is the state of that gap: what has been repaired, what is stale, and what each remaining item is
@@ -37,7 +82,7 @@ number, so the next agent can find out it has moved instead of trusting a date. 
 | 3 | ~~1 mapping refused on evidence: `MOVEMAPSTEP_STEP_MOVEMAP_RVA`~~ **RESOLVED 2026-08-31** | `PATCH-SITE-IDENTICAL`, in both `VERIFIED_1162_TO_1170` and `DETOUR_SAFE_1162_TO_1170`. The two inserted instructions are `mov rcx,rbx; call CS::MoveMapStep::_UpdateHorseType` at index 873 of 975, 0x1055 bytes past a prologue that is `48 8b c4 55 56 57 41 54` in both builds -- see "Function lengths" below | nothing; pinned in `PATCH_SITE_ACKNOWLEDGED` (`er-game-base/build.rs`) so the next insertion fails the build |
 | 4 | Struct layouts | two confirmed drifts: `PlayerGameData` +8 (`+0xab5` -> `+0xabd`, corroborated by the retired `er-ersc-sigshim` fixups, whose Scadutree rewrite depended on it), the Wwise settings object +0x38. The rest is unaudited | hand RE. :8767 does NOT close this: it has structure, not types -- a field name or a struct layout still only exists on :8765, for the previous build |
 | 5 | `fromsoftware-rs` bindings (path dependency) | field offsets are 1.16.2-shaped. The RVA half IS done: `rva_ww_270.rs` exists with 96 fields and **zero** of them are `0` (checked 2026-08-31 -- see the zero-field trap below), and `scripts/check-game-version-supported.py` passes: `installed game 2.7.0.0 is in the RVA bundle's supported set ['2.6.2.0', '2.6.2.1', '2.7.0.0']` | #4 |
-| 6 | Generated prologue windows (`build.rs` + `check-prologue-bytes`) | mostly fine: the sweep that found exactly ONE breakage, `er-save-suppress::QUIT_PHASE_SETTLE_SIG` (now respelled), covered **36 specs in `er-quickload/build.rs`** -- NOT the whole set. Re-counted 2026-08-31: **84 `PrologueSpec` sites** across five `build.rs` files (er-quickload 36, er-save-suppress 22, er-invasion-warp 12, er-seamless-bugfixes 8, er-player-name-filter 6). `Image::EldenRing1170` is used by 4 specs (3 in er-quickload, 1 in er-save-suppress); the rest are register-only prologues whose encoding is version-invariant | re-running the sweep over all 84, plus 5 specs whose 1.16.2 RVA is in no map |
+| 6 | Generated prologue windows (`build.rs` + `check-prologue-bytes`) | mostly fine: the sweep that found exactly ONE breakage, `er-save-suppress::QUIT_PHASE_SETTLE_SIG` (now respelled), covered **18 specs in `er-quickload/build.rs`** -- not the whole set. Re-counted 2026-09-08: **42 `PrologueSpec` sites** across five `build.rs` files (er-quickload 18, er-save-suppress 11, er-invasion-warp 6, er-seamless-bugfixes 4, er-player-name-filter 3). The 84 recorded here on 2026-08-31 was a double-count, not drift: the same five files held 42 at `1427730` too, and every one of the six numbers was exactly twice the real one. `Image::EldenRing1170` is the `image` of **3** specs, not 4 -- the fourth occurrence of that name is a doc-comment reference at `crates/er-quickload/build.rs:32`. All three sit below the 1.17.1 boundary and none of them moved (`scripts/audit-1171-stale-constants.py`). The rest are register-only prologues whose encoding is version-invariant | re-running the sweep over all 84, plus 5 specs whose 1.16.2 RVA is in no map |
 | 7 | `dump-exec.bin` + `scripts/dump-deobf-shift.py` | **RETIRED. Do not run it.** Its dump side is 1.16.1, so it maps 1.16.1-dump onto a 1.16.2 image whose real shift is zero, and it invents a nonzero one. Re-verified 2026-08-31 against `.pdata`: `0x142413860` IS a function start in `eldenring-deobf.bin`, and the `+0x10` answer `0x142413870` is 16 bytes into its prologue; `0x142410830`, which the tool flagged as a "+0x10 estimate", is also already a function start. Both of its published answers land mid-instruction | nothing. Use `map-rvas-1162-to-1170.py`, or read :8767 directly |
 | 8 | `regulation.bin`, `data/effects.json`, `effect-master-catalog.json` | 1.17 shipped new params; row ids unverified | re-validate with `tools/er-param-inspect` |
 | 9 | Save containers / `ProfileSummary` reader | RVA-stale; whether the format itself changed is unknown | a save-format diff. Not blocked on #1 any more |

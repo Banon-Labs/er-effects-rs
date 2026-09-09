@@ -40,6 +40,37 @@ pub const SUPPORTED_FILE_VERSION: FileVersion = FileVersion {
     revision: 0,
 };
 
+/// `FileVersion` of the build the 1.17 half of the address map was measured against: 1.17.0.
+pub const MAPPED_FILE_VERSION: FileVersion = FileVersion {
+    major: 2,
+    minor: 7,
+    build: 0,
+    revision: 0,
+};
+
+/// `FileVersion` of 1.17.1, which shipped 2026-09-08.
+pub const MAPPED_FILE_VERSION_1171: FileVersion = FileVersion {
+    major: 2,
+    minor: 7,
+    build: 1,
+    revision: 0,
+};
+
+/// End of the primary `.text`, as an rva. Both 1.17 builds put the section table in the same
+/// place, so this bound is the same on either of them.
+const TEXT_RVA_END: u32 = 0x29a5800;
+
+/// The lowest rva that 1.17.1 moved. Below it the two 1.17 builds hold the same code at the same
+/// address; at or above it a function entry sits [`CARRY_1171_SHIFT`] bytes higher.
+const CARRY_1171_BOUNDARY_RVA: u32 = 0xafefe9;
+
+/// How far 1.17.1 pushed the code above [`CARRY_1171_BOUNDARY_RVA`].
+///
+/// Read only by `carry_shift_for_running_build`, which is windows-gated, and by the tests. A host
+/// build with no `cfg(test)` therefore sees no use of it at all, and this crate denies dead code.
+#[cfg_attr(not(windows), allow(dead_code))]
+const CARRY_1171_SHIFT: u32 = 0x70;
+
 /// A PE `VS_FIXEDFILEINFO` file version, in display order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct FileVersion {
@@ -742,6 +773,7 @@ fn resolve_on_running_build(address: usize, what: core::fmt::Arguments<'_>) -> O
     }
     let base = crate::mem::game_module_base().ok()?;
     let rva = (address - base) as u32;
+    let shift = carry_shift_or_refuse(what)?;
     // Already translated. Resolution is not naturally idempotent: the table is keyed by 1.16.2 RVA
     // and its values are 1.17 RVAs, so asking it where a 1.17 address moved to finds no entry and
     // the honest answer is to refuse -- which is how a correctly translated address got refused on
@@ -763,7 +795,7 @@ fn resolve_on_running_build(address: usize, what: core::fmt::Arguments<'_>) -> O
     // the time of writing; an empty baseline means the tables carry none). The test below,
     // `every_verified_row_resolves_to_its_own_destination`, checks something weaker and different:
     // that the shortcut never swallows a source the table should have translated.
-    match table_answer(&VERIFIED_1162_TO_1170, rva) {
+    match table_answer(&VERIFIED_1162_TO_1170, rva, shift) {
         TableAnswer::AlreadyTranslated => return Some(address),
         TableAnswer::MovedTo { row, to } => {
             let translated = base + to as usize;
@@ -836,17 +868,91 @@ fn resolve_on_running_build(address: usize, what: core::fmt::Arguments<'_>) -> O
 /// `translation_wins_over_the_shortcut_on_a_collision` exists to keep out, on a table it builds
 /// itself rather than on whichever rows the ledgers happen to hold this week.
 ///
+/// Carry an rva from the build the map's destinations were measured on to the running build.
+///
+/// The 1.17.0 to 1.17.1 patch grew exactly one function -- `0xafeea0`, from 329 bytes to 441 --
+/// and everything downstream of it slid by the difference. Nothing else moved. The section table
+/// is byte-identical between the two builds, so an `.rdata` vtable or a `.data` global keeps its
+/// address, which is why the shift is bounded to the primary `.text` rather than applied to any
+/// rva above the boundary. Read exhaustively out of both de-Arxan'd images' `.pdata` by
+/// `scripts/map-rvas-1170-to-1171.py`, whose selftest asserts it: all 174,389 function entries
+/// above the boundary map at `+0x70`, with none left over and none needing a signature match.
+///
+/// A `shift` of zero is the identity, which is what 1.17.0 itself takes.
+#[cfg_attr(not(windows), allow(dead_code))]
+const fn carry_mapped_rva(rva: u32, shift: u32) -> u32 {
+    if rva >= CARRY_1171_BOUNDARY_RVA && rva < TEXT_RVA_END {
+        rva + shift
+    } else {
+        rva
+    }
+}
+
+/// How far to carry the map's destinations for the running build, or `None` when this is a build
+/// nobody has measured.
+///
+/// `None` refuses every game address, and that is the point. Until 1.17.1 shipped there was no
+/// such check: the map's 1.17.0 destinations were handed to any build that was not 2.6.2.0, so
+/// the first launch on a newly patched game would have called and detoured 1.17.0 addresses
+/// inside 1.17.1 code for every address that moved -- roughly half of them -- with nothing in the
+/// log to say so, because from the table's point of view the translation had succeeded.
+#[cfg(windows)]
+fn carry_shift_for_running_build() -> Option<u32> {
+    let running = game_file_version()?;
+    if running == MAPPED_FILE_VERSION {
+        Some(0)
+    } else if running == MAPPED_FILE_VERSION_1171 {
+        Some(CARRY_1171_SHIFT)
+    } else {
+        None
+    }
+}
+
+/// Set once an unmeasured build has been reported, so that line is written once rather than once
+/// per address on a per-frame path.
+#[cfg(windows)]
+static UNMEASURED_BUILD_ANNOUNCED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// [`carry_shift_for_running_build`], saying so in the log the first time it refuses.
+#[cfg(windows)]
+fn carry_shift_or_refuse(what: core::fmt::Arguments<'_>) -> Option<u32> {
+    if let Some(shift) = carry_shift_for_running_build() {
+        return Some(shift);
+    }
+    if !UNMEASURED_BUILD_ANNOUNCED.swap(true, Ordering::Relaxed) {
+        // Deliberately not an `ADDRESS REFUSED` line. That shape is per-address and carries the
+        // address, and `scripts/record-1170-refusals.py` harvests it to build a work list of
+        // addresses to map. This refusal is not about an address -- every address is refused, and
+        // no list of them would be worth reading -- so a line in that shape would add an entry
+        // with nothing to map and misreport the cause as missing coverage.
+        address_log(format_args!(
+            "ADDRESS MAP NOT CARRIED (first asked by {what}): {} -- the map's destinations were \
+             read on {MAPPED_FILE_VERSION} and are carried to {MAPPED_FILE_VERSION_1171}; this \
+             build is neither, so every game address is refused rather than translated onto a \
+             build nobody has read. Carrying it forward is `scripts/map-rvas-1170-to-1171.py`",
+            describe_build()
+        ));
+    }
+    None
+}
+
 /// A pure function of the table so it can be tested on the host, where there is no game to
 /// resolve against. It was called through a `VERIFIED_1162_TO_1170`-shaped wrapper named
 /// `already_translated` until 2026-08-30; [`table_answer`] took that over.
+///
+/// `shift` carries the destination column onto the running build before the comparison, and it
+/// has to happen in that order: on 1.17.1 an address that has already been through this gate is a
+/// carried destination, and asking whether it equals an uncarried one answers no for every row
+/// that moved. A `shift` of zero is the identity, which is what 1.17.0 takes.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn already_translated_in(table: &[(u32, u32)], rva: u32) -> bool {
+fn already_translated_in(table: &[(u32, u32)], rva: u32, shift: u32) -> bool {
     let is_destination = table
         .iter()
-        .any(|(from, moved)| *moved == rva && *from != rva);
+        .any(|(from, moved)| carry_mapped_rva(*moved, shift) == rva && *from != rva);
     let is_source_of_a_move = table
         .iter()
-        .any(|(from, moved)| *from == rva && *moved != rva);
+        .any(|(from, moved)| *from == rva && carry_mapped_rva(*moved, shift) != rva);
     is_destination && !is_source_of_a_move
 }
 
@@ -876,15 +982,18 @@ enum TableAnswer {
 /// The order is the whole point and is asserted by
 /// `translation_wins_over_the_shortcut_on_a_collision`: an address that is both a destination and
 /// a source is answered as a source, because the shortcut declines on it.
+/// `shift` carries the destination column onto the running build. What it never carries is the
+/// source column: that is a 1.16.2 rva, and 1.16.2 is not a build this function's `shift` says
+/// anything about.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn table_answer(table: &[(u32, u32)], rva: u32) -> TableAnswer {
-    if already_translated_in(table, rva) {
+fn table_answer(table: &[(u32, u32)], rva: u32, shift: u32) -> TableAnswer {
+    if already_translated_in(table, rva, shift) {
         return TableAnswer::AlreadyTranslated;
     }
     match table.iter().position(|(from, _)| *from == rva) {
         Some(row) => TableAnswer::MovedTo {
             row,
-            to: table[row].1,
+            to: carry_mapped_rva(table[row].1, shift),
         },
         None => TableAnswer::Unmapped,
     }
@@ -915,9 +1024,10 @@ pub fn resolve_detour_address(address: usize, what: &str) -> Option<usize> {
     }
     let base = crate::mem::game_module_base().ok()?;
     let rva = (address - base) as u32;
+    let shift = carry_shift_or_refuse(format_args!("{what}"))?;
     // Same rule, same order, same function as the call path above -- including the part it cannot
     // establish. See the comment there.
-    match table_answer(&DETOUR_SAFE_1162_TO_1170, rva) {
+    match table_answer(&DETOUR_SAFE_1162_TO_1170, rva, shift) {
         TableAnswer::AlreadyTranslated => return Some(address),
         TableAnswer::MovedTo { row, to } => {
             let translated = base + to as usize;
@@ -951,7 +1061,7 @@ pub fn resolve_detour_address(address: usize, what: &str) -> Option<usize> {
     let occurrence = note_refusal(&DETOUR_REFUSALS, &DETOUR_REFUSAL_OVERFLOW, rva);
     match refusal_line_for(occurrence) {
         RefusalLine::Full => {
-            let call_only = resolve_on_running_build_quiet(rva).is_some();
+            let call_only = resolve_on_running_build_quiet(rva, shift).is_some();
             let arrived_translated = VERIFIED_1162_TO_1170
                 .iter()
                 .find(|(from, moved)| *moved == rva && *from != rva)
@@ -1087,11 +1197,11 @@ pub fn resolve_call_site_band(
 
 /// Does `rva` have any mapping? Used only to word a refusal accurately; logs nothing.
 #[cfg(windows)]
-fn resolve_on_running_build_quiet(rva: u32) -> Option<u32> {
+fn resolve_on_running_build_quiet(rva: u32, shift: u32) -> Option<u32> {
     VERIFIED_1162_TO_1170
         .iter()
         .find(|(from, _)| *from == rva)
-        .map(|(_, moved)| *moved)
+        .map(|(_, moved)| carry_mapped_rva(*moved, shift))
 }
 
 /// How many verified translations this build carries. Read by the product's startup line so a log
@@ -1109,6 +1219,114 @@ mod tests {
         announce_translation_once, announcement_words, note_refusal, refusal_line_for,
         refusal_slot, refusal_totals, table_answer,
     };
+    use super::{
+        CARRY_1171_BOUNDARY_RVA, CARRY_1171_SHIFT, TEXT_RVA_END, already_translated_in,
+        carry_mapped_rva,
+    };
+
+    /// The 1.17.0 to 1.17.1 carry, at each edge of the one range it applies to.
+    ///
+    /// The bound that matters is the upper one. Every `.rdata` vtable and `.data` global this
+    /// workspace pins sits above the end of `.text` and is numerically far above the boundary, so
+    /// a carry written as "anything above 0xafefe9" rather than "anything in `.text` above
+    /// 0xafefe9" would move all of them, and they did not move: the two builds have an identical
+    /// section table, and `u"%s/EldenRing/%s/"` is at rva 0x2bdd9b8 in both.
+    ///
+    /// The edges are spelled as literals rather than as `CARRY_1171_BOUNDARY_RVA - 1` and the
+    /// like, and that is not a style choice. `scripts/rva_role.py` proves that constant is a
+    /// bound rather than a game address from the fact that every use of it is a comparison;
+    /// passing it to a function or doing arithmetic on it here would break the proof, and
+    /// `select-needed-1170-rows.py` would then require it to be carried forward in an address
+    /// ledger as if a threshold were a function. The two asserts below tie the literals back to
+    /// the constants without leaving comparison position.
+    #[test]
+    fn the_carry_moves_text_above_the_boundary_and_nothing_else() {
+        let shift = CARRY_1171_SHIFT;
+        const { assert!(0xafefe8 < CARRY_1171_BOUNDARY_RVA && 0xafefe9 >= CARRY_1171_BOUNDARY_RVA) };
+        const { assert!(0x29a57ff < TEXT_RVA_END && 0x29a5800 >= TEXT_RVA_END) };
+
+        assert_eq!(carry_mapped_rva(0xafefe8, shift), 0xafefe8);
+        assert_eq!(carry_mapped_rva(0xafefe9, shift), 0xafefe9 + shift);
+        assert_eq!(carry_mapped_rva(0x29a57ff, shift), 0x29a57ff + shift);
+        // `.rdata` and `.data`, which did not move.
+        assert_eq!(carry_mapped_rva(0x29a5800, shift), 0x29a5800);
+        assert_eq!(carry_mapped_rva(0x2bdd9b8, shift), 0x2bdd9b8);
+        assert_eq!(carry_mapped_rva(0x3d89700, shift), 0x3d89700);
+        // 1.17.0 takes the identity.
+        for rva in [0x1000, 0xafefe9, 0x29a57ff, 0x2bdd9b8] {
+            assert_eq!(carry_mapped_rva(rva, 0), rva);
+        }
+    }
+
+    /// A carried destination must still be recognised as already translated.
+    ///
+    /// Without this the second pass through the gate refuses an address that is already correct,
+    /// which is the failure that cost `er-armament-icons` its file-open observer on 1.17.0 -- with
+    /// the carry it would have come back on 1.17.1 for a second reason.
+    #[test]
+    fn a_carried_destination_reads_as_already_translated() {
+        // One row below the boundary (does not move) and one above it (does).
+        const TABLE: [(u32, u32); 2] = [(0x2000, 0x3000), (0x2001, 0xb00000)];
+        let shift = CARRY_1171_SHIFT;
+
+        assert_eq!(
+            table_answer(&TABLE, 0x2001, shift),
+            TableAnswer::MovedTo {
+                row: 1,
+                to: 0xb00000 + shift
+            }
+        );
+        assert!(already_translated_in(&TABLE, 0xb00000 + shift, shift));
+        // The uncarried destination is not the answer on this build, and claiming it is already
+        // translated would hand back a 1.17.0 address as if it were right.
+        assert!(!already_translated_in(&TABLE, 0xb00000, shift));
+        // A row that did not move reads the same on either build.
+        assert!(already_translated_in(&TABLE, 0x3000, shift));
+        assert!(already_translated_in(&TABLE, 0x3000, 0));
+        // Unchanged behaviour at shift 0.
+        assert_eq!(
+            table_answer(&TABLE, 0x2001, 0),
+            TableAnswer::MovedTo {
+                row: 1,
+                to: 0xb00000
+            }
+        );
+        assert_eq!(
+            table_answer(&TABLE, 0x2001, 0),
+            TableAnswer::MovedTo {
+                row: 1,
+                to: 0xb00000
+            }
+        );
+    }
+
+    /// Every destination the real table carries stays inside the image once carried.
+    #[test]
+    fn carrying_the_real_tables_keeps_every_destination_in_range() {
+        for (name, table) in [
+            ("VERIFIED_1162_TO_1170", &VERIFIED_1162_TO_1170[..]),
+            ("DETOUR_SAFE_1162_TO_1170", &DETOUR_SAFE_1162_TO_1170[..]),
+        ] {
+            assert!(table.len() >= MIN_EXPECTED_ROWS, "{name} looks unpopulated");
+            let moved = table
+                .iter()
+                .filter(|(_, to)| carry_mapped_rva(*to, CARRY_1171_SHIFT) != *to)
+                .count();
+            assert!(
+                moved > 0,
+                "{name}: no destination moves under the 1.17.1 carry, which cannot be right for a \
+                 table whose addresses span the whole image"
+            );
+            for (from, to) in table {
+                let carried = carry_mapped_rva(*to, CARRY_1171_SHIFT);
+                assert!(
+                    carried >= *to && carried - *to <= CARRY_1171_SHIFT,
+                    "{name}: {from:#x} -> {to:#x} carried to {carried:#x}, which is not the \
+                     identity nor a single {CARRY_1171_SHIFT:#x} step"
+                );
+            }
+        }
+    }
 
     /// VACUOUS QUANTIFICATION, and why every test below counts what it walked.
     ///
@@ -1192,40 +1410,40 @@ mod tests {
         ];
 
         assert_eq!(
-            table_answer(&TABLE, 0xa),
+            table_answer(&TABLE, 0xa, 0),
             TableAnswer::MovedTo { row: 0, to: 0xb },
             "a plain source must translate, and from its OWN row"
         );
         assert_eq!(
-            table_answer(&TABLE, 0xb),
+            table_answer(&TABLE, 0xb, 0),
             TableAnswer::MovedTo { row: 1, to: 0xc },
             "an address that is BOTH a destination and a source must be answered as a source; \
              AlreadyTranslated here drops the second row silently, which is the whole hazard"
         );
         assert_eq!(
-            table_answer(&TABLE, 0xc),
+            table_answer(&TABLE, 0xc, 0),
             TableAnswer::AlreadyTranslated,
             "a destination that nothing else sources is what the shortcut is FOR: a second \
              resolve of it must hand it back, not refuse it"
         );
         assert_eq!(
-            table_answer(&TABLE, 0x20),
+            table_answer(&TABLE, 0x20, 0),
             TableAnswer::MovedTo { row: 2, to: 0x20 },
             "a row that did not move still answers from the table"
         );
         assert_eq!(
-            table_answer(&TABLE, 0x30),
+            table_answer(&TABLE, 0x30, 0),
             TableAnswer::AlreadyTranslated,
             "the shortcut may claim a source only when its answer is the row's own destination"
         );
         assert_eq!(
-            table_answer(&TABLE, 0x31),
+            table_answer(&TABLE, 0x31, 0),
             TableAnswer::MovedTo { row: 4, to: 0x30 },
             "a source whose destination did not move is still a source, answered by row 4 rather \
              than by row 3, which merely shares its destination"
         );
         assert_eq!(
-            table_answer(&TABLE, 0x99),
+            table_answer(&TABLE, 0x99, 0),
             TableAnswer::Unmapped,
             "an address no row names must be refused, not guessed at"
         );
@@ -1286,14 +1504,16 @@ mod tests {
         let unrecognised: Vec<u32> = pure
             .iter()
             .copied()
-            .filter(|moved| super::already_translated_in(&VERIFIED_1162_TO_1170, *moved))
+            .filter(|moved| super::already_translated_in(&VERIFIED_1162_TO_1170, *moved, 0))
             .count()
             .eq(&pure.len())
             .then(Vec::new)
             .unwrap_or_else(|| {
                 pure.iter()
                     .copied()
-                    .filter(|moved| !super::already_translated_in(&VERIFIED_1162_TO_1170, *moved))
+                    .filter(|moved| {
+                        !super::already_translated_in(&VERIFIED_1162_TO_1170, *moved, 0)
+                    })
                     .collect()
             });
         assert!(
@@ -1725,7 +1945,7 @@ mod tests {
         assert_table_is_populated(table, name);
         let wrong: Vec<(u32, u32, TableAnswer)> = table
             .iter()
-            .map(|&(from, moved)| (from, moved, table_answer(table, from)))
+            .map(|&(from, moved)| (from, moved, table_answer(table, from, 0)))
             .filter(|&(from, moved, answer)| match answer {
                 // The shortcut may claim a source only when the address it hands back is what the
                 // row would have returned. That is the rows that did not move, and only them.

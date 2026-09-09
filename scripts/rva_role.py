@@ -101,6 +101,23 @@ NOT_AN_ADDRESS: dict[str, str] = {
         "game's first .text section entirely; it stayed out of the ledgers only because "
         "functions.tsv has no pair that far out, not because anything refused it."
     ),
+    "TEXT_RVA_END": (
+        "crates/er-game-base/src/game_build.rs -- one past the end of the primary .text section, "
+        "used only as `rva < TEXT_RVA_END` to keep the 1.17.1 carry from moving addresses that "
+        "are not code. It is the section's extent, which both 1.17 builds share, and not the "
+        "address of anything: the byte at that rva belongs to the next section. Carrying it "
+        "forward as a function would be meaningless, and dropping it from a ledger silently "
+        "would hide that the bound exists at all."
+    ),
+    "CARRY_1171_BOUNDARY_RVA": (
+        "crates/er-game-base/src/game_build.rs -- the lowest rva that ELDEN RING 1.17.1 moved, "
+        "used once and only as `rva >= CARRY_1171_BOUNDARY_RVA && rva < TEXT_RVA_END`. It names "
+        "the seam between the code the 1.17.0 to 1.17.1 patch left alone and the code it slid by "
+        "0x70, so it is a boundary between two builds rather than the address of anything: no "
+        "function starts there in either image, and nothing resolves or offsets from it. Putting "
+        "it in an address ledger would ask the mapper to carry a threshold forward as if it were "
+        "a function."
+    ),
     "SW_BP_RVA_LIMIT": (
         "crates/er-quickload/src/constants/software_breakpoints.rs -- the same shape one crate "
         "over: the software-breakpoint RVA window's upper bound, used three times and every time "
