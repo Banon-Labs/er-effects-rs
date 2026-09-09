@@ -105,6 +105,9 @@ use er_invasion_warp_core::param_row::PinAppearance;
 /// 3,200-line hard limit; the seam was already there.
 mod hotkeys;
 
+/// Both items are `#[cfg(windows)]` inside the module -- they read `GetAsyncKeyState` -- so the
+/// re-export has to be gated too, or the host-target test build looks for names that do not exist.
+#[cfg(windows)]
 pub use hotkeys::{MarkKeys, warp_keys_in_force};
 
 mod ersc;
