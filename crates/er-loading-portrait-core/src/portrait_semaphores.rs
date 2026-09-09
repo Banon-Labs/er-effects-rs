@@ -385,8 +385,20 @@ const PROFILE_OFFSCREEN_MAX_ASPECT: usize = 36;
 /// rather than a black band. Accepted as an edge case by the user, 2026-09-08.
 #[must_use]
 pub fn profile_offscreen_size_target() -> usize {
+    offscreen_size_for_display(display_size())
+}
+
+/// [`profile_offscreen_size_target`] with the display passed in rather than asked for.
+///
+/// Split out so the fallback has a test. The tests in this crate are built for the windows target
+/// and run under Wine, where `GetSystemMetrics` answers with the real monitor -- so a test that
+/// called the display-reading function and asserted the no-display answer was asserting whatever
+/// screen the machine happened to have, and it failed on a 16:9 one by returning 2741 where it
+/// wanted 1542. The arithmetic is the part worth pinning; reading the display is not.
+#[must_use]
+fn offscreen_size_for_display(display: Option<(usize, usize)>) -> usize {
     let height = PROFILE_OFFSCREEN_SIZE_HEIGHT;
-    let width = match display_size() {
+    let width = match display {
         Some((w, h)) if w > 0 && h > 0 => {
             (height * w / h).clamp(height, height * PROFILE_OFFSCREEN_MAX_ASPECT / 10)
         }
@@ -425,7 +437,10 @@ pub const PROFILE_RENDERER_ENV_REGION_OFFSET: usize = 0x760;
 
 #[cfg(test)]
 mod offscreen_size_tests {
-    use super::{PROFILE_OFFSCREEN_SIZE_HEIGHT, profile_offscreen_size_target};
+    use super::{
+        PROFILE_OFFSCREEN_MAX_ASPECT, PROFILE_OFFSCREEN_SIZE_HEIGHT, offscreen_size_for_display,
+        profile_offscreen_size_target,
+    };
 
     /// The packing is the engine's, read out of `CSMenuProfModelRend`'s ctor: low dword width,
     /// high dword height. Getting the halves the wrong way round would ask for a portrait-shaped
@@ -441,13 +456,39 @@ mod offscreen_size_tests {
         assert!(target & 0xffff_ffff >= PROFILE_OFFSCREEN_SIZE_HEIGHT);
     }
 
-    /// On a host there is no display to ask, and the answer has to be the square this replaced --
-    /// the shape every measurement in this module was taken against.
+    /// With no display to ask, the answer has to be the square this replaced -- the shape every
+    /// measurement in this module was taken against.
+    ///
+    /// It passes `None` rather than calling `profile_offscreen_size_target`, because these tests
+    /// are built for the windows target and run under Wine: the real `display_size` answers there,
+    /// so calling it would assert the machine's monitor instead of the fallback.
     #[test]
     fn with_no_display_it_falls_back_to_the_square_it_replaced() {
+        let square = (PROFILE_OFFSCREEN_SIZE_HEIGHT << 32) | PROFILE_OFFSCREEN_SIZE_HEIGHT;
+        assert_eq!(offscreen_size_for_display(None), square);
+        // A display that reports zero on either axis is the same "nothing to ask" case, and must
+        // not divide by it.
+        assert_eq!(offscreen_size_for_display(Some((0, 0))), square);
+        assert_eq!(offscreen_size_for_display(Some((1920, 0))), square);
+    }
+
+    /// A landscape display widens the render, and only up to the aspect cap.
+    #[test]
+    fn a_display_widens_the_render_and_the_cap_bounds_it() {
+        let h = PROFILE_OFFSCREEN_SIZE_HEIGHT;
         assert_eq!(
-            profile_offscreen_size_target(),
-            (PROFILE_OFFSCREEN_SIZE_HEIGHT << 32) | PROFILE_OFFSCREEN_SIZE_HEIGHT
+            offscreen_size_for_display(Some((1920, 1080))) & 0xffff_ffff,
+            h * 16 / 9
+        );
+        // Portrait display: never narrower than the square, because the composite covers.
+        assert_eq!(
+            offscreen_size_for_display(Some((1080, 1920))) & 0xffff_ffff,
+            h
+        );
+        // Absurdly wide: clamped rather than allocating a render target off the end of the world.
+        assert_eq!(
+            offscreen_size_for_display(Some((10_000, 1000))) & 0xffff_ffff,
+            h * PROFILE_OFFSCREEN_MAX_ASPECT / 10
         );
     }
 }
