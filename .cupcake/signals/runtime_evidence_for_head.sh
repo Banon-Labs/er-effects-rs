@@ -35,7 +35,10 @@
 # running -- newer file, older code -- which is the exact failure being guarded, made inside the
 # guard.
 #
-# Safe to run on every Bash call: three git reads and one directory stat, no network, no writes.
+# Safe to run on every Bash call, and measured rather than asserted: ~0.1s warm, ~1.2s the first
+# time a new tip is seen, no network. It writes nothing but its own memo under `XDG_RUNTIME_DIR`.
+# The version that read the whole run root and walked the reverse-dependency graph once per log
+# line took over 45 seconds, which one gate then paid 176 times.
 set -uo pipefail
 
 # The regression tests drive the policy through this, the same way the branch guards use
@@ -87,6 +90,7 @@ fi
 # `+dirty` disqualifies the run as well. It means the tree carried uncommitted changes when that DLL
 # was built, so the binary is not the commit even when the sha matches.
 python3 - "$run_root" "$head_sha" <<'PY'
+import os
 import pathlib
 import re
 import subprocess
@@ -151,7 +155,25 @@ for run in sorted(run_root.iterdir(), reverse=True):
 # stat. The newest builds are the only ones a live branch can carry forward from anyway -- an older
 # sha reaches the tip across strictly more commits, so if the newest cannot forgive the diff, an
 # older one cannot either.
-for built in list(dict.fromkeys(clean_builds))[:CANDIDATES]:
+# Memoised, because one gate charges this signal 176 times. `scripts/test-cupcake-policies.py`
+# drives that many `cupcake eval` spawns and every one of them runs every signal, so a walk that
+# costs half a second lands as minutes on the suite. The answer is a pure function of the two
+# commit shas -- `--rev` reads the commit, not the working tree -- so it is safe to keep, and it is
+# keyed by both shas so it cannot be served for a different pair.
+cache_dir = pathlib.Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "er-mods-rs-evidence"
+try:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+except OSError:
+    cache_dir = None
+
+
+def adds_no_cargo_work(built):
+    cached = cache_dir / f"{head_sha}-{built}" if cache_dir else None
+    if cached is not None:
+        try:
+            return cached.read_text() == "3"
+        except OSError:
+            pass
     probe = subprocess.run(
         [
             "python3",
@@ -165,7 +187,16 @@ for built in list(dict.fromkeys(clean_builds))[:CANDIDATES]:
         capture_output=True,
         check=False,
     )
-    if probe.returncode == 3:
+    if cached is not None:
+        try:
+            cached.write_text("3" if probe.returncode == 3 else "0")
+        except OSError:
+            pass
+    return probe.returncode == 3
+
+
+for built in list(dict.fromkeys(clean_builds))[:CANDIDATES]:
+    if adds_no_cargo_work(built):
         print("OK", end="")
         raise SystemExit(0)
 
