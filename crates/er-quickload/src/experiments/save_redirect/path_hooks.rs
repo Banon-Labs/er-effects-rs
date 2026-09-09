@@ -336,6 +336,13 @@ const SAVE_REDIRECT_MODE_DEFAULT_USER: usize = 3;
 /// container cannot become valid without replacing the staged source, which this process cannot do
 /// (`SAVE_DIRECT_SOURCE_FILE` is deliberately write-once). The first rejection therefore fails
 /// closed; a second identical observation is a recurrence bug and sets a nonzero semaphore.
+/// Return value of `CreateFileW` when the open failed (`INVALID_HANDLE_VALUE`).
+const INVALID_HANDLE_RETURN: isize = -1;
+
+/// Owns the "a redirected save open failed, ask the player" one-shot.
+static SAVE_REDIRECT_FAILED_PICKER: er_save_redirect::FailedRedirectPicker =
+    er_save_redirect::FailedRedirectPicker::new();
+
 static OWN_LOAD_SAVE_REJECTION: TerminalRejectionGuard = TerminalRejectionGuard::new();
 static OWN_LOAD_SAVE_REJECTION_GUARD_CHECKS: AtomicU64 = AtomicU64::new(0);
 static OWN_LOAD_SAVE_REJECTION_PROBE_ARMED: AtomicUsize = AtomicUsize::new(0);
@@ -1917,6 +1924,14 @@ pub(super) unsafe extern "system" fn save_redirect_createfilew_hook(
                     template,
                 )
             };
+            // Decision, one-shot and reasoning all live in `er_save_redirect`.
+            if SAVE_REDIRECT_FAILED_PICKER.should_arm(ret == INVALID_HANDLE_RETURN, path) {
+                append_autoload_debug(format_args!(
+                    "save-override: redirected save open FAILED -- arming the missing-save picker"
+                ));
+                set_missing_save_dialog_state(er_save_redirect::MissingSaveState::Pending);
+                crate::experiments::arm_missing_save_picker_after_boot("redirected-save-open-fail");
+            }
             let hit = SAVE_REDIRECT_HITS.fetch_add(1, Ordering::SeqCst);
             if hit < SAVE_REDIRECT_LOG_MAX {
                 // UTF-8 Lossy: log-only decode of a Windows wide path for probe confirmation.
@@ -1927,8 +1942,7 @@ pub(super) unsafe extern "system" fn save_redirect_createfilew_hook(
                     .unwrap_or(redirected.len());
                 // UTF-8 Lossy: log-only decode of the redirected wide path.
                 let to = String::from_utf16_lossy(&redirected[..to_end]);
-                // ret == -1 (INVALID_HANDLE_VALUE) means the redirected path did not resolve (Wine
-                // path/case miss) -> the game falls back to no-save. ok=true means our file opened.
+                // ok=false means the redirected path did not resolve; the picker arms above.
                 let ok = ret != -1;
                 append_autoload_debug(format_args!(
                     "save-override: REDIRECT #{hit} access=0x{access:x} disp={disposition} ok={ok} ret=0x{ret:x} '{from}' -> '{to}'"

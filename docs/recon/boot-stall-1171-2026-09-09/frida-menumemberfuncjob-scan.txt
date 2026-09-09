@@ -1,0 +1,4 @@
+coverage: 843/845 ranges, 2236/2270 MB (98.5%), 2 unreadable
+instances of vtable 0x142b29650: 2
+    0x3a677a8
+    0x45c33880

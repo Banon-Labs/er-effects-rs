@@ -1,0 +1,11 @@
+{
+  "total_ranges": 845,
+  "total_bytes": 2269851648,
+  "scanned_ranges": 843,
+  "scanned_bytes": 2235584512,
+  "unreadable_ranges": 2,
+  "hits": [
+    "0x3a677a8",
+    "0x45c33880"
+  ]
+}
