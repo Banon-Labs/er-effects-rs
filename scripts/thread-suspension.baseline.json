@@ -1,0 +1,12 @@
+{
+  "gates": {
+    "profiler_rip_enabled": "er-boot-profiler RIP sampling: ER_QUICKLOAD_PROFILE_RIP=1 or er-quickload-profile-rip.txt in the game directory",
+    "rip_sampling_enabled": "er-telemetry-core cpu sampler: the same ER_QUICKLOAD_PROFILE_RIP=1 switch, reused rather than a second one",
+    "c30_watch_enabled": "er-quickload debug-register write watchpoint on GameMan+0xc30: ER_QUICKLOAD_C30_WATCH=1 or er-quickload-c30-watch.txt",
+    "freeze_guard::hold": "the cross-DLL MinHook freeze lock in crates/er-hook/src/lib.rs (named mutex Local\\er-mods-rs-minhook-freeze-<pid>)"
+  },
+  "sites": {
+    "crates/er-crash-logging-core/src/hang.rs::enumerate_threads": "Hang watchdog thread enumeration. Snapshot only, no suspension; exempted with sample_thread because it is that report path's first step.",
+    "crates/er-crash-logging-core/src/hang.rs::sample_thread": "Hang watchdog thread snapshot. Cannot be opt-in: a watchdog you enable in advance is off on the run that needed it. Fires only after a detector has already tripped, one thread at a time, no allocation while suspended, capped at 3 stall and 5 frame-drop reports."
+  }
+}

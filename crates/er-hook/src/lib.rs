@@ -725,17 +725,192 @@ pub enum MH_STATUS {
 
 unsafe extern "system" {
     pub fn MH_Initialize() -> MH_STATUS;
-    pub fn MH_Uninitialize() -> MH_STATUS;
     pub fn MH_CreateHook(
         pTarget: *mut c_void,
         pDetour: *mut c_void,
         ppOriginal: *mut *mut c_void,
     ) -> MH_STATUS;
-    pub fn MH_EnableHook(pTarget: *mut c_void) -> MH_STATUS;
     pub fn MH_QueueEnableHook(pTarget: *mut c_void) -> MH_STATUS;
-    pub fn MH_DisableHook(pTarget: *mut c_void) -> MH_STATUS;
     pub fn MH_QueueDisableHook(pTarget: *mut c_void) -> MH_STATUS;
-    pub fn MH_ApplyQueued() -> MH_STATUS;
+
+    // The four that FREEZE. Renamed rather than exported, so nothing can reach MinHook's
+    // thread-suspending entry points without passing through the guard below. See
+    // [`freeze_guard`] for what that guard is for; the wrappers keep the original names and
+    // signatures, so every existing call site is unchanged.
+    #[link_name = "MH_Uninitialize"]
+    fn MH_Uninitialize_unguarded() -> MH_STATUS;
+    #[link_name = "MH_EnableHook"]
+    fn MH_EnableHook_unguarded(pTarget: *mut c_void) -> MH_STATUS;
+    #[link_name = "MH_DisableHook"]
+    fn MH_DisableHook_unguarded(pTarget: *mut c_void) -> MH_STATUS;
+    #[link_name = "MH_ApplyQueued"]
+    fn MH_ApplyQueued_unguarded() -> MH_STATUS;
+}
+
+/// # Safety
+/// Same contract as MinHook's own `MH_EnableHook`.
+pub unsafe fn MH_EnableHook(pTarget: *mut c_void) -> MH_STATUS {
+    let _guard = freeze_guard::hold("MH_EnableHook");
+    unsafe { MH_EnableHook_unguarded(pTarget) }
+}
+
+/// # Safety
+/// Same contract as MinHook's own `MH_DisableHook`.
+pub unsafe fn MH_DisableHook(pTarget: *mut c_void) -> MH_STATUS {
+    let _guard = freeze_guard::hold("MH_DisableHook");
+    unsafe { MH_DisableHook_unguarded(pTarget) }
+}
+
+/// # Safety
+/// Same contract as MinHook's own `MH_ApplyQueued`.
+pub unsafe fn MH_ApplyQueued() -> MH_STATUS {
+    let _guard = freeze_guard::hold("MH_ApplyQueued");
+    unsafe { MH_ApplyQueued_unguarded() }
+}
+
+/// # Safety
+/// Same contract as MinHook's own `MH_Uninitialize`.
+pub unsafe fn MH_Uninitialize() -> MH_STATUS {
+    let _guard = freeze_guard::hold("MH_Uninitialize");
+    unsafe { MH_Uninitialize_unguarded() }
+}
+
+/// One process-wide lock around every MinHook entry point that suspends threads.
+///
+/// # The deadlock this exists to prevent
+///
+/// MinHook's `Freeze()` takes a `CreateToolhelp32Snapshot` and calls `SuspendThread` on every
+/// other thread in the process before it writes a detour, then resumes them. That is correct for
+/// one MinHook. This workspace ships twenty-one cdylibs, each of which statically links its OWN
+/// MinHook instance -- deliberately, since the hook union owns exactly one instance per DLL -- so
+/// there are twenty-one independent freezers with twenty-one independent locks, and MinHook's own
+/// critical section serialises none of them against each other. Each shell then installs its hooks
+/// from a thread it spawned out of `DllMain`, so those twenty-one installer threads run at the
+/// same time by construction.
+///
+/// Two of them overlapping is the bug: thread A's `Freeze` suspends thread B while B is itself
+/// inside `SuspendThread`, and on Wine every one of those calls is a wineserver round trip, so the
+/// suspended requester never returns and its request never completes. Measured on 2026-09-04 and
+/// again on 2026-09-08 (run br-20260908-195845-d694, wedged at +576ms during hook installation,
+/// every DLL's log frozen at the same instant): 62 threads all in state `S`, wchan
+/// `anon_pipe_read` x48 including the leader, and wineserver itself idle in `do_epoll_wait` --
+/// nothing pending on its side, because the threads that would have had requests outstanding were
+/// suspended before they could make them. Open issue er-effects-rs-1742.
+///
+/// It is intermittent for the reason the mechanism predicts: it needs two freeze windows to
+/// overlap, and each is short. That is also why a lock is the whole fix -- there is nothing wrong
+/// with any single freeze.
+///
+/// # Why a named mutex rather than a `static`
+///
+/// A Rust `static` is per-DLL here, exactly like MinHook's own lock, so it would serialise each
+/// shell against itself and nothing else -- the same non-fix twenty-one times over. A named
+/// kernel mutex is one object no matter how many modules open it, which is the property required.
+/// It is scoped to this process by name, so two Elden Ring instances do not serialise against each
+/// other, and it is reentrant for the owning thread, so a hook installed from inside another
+/// hook's callback cannot self-deadlock.
+///
+/// Every failure path here proceeds unguarded rather than refusing. A hook that is not installed
+/// is a feature that is silently missing for the whole run; an unserialised freeze is a boot that
+/// usually works. Neither is good and the first one is worse.
+#[cfg(windows)]
+mod freeze_guard {
+    use core::ffi::c_void;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    unsafe extern "system" {
+        fn CreateMutexW(
+            attributes: *mut c_void,
+            initial_owner: i32,
+            name: *const u16,
+        ) -> *mut c_void;
+        fn WaitForSingleObject(handle: *mut c_void, milliseconds: u32) -> u32;
+        fn ReleaseMutex(handle: *mut c_void) -> i32;
+        fn GetCurrentProcessId() -> u32;
+    }
+
+    const WAIT_OBJECT_0: u32 = 0x0000_0000;
+    /// The holder died without releasing. The lock is ours and the protected state is MinHook's
+    /// own, which a dead thread cannot have left half-written here -- so this is as good as
+    /// acquiring.
+    const WAIT_ABANDONED: u32 = 0x0000_0080;
+    /// Long enough that a real freeze (a snapshot plus a suspend/resume pair per thread, roughly
+    /// sixty threads, on Wine) is never cut off, short enough that a wedged holder costs one boot
+    /// rather than hanging the process forever.
+    const FREEZE_LOCK_TIMEOUT_MS: u32 = 5_000;
+
+    /// The opened mutex, or `usize::MAX` once opening has failed and should not be retried.
+    static HANDLE: AtomicUsize = AtomicUsize::new(0);
+    const UNAVAILABLE: usize = usize::MAX;
+
+    fn handle() -> Option<*mut c_void> {
+        let cached = HANDLE.load(Ordering::Acquire);
+        if cached == UNAVAILABLE {
+            return None;
+        }
+        if cached != 0 {
+            return Some(cached as *mut c_void);
+        }
+        // Per process, so a second running game does not serialise against this one.
+        let name: Vec<u16> = format!("Local\\er-mods-rs-minhook-freeze-{}", unsafe {
+            GetCurrentProcessId()
+        })
+        .encode_utf16()
+        .chain(core::iter::once(0))
+        .collect();
+        let opened = unsafe { CreateMutexW(core::ptr::null_mut(), 0, name.as_ptr()) };
+        if opened.is_null() {
+            HANDLE.store(UNAVAILABLE, Ordering::Release);
+            return None;
+        }
+        // A race here opens the same named object twice and leaks one handle for the life of the
+        // process. Both handles name one mutex, so the guarantee holds either way; closing the
+        // loser would be the bug, since another thread may already be waiting on it.
+        match HANDLE.compare_exchange(0, opened as usize, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => Some(opened),
+            Err(winner) => Some(winner as *mut c_void),
+        }
+    }
+
+    /// Held for the duration of one freezing MinHook call.
+    pub(super) struct Held(Option<*mut c_void>);
+
+    impl Drop for Held {
+        fn drop(&mut self) {
+            if let Some(handle) = self.0 {
+                unsafe { ReleaseMutex(handle) };
+            }
+        }
+    }
+
+    pub(super) fn hold(what: &str) -> Held {
+        let Some(handle) = handle() else {
+            return Held(None);
+        };
+        match unsafe { WaitForSingleObject(handle, FREEZE_LOCK_TIMEOUT_MS) } {
+            WAIT_OBJECT_0 | WAIT_ABANDONED => Held(Some(handle)),
+            other => {
+                // Proceeding is the lesser risk, but it is the shape of the deadlock this guard
+                // exists to prevent, so it must not be silent.
+                crate::hook_log(format_args!(
+                    "HOOK FREEZE LOCK: {what} waited {FREEZE_LOCK_TIMEOUT_MS}ms for the \
+                     process-wide MinHook lock and got {other:#x}; proceeding UNSERIALISED. \
+                     Another module has been inside a thread freeze for longer than any real \
+                     freeze takes -- see er-effects-rs-1742."
+                ));
+                Held(None)
+            }
+        }
+    }
+}
+
+/// Host half: nothing to serialise, because nothing freezes.
+#[cfg(not(windows))]
+mod freeze_guard {
+    pub(super) struct Held;
+    pub(super) fn hold(_what: &str) -> Held {
+        Held
+    }
 }
 
 impl MH_STATUS {

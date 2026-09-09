@@ -802,6 +802,7 @@ python3 "$repo_root/scripts/test-cupcake-stop-guards.py"
 python3 "$repo_root/scripts/test-authority-agreement-signal.py"
 python3 "$repo_root/scripts/test-idle-hold-signal.py"
 python3 "$repo_root/scripts/test-unexecuted-promise-signal.py"
+python3 "$repo_root/scripts/test-described-next-step-signal.py"
 python3 "$repo_root/scripts/test-native-ownership-vocab-signal.py"
 python3 "$repo_root/scripts/test-stall-on-friction-signal.py"
 python3 "$repo_root/scripts/test-wall-of-text-signal.py"
@@ -837,6 +838,7 @@ opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policie
 # policy that cupcake's WASM runtime cannot execute returns nothing and reads as a clean turn.
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/edit_no_comment_caps_guard.rego" "$repo_root/.cupcake/tests/edit_no_comment_caps_guard_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_unbacked_claim.rego" "$repo_root/.cupcake/tests/no_unbacked_claim_test.rego"
+opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_described_next_step.rego" "$repo_root/.cupcake/tests/no_described_next_step_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_repo_network_banners_prompt_context.rego" "$repo_root/.cupcake/tests/no_repo_network_banners_prompt_context_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/require_scoped_cargo.rego" "$repo_root/.cupcake/tests/require_scoped_cargo_test.rego"
 # And the half `opa test` cannot reach. A green policy suite does not mean production-allowed or
@@ -900,6 +902,17 @@ python3 "$repo_root/scripts/check-comment-caps.py"
 # than a habit. Selftest first, so the gate is never trusted on its own say-so.
 python3 "$repo_root/scripts/check-no-unguarded-cstr-from-ptr.py" --selftest
 python3 "$repo_root/scripts/check-no-unguarded-cstr-from-ptr.py"
+# Two thread suspenders that do not know about each other is how three boots of the 21-DLL profile
+# wedged during hook installation (bd er-effects-rs-1742): an ungated er-cpu-sampler calling
+# `SuspendThread` on the game thread about once a millisecond, against twenty-one MinHook
+# `Freeze()` calls doing the same thing to it. Nothing can catch this at runtime -- er-hook's
+# freeze lock covers only MinHook's own entry points, and its 5s timeout is measured inside a
+# thread that a foreign freeze has already suspended, so it can never fire. So the enforcement is
+# static: a suspension primitive must be behind an opt-in, under the freeze lock, or in
+# scripts/thread-suspension.baseline.json with a reason. Selftest first, so the gate is never
+# trusted on its own say-so.
+python3 "$repo_root/scripts/check-no-thread-suspension.py" --selftest
+python3 "$repo_root/scripts/check-no-thread-suspension.py"
 # A detour's expected prologue must be generated from named iced-x86 instructions in a build.rs,
 # never hand-typed: `mov rax, rsp` has two legal encodings, the game ships 48 8b c4, an assembler
 # left to choose emits 48 89 e0, and a prologue that is one byte off byte-checks its own hook off
@@ -1940,7 +1953,10 @@ python3 "$repo_root/scripts/check-me3-shell-coverage.py"
 # a harness that drives input every frame -- and that knowledge used to live only as prose in
 # a hand-written ~/Elden/*.me3. scripts/er-dll-closure.py now reads it as data to decide what a
 # generated profile may load, so the table must stay complete: a new cdylib that nobody has
-# classified is exactly the one a dependency-closure walk auto-includes.
+# classified is exactly the one a dependency-closure walk auto-includes. The same file also
+# carries the two consent answers -- `[opt_in_only]` withholds a shell until the launch names it,
+# `[always]` loads one into every launch without being named -- and this gate refuses a package
+# that claims both, or that claims to be unconditional without having been found compatible.
 python3 "$repo_root/scripts/check-me3-dll-conflicts.py" --selftest
 python3 "$repo_root/scripts/check-me3-dll-conflicts.py"
 

@@ -389,12 +389,38 @@ mod profiler {
         if base != 0 {
             GAME_BASE.store(base, Ordering::Relaxed);
         }
+        if !rip_sampling_enabled() {
+            return;
+        }
         if STARTED.swap(1, Ordering::SeqCst) == 0 {
             *HIST.lock().unwrap() = Some(HashMap::new());
             let _ = std::thread::Builder::new()
                 .name("er-cpu-sampler".into())
                 .spawn(sampler_loop);
         }
+    }
+
+    /// Whether the sampler may run. Off unless `ER_QUICKLOAD_PROFILE_RIP=1`.
+    ///
+    /// # Why a diagnostic that suspends the game thread cannot be on by default
+    ///
+    /// `sample_rip` calls `SuspendThread` on the game thread roughly once a millisecond for as
+    /// long as frames are slow, and boot is the longest run of slow frames there is. Meanwhile
+    /// every one of the twenty-one shells installs its detours through its own statically linked
+    /// MinHook, whose `Freeze()` suspends every other thread and rewrites their `RIP` through
+    /// `Get`/`SetThreadContext`. Two suspenders that do not know about each other, one of them
+    /// firing continuously, is the shape of er-effects-rs-1742: three measured boots have wedged
+    /// with the last log line being er-hook's `HOOK TRANSLATED`, which is the statement
+    /// immediately before `MH_CreateHook`.
+    ///
+    /// `er-boot-profiler` already treats exactly this mechanism as opt-in and names the switch;
+    /// this reuses it rather than inventing a second one, so one variable turns off every
+    /// thread-suspending diagnostic this workspace has.
+    fn rip_sampling_enabled() -> bool {
+        matches!(
+            std::env::var("ER_QUICKLOAD_PROFILE_RIP").as_deref(),
+            Ok("1")
+        )
     }
 
     fn sampler_loop() {

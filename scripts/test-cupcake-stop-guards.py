@@ -63,6 +63,12 @@ CASES = [
         "turn ends on 'I'll re-run the gate...' with no tool call, no background work, no handoff",
     ),
     Case(
+        "described_next_step.jsonl",
+        "describing a next step instead of starting it",
+        "turn names the mechanism, the target and the tool for the next step and begins none of it "
+        "-- no tool call, no blocker, no question (the 2026-09-08 directive)",
+    ),
+    Case(
         "idle_hold.jsonl",
         "announced holding/idling",
         "turn is a pure pause announcing an idle hold while a background task runs",
