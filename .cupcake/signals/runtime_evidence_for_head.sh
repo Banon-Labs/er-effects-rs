@@ -102,11 +102,19 @@ def names_head(built):
     return built.startswith(head_sha) or head_sha.startswith(built)
 
 
+# Newest run first, and stop as soon as there are enough candidates. Run directory names are
+# `br-<timestamp>-<id>`, so a reverse sort is newest first. Scanning every directory meant opening
+# the first line of several hundred logs on every Bash tool call; the pre-push copy does the
+# exhaustive walk, where paying for it once is fine.
+CANDIDATES = 2
+
 clean_builds = []
 
-for run in sorted(run_root.iterdir()):
+for run in sorted(run_root.iterdir(), reverse=True):
     if not run.is_dir():
         continue
+    if len(dict.fromkeys(clean_builds)) >= CANDIDATES:
+        break
     for artifact in sorted(run.glob("er-*.log")):
         try:
             with artifact.open(encoding="utf-8", errors="replace") as handle:
@@ -132,10 +140,18 @@ for run in sorted(run_root.iterdir()):
 # scripts/er-change-scope.py answers it, the same reverse-dependency walk the compile gate uses:
 # `--rust-touched` exits 3 for "provably no cargo work required" and 0 otherwise, and it fails open
 # on a git failure, an unresolvable base, or any build input outside a single crate directory. So it
-# can only forgive a diff that provably cannot change a DLL. Kept identical to
-# scripts/check-runtime-evidence.sh on purpose: two enforcement points that disagree about one push
-# teach the next agent to ignore whichever is louder.
-for built in reversed(clean_builds):
+# can only forgive a diff that provably cannot change a DLL. It agrees with
+# scripts/check-runtime-evidence.sh by construction: two enforcement points that answer differently
+# about one push teach the next agent to ignore whichever is louder.
+#
+# Deduplicated and capped, which the pre-push copy does not need to be. This signal runs on every
+# single Bash tool call, and every attempt is a whole reverse-dependency walk: the first version
+# tried one per matching log line, and the run root here holds hundreds of them across a dozen
+# builds. It took over 45 seconds to answer, on a signal whose header promises three git reads and a
+# stat. The newest builds are the only ones a live branch can carry forward from anyway -- an older
+# sha reaches the tip across strictly more commits, so if the newest cannot forgive the diff, an
+# older one cannot either.
+for built in list(dict.fromkeys(clean_builds))[:CANDIDATES]:
     probe = subprocess.run(
         [
             "python3",
