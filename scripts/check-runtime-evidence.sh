@@ -11,7 +11,7 @@
 #     build git=b6b459560dfa module=er_invasion_warp.dll base=0x... pe=0x... (2026-09-09T02:05:18Z)
 #
 # That sha is what ties a run to code, and a file timestamp does not. The first version of this
-# check compared mtimes and answered "evidence present" for HEAD 0e084240 on a log whose own first
+# check compared mtimes and answered "evidence present" for head 0e084240 on a log whose own first
 # line read `build git=b6b45956` -- a DLL two commits older, still running and still writing, so its
 # file was newer than the commit it could not possibly have executed. Reading a clock and calling it
 # provenance is the exact mistake this exists to stop.
@@ -92,7 +92,7 @@ PY
 #
 # The question is answered by scripts/er-change-scope.py, the same reverse-dependency walk the
 # compile gate uses, rather than by a second opinion written here: `--rust-touched` exits 3 for
-# "provably no cargo work required" and 0 otherwise, and it FAILS OPEN -- a git failure, an
+# "provably no cargo work required" and 0 otherwise, and it fails open -- a git failure, an
 # unresolvable base, or any build input outside a single crate directory all answer 0, which keeps
 # the refusal. So this can only ever forgive a diff that provably cannot change a DLL.
 carried_forward() { # carried_forward <run build sha> <tip>

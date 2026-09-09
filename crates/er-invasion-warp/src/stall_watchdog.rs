@@ -45,7 +45,7 @@ pub mod state {
     /// The state a driven cancel settles through on its way back to idle. Named so the test that
     /// refuses to time it can say which state it means.
     pub const CANCEL_SETTLING: u32 = 0x23;
-    /// A handshake step that IS timed, used by the tests that exercise the timing mechanism
+    /// A handshake step that is timed, used by the tests that exercise the timing mechanism
     /// rather than the membership list.
     pub const CONNECTING: u32 = 0x12;
 }
@@ -80,13 +80,13 @@ const TIMED_STATES: [u32; 3] = [
 ];
 
 // 0x22 and 0x23 are deliberately absent, and they used to be here. They are the unwind of a cancel
-// that is ALREADY IN FLIGHT, and the only remedy this watchdog has is to drive a cancel -- so on
+// that is already in flight, and the only remedy this watchdog has is to drive a cancel -- so on
 // those two states it answers a cancel with another cancel.
 //
 // Measured on run br-20260909-020749-0a75, six times in one session. The sequence each time:
 // `cancelled rejected match (#N)` puts the session at 0x23, five seconds later this fires
 // `about to drive ERSC cancel (stalled attempt) -- state=0x23 CANCELLING`, and the session then
-// holds 0x23 for 30,307ms before reaching 0x24 and IDLE. From the player's seat that is a search
+// holds 0x23 for 30,307ms before reaching 0x24 and idle. From the player's seat that is a search
 // that dies and takes half a minute to come back, reported as "I'm just getting failed
 // invasions".
 //
@@ -227,7 +227,7 @@ mod tests {
     /// It used to require that a cancel hung at `CANCELLING` be recovered by driving a cancel.
     /// That is answering a cancel with another cancel, and run br-20260909-020749-0a75 measured
     /// the cost six times: `cancelled rejected match (#N)` puts the session at 0x23, this fired
-    /// five seconds later, and the session then held 0x23 for 30,307ms before reaching IDLE.
+    /// five seconds later, and the session then held 0x23 for 30,307ms before reaching idle.
     ///
     /// A cancel that is settling is already the recovery. There is nothing for this watchdog to
     /// add to it, and its only action makes it worse.

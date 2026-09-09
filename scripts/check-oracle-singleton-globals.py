@@ -324,7 +324,7 @@ def constant_values(root: Path) -> dict[str, int | None]:
 def _without_outer_parens(expression: str) -> str:
     """`(lfanew & 0xffff_ffff)` -> `lfanew & 0xffff_ffff`, and `(a) + (b)` unchanged.
 
-    Every test below reads the FIRST token of the expression -- is it a literal, does it name the
+    Every test below reads the first token of the expression -- is it a literal, does it name the
     module base, which local binds it. A wrapping paren hid all three: `base + (lfanew & mask)` in
     `local_invasion_filter.rs`'s PE walk fell through to "no leading name" and was reported as a
     compiled-in address, against a site the frozen-negative list names. Only a paren that spans

@@ -1048,7 +1048,7 @@ def selftest() -> int:
 
     # The stale-launcher reader, against this process rather than a fixture: it must find the
     # live `me3 launch` processes and nothing else, and it must survive a pid that exits
-    # mid-scan. Asserting the SHAPE rather than a count, because whether a launcher happens to
+    # mid-scan. Asserting the shape rather than a count, because whether a launcher happens to
     # be up while the selftest runs is not this function's business.
     for pid, profile in stale_launchers():
         check(isinstance(pid, int) and pid > 0, f"a launcher pid must be a pid: {pid!r}")

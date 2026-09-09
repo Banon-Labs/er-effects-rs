@@ -17,25 +17,15 @@
 #
 #   one line of prose naming what ran, for the denial message. Never branched on.
 #
-# A BARE WORD, with no fields to parse, because the policy has to compare it inside cupcake's
-# optimised WASM module and every parsing form tried there was inert: a colon-split with
-# `array.slice`, a pipe-split without it, `else` chains and `default` rules all passed
-# `opa test` and produced zero decisions in production. String equality is the one operation
-# that was measured to survive the round trip. The prose belongs to the sibling signal
-# `runtime_evidence_note`, which the policy interpolates but never inspects.
+# The verdict lives in the sibling signal `runtime_evidence_for_head`, which emits one of
+# `OK`, `MISSING`, `NOTRUNTIME` or `UNKNOWN`. Splitting them keeps every comparison in the policy a
+# string equality against a word, and leaves the sentence a human reads free to change without
+# touching a rule.
 #
-# verdict is one of:
-#   OK         -- a run artifact is newer than the tip commit, and the run shows a DLL loaded.
-#   MISSING    -- no run artifact is newer than the tip commit. This is the case that denies.
-#   NOTRUNTIME -- the commits about to be pushed touch no crate that ships in a DLL, so there is
-#                 nothing for a run to prove. Never denies.
-#   UNKNOWN    -- the signal could not measure (no git, no run root, unreadable). Never denies:
-#                 a guard that cannot see must not invent a verdict, and the pre-push hook plus
-#                 CI still stand behind it.
-#
-# The comparison is a TIMESTAMP, deliberately, and not "did any run ever happen". A run that
-# predates the commit proves the previous build, which is the exact failure being guarded: the
-# evidence looked present and described code that was not in the tree.
+# What decides the answer is the sha a DLL log names on its own `build git=` line, never a
+# timestamp. The first version compared mtimes and answered `OK` on a log written by a build two
+# commits old that happened to still be running -- newer file, older code -- which is the exact
+# failure being guarded, made inside the guard.
 #
 # Safe to run on every Bash call: three git reads and one directory stat, no network, no writes.
 set -uo pipefail
@@ -81,7 +71,7 @@ fi
 #   build git=b6b459560dfa module=er_invasion_warp.dll base=0x... pe=0x... (2026-09-09T02:05:18Z)
 #
 # That sha, not the file's mtime, is what ties a run to code. The first version of this signal
-# compared mtimes and immediately answered OK for HEAD 0e084240 on a log whose own first line read
+# compared mtimes and immediately answered OK for head 0e084240 on a log whose own first line read
 # `build git=b6b459560dfa` -- a DLL two commits older, still running and still writing, so its log
 # was newer than the commit it could not possibly have executed. Reading a clock and calling it
 # provenance is the same mistake this guard exists to stop, made inside the guard.

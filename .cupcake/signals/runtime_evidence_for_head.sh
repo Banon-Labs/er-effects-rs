@@ -13,29 +13,27 @@
 # guard by name. AGENTS.md already says to commit only after a runtime validation run completes;
 # that rule is prose, and prose did not stop it. This does.
 #
-# What it emits, one line:
+# What it emits, one line, one word:
 #
-#   one bare word: OK, MISSING, NOTRUNTIME or UNKNOWN
+#   `OK`         a run executed this code: a DLL log names the tip on its own `build git=` line,
+#                or names a commit the tip adds no cargo work on top of.
+#   `MISSING`    no run did. This is the case that denies.
+#   `NOTRUNTIME` the commits about to be pushed touch no crate that ships in a DLL, so there is
+#                nothing for a run to prove. Never denies.
+#   `UNKNOWN`    the signal could not measure (no git, no run root, unreadable). Never denies:
+#                a guard that cannot see must not invent a verdict, and the pre-push hook plus
+#                CI still stand behind it.
 #
-# A BARE WORD, with no fields to parse, because the policy has to compare it inside cupcake's
-# optimised WASM module and every parsing form tried there was inert: a colon-split with
-# `array.slice`, a pipe-split without it, `else` chains and `default` rules all passed
-# `opa test` and produced zero decisions in production. String equality is the one operation
-# that was measured to survive the round trip. The prose belongs to the sibling signal
-# `runtime_evidence_note`, which the policy interpolates but never inspects.
+# One word with no fields, because the parsing is easier to selftest in bash than in rego, and the
+# prose belongs to the sibling signal `runtime_evidence_note`, which the policy interpolates but
+# never inspects. The header used to justify this differently -- that every parsing form tried in
+# rego was inert -- and that was wrong: the policy was dead because of `sprintf`, which cupcake's
+# WASM runtime does not implement, not because of anything to do with parsing or `input.signals`.
 #
-# verdict is one of:
-#   OK         -- a run artifact is newer than the tip commit, and the run shows a DLL loaded.
-#   MISSING    -- no run artifact is newer than the tip commit. This is the case that denies.
-#   NOTRUNTIME -- the commits about to be pushed touch no crate that ships in a DLL, so there is
-#                 nothing for a run to prove. Never denies.
-#   UNKNOWN    -- the signal could not measure (no git, no run root, unreadable). Never denies:
-#                 a guard that cannot see must not invent a verdict, and the pre-push hook plus
-#                 CI still stand behind it.
-#
-# The comparison is a TIMESTAMP, deliberately, and not "did any run ever happen". A run that
-# predates the commit proves the previous build, which is the exact failure being guarded: the
-# evidence looked present and described code that was not in the tree.
+# What decides the answer is the sha in the log, never a timestamp. The first version compared
+# mtimes and answered `OK` on a log written by a build two commits old that happened to still be
+# running -- newer file, older code -- which is the exact failure being guarded, made inside the
+# guard.
 #
 # Safe to run on every Bash call: three git reads and one directory stat, no network, no writes.
 set -uo pipefail
@@ -81,7 +79,7 @@ fi
 #   build git=b6b459560dfa module=er_invasion_warp.dll base=0x... pe=0x... (2026-09-09T02:05:18Z)
 #
 # That sha, not the file's mtime, is what ties a run to code. The first version of this signal
-# compared mtimes and immediately answered OK for HEAD 0e084240 on a log whose own first line read
+# compared mtimes and immediately answered OK for head 0e084240 on a log whose own first line read
 # `build git=b6b459560dfa` -- a DLL two commits older, still running and still writing, so its log
 # was newer than the commit it could not possibly have executed. Reading a clock and calling it
 # provenance is the same mistake this guard exists to stop, made inside the guard.

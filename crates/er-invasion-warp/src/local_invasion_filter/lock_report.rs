@@ -485,12 +485,9 @@ static LAST_REPORTED: AtomicU64 = AtomicU64::new(0);
 
 /// Fold one reading into the latch key. Fnv1a, so a changed nibble anywhere changes the answer.
 fn reading_key(parts: &[u64]) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut hash = er_game_base::fnv1a::FNV1A64_OFFSET_BASIS;
     for part in parts {
-        for byte in part.to_le_bytes() {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-        }
+        hash = er_game_base::fnv1a::fnv1a64_extend(hash, &part.to_le_bytes());
     }
     hash | 1
 }
