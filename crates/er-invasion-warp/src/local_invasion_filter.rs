@@ -303,7 +303,8 @@ fn refresh_config() {
                  reject_notice={} map_pins={} steam_hooks={} ersc_observers={} \
                  ersc_show_observer={} ersc_lobby_key_observer={} ersc_invade_observer={} \
                  named={} ids={} blocks={} \
-                 excluded={} mark={} unmark={} warp_nearest={} warp_next={} warp_other_area={}",
+                 excluded={} mark={} unmark={} enable_toggle={} warp_nearest={} warp_next={} \
+                 warp_other_area={}",
                 outcome.config.enabled,
                 outcome.config.mode.as_str(),
                 outcome.config.hunt,
@@ -337,6 +338,7 @@ fn refresh_config() {
                 // into a different valid key looks exactly like the feature not working.
                 er_invasion_warp_core::keybind::key_name(outcome.config.mark_key),
                 er_invasion_warp_core::keybind::key_name(outcome.config.unmark_key),
+                er_invasion_warp_core::keybind::key_name(outcome.config.enable_toggle_key),
                 er_invasion_warp_core::keybind::key_name(outcome.config.warp_nearest_key),
                 er_invasion_warp_core::keybind::key_name(outcome.config.warp_next_key),
                 er_invasion_warp_core::keybind::key_name(outcome.config.warp_other_area_key),
