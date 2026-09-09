@@ -72,8 +72,32 @@ else:
     run_name, name, built, dirty = seen[-1]
     state = "a dirty tree at " if dirty else ""
     print(f"the newest run {run_name} ran {name}, built from {state}{built[:8]}, not {tip}")
+
+# Candidates for the carry-forward below: every clean build sha a run actually executed. The
+# caller decides whether the tip adds anything cargo would compile on top of one of them.
+for run_name, name, built, dirty in seen:
+    if not dirty:
+        print(f"candidate {built} {run_name}/{name}", file=sys.stderr)
 raise SystemExit(1)
 PY
+}
+
+# A run proves the tip when the tip adds nothing cargo would compile on top of what ran.
+#
+# Without this the guard fires on its own author. The commit that added it changes only policy and
+# a probe script, so no rebuild could produce a DLL different from the one already running -- and
+# it was refused anyway, because the branch's cumulative diff touches crates/. A guard that demands
+# a fifteen-minute rebuild-and-relaunch to publish a shell script is one the next agent overrides
+# by reflex, which its own header warns against.
+#
+# The question is answered by scripts/er-change-scope.py, the same reverse-dependency walk the
+# compile gate uses, rather than by a second opinion written here: `--rust-touched` exits 3 for
+# "provably no cargo work required" and 0 otherwise, and it FAILS OPEN -- a git failure, an
+# unresolvable base, or any build input outside a single crate directory all answer 0, which keeps
+# the refusal. So this can only ever forgive a diff that provably cannot change a DLL.
+carried_forward() { # carried_forward <run build sha> <tip>
+	python3 scripts/er-change-scope.py --rust-touched --base "$1" --rev "$2" >/dev/null 2>&1
+	[ $? -eq 3 ]
 }
 
 selftest() {
@@ -129,6 +153,24 @@ selftest() {
 	ER_ME3_RUN_ROOT="$tmp/nobuild" expect 1 "a log with no build line is not evidence" \
 		evidence_for "deadbeef1234"
 
+	# The carry-forward, against this repository's own history rather than a fixture: the scope
+	# tool needs real commits to diff. Skipped rather than failed when the pair is not present,
+	# so a shallow clone or a rewritten branch does not turn into a red gate about nothing.
+	local ran_sha tip_sha other_sha
+	ran_sha=466e3dd4 # policy + hook only on top of it
+	tip_sha=63525d77
+	other_sha=392b4b3c # a commit under crates/ sits between this one and the tip
+	if git cat-file -e "$ran_sha^{commit}" 2>/dev/null &&
+		git cat-file -e "$tip_sha^{commit}" 2>/dev/null &&
+		git cat-file -e "$other_sha^{commit}" 2>/dev/null; then
+		expect 0 "a run carries forward to a tip that adds no cargo work" \
+			carried_forward "$ran_sha" "$tip_sha"
+		expect 1 "a run does NOT carry forward across a change cargo compiles" \
+			carried_forward "$other_sha" "$tip_sha"
+	else
+		printf '  skip  carry-forward (the fixture commits are not in this clone)\n'
+	fi
+
 	rm -rf "$tmp"
 	if [ "$failures" -eq 0 ]; then
 		printf 'check-runtime-evidence selftest: PASS\n'
@@ -162,9 +204,26 @@ main() {
 		return 0
 	fi
 
-	local note rc
-	note="$(evidence_for "$tip")"
+	local note rc candidates
+	candidates="$(mktemp)"
+	note="$(evidence_for "$tip" 2>"$candidates")"
 	rc=$?
+
+	# No log names the tip, but a run may still have executed the same code. Ask the scope tool,
+	# newest run first, and take the first sha whose diff to the tip provably reaches no cargo.
+	if [ "$rc" -eq 1 ]; then
+		local sha where
+		while read -r _ sha where; do
+			[ -n "$sha" ] || continue
+			if carried_forward "$sha" "$tip"; then
+				printf 'pre-push: runtime evidence for %s carried forward -- %s ran %s, and %s adds nothing cargo compiles on top of it\n' \
+					"$tip" "$where" "${sha:0:8}" "$tip" >&2
+				rm -f "$candidates"
+				return 0
+			fi
+		done < <(tac "$candidates" 2>/dev/null || cat "$candidates")
+	fi
+	rm -f "$candidates"
 
 	if [ "$rc" -eq 0 ]; then
 		printf 'pre-push: runtime evidence for %s -- %s\n' "$tip" "$note" >&2
