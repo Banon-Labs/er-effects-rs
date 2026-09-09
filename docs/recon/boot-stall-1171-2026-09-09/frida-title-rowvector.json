@@ -1,0 +1,713 @@
+[
+  {
+    "type": "send",
+    "payload": {
+      "kind": "title-row-walk",
+      "game_base": "0x140000000",
+      "dialog_live": true,
+      "owner_live": true,
+      "dialog_vtable": {
+        "p": "0x142b294e8",
+        "module": "eldenring.exe+0x2b294e8"
+      },
+      "registry": {
+        "p": "0x142a97af0",
+        "module": "eldenring.exe+0x2a97af0"
+      },
+      "source": {
+        "p": "0xbe338138",
+        "module": null
+      },
+      "rowvec": {
+        "begin": "0x1257e180",
+        "end": "0x1257e400",
+        "stride": "0x140",
+        "rows": 2
+      },
+      "rows": [
+        {
+          "index": 0,
+          "at": "0x1257e180",
+          "qwords": [
+            {
+              "off": "0x0",
+              "val": "0x142a9c698",
+              "module": "eldenring.exe+0x2a9c698"
+            },
+            {
+              "off": "0x8",
+              "val": "0x13d56c80",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x10",
+              "val": "0x13d57880",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x18",
+              "val": "0x13d58480",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x20",
+              "val": "0x13d59080",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x28",
+              "val": "0x13d59c80",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x30",
+              "val": "0x13d5a880",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x38",
+              "val": "0x1257e180",
+              "heap": true,
+              "vtable": {
+                "p": "0x142a9c698",
+                "module": "eldenring.exe+0x2a9c698"
+              }
+            },
+            {
+              "off": "0x40",
+              "val": "0x142a9c660",
+              "module": "eldenring.exe+0x2a9c660"
+            },
+            {
+              "off": "0x48",
+              "val": "0x13d5cc80",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x50",
+              "val": "0x13d5d880",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x58",
+              "val": "0x13d5e480",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x60",
+              "val": "0x13d5f080",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x68",
+              "val": "0x13dc0080",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x70",
+              "val": "0x13dc0c80",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x78",
+              "val": "0x1257e1c0",
+              "heap": true,
+              "vtable": {
+                "p": "0x142a9c660",
+                "module": "eldenring.exe+0x2a9c660"
+              }
+            },
+            {
+              "off": "0x80",
+              "val": "0x13dc2480",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x88",
+              "val": "0x13dc3080",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x90",
+              "val": "0x13dc3c80",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x98",
+              "val": "0x13dc4880",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0xa0",
+              "val": "0x13dc5480",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0xa8",
+              "val": "0x13dc6080",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0xb0",
+              "val": "0x13dc6c80",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0xc0",
+              "val": "0x142b296a8",
+              "module": "eldenring.exe+0x2b296a8"
+            },
+            {
+              "off": "0xc8",
+              "val": "0x12fc3880",
+              "heap": true,
+              "vtable": {
+                "p": "0x142b294e8",
+                "module": "eldenring.exe+0x2b294e8"
+              }
+            },
+            {
+              "off": "0xd0",
+              "val": "0x13dc9c80",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0xd8",
+              "val": "0x13dca880",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0xe0",
+              "val": "0x13dcb480",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0xe8",
+              "val": "0x13dcc080",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0xf0",
+              "val": "0x13dccc80",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0xf8",
+              "val": "0x1257e240",
+              "heap": true,
+              "vtable": {
+                "p": "0x142b296a8",
+                "module": "eldenring.exe+0x2b296a8"
+              }
+            },
+            {
+              "off": "0x100",
+              "val": "0x142b296e0",
+              "module": "eldenring.exe+0x2b296e0"
+            },
+            {
+              "off": "0x108",
+              "val": "0x12fc3880",
+              "heap": true,
+              "vtable": {
+                "p": "0x142b294e8",
+                "module": "eldenring.exe+0x2b294e8"
+              }
+            },
+            {
+              "off": "0x110",
+              "val": "0x13dd0080",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x118",
+              "val": "0x13dd0c80",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x120",
+              "val": "0x13dd1880",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x128",
+              "val": "0x13dd2480",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x130",
+              "val": "0x13dd3080",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x138",
+              "val": "0x1257e280",
+              "heap": true,
+              "vtable": {
+                "p": "0x142b296e0",
+                "module": "eldenring.exe+0x2b296e0"
+              }
+            }
+          ]
+        },
+        {
+          "index": 1,
+          "at": "0x1257e2c0",
+          "qwords": [
+            {
+              "off": "0x0",
+              "val": "0x142a9c628",
+              "module": "eldenring.exe+0x2a9c628"
+            },
+            {
+              "off": "0x8",
+              "val": "0x13dd5480",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x10",
+              "val": "0x13dd6080",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x18",
+              "val": "0x13dd6c80",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x20",
+              "val": "0x13dd7880",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x28",
+              "val": "0x13dd8480",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x30",
+              "val": "0x13dd9080",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x38",
+              "val": "0x1257e2c0",
+              "heap": true,
+              "vtable": {
+                "p": "0x142a9c628",
+                "module": "eldenring.exe+0x2a9c628"
+              }
+            },
+            {
+              "off": "0x40",
+              "val": "0x142a9c5f0",
+              "module": "eldenring.exe+0x2a9c5f0"
+            },
+            {
+              "off": "0x48",
+              "val": "0x13ddb480",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x50",
+              "val": "0x13ddc080",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x58",
+              "val": "0x13ddcc80",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x60",
+              "val": "0x13ddd880",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x68",
+              "val": "0x13dde480",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x70",
+              "val": "0x13ddf080",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x78",
+              "val": "0x1257e300",
+              "heap": true,
+              "vtable": {
+                "p": "0x142a9c5f0",
+                "module": "eldenring.exe+0x2a9c5f0"
+              }
+            },
+            {
+              "off": "0x80",
+              "val": "0x13df0c80",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x88",
+              "val": "0x13df1880",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x90",
+              "val": "0x13df2480",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x98",
+              "val": "0x13df3080",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0xa0",
+              "val": "0x13df3c80",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0xa8",
+              "val": "0x13df4880",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0xb0",
+              "val": "0x13df5480",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0xc0",
+              "val": "0x142b29718",
+              "module": "eldenring.exe+0x2b29718"
+            },
+            {
+              "off": "0xc8",
+              "val": "0x12fc3880",
+              "heap": true,
+              "vtable": {
+                "p": "0x142b294e8",
+                "module": "eldenring.exe+0x2b294e8"
+              }
+            },
+            {
+              "off": "0xd0",
+              "val": "0x13df8480",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0xd8",
+              "val": "0x13df9080",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0xe0",
+              "val": "0x13df9c80",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0xe8",
+              "val": "0x13dfa880",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0xf0",
+              "val": "0x13dfb480",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0xf8",
+              "val": "0x1257e380",
+              "heap": true,
+              "vtable": {
+                "p": "0x142b29718",
+                "module": "eldenring.exe+0x2b29718"
+              }
+            },
+            {
+              "off": "0x100",
+              "val": "0x142b29750",
+              "module": "eldenring.exe+0x2b29750"
+            },
+            {
+              "off": "0x108",
+              "val": "0x12fc3880",
+              "heap": true,
+              "vtable": {
+                "p": "0x142b294e8",
+                "module": "eldenring.exe+0x2b294e8"
+              }
+            },
+            {
+              "off": "0x110",
+              "val": "0x13dfe480",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x118",
+              "val": "0x13dff080",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x120",
+              "val": "0x13e00080",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x128",
+              "val": "0x13e00c80",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x130",
+              "val": "0x13e01880",
+              "heap": true,
+              "vtable": {
+                "p": "0x143033a48",
+                "module": "eldenring.exe+0x3033a48"
+              }
+            },
+            {
+              "off": "0x138",
+              "val": "0x1257e3c0",
+              "heap": true,
+              "vtable": {
+                "p": "0x142b29750",
+                "module": "eldenring.exe+0x2b29750"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+]

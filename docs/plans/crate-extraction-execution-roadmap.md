@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 77 | 51,066 |
+| all `experiments/**` | 77 | 51,080 |
 | excluding `startup_hooks/**` | 43 | 25,089 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 24,599 |
 | lifecycle S10 split | 5 | 2,275 |
@@ -281,7 +281,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `save_picker.rs` | 3 | product save-picker compatibility shim | R17 |
 | `save_redirect.rs` | 9 | save-redirect facade | R32 |
 | `save_redirect/file_ops.rs` | 346 | save-file hook implementation | R32-R37 |
-| `save_redirect/path_hooks.rs` | 2,221 | save source/path policy and redirect adapters | R32-R37 |
+| `save_redirect/path_hooks.rs` | 2,235 | save source/path policy and redirect adapters | R32-R37 |
 | `startup_hooks.rs` | 108 | product startup root and arming facade | `STAY` |
 | `startup_hooks/diagnostics/layout_global_hooks.rs` | 345 | mixed title, quit, and product diagnostics | R11 and R22 |
 | `startup_hooks/diagnostics/mod.rs` | 23 | diagnostics module facade | `STAY` |

@@ -125,6 +125,41 @@ def refuse_stale_slot_channel(game_dir: Path) -> None:
     )
 
 
+def refuse_default_container_save_file(save_file: str) -> None:
+    """Refuse a `save_file` that is the game-owned APPDATA container itself.
+
+    The redirect stages the configured source into a private tree built beside it. When the
+    source is itself the live default container, that tree lands inside
+    `Roaming/EldenRing/<steamid>/`, which is the same directory the redirect matches on -- so
+    every open of the staged copy was redirected a second time, into a path nothing creates.
+    Measured 2026-09-09: 33,241 such opens, none successful, the boot parked at
+    `PREPARING SAVE 6/11` until the process was killed.
+
+    `crates/er-save-redirect` no longer produces that mapping, so this refusal is not what
+    makes the boot work -- it stops this tool from generating the configuration that needed
+    the fix, which also protects a run made with an older DLL on disk.
+
+    Pointing a run at the default container is anyway the deprecated explicit-save-source path
+    (AGENTS.md 2026-07-08); the supported way to launch the real default save is
+    `~/Elden/launch.sh` with no `save_file` at all.
+    """
+    parts = [part.lower() for part in Path(save_file).parts]
+    if "eldenring" not in parts:
+        return
+    index = parts.index("eldenring")
+    steam_id = parts[index + 1] if index + 1 < len(parts) else ""
+    if not (steam_id.isdigit() and 16 <= len(steam_id) <= 20):
+        return
+    if "roaming" not in parts[:index]:
+        return
+    raise SystemExit(
+        "er-gen-me3-profile: refusing save_file "
+        f"'{save_file}' -- it is the game-owned APPDATA container, so the redirect stage "
+        "would be created inside the directory the redirect matches on. Launch the default "
+        "save with ~/Elden/launch.sh and no save_file, or name a save under a corpus root."
+    )
+
+
 def artifact_paths(closure: dict, target_dir: Path) -> list[Path]:
     return [target_dir / artifact for artifact in closure["artifacts"]]
 
@@ -248,6 +283,7 @@ def render_sidecar(save: dict, run_id: str) -> str:
         # should never write the source -- but 45 of the 89 corpus saves are writable on disk,
         # so a file claiming "read-only" over a writable source would be a comforting lie in
         # the one artifact someone reads while diagnosing a corrupted save.
+        refuse_default_container_save_file(save["save_file"])
         protection = (
             "The source is WRITABLE on disk -- the DLL stages a private copy and should write "
             "only there, but nothing at the filesystem level enforces that for this file."
@@ -429,6 +465,27 @@ def selftest() -> int:
                 AUTOLOAD_REQUEST_FILE in str(err) and "slot=0" in str(err),
                 "the refusal names the file and quotes the line the user has to act on",
             )
+
+        # The configuration that self-nested the redirect on 2026-09-09. Both directions,
+        # because a refusal that also rejects corpus saves would stop every legitimate run.
+        default_container = (
+            "/home/u/.local/share/Steam/steamapps/compatdata/1245620/pfx/drive_c/users/"
+            "steamuser/AppData/Roaming/EldenRing/76561197986456766/ER0000.co2"
+        )
+        try:
+            refuse_default_container_save_file(default_container)
+            check(False, "the game-owned APPDATA container must be refused as a save_file")
+        except SystemExit as err:
+            check(
+                "ER0000.co2" in str(err) and "launch.sh" in str(err),
+                "the refusal names the file and the supported way to launch it",
+            )
+        for allowed in (
+            "/home/u/projects/er-mods-rs/save-files/139-STR/ER0000.sl2",
+            "/home/u/saves/EldenRing/not-a-steamid/ER0000.co2",
+        ):
+            refuse_default_container_save_file(allowed)
+        check(True, "a corpus save and a non-SteamID EldenRing directory are still allowed")
 
         # `slot=` with no value is not a preference, and `own_load=1` is not a slot. Neither may
         # block a run: a refusal that fires on unrelated keys gets routed around.

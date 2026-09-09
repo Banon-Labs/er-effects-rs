@@ -18,6 +18,11 @@ use std::{
 
 use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 
+/// The "a redirected save open failed, ask the player" one-shot. Its own file because `lib.rs`
+/// is at the crate's hard size limit.
+mod failed_redirect_picker;
+pub use failed_redirect_picker::FailedRedirectPicker;
+
 /// Exact byte length of Elden Ring PC `ER0000.sl2` / Seamless `.co2` save containers.
 ///
 /// These files use a fixed BND4 layout: ten `USER_DATA00N` character slots, `USER_DATA010`, and
@@ -1332,6 +1337,39 @@ pub fn wide_find_ci_ascii(hay: &[u16], needle: &[u16]) -> Option<usize> {
     })
 }
 
+/// True if `hay` begins with `prefix` as a whole path prefix (ASCII, case-insensitive).
+///
+/// Unlike the other helpers here, both sides are lowercased, because the caller compares against a
+/// live redirect root rather than a literal, and that root carries whatever case the configured
+/// path had.
+///
+/// The match is required to end on a path boundary so a sibling directory cannot be mistaken for
+/// the root: with the root `...\\stage`, the path `...\\stage-old\\ER0000.co2` is not inside it,
+/// and treating it as inside would stop redirecting a real save.
+pub fn wide_starts_with_ci_ascii(hay: &[u16], prefix: &[u16]) -> bool {
+    const BACKSLASH: u16 = b'\\' as u16;
+    const SLASH: u16 = b'/' as u16;
+    // A root recorded with a trailing separator and one without must behave the same.
+    let prefix = match prefix.last() {
+        Some(&last) if last == BACKSLASH || last == SLASH => &prefix[..prefix.len() - 1],
+        _ => prefix,
+    };
+    if prefix.is_empty() || prefix.len() > hay.len() {
+        return false;
+    }
+    if !prefix
+        .iter()
+        .enumerate()
+        .all(|(i, &p)| wide_ascii_lower(hay[i]) == wide_ascii_lower(p))
+    {
+        return false;
+    }
+    match hay.get(prefix.len()) {
+        None => true,
+        Some(&next) => next == BACKSLASH || next == SLASH,
+    }
+}
+
 /// True if `hay` ends with `suffix` (ASCII, case-insensitive). `suffix` must be ASCII lowercase.
 pub fn wide_ends_with_ci_ascii(hay: &[u16], suffix: &[u16]) -> bool {
     if suffix.len() > hay.len() {
@@ -1386,7 +1424,7 @@ pub fn steam_id64_from_wide_save_path(path: &[u16]) -> Option<u64> {
     None
 }
 
-fn is_primary_save_file_path(path: &[u16]) -> bool {
+pub fn is_primary_save_file_path(path: &[u16]) -> bool {
     const SL2D: &[u16] = &[b'.' as u16, b's' as u16, b'l' as u16, b'2' as u16];
     const CO2D: &[u16] = &[b'.' as u16, b'c' as u16, b'o' as u16, b'2' as u16];
     wide_ends_with_ci_ascii(path, SL2D) || wide_ends_with_ci_ascii(path, CO2D)
@@ -1466,10 +1504,23 @@ pub fn classify_save_like_path(path: &[u16]) -> SavePathKind {
 /// Redirect a Windows/Wine wide path rooted under `%APPDATA%\\Roaming\\EldenRing` to a staged
 /// save root. Returns a NUL-terminated wide path.
 ///
-/// The `Roaming` anchor prevents already-redirected staged paths from being redirected again. The
-/// `EldenRing` suffix is lowercased because the staged tree is created on a case-sensitive Linux
-/// filesystem as lowercase `eldenring/<steamid>/er0000.*`.
+/// The `Roaming` anchor was relied on to stop an already-redirected path being redirected a
+/// second time, and that holds only while the stage root lives outside `Roaming`. It does not
+/// when the configured `save_file` is the live default container, because the stage root is then
+/// built inside `Roaming\\EldenRing\\<steamid>` and this function takes the first `EldenRing`
+/// component -- so the whole stage prefix gets appended to itself, onto a path nothing creates.
+/// Every open of the staged copy then returns `INVALID_HANDLE_VALUE` and the boot waits on a save
+/// it can never read (measured 2026-09-09; see `docs/recon/boot-stall-1171-2026-09-09/`).
+///
+/// So the destination is excluded explicitly: a path that already begins with the redirect root
+/// is the output of an earlier call and passes through untouched.
+///
+/// The `EldenRing` suffix is lowercased because the staged tree is created on a case-sensitive
+/// Linux filesystem as lowercase `eldenring/<steamid>/er0000.*`.
 pub fn redirect_wide_roaming_eldenring_path(path: &[u16], root_wide: &[u16]) -> Option<Vec<u16>> {
+    if wide_starts_with_ci_ascii(path, root_wide) {
+        return None;
+    }
     const ELDENRING: &[u16] = &[
         b'e' as u16,
         b'l' as u16,
@@ -2317,6 +2368,97 @@ mod tests {
 
     fn wide_path(path: &str) -> Vec<u16> {
         path.encode_utf16().collect()
+    }
+
+    /// The staged copy must not be redirected into itself when the stage root lives inside the
+    /// save root.
+    ///
+    /// Captured from the live stall of 2026-09-09, where `save_file` named the active default
+    /// container, so the stage root was created inside `Roaming\EldenRing\<steamid>`. Every open
+    /// of the staged copy matched the redirect again and resolved to a path nothing creates:
+    /// 33,241 such opens, none successful, `saveState` never leaving 0.
+    #[test]
+    fn staged_path_under_the_save_root_is_not_redirected_a_second_time() {
+        let root = wide_path(
+            r"Z:\home\u\AppData\Roaming\EldenRing\76561197986456766\er-quickload-save-redirect-stage",
+        );
+        let staged = wide_path(
+            r"Z:\home\u\AppData\Roaming\EldenRing\76561197986456766\er-quickload-save-redirect-stage\eldenring\76561197986456766\ER0000.co2",
+        );
+        assert_eq!(
+            redirect_wide_roaming_eldenring_path(&staged, &root),
+            None,
+            "the staged copy is the redirect DESTINATION and must pass through untouched"
+        );
+
+        // The source it was staged from still redirects, or the feature would be dead.
+        let source = wide_path(r"Z:\home\u\AppData\Roaming\EldenRing\76561197986456766\ER0000.co2");
+        let redirected = redirect_wide_roaming_eldenring_path(&source, &root)
+            .expect("the real default save still redirects into the stage root");
+        let text = String::from_utf16_lossy(&redirected[..redirected.len() - 1]);
+        assert_eq!(
+            text.matches("er-quickload-save-redirect-stage").count(),
+            1,
+            "exactly one stage segment; a second one is the self-redirect bug: {text}"
+        );
+
+        // The live run redirected a bare directory open of the stage root itself, trailing
+        // separator and all (`save-override: REDIRECT #2`, 2026-09-09), and that is the open that
+        // produced the doubled path in the log.
+        let stage_dir_open = wide_path(
+            r"Z:\home\u\AppData\Roaming\EldenRing\76561197986456766\er-quickload-save-redirect-stage\",
+        );
+        assert_eq!(
+            redirect_wide_roaming_eldenring_path(&stage_dir_open, &root),
+            None,
+            "a directory open of the stage root is already the destination"
+        );
+
+        // The save directory one level above it must still redirect -- that open succeeded live
+        // (`REDIRECT #3`, ok=true) and the feature depends on it.
+        let save_dir = wide_path(r"Z:\home\u\AppData\Roaming\EldenRing\76561197986456766\");
+        assert!(
+            redirect_wide_roaming_eldenring_path(&save_dir, &root).is_some(),
+            "the save directory itself still redirects into the stage root"
+        );
+
+        // A sibling whose name merely starts with the root is not inside it.
+        let sibling = wide_path(
+            r"Z:\home\u\AppData\Roaming\EldenRing\76561197986456766\er-quickload-save-redirect-stage-old\ER0000.co2",
+        );
+        assert!(
+            redirect_wide_roaming_eldenring_path(&sibling, &root).is_some(),
+            "a sibling directory is not the redirect destination"
+        );
+    }
+
+    /// The picker arms once and only for a primary container.
+    #[test]
+    fn failed_redirect_picker_arms_once_and_only_for_the_primary_container() {
+        let picker = FailedRedirectPicker::new();
+        let primary =
+            wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\76561197960265729\ER0000.co2");
+        let backup =
+            wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\76561197960265729\ER0000.sl2.bak");
+        let config = wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\GraphicsConfig.xml");
+
+        // A healthy run fails exactly this open, and must not be interrupted by a picker.
+        assert!(!picker.should_arm(true, &config));
+        // A missing backup is ordinary on a first boot.
+        assert!(!picker.should_arm(true, &backup));
+        // An open that succeeded says nothing.
+        assert!(!picker.should_arm(false, &primary));
+        assert!(!picker.armed());
+
+        assert!(
+            picker.should_arm(true, &primary),
+            "the first real failure arms"
+        );
+        assert!(picker.armed());
+        // The detour runs millions of times; every later call must be silent.
+        for _ in 0..10_000 {
+            assert!(!picker.should_arm(true, &primary));
+        }
     }
 
     #[test]
