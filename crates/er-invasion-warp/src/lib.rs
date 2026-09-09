@@ -34,6 +34,7 @@ pub mod announce;
 pub mod drive;
 pub mod lobby_publish;
 pub mod local_invasion_filter;
+pub mod lynchpin_use;
 #[cfg(windows)]
 pub mod map_confirm;
 pub mod map_gfx;
@@ -244,6 +245,14 @@ fn spawn_catalog_task() {
                             crate::drive::game_has_focus(),
                         );
                     }
+                    // The Challenger's Lynchpin: a shorter use animation, the start-a-search popup
+                    // skipped, and any requested use held for the frames the engine needs to see
+                    // it. Every part is idempotent and fails closed, so a tick before the world
+                    // exists costs nothing.
+                    //
+                    // SAFETY: same game-task context; every read is fault-closed and the one
+                    // detour is installed on a byte-verified prologue.
+                    unsafe { crate::lynchpin_use::tick() };
                     // Advertise this host's current map on its own Steam lobby, so an invader can
                     // ask for a location instead of sampling and rejecting. Gated internally on the
                     // block having changed, so a host standing still costs one string compare.
