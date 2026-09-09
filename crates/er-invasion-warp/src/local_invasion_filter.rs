@@ -89,10 +89,10 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
-use er_game_base::fnv1a::{fnv1a64, fnv1a64_mix};
+use er_game_base::fnv1a::fnv1a64;
 use er_invasion_warp_core::local_invasion::{
-    InvasionAnchor, InvasionCandidate, LocalInvasionConfig, LocalInvasionMode, LocationChoice,
-    RejectReason, Verdict,
+    InvasionAnchor, InvasionCandidate, LocalInvasionConfig, LocalInvasionMode, RejectReason,
+    Verdict,
 };
 use er_invasion_warp_core::local_invasion_config::{
     CONFIG_FILE_NAME, DEFAULT_CONFIG_TOML, HotConfig,
@@ -101,18 +101,92 @@ use er_invasion_warp_core::param_row::PinAppearance;
 
 // Which Seamless Co-op build is loaded, and everything that differs between them. The docs are on
 // the file itself; a `///` here would be a second, competing source for the same module.
+/// Which key does what, and what each press changes. Split out when this file crossed the
+/// 3,200-line hard limit; the seam was already there.
+mod hotkeys;
+
+/// Both items are `#[cfg(windows)]` inside the module -- they read `GetAsyncKeyState` -- so the
+/// re-export has to be gated too, or the host-target test build looks for names that do not exist.
+#[cfg(windows)]
+pub use hotkeys::{MarkKeys, warp_keys_in_force};
+
 mod ersc;
+
+// The reading taken immediately before any ERSC action is driven: who owns the `std::mutex` that
+// action locks first. Its own file because this one is at the size limit; the docs are on it.
+pub(crate) mod banner;
+pub(crate) mod map_pins_view;
+#[cfg(windows)]
+pub mod menu_object;
+#[cfg(windows)]
+mod menu_seams;
+pub use map_pins_view::{log_pin_tier_tally, pin_appearance_for, pin_choice_signature};
+pub(crate) mod differential_scan;
+pub(crate) mod lock_report;
+pub(crate) mod session_scan;
+
+use lock_report::{
+    HANDLER_ERSC_LOBBY_KEY, HANDLER_ERSC_SHOW, HANDLER_GAME_TASK, HANDLER_JOIN_DATA,
+    cancel_row_refusal, enter_ersc_callback, enter_handler, inside_ersc_callback,
+    lock_shape_refusal, mutex_shape_identifies_a_session, report_lock_preconditions,
+};
+use session_scan::cached_scan_for_session;
 
 /// The four-argument shape of an ERSC option action. Only the first is read by the callee, which
 /// the disassembly in the module docs establishes; the rest are passed as the constants the engine
 /// itself passes so a stack trace through one of these looks exactly like a user's own click.
-type ErscActionFn = unsafe extern "system" fn(usize, usize, usize, usize) -> usize;
+///
+/// # Why the ABI carries `-unwind`
+///
+/// These functions throw. `ersc+0x258d0` reaches `_Throw_Cpp_error(5)` -- a real MSVC
+/// `std::system_error` raised through `_CxxThrowException` -- whenever its `_Mtx_lock` reports the
+/// session mutex busy, and nothing in the whole module catches it: a census of ersc.dll's exception
+/// directory finds 403 catch clauses, every one of them in a record the linker emitted for a `.text`
+/// function, and not one on the path between the throw and the top.
+///
+/// Declaring a function that unwinds with a non-unwinding ABI is undefined behaviour, not merely
+/// unwise -- the Reference says so under `panic.unwind.ffi.undefined`, and RFC 2945 adds that such
+/// an unwind is *not guaranteed* to abort. The abort observed on 2026-09-08 was one manifestation
+/// of that, not a contract, and under `extern "system"` the compiler emits the call with no unwind
+/// edge at all, so nothing in this crate's frames gets to clean up.
+///
+/// This is the honest half of the change. The frame that actually aborts is the detour, and every
+/// detour in this workspace goes through `er_hook::UnionFn`, whose ABI is shared by twenty-six
+/// DLLs -- retyping that is its own change with its own blast radius, tracked separately. What this
+/// buys on its own is a defined call and destructors that run, which is what makes [`OurCall`]'s
+/// `Drop` load-bearing rather than decorative.
+type ErscActionFn = unsafe extern "system-unwind" fn(usize, usize, usize, usize) -> usize;
 
 /// The last session state this module saw, so a transition to "cancelling" that we did not cause
 /// can be recognised as the user's own Cancel search -- polled, rather than hooked.
 static LAST_SESSION_STATE: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// Set while the filter is itself driving ERSC, so our own cancel is not mistaken for the user's.
+///
+/// Never written directly -- go through [`OurCall::enter`], whose `Drop` clears it. It used to be a
+/// pair of bare stores around each call, which was free only because the throw that escapes an
+/// ERSC action kills the process before the second store can be missed. The moment that stops being
+/// true -- an unwinding ABI on the detours, a refusal that returns early -- a skipped clear latches
+/// this flag on for the life of the process, after which the filter reads every ERSC cancel as its
+/// own and never stands down again.
 static IN_OUR_CALL: AtomicBool = AtomicBool::new(false);
+
+/// Holds [`IN_OUR_CALL`] for the duration of one call into ERSC, and clears it on the way out of
+/// the scope however that happens.
+struct OurCall;
+
+impl OurCall {
+    #[must_use]
+    fn enter() -> Self {
+        IN_OUR_CALL.store(true, Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for OurCall {
+    fn drop(&mut self) {
+        IN_OUR_CALL.store(false, Ordering::SeqCst);
+    }
+}
 /// Armed by our own cancel: search again as soon as the session settles back to idle. Cleared the
 /// moment the re-invade fires, so a session that never returns to idle cannot make this repeat.
 static PENDING_REINVADE: AtomicBool = AtomicBool::new(false);
@@ -139,7 +213,7 @@ static PROCESS_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceL
 /// # Why both, and not either one
 ///
 /// Seamless's no-match retry dwells in `0x11` for a fixed interval before returning to `0x0d`, and
-/// whether that interval is a FRAME COUNT or a WALL CLOCK decides whether raising the frame rate
+/// whether that interval is a frame count or a wall clock decides whether raising the frame rate
 /// would shorten the wait — the difference between a usable idea and a void one. The two are
 /// indistinguishable at a steady frame rate, which is exactly the condition the earlier reading was
 /// taken under: ~600 ticks, nine times running, at unchanging fps. That is equally consistent with
@@ -236,8 +310,10 @@ fn refresh_config() {
             crate::standalone_log(format_args!(
                 "local-invasion: config loaded enabled={} mode={} hunt={} dll_users_only={} \
                  reject_notice={} map_pins={} steam_hooks={} ersc_observers={} \
-                 ersc_show_observer={} ersc_lobby_key_observer={} named={} ids={} blocks={} \
-                 excluded={} mark={} unmark={} warp_nearest={} warp_next={} warp_other_area={}",
+                 ersc_show_observer={} ersc_lobby_key_observer={} ersc_invade_observer={} \
+                 named={} ids={} blocks={} \
+                 excluded={} mark={} unmark={} enable_toggle={} warp_nearest={} warp_next={} \
+                 warp_other_area={}",
                 outcome.config.enabled,
                 outcome.config.mode.as_str(),
                 outcome.config.hunt,
@@ -250,16 +326,17 @@ fn refresh_config() {
                 outcome.config.dll_users_only,
                 outcome.config.reject_notice,
                 outcome.config.map_pins,
-                // The three ersc_* switches are the ones that decide whether this DLL DETOURS
+                // The four ersc_* switches are the ones that decide whether this DLL DETOURS
                 // Seamless at all, and detouring it is what killed the game at 0x140010043. They
                 // default off and the filter now resolves the session by scanning ersc's writable
                 // data instead, so a run that has them on is a different program from the one the
                 // 600s clean window was measured on -- which makes them the single most important
-                // pair of values on this line, not the least.
+                // group of values on this line, not the least.
                 outcome.config.steam_hooks,
                 outcome.config.ersc_observers,
                 outcome.config.ersc_show_observer,
                 outcome.config.ersc_lobby_key_observer,
+                outcome.config.ersc_invade_observer,
                 outcome.config.named_locations.len(),
                 outcome.config.named_location_text_ids.len(),
                 outcome.config.allowed_blocks.len(),
@@ -270,6 +347,7 @@ fn refresh_config() {
                 // into a different valid key looks exactly like the feature not working.
                 er_invasion_warp_core::keybind::key_name(outcome.config.mark_key),
                 er_invasion_warp_core::keybind::key_name(outcome.config.unmark_key),
+                er_invasion_warp_core::keybind::key_name(outcome.config.enable_toggle_key),
                 er_invasion_warp_core::keybind::key_name(outcome.config.warp_nearest_key),
                 er_invasion_warp_core::keybind::key_name(outcome.config.warp_next_key),
                 er_invasion_warp_core::keybind::key_name(outcome.config.warp_other_area_key),
@@ -437,6 +515,58 @@ fn resolve_ersc_abi() -> Option<&'static ersc::Abi> {
 // Resolving Seamless's session, without hooking it
 // ---------------------------------------------------------------------------------------------
 
+/// Whether the module at `base` is still the one whose identity was recorded on first use.
+///
+/// Reads three PE-header fields and nothing else. See [`resolve_session`] for why this may not
+/// read code: every function this check has ever fingerprinted has since been hooked, twice by
+/// this module and once by a debugger attached beside it, and each time the check read a
+/// trampoline and called Seamless a stranger.
+///
+/// The first call records; every later call compares. A module that cannot be read at all fails,
+/// because not knowing is not a licence to drive its code.
+#[cfg(windows)]
+fn module_identity_holds(base: usize) -> bool {
+    /// `IMAGE_DOS_HEADER::e_lfanew`.
+    const PE_LFANEW: usize = 0x3c;
+    /// `IMAGE_NT_HEADERS::FileHeader::TimeDateStamp`.
+    const PE_TIME_DATE_STAMP: usize = 8;
+    /// `IMAGE_NT_HEADERS::OptionalHeader::AddressOfEntryPoint`.
+    const PE_ENTRY_POINT: usize = 24 + 16;
+    /// `IMAGE_NT_HEADERS::OptionalHeader::SizeOfImage`.
+    const PE_SIZE_OF_IMAGE: usize = 24 + 56;
+    /// Recorded identity, or 0 before the first successful read. Zero is not a valid combination
+    /// of these three fields for a real module, so it doubles as the "not yet recorded" marker.
+    static IDENTITY: AtomicUsize = AtomicUsize::new(0);
+
+    let Some(lfanew) = (unsafe { er_game_base::mem::safe_read_usize(base + PE_LFANEW) }) else {
+        return false;
+    };
+    let nt = base + (lfanew & 0xffff_ffff);
+    let read = |offset: usize| unsafe { er_game_base::mem::safe_read_usize(nt + offset) };
+    let (Some(stamp), Some(entry), Some(size)) = (
+        read(PE_TIME_DATE_STAMP),
+        read(PE_ENTRY_POINT),
+        read(PE_SIZE_OF_IMAGE),
+    ) else {
+        return false;
+    };
+    // Folded rather than compared field by field: one word is one atomic, and the three fields
+    // are only ever meaningful together.
+    let identity =
+        (stamp & 0xffff_ffff) ^ ((entry & 0xffff_ffff) << 16) ^ ((size & 0xffff_ffff) << 32);
+    let identity = if identity == 0 { 1 } else { identity };
+    match IDENTITY.compare_exchange(0, identity, Ordering::SeqCst, Ordering::SeqCst) {
+        Ok(_) => true,
+        Err(recorded) => recorded == identity,
+    }
+}
+
+/// Host-side stub: there is no module to identify.
+#[cfg(not(windows))]
+fn module_identity_holds(_base: usize) -> bool {
+    false
+}
+
 /// The option-menu object and its session, resolved by reading, plus the build they belong to.
 #[derive(Clone, Copy)]
 struct SeamlessSession {
@@ -459,6 +589,10 @@ static SHOW_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 /// that OSM has no static to read it from, so the pointer has to be seen being passed.
 #[cfg(windows)]
 unsafe extern "system" fn show_observer(a: usize, b: usize, c: usize, d: usize) -> usize {
+    // Stamp the thread, so the owner id in `report_lock_preconditions` has a name to resolve to
+    // rather than staying a bare number.
+    let _scope = enter_handler(HANDLER_ERSC_SHOW);
+    let _ersc = enter_ersc_callback();
     // `a` is the option-menu object: that is `show`'s first parameter, and the prologue at this
     // address was byte-checked before the hook went in. Storing it is therefore not a guess, and
     // it is deliberately not gated on a content check.
@@ -492,31 +626,7 @@ unsafe extern "system" fn show_observer(a: usize, b: usize, c: usize, d: usize) 
              you see are Seamless's own and nothing here will act while you decide"
         ));
     }
-    let mut first_capture = false;
-    if a != 0 {
-        first_capture = OSM.swap(a, Ordering::SeqCst) == 0;
-        if first_capture {
-            let session =
-                unsafe { er_game_base::mem::safe_read_usize(a + ersc::NEXT_OBJECT_OFFSET) };
-            // The hook is installed only after a build was recognised, so this cannot be `None`
-            // here in practice -- but reporting an unlabelled state read at an unknown offset
-            // would be worse than reporting none, so it is threaded rather than unwrapped.
-            let abi = resolve_ersc_abi();
-            crate::standalone_log(format_args!(
-                "local-invasion: captured Seamless's option-menu object OSM=0x{a:x} (group={b}) \
-                 build={} session={:?} state={:?} tag_at+0x68={}",
-                abi.map_or("unrecognised", |abi| abi.version),
-                session.map(|s| format!("0x{s:x}")),
-                abi.zip(session)
-                    .and_then(|(abi, session)| read_session_state(abi, session)),
-                if osm_tag_matches(a) {
-                    "\"seamless\""
-                } else {
-                    "not the measured bytes (harmless -- nothing depends on it)"
-                }
-            ));
-        }
-    }
+    let first_capture = menu_object::capture_osm(a, &format!("its option menu (group={b})"));
     let orig = ORIG_SHOW.load(Ordering::SeqCst);
     if orig == 0 {
         return 0;
@@ -529,84 +639,9 @@ unsafe extern "system" fn show_observer(a: usize, b: usize, c: usize, d: usize) 
     // a manual /proc read moments later showed one populated 0x90-byte row sitting there. Same
     // `first` latch, so this still reports once per process.
     if first_capture {
-        report_menu_seams(a);
+        menu_seams::report_menu_seams(a);
     }
     result
-}
-
-/// Report which module owns the option-menu function pointers Seamless calls.
-///
-/// Read-only, once per process. ERSC resolves these by pattern scan at init and stores no absolute
-/// game address anywhere in its image, so the owner was not decidable statically -- and the owner
-/// decides where an added menu row would have to attach.
-///
-/// Answered live, 2026-08-17 (run `br-20260817-184836-d6a7`, user opened the lynchpin menu):
-///
-/// ```text
-/// +0xa8 open_dialog   0x140e9e4f0   eldenring.exe+0xe9e4f0
-/// +0xb0 clear_options 0x140800950   eldenring.exe+0x800950
-/// +0xb8 append_option 0x140800840   eldenring.exe+0x800840
-/// +0xe0 <not a menu fn> 0x13fff0f80 anonymous rwx region based 0x13fff0000
-/// ```
-///
-/// The first three are game functions, so 1.16.2's zero shift makes those RVAs directly nameable
-/// in the dump and an added row is a static-RE job rather than another runtime hunt. `+0xe0` was
-/// guessed to be the teardown and is not: it points below the game image entirely, into a separate
-/// anonymous region, so treat that offset as unmapped rather than as a fourth seam.
-///
-/// Module attribution is by base-address arithmetic on purpose. Under Wine every PE maps as
-/// anonymous memory, so `/proc/<pid>/maps` carries no file name to match against and a
-/// name-based lookup would report "unknown" for pointers that are plainly inside the game.
-///
-/// Nothing is written and nothing is called: this only reads pointers already sitting in an object
-/// we hold.
-#[cfg(windows)]
-fn report_menu_seams(osm: usize) {
-    /// `+0xa8` open dialog, `+0xb0` clear list, `+0xb8` append row; `+0xe0` probed and found not
-    /// to be a menu function (see above) -- kept only so the report keeps saying so.
-    const SEAMS: [(usize, &str); 4] = [
-        (0xa8, "open_dialog"),
-        (0xb0, "clear_options"),
-        (0xb8, "append_option"),
-        (0xe0, "teardown"),
-    ];
-    // Attributed against the only two modules that could own them, both of which this module
-    // already resolves. A plausible in-image offset identifies the owner; an implausible one says
-    // the pointer belongs to neither, which is itself the answer.
-    const PLAUSIBLE_IMAGE_SIZE: usize = 0x0800_0000;
-    let ersc = ersc_module_base();
-    let game = er_game_base::mem::game_module_base().ok();
-    let mut parts = Vec::new();
-    for (offset, name) in SEAMS {
-        let Some(pointer) = (unsafe { er_game_base::mem::safe_read_usize(osm + offset) }) else {
-            parts.push(format!("{name}@+{offset:#x}=<unreadable>"));
-            continue;
-        };
-        let owner = [("ersc.dll", ersc), ("eldenring.exe", game)]
-            .into_iter()
-            .filter_map(|(module, base)| base.map(|base| (module, base)))
-            .find(|(_, base)| pointer >= *base && pointer - base < PLAUSIBLE_IMAGE_SIZE)
-            .map_or_else(
-                || "<neither module>".to_owned(),
-                |(module, base)| format!("{module}+{:#x}", pointer - base),
-            );
-        parts.push(format!("{name}@+{offset:#x}=0x{pointer:x} ({owner})"));
-    }
-    // The visible-option vector, to confirm which group this menu is and how many rows it holds.
-    let counts = (
-        unsafe { er_game_base::mem::safe_read_usize(osm + 0x108) },
-        unsafe { er_game_base::mem::safe_read_usize(osm + 0x110) },
-    );
-    let visible = match counts {
-        (Some(begin), Some(end)) if end >= begin && begin != 0 => {
-            format!("{} row(s)", (end - begin) / 0x90)
-        }
-        _ => "<unreadable>".to_owned(),
-    };
-    crate::standalone_log(format_args!(
-        "local-invasion: menu seams -- {} | visible options: {visible}",
-        parts.join(" ")
-    ));
 }
 
 /// Why a session could not be resolved. Carried so a failed cancel names its cause instead of
@@ -617,8 +652,8 @@ enum NoSession {
     ErscAbsent,
     /// Loaded, but not the build these offsets were measured against.
     ErscUnrecognised,
-    /// The Seamless menu has not been opened yet this session, so the object was never passed to
-    /// anything we can see.
+    /// Nothing has handed over the option-menu object yet: neither Seamless's menu builder nor
+    /// the invade action has run this session, and the scan found nothing either.
     MenuNeverOpened,
     /// OSM is held but `+0x58` does not lead to a session-shaped object -- a stale pointer.
     SessionUnreadable,
@@ -656,158 +691,32 @@ impl NoSession {
 /// Nothing is cached beyond OSM and the recognised build, and OSM is re-validated on every use: the
 /// session is a heap allocation whose lifetime this module does not own, and a stale pointer is
 /// exactly the kind of thing that turns a filter into a crash.
-/// A 32-bit read built from the two 16-bit reads `er-game-base` actually exposes.
-#[cfg(windows)]
-fn read_u32(addr: usize) -> Option<u32> {
-    let low = unsafe { er_game_base::mem::safe_read_u16(addr) }? as u32;
-    let high = unsafe { er_game_base::mem::safe_read_u16(addr + 2) }? as u32;
-    Some(low | (high << 16))
-}
-
-/// PE constants for walking `ersc.dll`'s own section table at runtime.
-const PE_LFANEW: usize = 0x3c;
-const PE_NUMBER_OF_SECTIONS: usize = 6;
-const PE_SIZE_OF_OPTIONAL_HEADER: usize = 20;
-const PE_OPTIONAL_HEADER: usize = 24;
-const SECTION_HEADER_SIZE: usize = 40;
-const SECTION_VIRTUAL_SIZE: usize = 8;
-const SECTION_VIRTUAL_ADDRESS: usize = 12;
-const SECTION_CHARACTERISTICS: usize = 36;
-const IMAGE_SCN_MEM_WRITE: u32 = 0x8000_0000;
-/// Stop after this many candidate qwords, so a malformed header cannot turn this into a hang.
-const SESSION_SCAN_QWORD_BUDGET: usize = 1 << 18;
-
-/// Find Seamless's session object without detouring anything in `ersc.dll`.
-///
-/// Why this exists. Hooking `ersc.dll` at all is what kills the game. Both detours this DLL placed
-/// there fault at `0x140010043` with no input given -- `show` (ersc+0x241a0) at ~50s, the lobby-key
-/// builder (ersc+0xad6e0) at 30.6s -- while a build with neither armed cleared the same window
-/// twice. So the answer cannot be "detour a different function", and the obvious replacement of
-/// reading the pointer from the call site is unavailable too: neither function has a direct caller
-/// in `.text`, both being dispatched indirectly.
-///
-/// What is left is that the session identifies itself. `read_session_state` returns `Some` only for
-/// a known state code at a known offset of a known build, which is a strong enough signature to
-/// recognise the object without being handed it. So walk `ersc.dll`'s own WRITABLE sections -- its
-/// globals, where a long-lived object's pointer will be parked -- and test each qword as a
-/// candidate. Two shapes are accepted, matching what `resolve_session` does with `OSM`: the pointer
-/// is the session, or the session is one hop away at `+ NEXT_OBJECT_OFFSET`.
-///
-/// This reads only; it writes nothing into Seamless and patches no bytes.
-#[cfg(windows)]
-fn scan_for_session(base: usize, abi: &ersc::Abi) -> Option<(usize, usize, usize)> {
-    let lfanew = unsafe { er_game_base::mem::safe_read_usize(base + PE_LFANEW) }? & 0xffff_ffff;
-    let nt = base + lfanew;
-    let sections = unsafe { er_game_base::mem::safe_read_u16(nt + PE_NUMBER_OF_SECTIONS) }?;
-    let optional = unsafe { er_game_base::mem::safe_read_u16(nt + PE_SIZE_OF_OPTIONAL_HEADER) }?;
-    let table = nt + PE_OPTIONAL_HEADER + optional as usize;
-    let mut budget = SESSION_SCAN_QWORD_BUDGET;
-    // The two answers this scan can produce, kept separately because the weaker one used to be
-    // able to veto the stronger one. See the shape-B arm below for what that cost.
-    //
-    // `bare`: a global that points straight at something identifying itself as a session. One
-    // condition, and it names no owner, so it can only ever yield `owner: 0`.
-    // `owned`: a global pointing at an object whose `+ NEXT_OBJECT_OFFSET` identifies itself as a
-    // session -- the exact relation `resolve_session`'s detour half uses -- so that object is the
-    // OSM. Two linked conditions, and it is the only shape that lets the filter act.
-    let mut bare: Option<(usize, usize)> = None;
-    let mut owned: Option<(usize, usize, usize)> = None;
-    for index in 0..sections as usize {
-        let header = table + index * SECTION_HEADER_SIZE;
-        // Composed from two u16 reads: `er-game-base` exposes `safe_read_u8`, `safe_read_u16` and
-        // `safe_read_usize`, and widening its public surface for one header field is not worth it.
-        let characteristics = read_u32(header + SECTION_CHARACTERISTICS)?;
-        if characteristics & IMAGE_SCN_MEM_WRITE == 0 {
-            continue;
-        }
-        let virtual_size = read_u32(header + SECTION_VIRTUAL_SIZE)?;
-        let virtual_address = read_u32(header + SECTION_VIRTUAL_ADDRESS)?;
-        let start = base + virtual_address as usize;
-        let end = start + virtual_size as usize;
-        let mut slot = start;
-        while slot + 8 <= end && budget > 0 {
-            budget -= 1;
-            if let Some(candidate) = unsafe { er_game_base::mem::safe_read_usize(slot) }
-                && plausible_session_pointer(candidate)
-            {
-                if identifies_a_session(abi, candidate) {
-                    // The pointer is the session, and this shape names no owner -- but the owner
-                    // still exists somewhere, so remember the session and keep looking rather than
-                    // returning a `0` owner that disables cancel/invade for the whole run. This is
-                    // the shape that actually matched on this machine (session 0x1801b2560 via
-                    // slot 0x18021a640), so returning early here is the difference between a
-                    // filter that can cancel a rejected match and one that can only complain.
-                    if bare.is_none() {
-                        bare = Some((slot, candidate));
-                    }
-                    slot += 8;
-                    continue;
-                }
-                if let Some(next) = unsafe {
-                    er_game_base::mem::safe_read_usize(candidate + ersc::NEXT_OBJECT_OFFSET)
-                } && next != 0
-                    && identifies_a_session(abi, next)
-                {
-                    // This shape hands back the owner too, and throwing it away is what made the
-                    // scan path deadly. `resolve_session`'s detour half derives the session as
-                    // `*(osm + NEXT_OBJECT_OFFSET)` -- the exact relation just matched here -- so
-                    // `candidate` is the OSM. Every ersc action is invoked as
-                    // `action(osm, ..)`, and returning `osm: 0` meant `cancel(0, 0, 1, 1)`
-                    // dereferenced null inside `ersc.dll` at `+0x258da`, killing the process with
-                    // no crash record (the unwind could not cross our MinHook frames).
-                    //
-                    // The VETO that used to be here is gone. This arm additionally required
-                    // `found.map(|(_, session)| session == next).unwrap_or(true)` -- the owner had
-                    // to point at the session a previous bare hit had already accepted. As
-                    // corroboration that is sound; as a requirement it hands a single wrong bare
-                    // hit a veto over every real owner in the image, because a real OSM points at
-                    // the real session and the real session is not the wrong one. That is exactly
-                    // what happened on 2026-09-06 (see `plausible_session_pointer`): one garbage
-                    // qword matched first, and the filter spent the whole run unable to cancel.
-                    // Corroboration is now a reason to stop early, never a reason to reject.
-                    if osm_tag_matches(candidate)
-                        || bare.is_some_and(|(_, session)| session == next)
-                    {
-                        return Some((slot, next, candidate));
-                    }
-                    if owned.is_none() {
-                        owned = Some((slot, next, candidate));
-                    }
-                }
-            }
-            slot += 8;
-        }
-    }
-    // An owner beats a bare session, and a bare session beats nothing at all. The middle case is
-    // the filter judging every match and logging while declining to drive Seamless (see
-    // `ersc_owner_or_refuse`); only the first case can actually cancel a rejected match.
-    owned.or_else(|| bare.map(|(slot, session)| (slot, session, 0)))
-}
-
-/// The host build has no `ersc.dll` image to walk, so there is nothing to find.
-///
-/// `resolve_session` is deliberately not `cfg`-gated -- its state machine is what the host tests
-/// exercise -- so the scanner needs a host half or the whole crate fails to build off Windows.
-#[cfg(not(windows))]
-fn scan_for_session(_base: usize, _abi: &ersc::Abi) -> Option<(usize, usize, usize)> {
-    None
-}
-
 fn resolve_session() -> Result<SeamlessSession, NoSession> {
     let base = ersc_module_base().ok_or(NoSession::ErscAbsent)?;
     // Which build, and therefore which addresses, offsets and state codes. Refuses on anything
     // this module has not measured; see `resolve_ersc_abi`.
     let abi = resolve_ersc_abi().ok_or(NoSession::ErscUnrecognised)?;
-    // Re-prove it on every use, rather than trusting the cached verdict alone.
+    // Re-prove it on every use, rather than trusting the cached verdict alone -- but on the PE
+    // header, not on code.
     //
-    // The fingerprint reads `invade`, not `show`, and the difference is the whole reason this
-    // function has a comment. `show` was the fingerprint until 2026-08-05, when a live run rejected
-    // a match and then reported `ErscUnrecognised` -- because this module hooks `show`, and MinHook
-    // had overwritten the very bytes being compared. The check was measuring its own detour and
-    // concluding Seamless was a stranger. A fingerprint must be taken from something nobody
-    // patches; `invade` is called but never hooked, so its prologue stays the shipped bytes for the
-    // life of the process.
-    if !prologue_matches(base + abi.invade_action_rva, abi.invade_prologue) {
+    // The recurring fingerprint used to read a function's opening bytes, and that has now broken
+    // this feature three separate times, each in the same way and each with a different function.
+    // `show` until 2026-08-05, when this module's own detour on it made the check read our patch
+    // and report `ErscUnrecognised` on a live rejection. Then `invade`, until it gained an
+    // observer of its own on 2026-09-08. Then `cancel`, for about twenty minutes on the same
+    // evening, until a Frida `Interceptor` was attached there to watch the player's own cancel --
+    // and a real rejection came back `cannot cancel (WrongBlock) -- ErscUnrecognised` again.
+    //
+    // Chasing an entry point nobody has hooked yet is a losing game: any tool may hook any
+    // function, ours included, and the check cannot tell a stranger's module from its own
+    // trampoline. So it reads what no hook touches. `SizeOfImage`, `TimeDateStamp` and
+    // `AddressOfEntryPoint` come out of the PE header, which MinHook and Frida both leave alone,
+    // and together they identify the mapped file rather than the state of its code.
+    //
+    // What this still catches is the only thing the recurring check was ever for: the module at
+    // this base being replaced by a different one mid-run. The build is proved once, by
+    // `resolve_ersc_abi`'s discriminator, before any detour exists.
+    if !module_identity_holds(base) {
         return Err(NoSession::ErscUnrecognised);
     }
     let osm = OSM.load(Ordering::SeqCst);
@@ -914,6 +823,10 @@ unsafe extern "system" fn build_lobby_key_observer(
     c: usize,
     d: usize,
 ) -> usize {
+    // Stamp the thread, so the owner id in `report_lock_preconditions` has a name to resolve to
+    // rather than staying a bare number.
+    let _scope = enter_handler(HANDLER_ERSC_LOBBY_KEY);
+    let _ersc = enter_ersc_callback();
     let orig = ORIG_BUILD_LOBBY_KEY.load(Ordering::SeqCst);
     if orig == 0 {
         return 0;
@@ -1102,7 +1015,7 @@ fn install_show_observer() -> usize {
 }
 
 /// The `seamless` ASCII tag at `OSM+0x68`. Without it any pointer-shaped value would pass.
-fn osm_tag_matches(osm: usize) -> bool {
+pub(super) fn osm_tag_matches(osm: usize) -> bool {
     ersc::OSM_TAG.iter().enumerate().all(|(index, byte)| {
         unsafe { er_game_base::mem::safe_read_u8(osm + ersc::OSM_TAG_OFFSET + index) }
             .is_some_and(|got| got == *byte)
@@ -1145,14 +1058,49 @@ fn read_session_state(abi: &ersc::Abi, session: usize) -> Option<u32> {
 /// this now requires first. Each of the three false positives above was answered by narrowing what
 /// the field may contain; the third one proved the field was never the whole question, because the
 /// address it was read from could not have been an object at all.
-fn identifies_a_session(abi: &ersc::Abi, session: usize) -> bool {
-    plausible_session_pointer(session)
+fn identifies_a_session(abi: &ersc::Abi, session: usize, discovering: bool) -> bool {
+    // Ordered by cost, cheapest first, because the scan asks this of every qword in ersc's
+    // writable data: two arithmetic tests, then two guarded reads, and only then the
+    // `VirtualQuery` inside `plausible_session_pointer`. Written the other way round it made a
+    // kernel call for every non-zero aligned word in 10.98 MB.
+    addressable_session_pointer(session)
         && read_session_state(abi, session).is_some_and(|state| {
+            // While a join is in flight the real session is never idle, and that is not a guess:
+            // the invade action at ersc+0x25850 opens `cmp dword [rdi+0x150], 1` / `jne` -- it
+            // refuses to start unless the state is idle -- and then writes `0xe` into that same
+            // field before returning. So from the moment a search begins until it settles, the
+            // object cannot read `state_idle`.
+            //
+            // Accepting idle during a join is what made the haystack unsearchable. Six candidates
+            // have now been latched and rejected -- 0x3dfadb, 0x860f90f8, 0x451200, 0x45e00cb0,
+            // 0xa2760038, 0xd2c0038 -- and every one of them sat at `0x01` for the whole run,
+            // because `0x00000001` is one of the most common dwords in a process and the scan was
+            // asking a question almost anything could answer. Requiring an active state at the one
+            // moment we know a search is running shrinks the haystack by the ratio of "memory that
+            // happens to hold 1" to "memory that happens to hold 0xe, 0x13 or 0x23".
+            //
+            // That argument is about discovery -- narrowing a haystack of a million candidates --
+            // and it does not transfer to retention. Applied to the session already in hand it
+            // does the opposite of its job: run br-20260908-212740-ea7c resolved the session,
+            // drove ERSC's own cancel through it (`0x0e SEARCHING -> 0x23 CANCELLING`), and then
+            // reported `MenuNeverOpened` for the very next rejection, because the join that made
+            // the cancel necessary is also what made this rule refuse the pointer that would have
+            // performed it. So `discovering` is false when the caller is re-checking the cached
+            // answer, and the refusal applies only while choosing a new one.
+            if discovering && JOIN_IN_FLIGHT.load(Ordering::SeqCst) && state == abi.state_idle {
+                return false;
+            }
             state == abi.state_idle
                 || state == abi.state_searching
                 || state == abi.state_cancelling
                 || state == abi.state_offer_received
         })
+        // The `_Mtx_internal_imp_t` at `session+0x100`. Four small integers at known offsets is a
+        // weak signature over a million candidates and it has now false-positived live four times;
+        // this is the discriminator `ersc_owner_or_refuse` already used to catch the wrong pointer
+        // after the scan had cached it. See `mutex_shape_identifies_a_session`.
+        && mutex_shape_identifies_a_session(abi, session)
+        && plausible_session_pointer(session)
 }
 
 /// The smallest address worth testing. Below this is the null page and the low reservations, never
@@ -1185,8 +1133,47 @@ const MIN_PLAUSIBLE_SESSION_POINTER: usize = 0x1_0000;
 /// bits being `0b011`.
 ///
 /// Not `cfg`-gated: it is arithmetic, and it is what the host tests pin the measured addresses with.
-fn plausible_session_pointer(candidate: usize) -> bool {
+/// Whether an address lies inside a loaded module's image rather than on the heap.
+///
+/// The session is allocated; it is never static data. Without this the scan accepted
+/// `0x143c0cdc0` -- which is `eldenring.exe+0x3c0cdc0`, the game's own `.data` -- and every later
+/// check waved it through: it is above `MIN_PLAUSIBLE_SESSION_POINTER`, it is 8-aligned, the dword
+/// at `+0x150` happened to read `1`, and the bytes at `+0x100` happened to pass for an
+/// `_Mtx_internal_imp_t`. Seamless's invade action then locked that "mutex" at `ersc+0x25871`, and
+/// because nothing on earth unlocks a static game global, the game's main thread waited on it until
+/// the stall watchdog fired thirty seconds later (run br-20260908-191656-17a9, `reason=main-thread-
+/// stall`, `tid=392 first_thread=true` blocked at `ersc.dll+0x25876`).
+///
+/// A shape test cannot catch that, because the object is not garbage -- it is real game data that
+/// happens to have the right numbers in the right places. What separates it from a session is where
+/// it lives, and that is cheap to ask.
+fn inside_a_loaded_module(candidate: usize) -> bool {
+    module_backing(candidate).is_some()
+}
+
+/// The module an address belongs to and its offset within it, or `None` for heap and other
+/// non-image memory.
+///
+/// Named rather than a bare bool so a refusal can say `eldenring.exe+0x3c0cdc0` instead of
+/// `implausible`, which is the difference between a log line a reader can check and one they have
+/// to take on faith. Lives in `er_game_base` because it needs the `windows` crate and this one does
+/// not depend on it.
+fn module_backing(candidate: usize) -> Option<(String, usize)> {
+    er_game_base::mem::module_backing(candidate)
+}
+
+/// The free half of [`plausible_session_pointer`]: whether the value could address an allocation
+/// at all.
+///
+/// Split out because the other half calls `VirtualQuery`, and [`scan_for_session`] asks about
+/// every qword in 10.98 MB of writable data. A kernel call per candidate is what put the game's
+/// main thread at 100% of a core; these two tests cost nothing and reject most of the haystack.
+fn addressable_session_pointer(candidate: usize) -> bool {
     candidate >= MIN_PLAUSIBLE_SESSION_POINTER && candidate.is_multiple_of(align_of::<usize>())
+}
+
+fn plausible_session_pointer(candidate: usize) -> bool {
+    addressable_session_pointer(candidate) && !inside_a_loaded_module(candidate)
 }
 
 /// True when the session is in the state every option action refuses to proceed past. They take a
@@ -1234,7 +1221,17 @@ fn trace_session_state(session: SeamlessSession) {
         // A new hunt is a new question; whatever the last one turned into is spent.
         INVASION_ACTUALLY_HAPPENED.store(false, Ordering::SeqCst);
     }
-    if state == abi.state_searching && !AUTO_SEARCH_ARMED.swap(true, Ordering::SeqCst) {
+    // `previous == usize::MAX` is the first reading of a session, not a transition into one. The
+    // difference is the whole hunt: run br-20260908-212740-ea7c resolved a session whose first
+    // read was already `0x0e`, armed the loop off that, timed five seconds, called the handshake
+    // stalled and cancelled it -- before the player had used an invasion item. That left the
+    // session parked at `0x23`, which is outside the set ERSC's own hide-predicate draws a Cancel
+    // row for, so the real rejection minutes later could not have been cancelled even with a
+    // session in hand. A search this mod did not watch begin is not a search it manages.
+    if state == abi.state_searching
+        && previous != usize::MAX
+        && !AUTO_SEARCH_ARMED.swap(true, Ordering::SeqCst)
+    {
         crate::standalone_log(format_args!(
             "local-invasion: you started a search -- rejected matches will be cancelled and the \
              search restarted until one lands somewhere you want, or you cancel it yourself"
@@ -1245,9 +1242,13 @@ fn trace_session_state(session: SeamlessSession) {
 /// Record the state our own call produced, so the transition tracer does not mistake it for the
 /// user acting.
 ///
-/// This is what makes "who pressed Invade world" answerable at all. Our restart writes `0x0d` the
+/// This is what makes "who pressed Invade world" answerable at all. Our restart writes `0x0e` the
 /// same way the option does, on the same thread, so by the time the next frame polls there is
 /// nothing left to distinguish them -- unless we claim it first, which is what this does.
+///
+/// The number said `0x0d` here until 2026-09-08, left behind by the enum-wide renumber. The write
+/// is `mov dword [rdi+0x150], 0xe` at `ersc+0x25886`, inside the invade action, and it is the only
+/// site in the plaintext `.text` that puts that value in the field.
 fn note_state_after_our_action(session: SeamlessSession, what: &str) {
     let Some(state) = read_session_state(session.abi, session.session) else {
         return;
@@ -1407,6 +1408,9 @@ fn state_name(abi: &ersc::Abi, state: u32) -> &'static str {
 /// written.
 #[cfg(windows)]
 unsafe extern "system" fn set_join_data_hook(a: usize, b: usize, c: usize, d: usize) -> usize {
+    // Stamp the thread, so the owner id in `report_lock_preconditions` has a name to resolve to
+    // rather than staying a bare number. This handler is the one `cancel_match` runs under.
+    let _scope = enter_handler(HANDLER_JOIN_DATA);
     // The missing clock. This instant is the only honest "we got a connection" marker we have:
     // the server has pushed join data and the destination is decided. Every stall measured on
     // 2026-08-16 (53s, 59s, 91s, 213s) is time spent after this line with nothing to show for it,
@@ -1476,83 +1480,6 @@ fn current_anchor() -> Option<InvasionAnchor> {
 #[cfg(not(windows))]
 fn current_anchor() -> Option<InvasionAnchor> {
     None
-}
-
-/// How one map pin should look, given what the filter would do with an invasion landing there.
-///
-/// Reuses [`LocalInvasionConfig::judge`] rather than re-deriving the rules, so the map cannot tell
-/// a different story from the filter. The only thing it adds is separating "kept because the user
-/// marked it" from "kept because the mode allows it", which `judge` already distinguishes by
-/// reason and which is the distinction the three tiers exist to show.
-///
-/// A pin whose block is unknown, or a filter that is switched off, reports
-/// [`PinAppearance::Eligible`]: with no rules in force nothing is being excluded, and claiming
-/// otherwise would paint a map full of rejections for a player who has not asked for any.
-#[must_use]
-pub fn pin_appearance_for(block: Option<u32>) -> PinAppearance {
-    let Some(block) = block else {
-        return PinAppearance::Eligible;
-    };
-    let Some(config) = current_config() else {
-        return PinAppearance::Eligible;
-    };
-    match config.choice_for(block) {
-        LocationChoice::Chosen => PinAppearance::Chosen,
-        LocationChoice::Untouched => PinAppearance::Eligible,
-        LocationChoice::Excluded => PinAppearance::Rejected,
-    }
-}
-
-/// A hash of everything that can change a pin's icon, for the injection cache's key.
-///
-/// The map's param rows are built once and shared across views, keyed on the spawn catalog. That
-/// key is right for the spawn set and wrong for the icons, because the icon now depends on the
-/// user's lists too -- so without this the rows survive a mark and the map never changes. Mixing
-/// this in makes a mark invalidate exactly what a mark affects.
-///
-/// The invasion-attempt state is mixed in for the identical reason one step removed: it selects the
-/// bright-or-dimmed half of each tier's frame pair, so a search starting or ending while the map is
-/// already open has to invalidate the same cache a mark does. Without it the dim would only ever
-/// appear on the next map open, which is exactly the case a player is least likely to hit -- you
-/// notice the pins are unclickable by trying them, with the map already in front of you.
-#[must_use]
-pub fn pin_choice_signature() -> usize {
-    let mut hash = fnv1a64(b"");
-    let mut mix = |value: u64| {
-        hash = fnv1a64_mix(hash, value);
-    };
-    mix(u64::from(
-        er_invasion_warp_core::warp::invasion_attempt_in_flight(),
-    ));
-    let Some(config) = current_config() else {
-        return hash as usize;
-    };
-    mix(u64::from(config.enabled));
-    for block in &config.allowed_blocks {
-        mix(u64::from(*block));
-        mix(1);
-    }
-    for block in &config.blocked_blocks {
-        mix(u64::from(*block));
-        mix(2);
-    }
-    hash as usize
-}
-
-/// Count the tiers an injection produced, so "the map looks the same" is answerable from the log.
-///
-/// Added after a live run where all three marker frames were provably installed (+66 bytes, three
-/// 22-byte placements) and the map was re-injected four times, yet every pin looked identical --
-/// and nothing recorded which tier any pin got, so the cause could not be named. The tier is the
-/// output of this feature; not logging it repeated the exact mistake that cost three wrong
-/// attributions on the filter earlier.
-pub fn log_pin_tier_tally(chosen: usize, untouched: usize, excluded: usize) {
-    let enabled = current_config().is_some_and(|config| config.enabled);
-    crate::standalone_log(format_args!(
-        "map-inject: pin tiers chosen={chosen} untouched={untouched} excluded={excluded} \
-         (filter_enabled={enabled}). All-one-number means the map cannot show a difference: mark \
-         somewhere with Insert or exclude it with Delete."
-    ));
 }
 
 /// `PlaceName` text ids known for a block, from the injected pin registry.
@@ -1676,10 +1603,40 @@ pub fn judge_incoming_match(join_data: usize) {
     if !config.enabled {
         // Nothing was judged, so there is no verdict to report -- just the destination, stated as
         // the server's choice rather than as anything the mod approved.
-        announce_arrival(config.reject_notice, destination);
+        banner::announce_arrival(config.reject_notice, destination);
         return;
     }
 
+    // A match is the only moment the session is both needed and likely to exist, so this is
+    // where the sweeper's budget is refilled. Spending passes on a timer at startup found nothing
+    // and then stopped: run br-20260908-210312-80d7 reported `cannot cancel -- MenuNeverOpened`
+    // for a rejection judged minutes after the last pass had been spent.
+    #[cfg(windows)]
+    session_scan::request_sweep_now();
+    // A match is in flight from here until the join settles. While it is, a scan refuses an idle
+    // candidate -- see `identifies_a_session` for why that is a fact about ERSC rather than a
+    // guess. The cached answer is not thrown away here. It used to be, and that single line is
+    // what cost run br-20260908-212740-ea7c its enforcement: the session was resolving at
+    // `0x55080038` right up to the match, this cleared it, and the rejection two lines later
+    // could not cancel because nothing was left to cancel through. `cached_scan_for_session`
+    // already re-checks the pointer on every call and drops it if it stops identifying, so a dead
+    // session is discarded on evidence rather than on the arrival of the event that needs it.
+    JOIN_IN_FLIGHT.store(true, Ordering::SeqCst);
+    // The join has started, so the real session has just left idle. Re-read the addresses recorded
+    // while nothing was happening and keep only the ones that moved -- see `differential_scan` for
+    // why that is the only test a look-alike object cannot pass.
+    #[cfg(windows)]
+    if let Some(abi) = resolve_ersc_abi()
+        && let Some(session) = differential_scan::narrow_to_changed(abi)
+    {
+        crate::standalone_log(format_args!(
+            "local-invasion: session identified by CHANGE at {session:#x} -- it read idle before \
+             this join and an active state after it, which is what `ersc+0x25850` does to the \
+             field and what nothing else in the address space did. Adopting it over the shape \
+             scan's answer."
+        ));
+        session_scan::adopt_proven_session(session);
+    }
     let candidate = InvasionCandidate::new(destination, place_names_for_block(destination));
     match config.judge(&anchor, &candidate) {
         Verdict::Keep(reason) => {
@@ -1716,197 +1673,122 @@ pub fn judge_incoming_match(join_data: usize) {
             // session on 2026-09-04: "the popup tells me I'm rejecting a location to invade but it
             // still invades it". A notice that can be wrong is worse than no notice -- it is the
             // one signal the player has that the filter is working.
-            if cancel_match(reason) {
-                announce_rejection(config.reject_notice, destination, reason);
-            } else {
-                UNENFORCED_REJECTS.fetch_add(1, Ordering::SeqCst);
-                crate::standalone_log(format_args!(
-                    "local-invasion: NOT cancelled {destination:#010x} ({reason:?}) -- the match \
-                     was judged a rejection but Seamless was not driven, so the invasion PROCEEDS. \
-                     No banner is shown, because the player would read it as a rejection that \
-                     happened. The reason is logged immediately above this line."
-                ));
-            }
+            arm_pending_cancel(destination, reason, config.reject_notice);
         }
     }
 }
 
-/// Host-side stub: there is no game to show a banner in, and the decision half is tested directly
-/// against [`er_invasion_warp_core::reject_notice`] rather than through this.
-#[cfg(not(windows))]
-fn announce_rejection(_enabled: bool, _destination: u32, _reason: RejectReason) {}
-
-/// Host-side stub.
-#[cfg(not(windows))]
-fn announce_arrival(_enabled: bool, _destination: u32) {}
-
-/// Report a destination that arrived while the filter was switched off.
+/// Whether a match is between its join data and its settlement.
 ///
-/// Shares the one notice latch with the verdict banners, so the surface never contradicts itself
-/// about what it last said.
-#[cfg(windows)]
-fn announce_arrival(enabled: bool, destination: u32) {
-    let announcement = {
-        let mut guard = match REJECT_NOTICE.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let place = crate::place_name::place_name_for_block(destination);
-        guard.observe_arrival(enabled, destination, place.as_deref())
+/// Read by [`identifies_a_session`], which refuses an idle session while it is set. Cleared when
+/// the engine's join reaches a terminal state, so the ordinary between-invasions case -- where a
+/// real session legitimately reads idle -- is unaffected.
+static JOIN_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+/// Ticks a rejection waits for the sweeper to produce a session before it is counted unenforced.
+///
+/// The sweeper takes a few seconds and a join takes ten or more, so this is a window that fits
+/// inside the time the match is still cancellable, not a hopeful retry loop.
+const CANCEL_RETRY_TICKS: usize = 600;
+/// How long the current rejection has been waiting.
+static CANCEL_RETRIES: AtomicUsize = AtomicUsize::new(0);
+
+/// A rejection judged but not yet cancelled, waiting for the game task to drive it.
+///
+/// # Why the cancel does not fire where the verdict is reached
+///
+/// [`judge_incoming_match`] runs inside `set_join_data_hook`, a detour on the game's own
+/// `CS::SosSignMan::SetMultiplayJoinData`. Driving an ERSC action from there means calling into
+/// `ersc.dll` from a frame the game entered, in whatever session state the server's offer left
+/// behind -- and that state is measurably outside the set ERSC's hide-predicate draws its Cancel row
+/// for. Arming here and firing from the recurring `CSTaskImp` task moves the call to a frame that
+/// owns nothing of Seamless's, and lets [`cancel_row_refusal`] see a settled state rather than one
+/// mid-transition.
+///
+/// One slot, not a queue: a second rejection arriving before the first has fired replaces it. The
+/// newest offer is the one the server is waiting on, and cancelling a match that has already been
+/// superseded would drive the action for nothing.
+static PENDING_CANCEL: Mutex<Option<PendingCancel>> = Mutex::new(None);
+
+/// The three things the deferred cancel needs to finish the job the verdict started.
+#[derive(Clone, Copy)]
+struct PendingCancel {
+    destination: u32,
+    reason: RejectReason,
+    /// Whether the player asked for the on-screen notice, captured with the verdict rather than
+    /// re-read at fire time: the config can change between the two, and the banner belongs to the
+    /// decision it describes.
+    notice: bool,
+}
+
+/// Record a rejection for the game task to act on.
+fn arm_pending_cancel(destination: u32, reason: RejectReason, notice: bool) {
+    let mut guard = match PENDING_CANCEL.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
     };
-    let Some(text) = announcement else {
-        return;
-    };
-    // SAFETY: game thread, inside the join-data hook -- the same context and surface as the
-    // verdict banners.
-    if !unsafe { crate::announce::show(&text) } {
-        if NOTICE_FAILED.swap(true, Ordering::SeqCst) {
-            return;
-        }
+    if let Some(previous) = guard.replace(PendingCancel {
+        destination,
+        reason,
+        notice,
+    }) {
         crate::standalone_log(format_args!(
-            "local-invasion: could not show the arrival banner (\"{text}\") -- the message \
-             functions did not verify, or the menu is not up yet."
+            "local-invasion: a second rejection arrived before the first was driven -- \
+             {:#010x} ({:?}) is dropped in favour of {destination:#010x} ({reason:?}). The server \
+             is waiting on the newer offer; cancelling a superseded one drives ERSC for nothing.",
+            previous.destination, previous.reason
         ));
     }
 }
 
-/// Host-side stub; the decision half is tested against [`er_invasion_warp_core::reject_notice`].
-#[cfg(not(windows))]
-fn announce_success(_enabled: bool, _destination: u32) {}
-
-/// Put a successful invasion on the same banner the rejections use.
+/// Fire the armed cancel from the game task, and announce only what actually happened.
 ///
-/// Shares [`RejectNotice`] with [`announce_rejection`] on purpose: one banner, one memory of what
-/// it last said. That is what lets an arrival clear the rejection latch, so a later rejection at
-/// the same place is announced instead of being swallowed as a repeat.
-#[cfg(windows)]
-fn announce_success(enabled: bool, destination: u32) {
-    let announcement = {
-        let mut guard = match REJECT_NOTICE.lock() {
+/// The banner is emitted here rather than at the verdict for the reason recorded on
+/// [`cancel_match`]'s return value: a notice that says "rejected" when nothing was cancelled is
+/// the one signal the player has, and it used to be able to lie.
+fn drive_pending_cancel() {
+    let armed = {
+        let mut guard = match PENDING_CANCEL.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        let place = crate::place_name::place_name_for_block(destination);
-        guard.observe_success(enabled, destination, place.as_deref())
+        guard.take()
     };
-    let Some(text) = announcement else {
+    let Some(armed) = armed else {
         return;
     };
-    // SAFETY: game thread, inside the join-data hook -- the same context, and the same auto-closing
-    // announcement surface, as the rejection banner.
-    if !unsafe { crate::announce::show(&text) } {
-        if NOTICE_FAILED.swap(true, Ordering::SeqCst) {
-            return;
-        }
-        crate::standalone_log(format_args!(
-            "local-invasion: could not show the success banner (\"{text}\") -- the message \
-             functions did not verify, or the menu is not up yet. The invasion still happened; \
-             only the on-screen notice is missing."
-        ));
+    if cancel_match(armed.reason) {
+        banner::announce_rejection(armed.notice, armed.destination, armed.reason);
+        return;
     }
-}
-
-/// Put a rejection on the game's system-message banner, if the player asked for that.
-///
-/// The decision of whether to speak lives in [`er_invasion_warp_core::reject_notice`] and is unit-tested
-/// on the host; this only carries the answer to the screen. The notice is fed even when the option
-/// is off so that turning it on mid-session does not announce a place the player was rejected from
-/// minutes ago as though it had just happened.
-///
-/// Runs on the game thread, in the same call that judges the match -- which is the context
-/// `showPopupMenu` expects, and it null-checks the menu manager itself, so a message raised before
-/// the UI exists is dropped rather than faulting.
-#[cfg(windows)]
-fn announce_rejection(enabled: bool, destination: u32, reason: RejectReason) {
-    let announcement = {
-        let mut guard = match REJECT_NOTICE.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        // Resolve the area's own name for the banner. Done here rather than inside the notice so
-        // that type stays testable off the game: this is a call into the message repository.
-        //
-        // `None` before the world map has been read this session, which is the same condition that
-        // makes `area` mode fail closed -- the notice falls back to the block id, which is
-        // unfriendly but true.
-        let place = crate::place_name::place_name_for_block(destination);
-        guard.observe(enabled, destination, reason, place.as_deref())
-    };
-    let Some(text) = announcement else {
-        return;
-    };
-    // The game's own auto-closing announcement surface -- the "Grace discovered" one. Not
-    // `system_message`/`showPopupMenu`, which is a blocking modal with an OK button: shipping that
-    // gave the user a dialog to dismiss per rejection, showing squares and then nothing, and the
-    // unattended dialog held the session open long enough to trip the stall watchdog.
+    // A session that is not resolvable yet is not the same as a refusal, and discarding the
+    // rejection on the first tick threw away the whole window in which it could still be
+    // cancelled. The sweeper runs on its own thread and takes seconds; the join takes ten or
+    // more, so re-arming costs nothing and buys the only chance this rejection has.
     //
-    // SAFETY: game thread, inside the join-data hook. Writes the live view's embedded message,
-    // which is exactly what the view's own Update does when it pops one. Both game functions are
-    // byte-checked before use.
-    if !unsafe { crate::announce::show(&text) } {
-        // Once, not per rejection: a banner that cannot be shown is a missing convenience, and
-        // saying so every 20 seconds would be its own spam.
-        if NOTICE_FAILED.swap(true, Ordering::SeqCst) {
+    // Bounded, because a rejection that can never be driven must still end as an honest
+    // unenforced count rather than sitting armed forever and silently replacing the next one.
+    if matches!(resolve_session(), Err(NoSession::MenuNeverOpened)) {
+        let waited = CANCEL_RETRIES.fetch_add(1, Ordering::SeqCst) + 1;
+        if waited <= CANCEL_RETRY_TICKS {
+            let mut guard = match PENDING_CANCEL.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            *guard = Some(armed);
             return;
         }
-        crate::standalone_log(format_args!(
-            "local-invasion: could not show the rejection banner (\"{text}\") -- the message \
-             functions did not verify, or the menu is not up yet. Rejections still work; only the \
-             on-screen notice is missing."
-        ));
     }
+    CANCEL_RETRIES.store(0, Ordering::SeqCst);
+    UNENFORCED_REJECTS.fetch_add(1, Ordering::SeqCst);
+    crate::standalone_log(format_args!(
+        "local-invasion: NOT cancelled {:#010x} ({:?}) -- the match was judged a rejection but \
+         Seamless was not driven, so the invasion PROCEEDS. No banner is shown, because the player \
+         would read it as a rejection that happened. The reason is logged immediately above this \
+         line.",
+        armed.destination, armed.reason
+    ));
 }
-
-/// Drive ERSC's own "Cancel search" for a rejected match.
-///
-/// This calls the exact option callback the user's click calls, with `(OSM, 0, 1, 1)`. The zero is
-/// not a guess: the cancel action reads `rcx` and nothing else -- so no
-/// captured argument is required and none is invented. Everything past this point -- tearing the
-/// match down, returning the session to idle -- is Seamless's own code doing what it always does.
-/// [`scan_for_session`], but at most once per session rather than once per call.
-///
-/// The scan is not cheap and this caller is hot. `scan_for_session` probes up to
-/// `SESSION_SCAN_QWORD_BUDGET` (262,144) qwords with a guarded read each, and `resolve_session`
-/// runs from the filter's tick. It used to return the instant it matched, which hid the cost; the
-/// owner search added on 2026-09-04 keeps scanning past the first hit to find the owning object,
-/// so every call now walks the whole budget -- and the game's main thread went to 100% of a core
-/// in state `R` while all 108 other threads sat idle. Reported live as a hard lock, minutes after
-/// the change.
-///
-/// So the answer is cached, and re-derived only when the cached session stops identifying itself
-/// (`read_session_state` is the same signature the scan matched on). A session that goes away
-/// costs one rescan, not one rescan per frame.
-#[cfg(windows)]
-fn cached_scan_for_session(base: usize, abi: &ersc::Abi) -> Option<(usize, usize, usize)> {
-    let session = CACHED_SESSION.load(Ordering::SeqCst);
-    if session != 0 && identifies_a_session(abi, session) {
-        return Some((
-            CACHED_SLOT.load(Ordering::SeqCst),
-            session,
-            CACHED_OWNER.load(Ordering::SeqCst),
-        ));
-    }
-    let (slot, session, owner) = scan_for_session(base, abi)?;
-    CACHED_SLOT.store(slot, Ordering::SeqCst);
-    CACHED_OWNER.store(owner, Ordering::SeqCst);
-    // Published LAST: it is the field the fast path validates, so nothing may observe a session
-    // paired with another scan's slot or owner.
-    CACHED_SESSION.store(session, Ordering::SeqCst);
-    Some((slot, session, owner))
-}
-
-/// Host half: there is no ersc image to scan, so there is nothing to cache either.
-#[cfg(not(windows))]
-fn cached_scan_for_session(base: usize, abi: &ersc::Abi) -> Option<(usize, usize, usize)> {
-    scan_for_session(base, abi)
-}
-
-#[cfg(windows)]
-static CACHED_SLOT: AtomicUsize = AtomicUsize::new(0);
-#[cfg(windows)]
-static CACHED_SESSION: AtomicUsize = AtomicUsize::new(0);
-#[cfg(windows)]
-static CACHED_OWNER: AtomicUsize = AtomicUsize::new(0);
 
 /// Refuse to invoke a Seamless action with a null `this`, and say why.
 ///
@@ -1930,42 +1812,195 @@ static CACHED_OWNER: AtomicUsize = AtomicUsize::new(0);
 ///
 /// Not `cfg`-gated: its callers are not either, and the host build exercises their state machine.
 fn ersc_owner_or_refuse(session: &SeamlessSession, what: &str) -> Option<usize> {
+    // The identification, not just a guard on the call. `resolve_session` accepts a candidate on
+    // `plausible_session_pointer` -- at least 0x10000 and 8-aligned -- plus a state field holding one
+    // of four codes, tested across up to 2^18 candidate qwords, and it has already false-positived
+    // live once (0x3dfadb, 2026-09-06, see the note on `identifies_a_session`). Four small integers
+    // at known offsets is a weak signature over that many candidates.
+    //
+    // A live `_Mtx_internal_imp_t` at `session+0x100` is a much stronger one, and it is free: the
+    // action's own first act is to lock it, so an object that fails this check is an object the
+    // action would have thrown on. Measured on run br-20260908-185557-aa9c, where five invasions
+    // produced two rejections and both refused here: `_Type` was not a shape MSVC's mutex
+    // constructors write, and `osm_tag_matches` reported the `seamless` tag absent on the same
+    // owner. That is the pointer being wrong, not the lock being held.
+    if let Some((module, offset)) = module_backing(session.session) {
+        log_refusal_once(
+            &OWNER_REFUSAL_SAID,
+            format_args!(
+                "local-invasion: refusing to drive ERSC's {what} -- the session resolved to \
+                 {:#x}, which is {module}+{offset:#x}, inside a loaded module. A session is \
+                 allocated; it is never static image data. Handing this to Seamless is what wedged \
+                 the game on 2026-09-08: ersc+0x25871 locked a mutex that was really \
+                 eldenring.exe+0x3c0cdc0, nothing unlocks a static global, and the main thread \
+                 waited until the 30-second stall watchdog fired.",
+                session.session
+            ),
+        );
+        return None;
+    }
+    if let Some(refusal) = lock_shape_refusal(session) {
+        log_refusal_once(
+            &OWNER_REFUSAL_SAID,
+            format_args!(
+                "local-invasion: refusing to drive ERSC's {what} -- {refusal}. This is the session \
+                 identification failing, not the action: `resolve_session` handed back an address \
+                 whose {SESSION_MUTEX_OFFSET:#x} is not a live mutex, so driving anything with it \
+                 would call into ersc.dll on an object that is not a session. See open issue \
+                 er-effects-rs-9i0g."
+            ),
+        );
+        return None;
+    }
     if session.osm != 0 {
         return Some(session.osm);
     }
-    if OSM_NULL_REFUSED.swap(true, Ordering::SeqCst) {
-        return None;
-    }
-    crate::standalone_log(format_args!(
-        "local-invasion: refusing to drive ERSC's {what} -- the session was resolved by SCAN, which \
-         yields no owner object, and this action passes that owner as its first argument. Calling \
-         it with 0 dereferences null inside ersc.dll and kills the process (measured twice, \
-         2026-09-04: ersc.dll+0x258da with rcx=0, then 23 failed unwinds and a husk). The filter \
-         still judges and still logs; it just does not drive Seamless until an owner is known."
-    ));
-    None
+    // No OSM was found, and one is not needed. See `synthesized_owner`.
+    Some(synthesized_owner(session.session))
 }
 
-/// One line per process, not one per rejected match: the refusal repeats every time the filter
-/// would have cancelled, which is often.
-static OSM_NULL_REFUSED: AtomicBool = AtomicBool::new(false);
+/// A `this` of our own for ERSC's option actions, holding the session where they read it.
+///
+/// # Why this replaces the search that could not finish
+///
+/// Both driven actions were read end to end out of the installed `ersc.dll` (v2.0.1,
+/// `scripts/disas-ersc.py --whole`), and they are 0x64 and 0x75 bytes:
+///
+/// ```text
+/// cancel  ersc+0x258d0                     invade  ersc+0x25850
+///   mov  rdi, [rcx + 0x58]                   mov  rdi, [rcx + 0x58]
+///   lea  rsi, [rdi + 0x100]                  cmp  dword [rdi + 0x150], 1
+///   ...  everything else via rdi             ...  everything else via rdi
+/// ```
+///
+/// `rcx` is read exactly once, at `+0x58`, and never referenced again -- every later access is
+/// `rdi`-relative, and `rdi` is the session. So the object ERSC calls `this` is, to these two
+/// functions, nothing but a box with a session pointer at `+0x58`. Whose box it is has no bearing
+/// on what they do.
+///
+/// That dissolves open issue er-effects-rs-9i0g rather than solving it. Finding Seamless's own
+/// menu object was never the requirement; it was an assumption, and it cost four false-positive
+/// identifications, a wedged main thread, two killed processes, a sweep of the whole address space
+/// that turned up fifteen candidates, and a discriminator that then found none of the fifteen was
+/// referenced by `ersc.dll` at all. None of that had to happen. The function was 0x64 bytes and
+/// reading it settles the question in one look -- which is the argument for reading the binary
+/// first, made at our own expense.
+///
+/// The shim is strictly safer than the object it replaces: it is ours, it lives for the process,
+/// its lifetime cannot end under a call, and it cannot be a misidentification. The session pointer
+/// written into it is still the one every check upstream has already agreed on -- this changes who
+/// holds the session, never which session is held.
+///
+/// Allocated once and leaked on purpose: ERSC reads it during a call this thread is inside, so it
+/// must outlive any borrow, and a process-lifetime allocation of 0x60 bytes is the cheapest way to
+/// promise that.
+fn synthesized_owner(session: usize) -> usize {
+    /// Big enough to contain the one field ERSC reads, and aligned the way MSVC's `operator new`
+    /// would align a real one.
+    #[repr(C, align(16))]
+    struct OwnerShim([u8; 0x60]);
 
+    let shim = SYNTHESIZED_OWNER.load(Ordering::Acquire);
+    let shim = if shim == 0 {
+        let fresh = Box::into_raw(Box::new(OwnerShim([0u8; 0x60]))) as usize;
+        match SYNTHESIZED_OWNER.compare_exchange(0, fresh, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => fresh,
+            Err(winner) => {
+                // Another thread won. Reclaim ours rather than leaking two.
+                drop(unsafe { Box::from_raw(fresh as *mut OwnerShim) });
+                winner
+            }
+        }
+    } else {
+        shim
+    };
+    // Rewritten before every use rather than once: the session is a heap object whose address
+    // changes between matches, and a stale pointer here would hand ERSC a freed session -- the
+    // one way this shim could be more dangerous than the search it replaces.
+    // SAFETY: `shim` is our own 0x60-byte allocation, live for the process, and
+    // `ersc::NEXT_OBJECT_OFFSET + 8` is 0x60.
+    unsafe {
+        std::ptr::write_unaligned((shim + ersc::NEXT_OBJECT_OFFSET) as *mut usize, session);
+    }
+    if !SYNTHESIZED_OWNER_SAID.swap(true, Ordering::SeqCst) {
+        crate::standalone_log(format_args!(
+            "local-invasion: driving ERSC through a synthesized owner at {shim:#x} carrying the \
+             session at +{:#x}. Both actions read `rcx` exactly once, at that offset, and work \
+             through the session for everything after -- read end to end out of ersc+0x258d0 \
+             (0x64 bytes) and ersc+0x25850 (0x75 bytes). Seamless's own menu object is not \
+             required and is no longer looked for (er-effects-rs-9i0g).",
+            ersc::NEXT_OBJECT_OFFSET
+        ));
+    }
+    shim
+}
+
+/// The process-lifetime shim allocation, or 0 before it is made.
+static SYNTHESIZED_OWNER: AtomicUsize = AtomicUsize::new(0);
+/// Said once, not per rejected match.
+static SYNTHESIZED_OWNER_SAID: AtomicBool = AtomicBool::new(false);
+
+/// Latch for the identification refusal above, so a wrong pointer says so once rather than per frame.
+static OWNER_REFUSAL_SAID: Mutex<Option<String>> = Mutex::new(None);
+
+/// Where the session's `std::mutex` starts, named here because the refusal message quotes it.
+/// Derived from the guard offset rather than written twice: `guard == mutex + _Count`, and `_Count`
+/// is at `+0x4c` of an `_Mtx_internal_imp_t`.
+const SESSION_MUTEX_OFFSET: usize = 0x100;
+
+/// One line per distinct refusal, not one per frame.
+///
+/// `drive_pending_reinvade` runs on the game task, so an unchanged refusal was being written every
+/// frame -- 22735 identical lines in the run that first exercised this. Keyed on the reason, so a
+/// session whose shape changes still gets a fresh line, and the counters below stay honest about
+/// how often the refusal actually fired.
+fn log_refusal_once(latch: &Mutex<Option<String>>, message: std::fmt::Arguments<'_>) {
+    let text = format!("{message}");
+    let mut guard = match latch.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if guard.as_deref() == Some(text.as_str()) {
+        return;
+    }
+    crate::standalone_log(format_args!("{text}"));
+    *guard = Some(text);
+}
+
+/// Per-site latches for [`log_refusal_once`]. Separate so a cancel refusal cannot silence an invade
+/// one that happens to read the same.
+static CANCEL_REFUSAL_SAID: Mutex<Option<String>> = Mutex::new(None);
+static INVADE_REFUSAL_SAID: Mutex<Option<String>> = Mutex::new(None);
+static STALLED_REFUSAL_SAID: Mutex<Option<String>> = Mutex::new(None);
+
+/// Drive ERSC's own "Cancel search" for a rejected match.
+///
+/// This calls the exact option callback the user's click calls, with `(OSM, 0, 1, 1)`. The zero is
+/// not a guess: the cancel action reads `rcx` and nothing else -- so no
+/// captured argument is required and none is invented. Everything past this point -- tearing the
+/// match down, returning the session to idle -- is Seamless's own code doing what it always does.
+///
 /// Returns whether Seamless was actually driven. `false` means the match stands: the caller must
 /// not tell the player it was rejected.
 fn cancel_match(reason: RejectReason) -> bool {
     let session = match resolve_session() {
         Ok(session) => session,
         Err(cause) => {
-            crate::standalone_log(format_args!(
-                "local-invasion: cannot cancel ({reason:?}) -- {cause:?}, so the match is LEFT \
+            // Latched. The patient retry re-arms this every tick while the session is merely not
+            // ready yet, and an unlatched line here wrote 431 identical entries in one run.
+            log_refusal_once(
+                &CANCEL_REFUSAL_SAID,
+                format_args!(
+                    "local-invasion: cannot cancel ({reason:?}) -- {cause:?}, so the match is LEFT \
                  ALONE and will land wherever the server sent it{}",
-                match cause {
-                    NoSession::MenuNeverOpened =>
-                        ". Open Seamless's menu once (that is where the object is learned) and the \
+                    match cause {
+                        NoSession::MenuNeverOpened =>
+                            ". Open Seamless's menu once (that is where the object is learned) and the \
                          next rejection will cancel.",
-                    _ => "",
-                }
-            ));
+                        _ => "",
+                    }
+                ),
+            );
             return false;
         }
     };
@@ -1986,9 +2021,64 @@ fn cancel_match(reason: RejectReason) -> bool {
     let Some(owner) = ersc_owner_or_refuse(&session, "cancel") else {
         return false;
     };
-    IN_OUR_CALL.store(true, Ordering::SeqCst);
+    report_lock_preconditions(&session, owner, "cancel");
+    if let Some(refusal) = lock_shape_refusal(&session) {
+        log_refusal_once(
+            &CANCEL_REFUSAL_SAID,
+            format_args!(
+                "local-invasion: cannot cancel ({reason:?}) -- {refusal}. The match is LEFT ALONE. \
+                 The reading this refused on is in the line immediately above."
+            ),
+        );
+        return false;
+    }
+    // Reported, never obeyed. The set behind this reading is ERSC's hide-PREDICATE at
+    // `ersc+0x26b40` -- when Seamless draws its Cancel row -- and the cancel action at
+    // `ersc+0x258d0` has no state precondition at all: read end to end it locks the mutex at
+    // `session+0x100`, compares `[session+0x14c]` against `0x7fffffff`, and writes `0x23`. Nothing
+    // there consults `+0x150`.
+    //
+    // Treating a UI rule as a safety rule cost the whole feature. Measured 2026-09-08 in one
+    // evening: a Frida-driven cancel succeeded eight times from `state_before 22` (`0x16`), every
+    // one landing on `state_after 35` (`0x23`), with no crash -- and on the very next run this
+    // same reading refused `state 0x16` and the rejected invasion proceeded. The guard that does
+    // matter is `session_guard_poisoned`, checked above and left in force.
+    if let Some(note) = cancel_row_refusal(&session) {
+        log_refusal_once(
+            &CANCEL_REFUSAL_SAID,
+            format_args!(
+                "local-invasion: cancelling ({reason:?}) from a state Seamless would not have \
+                 drawn its own Cancel row in -- {note}. Driving it anyway: the action itself has \
+                 no state precondition, and this state is measured to cancel cleanly."
+            ),
+        );
+    }
+    // The one state reading that still refuses, because it is not about the row: an idle session
+    // while a join is in flight cannot be the real session -- the player is mid-search, so the
+    // real one reads `state_searching`. Keeping a pointer proven wrong means every later rejection
+    // refuses on the same reading, which is exactly what run br-20260909-000018-d691 did.
+    //
+    // Dropping the cache here rather than at the verdict is deliberate: `drive_pending_cancel`
+    // re-arms this rejection for `CANCEL_RETRY_TICKS`, so the sweeper gets its seconds while the
+    // rejection is still live. Invalidating at the verdict deleted the session at the moment it
+    // was needed, which is the mistake this replaces.
+    if read_session_state(session.abi, session.session) == Some(session.abi.state_idle)
+        && JOIN_IN_FLIGHT.load(Ordering::SeqCst)
+    {
+        crate::standalone_log(format_args!(
+            "local-invasion: dropping the cached session at {:#x} -- it reads idle while a join \
+             is in flight, which the real session cannot do. The sweeper looks again; the \
+             rejection stays armed meanwhile.",
+            session.session
+        ));
+        // Windows-only: the scan it invalidates does not exist on the host, where these tests run.
+        #[cfg(windows)]
+        session_scan::invalidate_cached_session();
+        return false;
+    }
+    let _call = OurCall::enter();
     unsafe { cancel(owner, 0, 1, 1) };
-    IN_OUR_CALL.store(false, Ordering::SeqCst);
+    drop(_call);
     note_state_after_our_action(session, "cancel");
     let fired = CANCELS.fetch_add(1, Ordering::SeqCst) + 1;
     // Search again once the session settles. Armed here, fired from the tick -- ERSC's own tick
@@ -2006,6 +2096,37 @@ fn cancel_match(reason: RejectReason) -> bool {
         }
     ));
     true
+}
+
+/// Arm a search for the next game tick, from outside this DLL.
+///
+/// Backs `er_invasion_warp_request_invade`; see that export for why the caller may not simply call
+/// the invade action itself. Both flags are needed: `PENDING_REINVADE` is what
+/// `drive_pending_reinvade` drains, and `AUTO_SEARCH_ARMED` is what it checks first -- setting
+/// only one arms a request that is refused on the same tick it is made.
+#[cfg(windows)]
+pub fn request_invade() -> bool {
+    if OSM.load(Ordering::SeqCst) == 0 {
+        crate::standalone_log(format_args!(
+            "local-invasion: a search was requested from outside this DLL, but no option-menu \
+             object has been handed over yet -- nothing to drive. Call \
+             er_invasion_warp_adopt_menu_object first."
+        ));
+        return false;
+    }
+    AUTO_SEARCH_ARMED.store(true, Ordering::SeqCst);
+    PENDING_REINVADE.store(true, Ordering::SeqCst);
+    crate::standalone_log(format_args!(
+        "local-invasion: a search was requested from outside this DLL -- armed for the next game \
+         tick, where the invade action runs on the thread that owns it."
+    ));
+    true
+}
+
+/// Host-side stub.
+#[cfg(not(windows))]
+pub fn request_invade() -> bool {
+    false
 }
 
 /// Fire the queued re-invade once the session is genuinely idle.
@@ -2037,9 +2158,20 @@ fn drive_pending_reinvade(session: SeamlessSession) {
     let Some(owner) = ersc_owner_or_refuse(&session, "invade") else {
         return;
     };
-    IN_OUR_CALL.store(true, Ordering::SeqCst);
+    report_lock_preconditions(&session, owner, "invade");
+    if let Some(refusal) = lock_shape_refusal(&session) {
+        log_refusal_once(
+            &INVADE_REFUSAL_SAID,
+            format_args!(
+                "local-invasion: not restarting the search -- {refusal}. The reading this refused \
+                 on is in the line immediately above."
+            ),
+        );
+        return;
+    }
+    let _call = OurCall::enter();
     unsafe { invade(owner, 0, 1, 1) };
-    IN_OUR_CALL.store(false, Ordering::SeqCst);
+    drop(_call);
     // Claim the searching state we just caused, before the tracer can read it as the user pressing
     // the option and arm a loop that is already armed.
     note_state_after_our_action(session, "restart search");
@@ -2155,9 +2287,27 @@ fn cancel_stalled_attempt(session: SeamlessSession, state: u32, held_ms: u64) {
     let Some(owner) = ersc_owner_or_refuse(&session, "cancel") else {
         return;
     };
-    IN_OUR_CALL.store(true, Ordering::SeqCst);
+    report_lock_preconditions(&session, owner, "cancel (stalled attempt)");
+    if let Some(refusal) = lock_shape_refusal(&session) {
+        log_refusal_once(
+            &STALLED_REFUSAL_SAID,
+            format_args!(
+                "local-invasion: not cancelling the stalled attempt -- {refusal}. The reading this \
+                 refused on is in the line immediately above."
+            ),
+        );
+        return;
+    }
+    if let Some(refusal) = cancel_row_refusal(&session) {
+        log_refusal_once(
+            &STALLED_REFUSAL_SAID,
+            format_args!("local-invasion: not cancelling the stalled attempt -- {refusal}"),
+        );
+        return;
+    }
+    let _call = OurCall::enter();
     unsafe { cancel(owner, 0, 1, 1) };
-    IN_OUR_CALL.store(false, Ordering::SeqCst);
+    drop(_call);
     note_state_after_our_action(session, "cancel stalled attempt");
     if AUTO_SEARCH_ARMED.load(Ordering::SeqCst) {
         PENDING_REINVADE.store(true, Ordering::SeqCst);
@@ -2285,6 +2435,15 @@ fn ersc_module_base() -> Option<usize> {
 /// bytes, so a short check would prove only that some option action is at this address -- and
 /// calling the wrong one cancels other players' invasions.
 fn ersc_action(abi: &ersc::Abi, rva: usize, prologue: &[u8]) -> Option<ErscActionFn> {
+    if inside_ersc_callback() {
+        crate::standalone_log(format_args!(
+            "local-invasion: refusing to hand out ersc+{rva:#x} -- this thread is inside a callback \
+             ersc.dll made, so calling back into it would run its code from a frame it entered, \
+             with whatever locks and half-finished state that call left behind. The action is \
+             declined, not queued: the tick will reach it on a frame of the game's own."
+        ));
+        return None;
+    }
     let base = ersc_module_base().or_else(|| {
         crate::standalone_log(format_args!(
             "local-invasion: ersc.dll not loaded -- nothing to filter"
@@ -2372,221 +2531,6 @@ fn install_join_hook() -> usize {
 // Hotkeys
 // ---------------------------------------------------------------------------------------------
 
-/// The keys that mark and un-mark, read from the config every poll.
-///
-/// They used to be the hard-coded constants `VK_INSERT`/`VK_DELETE`. A 60% keyboard has neither,
-/// which locked the marking feature out entirely for anyone using one -- so the pair now comes from
-/// `mark_key` / `unmark_key` in the config, by name. Read per poll rather than latched at startup
-/// so a hand-edit takes effect on the same hot reload as every other setting.
-///
-/// Falls back to the historical defaults when the config is unreadable: losing the config should
-/// cost the player their lists, not their keyboard.
-#[cfg(windows)]
-fn mark_keys_in_force() -> (i32, i32) {
-    current_config().map_or(
-        (
-            er_invasion_warp_core::keybind::VK_INSERT,
-            er_invasion_warp_core::keybind::VK_DELETE,
-        ),
-        |config| (config.mark_key, config.unmark_key),
-    )
-}
-/// The three warp keys, read from the config every poll, for the same reason and with the same
-/// fallback as [`mark_keys_in_force`].
-///
-/// These are the pair's sharper case. `VK_F7` was not merely unavailable on a compact keyboard, it
-/// was also another mod's default in the same me3 profile, so one press reached both features and a
-/// live session warped when the player meant the other thing -- with no config key on either side
-/// to move.
-#[cfg(windows)]
-pub fn warp_keys_in_force() -> (i32, i32, i32) {
-    current_config().map_or(
-        (
-            er_invasion_warp_core::keybind::VK_F7,
-            er_invasion_warp_core::keybind::VK_F8,
-            er_invasion_warp_core::keybind::VK_F9,
-        ),
-        |config| {
-            (
-                config.warp_nearest_key,
-                config.warp_next_key,
-                config.warp_other_area_key,
-            )
-        },
-    )
-}
-
-/// `VK_SHIFT`: held, the mark keys act on the location's name instead of its exact block --
-/// "everywhere that shares this name" rather than "this tile".
-#[cfg(windows)]
-const VK_SHIFT: i32 = 0x10;
-
-#[cfg(windows)]
-const KEY_DOWN_MASK: i16 = -0x8000;
-#[cfg(windows)]
-const KEY_PRESSED_SINCE_MASK: i16 = 0x0001;
-
-#[cfg(windows)]
-#[link(name = "user32")]
-unsafe extern "system" {
-    fn GetAsyncKeyState(vkey: i32) -> i16;
-}
-
-/// Edge-detected mark keys.
-///
-/// Deliberately a private copy of the pattern in `drive.rs` rather than a shared one: both bits of
-/// `GetAsyncKeyState` are consumed by a read, and the low "pressed since last call" bit is
-/// per-call, so two pollers sharing one key would eat each other's edge. These keys are distinct
-/// from the warp driver's F7/F8/F9, so the two pollers never contend.
-#[cfg(windows)]
-#[derive(Default)]
-pub struct MarkKeys {
-    mark_was_down: bool,
-    unmark_was_down: bool,
-    /// The keys the latches above are about. When the config moves a key, a latch left set says
-    /// the new key was already held -- so the next poll either swallows the press or, if the key
-    /// happens to be down at the moment of the swap, invents one.
-    bound_to: Option<(i32, i32)>,
-}
-
-#[cfg(windows)]
-impl MarkKeys {
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            mark_was_down: false,
-            unmark_was_down: false,
-            bound_to: None,
-        }
-    }
-
-    fn edge(vkey: i32, was_down: &mut bool) -> bool {
-        let state = unsafe { GetAsyncKeyState(vkey) };
-        let down = (state & KEY_DOWN_MASK) != 0;
-        let edge = (down && !*was_down) || (state & KEY_PRESSED_SINCE_MASK) != 0;
-        *was_down = down;
-        edge
-    }
-
-    /// Poll both keys and apply whatever they asked for.
-    ///
-    /// Shift is read with the down bit only. Consuming its "pressed since" latch would make a
-    /// held Shift look released on the second key press.
-    fn poll(&mut self) {
-        let (mark_key, unmark_key) = mark_keys_in_force();
-        if self.bound_to.replace((mark_key, unmark_key)) != Some((mark_key, unmark_key)) {
-            // A rebind (or the very first poll). Drop the latches and the OS-level
-            // "pressed since last call" bit, which is per-thread and would otherwise deliver the
-            // new key's whole history as one edge the instant it is bound.
-            self.forget();
-            let _ = unsafe { GetAsyncKeyState(mark_key) };
-            let _ = unsafe { GetAsyncKeyState(unmark_key) };
-            return;
-        }
-        // Both edges are read every poll, even when the two keys are the same. `GetAsyncKeyState`
-        // consumes its own "pressed since" latch per call, so skipping one read would eat the
-        // other's edge -- and a config that names one key for both would then fire neither.
-        let mark = Self::edge(mark_key, &mut self.mark_was_down);
-        let unmark = if unmark_key == mark_key {
-            false
-        } else {
-            Self::edge(unmark_key, &mut self.unmark_was_down)
-        };
-        if !mark && !unmark {
-            return;
-        }
-        let by_name = (unsafe { GetAsyncKeyState(VK_SHIFT) } & KEY_DOWN_MASK) != 0;
-        if mark {
-            apply_mark(true, by_name);
-        }
-        if unmark {
-            apply_mark(false, by_name);
-        }
-    }
-
-    /// Forget the latches when the game does not have focus, so pressing Delete in another window
-    /// does not silently edit the config.
-    fn forget(&mut self) {
-        self.mark_was_down = false;
-        self.unmark_was_down = false;
-    }
-}
-
-/// Add or remove the player's current location, by block or by name, and write the file.
-#[cfg(windows)]
-fn apply_mark(adding: bool, by_name: bool) {
-    let Some(anchor) = current_anchor() else {
-        crate::standalone_log(format_args!(
-            "local-invasion: cannot mark -- the player's location is not readable right now"
-        ));
-        return;
-    };
-    let path = config_path();
-    let Ok(mut guard) = CONFIG.lock() else { return };
-    let hot = guard.get_or_insert_with(HotConfig::default);
-    // Pick up any hand-edit first, so a keypress extends the file the user has rather than
-    // overwriting it with a stale in-memory copy.
-    let _ = hot.reload_if_changed(&path);
-    let mut config = hot.current().clone();
-
-    let changed = if by_name {
-        let count = if adding {
-            config.mark_place_names(&anchor)
-        } else {
-            config.unmark_place_names(&anchor)
-        };
-        if count == 0 && adding && anchor.named_location_count() == 0 {
-            crate::standalone_log(format_args!(
-                "local-invasion: {:#010x} has no place name on record, so there is nothing to mark \
-                 by name. Open the world map once this session -- that is where the names are read \
-                 from.",
-                anchor.block
-            ));
-            return;
-        }
-        count > 0
-    } else if adding {
-        config.mark_block(anchor.block)
-    } else {
-        config.unmark_block(anchor.block)
-    };
-
-    if !changed {
-        crate::standalone_log(format_args!(
-            "local-invasion: {} {:#010x}{} -- already in that state, file untouched",
-            if adding { "mark" } else { "un-mark" },
-            anchor.block,
-            if by_name { " by name" } else { "" }
-        ));
-        return;
-    }
-
-    match hot.save(&path, &config) {
-        Ok(true) => crate::standalone_log(format_args!(
-            "local-invasion: {} {:#010x}{} -- now {} chosen, {} excluded, {} name(s){}",
-            if adding { "MARKED" } else { "EXCLUDED" },
-            anchor.block,
-            if by_name { " by name" } else { "" },
-            config.allowed_blocks.len(),
-            config.blocked_blocks.len(),
-            config.named_location_text_ids.len(),
-            if config.enabled {
-                ""
-            } else {
-                " (the filter itself is still OFF -- set enabled = true)"
-            }
-        )),
-        Ok(false) => crate::standalone_log(format_args!(
-            "local-invasion: WROTE the config but it did not read back identically -- the mark may \
-             not survive. This is a bug in the config writer, not in your file."
-        )),
-        Err(error) => crate::standalone_log(format_args!(
-            "local-invasion: could not write {}: {error} -- the mark was NOT saved",
-            path.display()
-        )),
-    }
-}
-
 // ---------------------------------------------------------------------------------------------
 // Per-frame entry point
 // ---------------------------------------------------------------------------------------------
@@ -2601,6 +2545,10 @@ fn apply_mark(adding: bool, by_name: bool) {
 /// Game task thread, with the runtime up.
 #[cfg(windows)]
 pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
+    // Stamp the thread, so the owner id in `report_lock_preconditions` has a name to resolve to
+    // rather than staying a bare number. This handler is the one `drive_pending_reinvade` and
+    // `cancel_stalled_attempt` run under.
+    let _scope = enter_handler(HANDLER_GAME_TASK);
     // Counted before any early return, so a dwell measured across a stretch where Seamless was not
     // resolvable still reflects the frames that actually passed.
     TICKS.fetch_add(1, Ordering::SeqCst);
@@ -2616,11 +2564,20 @@ pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
     struct ErscObservers {
         show: bool,
         lobby_key: bool,
+        invade: bool,
     }
     let ersc_observers = current_config_snapshot().map(|config| ErscObservers {
         show: config.ersc_observers && config.ersc_show_observer,
         lobby_key: config.ersc_observers && config.ersc_lobby_key_observer,
+        invade: config.ersc_observers && config.ersc_invade_observer,
     });
+    // The two seams observe the same pointer and neither is guaranteed to run, so they have
+    // separate keys rather than one: `show` sees the object when the player opens Seamless's
+    // menu, the invade action when they use an invasion item, and a player who only ever uses
+    // the item gets nothing at all from `show`.
+    if ersc_observers.as_ref().map(|c| c.invade).unwrap_or(true) {
+        menu_object::install_invade_observer();
+    }
     if ersc_observers.as_ref().map(|c| c.show).unwrap_or(true) {
         install_show_observer();
     }
@@ -2652,6 +2609,21 @@ pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
             .ok_or("<state-unreadable>"),
         Err(reason) => Err(reason.label()),
     });
+    // Before the early return below, and that placement is the whole point. A rejection is armed
+    // from the join-data detour and driven here, and it used to sit under a `resolve_session`
+    // guard -- so a session that stopped resolving between the verdict and this tick stranded the
+    // armed cancel forever. Nothing said so: `drive_pending_cancel` never ran, so it never
+    // reached the line that counts an unenforced rejection, and the heartbeat printed
+    // `UNENFORCED=0` while holding one.
+    //
+    // Measured live, run br-20260908-201137-0567: one `REJECT 0x3d302b00 (WrongBlock)`, then nine
+    // consecutive `ersc=<menu-never-opened>` samples, `UNENFORCED=0`, no `NOT cancelled` line,
+    // and the invasion proceeded. The filter judged the match correctly and dropped the verdict on
+    // the floor.
+    //
+    // `cancel_match` resolves the session itself and says plainly when it cannot, which is the
+    // honest failure this path was missing. Attempting and reporting beats returning early.
+    drive_pending_cancel();
     // Everything below is Seamless-side and purely observational until a rejected match has
     // actually armed a re-search, so a run without Seamless loaded costs one failed module lookup.
     let Ok(session) = resolve_session() else {
@@ -2690,6 +2662,71 @@ pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
 /// `session` carries the Seamless state alongside the value that build calls idle, because the two
 /// only mean anything together: an update renumbered the enum once already, so a bare state code
 /// that is idle on one build is an active state on another.
+/// Discard a cached session whose state cannot move while the engine's join demonstrably does.
+///
+/// # The check this makes executable
+///
+/// A real Seamless session walks `0x0e, 0x0f, 0x12, 0x13, ...` through a join. Five separate
+/// objects have now been accepted by the scan and then sat at one value for an entire invasion --
+/// `0x3dfadb`, `0x860f90f8`, `0x451200`, `0x45e00cb0`, `0xa2760038` -- and the tell was identical
+/// every time and free to read: the `ersc=` column of `join-progress` frozen while `lobby` and
+/// `proto` advance. Run br-20260908-210559-6f26 is the cleanest instance: nine readings, all
+/// `0x01`, while lobby went `0 -> 4 -> 6` and proto cycled through 14.3 seconds of join.
+///
+/// Every static check tried so far is a snapshot -- a value at an offset, a mutex shape, a
+/// `_Count` -- and each one was defeated by memory that happened to hold the right numbers. This
+/// is not a snapshot: it asks the candidate to do something only the real object can do. A wrong
+/// pointer cannot pass it, because passing requires tracking a state machine it is not part of.
+///
+/// Recorded as a `bd` memory the same morning and left as prose, which is why it fired five times
+/// instead of once. A diagnostic that lives only in prose gets rediscovered; one that lives in the
+/// code gets enforced.
+fn note_session_liveness(ersc_state: Option<u32>, lobby: u32, protocol: u32) {
+    let Some(state) = ersc_state else {
+        // Nothing cached to invalidate, and no reading to judge.
+        LIVENESS_STALE_SAMPLES.store(0, Ordering::SeqCst);
+        return;
+    };
+    let engine = ((lobby as usize) << 16) | (protocol as usize);
+    let previous_engine = LIVENESS_LAST_ENGINE.swap(engine, Ordering::SeqCst);
+    let previous_state = LIVENESS_LAST_STATE.swap(state as usize, Ordering::SeqCst);
+    // Only samples where the engine moved are evidence. A quiet moment proves nothing about
+    // either party, and counting it would eventually discard a healthy session that was simply
+    // idle -- which is the normal state between invasions.
+    if previous_engine == engine || previous_engine == usize::MAX {
+        return;
+    }
+    if previous_state != state as usize {
+        LIVENESS_STALE_SAMPLES.store(0, Ordering::SeqCst);
+        return;
+    }
+    let stale = LIVENESS_STALE_SAMPLES.fetch_add(1, Ordering::SeqCst) + 1;
+    if stale < LIVENESS_STALE_LIMIT {
+        return;
+    }
+    LIVENESS_STALE_SAMPLES.store(0, Ordering::SeqCst);
+    log_refusal_once(
+        &LIVENESS_REFUSAL_SAID,
+        format_args!(
+            "local-invasion: DISCARDING the cached session -- its state has read {state:#x} \
+             across {stale} samples in which the engine's own join advanced (lobby/proto changed \
+             every time). A real session moves through 0x0e/0x0f/0x12/0x13 during a join, so this \
+             pointer is not one; five earlier candidates failed exactly this way while passing \
+             every static check. Re-scanning."
+        ),
+    );
+    #[cfg(windows)]
+    session_scan::invalidate_cached_session();
+}
+
+/// Engine samples with an unchanged session state before the cache is discarded. The measured
+/// runs showed nine in a row, so four is decisive without being twitchy.
+const LIVENESS_STALE_LIMIT: usize = 4;
+static LIVENESS_STALE_SAMPLES: AtomicUsize = AtomicUsize::new(0);
+static LIVENESS_LAST_ENGINE: AtomicUsize = AtomicUsize::new(usize::MAX);
+static LIVENESS_LAST_STATE: AtomicUsize = AtomicUsize::new(usize::MAX);
+static LIVENESS_REFUSAL_SAID: Mutex<Option<String>> = Mutex::new(None);
+
 #[cfg(windows)]
 fn trace_join_progress(session: Result<(u32, u32), &'static str>) {
     let ersc_state = session.ok().map(|(state, _)| state);
@@ -2698,9 +2735,18 @@ fn trace_join_progress(session: Result<(u32, u32), &'static str>) {
         return;
     };
     let verdict = progress.verdict();
+    note_session_liveness(
+        ersc_state,
+        progress.lobby_state as u32,
+        progress.protocol_state as u32,
+    );
     // `Client` and nothing else. `call_for_warp` is tempting and WRONG: `WarpNextStageKick_` runs
     // for every warp including a plain fast travel, so latching on it would mark an ordinary grace
     // warp as an invasion.
+    if progress.lobby_state == er_invasion_warp_core::join_progress::lobby_state::CLIENT {
+        // The join landed, so the session is allowed to read idle again.
+        JOIN_IN_FLIGHT.store(false, Ordering::SeqCst);
+    }
     if progress.lobby_state == er_invasion_warp_core::join_progress::lobby_state::CLIENT
         && !INVASION_ACTUALLY_HAPPENED.swap(true, Ordering::SeqCst)
     {
@@ -2710,7 +2756,7 @@ fn trace_join_progress(session: Result<(u32, u32), &'static str>) {
         if pending != usize::MAX
             && let Some(config) = current_config()
         {
-            announce_success(config.reject_notice, pending as u32);
+            banner::announce_success(config.reject_notice, pending as u32);
         }
     }
     // Pack the reading so an unchanged frame costs one atomic compare and no formatting.

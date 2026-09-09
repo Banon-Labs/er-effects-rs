@@ -189,6 +189,9 @@ cmd_start() {
 		# the `carried-over-from-previous-run` archive above exists to mop up.
 		nohup env ER_QUICKLOAD_SAVE_MODE_HINT=vanilla \
 			ER_QUICKLOAD_TELEMETRY_PATH="$artifact/er-quickload-telemetry.json" \
+			ER_QUICKLOAD_INVASION_WARP_LOG_PATH="$artifact/er-invasion-warp.log" \
+			ER_QUICKLOAD_INVASION_WARP_TELEMETRY_PATH="$artifact/er-invasion-warp-telemetry.json" \
+			ER_QUICKLOAD_INVASION_WARP_RUN_PATH="$artifact/er-invasion-warp-run.json" \
 			ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH="$artifact/er-quickload-autoload-debug.log" \
 			ER_QUICKLOAD_CRASH_LOG_PATH="$artifact/er-quickload-crash-log.txt" \
 			ER_QUICKLOAD_TRACE_CONTINUE_PATH="$artifact/er-quickload-continue-trace.log" \

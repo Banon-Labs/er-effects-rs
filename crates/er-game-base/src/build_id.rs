@@ -117,6 +117,34 @@ pub fn own_module_path() -> Option<(usize, String)> {
     None
 }
 
+/// File name of a module given its base address, for turning a raw pointer into something a reader
+/// can check. `None` when the base names no loaded module.
+///
+/// Added so a refusal can say `eldenring.exe+0x3c0cdc0` rather than `implausible`. A log line that
+/// carries the module is one the reader can verify against a map; one that carries a verdict is one
+/// they have to believe.
+#[cfg(windows)]
+#[must_use]
+pub fn module_file_name(module_base: usize) -> Option<String> {
+    if module_base == 0 {
+        return None;
+    }
+    let mut buffer = [0u16; MODULE_PATH_BUFFER];
+    // SAFETY: `module_base` is an `AllocationBase` the caller took from `VirtualQuery` on an
+    // image-backed region, which is the module handle for that image, and the length passed is
+    // `buffer`'s true capacity.
+    let written =
+        unsafe { GetModuleFileNameW(module_base, buffer.as_mut_ptr(), buffer.len() as u32) };
+    (written > 0).then(|| String::from_utf16_lossy(&buffer[..written as usize]))
+}
+
+/// Host stub.
+#[cfg(not(windows))]
+#[must_use]
+pub fn module_file_name(_module_base: usize) -> Option<String> {
+    None
+}
+
 /// Base address and file name of the module this code is linked into.
 ///
 /// Returns `None` on host builds and on the (unobserved) failure of either call, so the

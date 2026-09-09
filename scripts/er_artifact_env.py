@@ -42,6 +42,12 @@ ARTIFACT_ENV: dict[str, str] = {
     # reload trace is the largest producer in the repo (~655 MB/hour) and was the least movable.
     "ER_QUICKLOAD_RELOAD_TRACE_PATH": "er-reload-trace.log",
     "ER_QUICKLOAD_INPUT_HARNESS_LOG_PATH": "er-input-harness.log",
+    # er-invasion-warp wrote only to the game directory until 2026-09-08, which is why the line
+    # naming a process-killing abort sat outside the run that produced it.
+    "ER_QUICKLOAD_INVASION_WARP_LOG_PATH": "er-invasion-warp.log",
+    "ER_QUICKLOAD_INVASION_WARP_TELEMETRY_PATH": "er-invasion-warp-telemetry.json",
+    "ER_QUICKLOAD_INVASION_WARP_RUN_PATH": "er-invasion-warp-run.json",
+
     "ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH": "er-input-harness-phases.jsonl",
     "ER_QUICKLOAD_DIAG_HARNESS_PATH": "er-diag-harness.log",
     "ER_QUICKLOAD_TIMESERIES_PATH": "er-telemetry-timeseries.jsonl",

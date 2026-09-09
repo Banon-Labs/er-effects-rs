@@ -1077,6 +1077,12 @@ fn report_stall(counter_addr: usize, frame_counter: u32, stalled_seconds: u64) {
     unsafe { crate::write_minidump_named(config().hang_minidump_file_name, std::ptr::null_mut()) };
 }
 
+/// Every thread id in this process, from a ToolHelp snapshot.
+///
+/// Thread suspension: this call takes a snapshot and suspends nothing, but it is the first half
+/// of the pattern `scripts/check-no-thread-suspension.py` watches for, so it is exempted with
+/// `sample_thread` rather than separately. The exemption is the watchdog's, not this function's:
+/// see the note on `sample_thread` for why the watchdog cannot be opt-in.
 #[cfg(windows)]
 fn enumerate_threads() -> Vec<u32> {
     let mut ids = Vec::new();
@@ -1156,6 +1162,25 @@ impl ThreadSample {
 /// Everything between `SuspendThread` and `ResumeThread` writes into fixed-size storage only. A
 /// heap allocation there could block on a lock the suspended thread owns and freeze the process for
 /// real, which would be a diagnostic tool causing the failure it exists to observe.
+///
+/// Thread suspension: this is the one suspender in the workspace that cannot be put behind an
+/// opt-in switch, because nobody knows they want a hang report until the hang has already
+/// happened -- a watchdog you have to enable in advance is a watchdog that is off on the run
+/// that needed it. Baselined in `scripts/thread-suspension.baseline.json` instead.
+///
+/// What bounds the risk described in `er-effects-rs-1742`: the watchdog thread sleeps 5s before
+/// it looks at anything, refuses to arm until it has watched the frame counter advance, and then
+/// suspends only after a detector has already fired -- a stall means 30s with no frame at all, by
+/// which point hook installation finished long ago. One thread is suspended at a time, nothing is
+/// allocated while it is suspended, and the report budgets are three stall reports and five
+/// frame-drop reports for the life of the process.
+///
+/// What is not eliminated: this suspension is not serialised against the twenty-one MinHook
+/// `Freeze()` calls, so a frame-drop report that lands on a thread already inside another
+/// module's freeze window is the same hazard class, just an unlikely one. Bringing it under
+/// `er_hook`'s `freeze_guard` is the real fix and is tracked separately; it needs
+/// `er-crash-logging-core` to depend on `er-hook`, which drags MinHook into a crate that has no
+/// other reason to link it.
 #[cfg(windows)]
 fn sample_thread(thread_id: u32) -> Option<ThreadSample> {
     if thread_id == unsafe { GetCurrentThreadId() } {

@@ -231,6 +231,21 @@ def _steam_client_pids() -> set[int]:
     return client
 
 
+def _env_names_prefix(entry: str, prefix: str) -> bool:
+    """Whether this process's `WINEPREFIX` is the game's prefix.
+
+    Read as bytes and matched on the variable rather than on the bare number: `1245620` alone
+    appears in unrelated Steam paths, and matching it loosely is the class of mistake AGENTS.md
+    bans for `rsi` and `wine`.
+    """
+    try:
+        with open(f"{entry}/environ", "rb") as handle:
+            environ = handle.read()
+    except OSError:
+        return False
+    return b"WINEPREFIX=" + prefix.encode("utf-8", "replace") in environ
+
+
 def survey(prefix: str = DEFAULT_PREFIX) -> list[dict[str, object]]:
     """Every prefix-owned process currently alive, with the evidence that classifies it."""
     found: list[dict[str, object]] = []
@@ -242,7 +257,18 @@ def survey(prefix: str = DEFAULT_PREFIX) -> list[dict[str, object]]:
             continue
         comm = comm.strip()
         exe = _link(f"{entry}/exe")
-        in_prefix = prefix in exe or prefix in _link(f"{entry}/cwd")
+        # `WINEPREFIX` is the third place a process can say it belongs to this game, and without it
+        # eight `start.exe` processes leaked -- one per run, all eight alive at once on 2026-09-08,
+        # and by then launches were timing out at the 90s DLL-testimony wait. They carry
+        # `WINEPREFIX=<prefix>/pfx` and none of the three Steam appid variables, while their `exe`
+        # resolves into the Proton install rather than the prefix, so `by_appid` and `in_prefix`
+        # were both false and every classifier missed them. Reading the env is what catches a
+        # process whose paths point at Proton but whose prefix is ours.
+        in_prefix = (
+            prefix in exe
+            or prefix in _link(f"{entry}/cwd")
+            or _env_names_prefix(entry, prefix)
+        )
         by_appid = _has_appid(entry)
         # The game itself needs no CORROBORATION, and twice it has been missed for want of some.
         # Launched through the Steam Linux Runtime the game's /proc/<pid>/exe and cwd are inside
@@ -318,6 +344,10 @@ def cpu_ticks(pid: int) -> int | None:
 GAME_RUNNING = "running"
 GAME_HUSK = "husk"
 GAME_EXITED = "exited"
+# A pid whose task entries are still listed but whose process is reaped-pending. It reads exactly
+# like a wedged game to a thread-and-CPU test -- 130 threads, zero ticks -- and is the opposite:
+# there is no memory to walk and nothing to diagnose, only a parent that has not called wait().
+GAME_ZOMBIE = "zombie"
 
 
 def game_status(
@@ -352,9 +382,17 @@ def game_status(
                 "pid": pid,
                 "threads": threads,
                 "cpu_ticks": burned,
+                # Zombie first, and separately from husk. Folding the two together is what
+                # deadlocked this tool on 2026-09-08: a zombie eldenring.exe kept 130 task entries
+                # and burned no CPU, so it was reported `HUSK (wedged; tear down)`, the walk-first
+                # refusal then blocked the teardown, and the walker it pointed at could not read
+                # /proc/<pid>/mem because the process was already gone. A zombie must be reaped,
+                # not walked.
                 "verdict": (
-                    GAME_HUSK
-                    if is_zombie(pid) or threads <= HUSK_THREAD_CEILING or burned == 0
+                    GAME_ZOMBIE
+                    if is_zombie(pid)
+                    else GAME_HUSK
+                    if threads <= HUSK_THREAD_CEILING or burned == 0
                     else GAME_RUNNING
                 ),
             }
@@ -373,9 +411,10 @@ def game_health(prefix: str = DEFAULT_PREFIX, sample_ms: int = CPU_SAMPLE_MS) ->
         if row["verdict"] == GAME_EXITED:
             lines.append(f"pid={pid} EXITED during sampling -- it was already dying")
             continue
-        verdict = (
-            "HUSK (wedged; tear down)" if row["verdict"] == GAME_HUSK else GAME_RUNNING
-        )
+        verdict = {
+            GAME_HUSK: "HUSK (wedged; walk it, then tear down)",
+            GAME_ZOMBIE: "ZOMBIE (already dead, unreaped; nothing to walk -- tear down)",
+        }.get(str(row["verdict"]), GAME_RUNNING)
         lines.append(
             f"pid={pid} threads={row['threads']} "
             f"cpu_ticks_in_{sample_ms}ms={row['cpu_ticks']} -> {verdict}"
@@ -596,7 +635,12 @@ def selftest() -> int:
 
     check(
         "every row records which rule caught it",
-        all(row["matched_by"] in {"appid", "prefix", "launcher"} for row in rows),
+        # `name` belongs in this set and its absence was a live red gate on 2026-09-08. A zombie
+        # eldenring.exe has an unreadable `environ`, so the appid classifier cannot see the
+        # 1245620 needle and the fallback that catches it is its `comm`. That is a real rule, not
+        # a leak: the row it produced was `{comm: eldenring.exe, state: Z, in_prefix: False,
+        # matched_by: name}`, which is exactly the process a teardown must still reap.
+        all(row["matched_by"] in {"appid", "prefix", "launcher", "name"} for row in rows),
     )
     check(
         "the real Steam client is never a target",
@@ -628,8 +672,46 @@ def selftest() -> int:
     # module simply does not import `time`; if a sleep is ever reintroduced it must import it, and
     # this fails.
     check("the module has no time facility to sleep on", "time" not in globals())
+    # The WINEPREFIX classifier, exercised against this process rather than a fixture: it must say
+    # no for a prefix nothing is running under, and the matching must be on the variable rather
+    # than the bare appid, which appears in unrelated Steam paths.
+    check(
+        "a process is not claimed for a prefix it does not name",
+        not _env_names_prefix(f"/proc/{os.getpid()}", "/nonexistent-er-teardown-prefix"),
+    )
+    # The husk refusal: the difference between a diagnosable deadlock and a dead one. Exercised
+    # through the predicate rather than through `main`, because `game_health` costs a real 3s
+    # sample and needs a live prefix, and neither is available to a selftest.
+    check(
+        "a wedged game refuses teardown, while a healthy or absent one does not",
+        wedged_and_walkable(
+            "pid=1706030 threads=130 cpu_ticks_in_3000ms=13 -> HUSK (wedged; tear down)"
+        )
+        and not wedged_and_walkable("pid=1706030 threads=130 cpu_ticks_in_3000ms=9000 -> running")
+        and not wedged_and_walkable("no eldenring.exe")
+        and not wedged_and_walkable(
+            "pid=1742210 threads=130 cpu_ticks_in_3000ms=12 -> "
+            "ZOMBIE (already dead, unreaped; nothing to walk -- tear down)"
+        ),
+    )
     print("selftest:", "PASS" if failures == 0 else "FAIL")
     return 1 if failures else 0
+
+
+def wedged_and_walkable(health: str) -> bool:
+    """Whether `game_health` describes a live-but-wedged game, i.e. one there is still time to walk.
+
+    Split out of `main` so the refusal has a predicate the selftest can exercise without a game.
+    The two strings that must not match are the ones where walking is meaningless: a healthy
+    running game, and one that has already exited.
+    """
+    # A zombie's line also starts with `pid=`, and it must not match: there is no memory behind it
+    # to walk, so refusing its teardown would be a refusal nothing can satisfy.
+    return (
+        health.startswith("pid=")
+        and GAME_HUSK in health.lower()
+        and GAME_ZOMBIE not in health.lower()
+    )
 
 
 def main() -> int:
@@ -645,6 +727,14 @@ def main() -> int:
         "--game-dir",
         default=None,
         help="where er-run-outcome.txt lives (default: ER_GAME_DIR, else ME3_STEAM_DIR)",
+    )
+    parser.add_argument(
+        "--walked",
+        action="store_true",
+        help=(
+            "assert the wedged game's threads have already been walked "
+            "(scripts/er-frida-stall-walk.py). Required to tear down a HUSK."
+        ),
     )
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
@@ -674,6 +764,27 @@ def main() -> int:
         else:
             print(f"[er-teardown] run outcome: {outcome.strip()}")
         return 0
+
+    # A wedged game is the only artifact that can answer "which two threads are waiting on each
+    # other", and killing it destroys that artifact permanently. On 2026-09-08 a load-time
+    # deadlock was torn down before anything walked it, leaving 77 threads in `ntsync_schedule`
+    # and 40 in `futex_wait` as the entire record -- which proves a deadlock and names not one
+    # frame of it. `/proc` cannot do better; Frida attaches to a wedged process and
+    # `Thread.backtrace` is exactly what a stalled thread is for.
+    #
+    # So a HUSK refuses here rather than dying quietly. A live game and an already-dead one are
+    # unaffected: there is nothing to walk in either.
+    if wedged_and_walkable(game_health(args.prefix)):
+        if not args.walked:
+            print(
+                "[er-teardown] REFUSING to tear down a WEDGED game -- its threads have not been "
+                "walked, and killing it destroys the only evidence that can name the deadlock.\n"
+                "  walk it first:  uv run --with frida python3 scripts/er-frida-stall-walk.py\n"
+                "  (bring the server up first if needed: python3 scripts/er-frida-up.py)\n"
+                "  then repeat this command with --walked",
+                file=sys.stderr,
+            )
+            return 3
 
     teardown(args.prefix, reason=args.reason, game_dir=args.game_dir)
     return 0

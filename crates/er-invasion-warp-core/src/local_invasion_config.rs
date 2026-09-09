@@ -126,6 +126,12 @@ ersc_observers = false
 ersc_show_observer = true
 ersc_lobby_key_observer = true
 
+# The third one, and the only one that sees the option-menu object when you invade with an ITEM --
+# `show` runs only when Seamless's own menu is built, and the item path never builds it. Without
+# this the filter judges matches correctly and then cannot cancel them, which is what run
+# br-20260908-230004-d163 did 13 times in a row.
+ersc_invade_observer = true
+
 # Match ONLY other players running this DLL with this option turned on.
 #
 # Seamless finds worlds with a `lobby_key` that is a fingerprint of your game's params and Seamless
@@ -189,6 +195,11 @@ allowed_blocks = []
 # ignored, because a key that does nothing is indistinguishable from a broken feature.
 mark_key = "Insert"
 unmark_key = "Delete"
+
+# The switch for `enabled` above, by NAME, from the same list. Pressing it flips the setting
+# and saves the file, so the state survives a restart and the file always says what you are
+# actually playing in. The banner tells you which way it went.
+enable_toggle_key = "F3"
 
 # The three invasion-point keys, by NAME, from the same list above.
 #
@@ -351,6 +362,13 @@ pub fn parse_local_invasion_config_with_fallback(
                     message: format!("ersc_observers must be true or false, got {value:?}"),
                 }),
             },
+            "ersc_invade_observer" => match parse_bool(value) {
+                Some(v) => config.ersc_invade_observer = v,
+                None => issues.push(ConfigIssue {
+                    line: line_no,
+                    message: format!("ersc_invade_observer must be true or false, got {value:?}"),
+                }),
+            },
             "ersc_show_observer" => match parse_bool(value) {
                 Some(v) => config.ersc_show_observer = v,
                 None => issues.push(ConfigIssue {
@@ -408,6 +426,15 @@ pub fn parse_local_invasion_config_with_fallback(
                     "unmark_key",
                     value,
                     fallback.unmark_key,
+                    line_no,
+                    &mut issues,
+                );
+            }
+            "enable_toggle_key" => {
+                config.enable_toggle_key = key_setting(
+                    "enable_toggle_key",
+                    value,
+                    fallback.enable_toggle_key,
                     line_no,
                     &mut issues,
                 );
@@ -605,6 +632,15 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
                     config.ersc_show_observer
                 ));
             }
+            // Named here for the reason two keys above it were not: an unnamed key is copied from
+            // the shipped template verbatim on every save, so leaving it out would silently reset
+            // it to the template's value whenever the player marks a location.
+            "ersc_invade_observer" => {
+                out.push_str(&format!(
+                    "ersc_invade_observer = {}\n",
+                    config.ersc_invade_observer
+                ));
+            }
             "ersc_lobby_key_observer" => {
                 out.push_str(&format!(
                     "ersc_lobby_key_observer = {}\n",
@@ -633,6 +669,10 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
             "unmark_key" => out.push_str(&format!(
                 "unmark_key = \"{}\"\n",
                 crate::keybind::key_name(config.unmark_key)
+            )),
+            "enable_toggle_key" => out.push_str(&format!(
+                "enable_toggle_key = \"{}\"\n",
+                crate::keybind::key_name(config.enable_toggle_key)
             )),
             "warp_nearest_key" => out.push_str(&format!(
                 "warp_nearest_key = \"{}\"\n",
@@ -997,6 +1037,47 @@ mod tests {
             sites >= 4,
             "found only {sites} temp-path sites; the scan stopped matching the code it is \
              supposed to constrain, so a shared path would now pass unexamined"
+        );
+    }
+
+    /// The switch key survives a write, and the switch itself survives being written by a mark.
+    ///
+    /// Both halves are the same hazard the `reject_notice` / `map_pins` comment in the writer
+    /// records: a key the writer does not name is a key the writer destroys, and every in-game
+    /// keypress rewrites this file. A dropped `enable_toggle_key` would silently return the
+    /// player to F3 after they rebound it; a dropped `enabled` would switch the filter back on
+    /// the first time they marked a location.
+    #[test]
+    fn the_toggle_key_and_the_switch_both_survive_a_write_and_reparse() {
+        let config = LocalInvasionConfig {
+            enabled: false,
+            enable_toggle_key: crate::keybind::parse_key("KP_Plus").expect("KP_Plus is a key"),
+            ..Default::default()
+        };
+        let rendered = render_local_invasion_config(&config);
+        assert!(
+            rendered.contains("enable_toggle_key = \"KP_Plus\""),
+            "{rendered}"
+        );
+        assert!(rendered.contains("enabled = false"), "{rendered}");
+        let parsed = parse_local_invasion_config(&rendered);
+        assert!(parsed.issues.is_empty(), "{:?}", parsed.issues);
+        assert_eq!(parsed.config.enable_toggle_key, config.enable_toggle_key);
+        assert!(!parsed.config.enabled);
+    }
+
+    /// The shipped default is F3, and the shipped file says so -- a default the template does not
+    /// carry is a key the writer never emits, so the setting would be undiscoverable.
+    #[test]
+    fn the_shipped_config_names_the_toggle_key_and_it_is_f3() {
+        assert_eq!(
+            LocalInvasionConfig::default().enable_toggle_key,
+            crate::keybind::VK_F3
+        );
+        assert!(
+            DEFAULT_CONFIG_TOML.contains("enable_toggle_key = \"F3\""),
+            "the shipped template must carry the key, or render_local_invasion_config never \
+             writes it"
         );
     }
 

@@ -325,6 +325,20 @@ pub struct LocalInvasionConfig {
     /// `SHA256_hex(AES_decrypt(ctx[0xB8]) ++ ...)` -- worth noting only because the crash lands
     /// inside AES-NI code, which is suggestive and not evidence.
     pub ersc_lobby_key_observer: bool,
+    /// Install the invade-action observer specifically, when [`Self::ersc_observers`] is on.
+    ///
+    /// It has its own key rather than riding [`Self::ersc_show_observer`] because the two answer
+    /// different questions and the pair is what the master switch was turned off for. This one is
+    /// the only observer that fires when the player invades with an ITEM: `show` runs only when
+    /// Seamless's own option menu is built, and the item path never builds it. Measured in run
+    /// `br-20260908-230004-d163`: 13 matches judged and rejected, every one of them
+    /// `NOT cancelled`, with zero `captured Seamless's option-menu object` lines in the log.
+    ///
+    /// A Frida `Interceptor` sat on this exact address for that entire run -- dozens of invades,
+    /// no crash -- which says an inline hook here is survivable. It does not say MinHook's is:
+    /// different patcher, different install mechanics. Turning this on alone is the smallest
+    /// experiment that can tell the two apart.
+    pub ersc_invade_observer: bool,
     /// How destinations are judged.
     pub mode: LocalInvasionMode,
     /// Place-name text ids accepted in [`LocalInvasionMode::NamedOnly`], and -- see [`Self::judge`]
@@ -342,6 +356,17 @@ pub struct LocalInvasionConfig {
     pub mark_key: crate::keybind::VirtualKey,
     /// Virtual-key code that un-marks it.
     pub unmark_key: crate::keybind::VirtualKey,
+    /// Virtual-key code that flips [`Self::enabled`] and writes the file.
+    ///
+    /// The filter had no switch a player could reach mid-session: the only way to stop
+    /// rejecting was to alt-tab and hand-edit the TOML, and the reason to want it is
+    /// immediate -- a player who has been hunting one location decides to take whatever
+    /// comes next, and by the time the file is saved the moment has passed.
+    ///
+    /// It writes the file rather than holding the answer in memory, so the switch survives
+    /// a restart and so a player reading the config later sees the state they are actually
+    /// playing in.
+    pub enable_toggle_key: crate::keybind::VirtualKey,
     /// Virtual-key code for "the nearest invasion point that is not the one under our feet".
     ///
     /// Configurable for a sharper reason than the mark keys. This was hard-coded to `VK_F7`, and
@@ -399,6 +424,7 @@ impl Default for LocalInvasionConfig {
             // ON: both halves of the pair, so the master switch alone reproduces the old behaviour.
             ersc_show_observer: true,
             ersc_lobby_key_observer: true,
+            ersc_invade_observer: true,
             mode: LocalInvasionMode::ExactOnly,
             named_location_text_ids: BTreeSet::new(),
             named_locations: Vec::new(),
@@ -406,6 +432,7 @@ impl Default for LocalInvasionConfig {
             // muscle memory both keep working without touching the file.
             mark_key: crate::keybind::VK_INSERT,
             unmark_key: crate::keybind::VK_DELETE,
+            enable_toggle_key: crate::keybind::VK_F3,
             warp_nearest_key: crate::keybind::VK_F7,
             warp_next_key: crate::keybind::VK_F8,
             warp_other_area_key: crate::keybind::VK_F9,

@@ -230,6 +230,37 @@ def _lossy():
         expect("no-lossy-utf8", "spec/justified", rc, out, False)
 
 
+@control("no-thread-suspension",
+         baseline=["python3", "scripts/check-no-thread-suspension.py"])
+def _suspend():
+    g = ["python3", "scripts/check-no-thread-suspension.py"]
+    # The primitive name is assembled rather than written whole, so this control file does not
+    # itself carry an ungated call site for the gate it proves.
+    primitive = "Suspend" + "Thread"
+    declaration = 'unsafe extern "system" {\n    fn %s(thread: isize) -> u32;\n}\n' % primitive
+    call = "    unsafe { %s(thread) };\n" % primitive
+    bad = declaration + "fn _pc_probe_freeze(thread: isize) {\n" + call + "}\n"
+    with new_file("_pc_probe_suspend.rs", bad):
+        rc, out = run(g)
+        expect("no-thread-suspension", "sens/ungated-call", rc, out, True,
+               ["_pc_probe_suspend.rs", primitive])
+    # `profiler_rip_enabled` is the approved opt-in in the baseline's gate table. Textual: this
+    # file never compiles, and the gate reads source rather than a build.
+    ok = (declaration + "fn _pc_probe_freeze(thread: isize) {\n"
+          + "    if !profiler_rip_enabled() {\n        return;\n    }\n" + call + "}\n")
+    with new_file("_pc_probe_suspend.rs", ok):
+        rc, out = run(g)
+        expect("no-thread-suspension", "spec/gated-by-opt-in", rc, out, False)
+    # The baseline is the third route, and it does not work on its own: without the in-source
+    # justification the gate still goes red, which is what keeps an exemption visible at the code.
+    with edit_file("crates/er-crash-logging-core/src/hang.rs",
+                   lambda t: t.replace("/// Thread suspension: this is the one suspender",
+                                       "/// This is the one suspender", 1)):
+        rc, out = run(g)
+        expect("no-thread-suspension", "sens/baselined-without-justification", rc, out, True,
+               ["hang.rs", "sample_thread"])
+
+
 @control("no-timeouts", fast=False)
 def _timeouts():
     g = ["python3", "scripts/check-no-timeouts.py"]
@@ -520,6 +551,7 @@ SIGNAL_TESTS = {
     "test-stall-on-friction-signal.py": ".cupcake/signals/last_assistant_stall_on_friction.sh",
     "test-wall-of-text-signal.py": ".cupcake/signals/last_assistant_wall_of_text.sh",
     "test-unexecuted-promise-signal.py": ".cupcake/signals/last_assistant_unexecuted_promise.sh",
+    "test-described-next-step-signal.py": ".cupcake/signals/last_assistant_described_next_step.sh",
 }
 
 

@@ -48,7 +48,16 @@
 //! send invaders to where that host was twenty minutes ago. Steam permits the owner to rewrite its
 //! own lobby data freely, so [`publish_current_map`] re-publishes whenever the block changes.
 //!
-//! # Hooks: exactly one, and not in `ersc.dll`
+//! # Hooks: three, patched in Steam's vtable, and every one of them called by `ersc.dll`
+//!
+//! This heading read "exactly one, and not in `ersc.dll`" until 2026-09-08, and both halves misled.
+//! The module installs three detours -- `SetLobbyData`, `AddRequestLobbyListStringFilter` and
+//! `RequestLobbyList`. And "not in ersc.dll" describes where the five bytes are written, not who
+//! calls them: the caller of all three is Seamless. `ersc+0xab740` builds the lobby key and then
+//! publishes it through the `SetLobbyData` slot at `ersc+0xac57d`, and `ersc+0x154230` issues five
+//! `AddRequestLobbyListStringFilter` calls followed by two `RequestLobbyList` ones. A frame of ours
+//! reached from any of them is a frame Seamless entered, which is why each raises the re-entrancy
+//! scope that stops this DLL calling back into `ersc.dll` from inside it.
 //!
 //! Publishing installs one read-only observer, on `SetLobbyData`, and alters nothing it sees. It
 //! exists because the lobby id cannot be derived: the session struct's lobby field and the lobby
@@ -623,6 +632,10 @@ mod live {
         key: usize,
         value: usize,
     ) -> usize {
+        // ERSC calls this slot, so a frame of ours reached from here is a frame ERSC entered. The
+        // scope tells `ersc_action` to decline for as long as it lives, which keeps this module
+        // from calling back into ersc.dll with whatever state that call left behind.
+        let _ersc = crate::local_invasion_filter::lock_report::enter_ersc_callback();
         // Same rule as `pooled_key_for`: these pointers are Seamless's, so they are read through
         // `safe_read_cstr` rather than `CStr::from_ptr`. This hook has never been seen to crash,
         // but it takes the identical `key`/`value` pair from the identical caller as the hook
@@ -807,6 +820,10 @@ mod live {
         value: usize,
         comparison: usize,
     ) -> usize {
+        // ERSC calls this slot, so a frame of ours reached from here is a frame ERSC entered. The
+        // scope tells `ersc_action` to decline for as long as it lives, which keeps this module
+        // from calling back into ersc.dll with whatever state that call left behind.
+        let _ersc = crate::local_invasion_filter::lock_report::enter_ersc_callback();
         let substituted = pooled_key_for(key, value);
         let value = substituted.as_ref().map_or(value, |s| s.as_ptr() as usize);
         let orig = ORIG_ADD_STRING_FILTER.load(Ordering::SeqCst);
@@ -966,6 +983,10 @@ mod live {
         c: usize,
         d: usize,
     ) -> usize {
+        // ERSC calls this slot, so a frame of ours reached from here is a frame ERSC entered. The
+        // scope tells `ersc_action` to decline for as long as it lives, which keeps this module
+        // from calling back into ersc.dll with whatever state that call left behind.
+        let _ersc = crate::local_invasion_filter::lock_report::enter_ersc_callback();
         if let Some(value) = hunt_target()
             && let Some(add) = add_string_filter(iface)
         {

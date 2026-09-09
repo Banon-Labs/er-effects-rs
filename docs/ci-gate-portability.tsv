@@ -232,3 +232,7 @@ portable	-	test-pre-push-scrubs-git-env.sh	builds its own main+linked-worktree p
 portable	-	test-cpu-courtesy.sh	runs renice/taskset on itself; every number is derived from nproc, so a 2-core runner asserts 1
 portable	-	check-save-disable-warnings.py	source/AST/text analysis only
 portable	-	conventional-commit-subject.py --selftest	source/AST/text analysis only
+portable	-	test-described-next-step-signal.py	drives the signal script under mktemp; source/text only
+portable	-	check-no-thread-suspension.py --selftest	source/AST/text analysis only
+portable	-	check-no-thread-suspension.py	source/AST/text analysis only; silent and rc 0 in both the clone and the developer tree
+partial	git-baseline	check-runtime-evidence.sh --selftest	seven fixture cases run under mktemp and say PASS; the two carry-forward cases print 'skip' on a depth-1 checkout, which does not carry the commits they diff. fetch-depth: 0 runs them.

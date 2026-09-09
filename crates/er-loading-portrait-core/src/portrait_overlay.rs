@@ -242,15 +242,8 @@ pub fn portrait_onto(buf: &mut [u8], w: usize, h: usize) -> bool {
     // Target rect: the cropped head fills ~80% of screen height (aspect from the crop, not the square),
     // horizontally centered and bottom-anchored to the true screen bottom so the render clips exactly at the
     // monitor edge. The bar is drawn after this (see boot_view_rasterize), so the bar sits in front.
-    let dst_h = portrait_dst_height(h);
-    let dst_w = (dst_h * crop_w / crop_h).max(1);
-    let x0 = portrait_dst_left(
-        w,
-        dst_w,
-        cminx <= PORTRAIT_EDGE_CUT_INSET,
-        cmaxx + 1 + PORTRAIT_EDGE_CUT_INSET >= sw,
-    );
-    let y0 = h.saturating_sub(dst_h);
+    let (src_x, src_y, src_w, src_h) = (0usize, 0usize, sw, sh);
+    let (dst_w, dst_h, x0, y0) = portrait_cover_rect(w, h, src_w, src_h);
     // The settle, written down (2026-08-22). The user sees the portrait "make micro adjustments for a few
     // frames before settling on a camera position". It is not the camera: it is this envelope growing. The
     // blit above scales by `dst_h / crop_h` in both axes (`dst_w = dst_h * crop_w / crop_h`, so `crop_w`
@@ -316,17 +309,23 @@ pub fn portrait_onto(buf: &mut [u8], w: usize, h: usize) -> bool {
         ));
     }
     for dy in 0..dst_h {
-        let ty = y0 + dy;
+        let Some(ty) = y0.checked_add_unsigned(dy).filter(|ty| *ty >= 0) else {
+            continue;
+        };
+        let ty = ty as usize;
         if ty >= h {
             break;
         }
-        let sy = (cminy + dy * crop_h / dst_h).min(sh - 1);
+        let sy = (src_y + dy * src_h / dst_h).min(sh - 1);
         for dx in 0..dst_w {
-            let tx = x0 + dx;
+            let Some(tx) = x0.checked_add_unsigned(dx).filter(|tx| *tx >= 0) else {
+                continue;
+            };
+            let tx = tx as usize;
             if tx >= w {
                 break;
             }
-            let sx = (cminx + dx * crop_w / dst_w).min(sw - 1);
+            let sx = (src_x + dx * src_w / dst_w).min(sw - 1);
             let si = (sy * sw + sx) * 4;
             let a = spx[si + 3] as u32;
             if a == 0 {
@@ -348,61 +347,101 @@ pub fn portrait_onto(buf: &mut [u8], w: usize, h: usize) -> bool {
     true
 }
 
-/// How far short of the render's edge an alpha bound still counts as cut.
+/// Destination rect for the render, scaled to cover the viewport and centred: `(w, h, x0, y0)`.
 ///
-/// Not slop: the offscreen render never writes its outermost columns or rows, so a silhouette that
-/// runs off the side reports `maxx = 1539` in a 1542-wide render, never 1541. An exact `== sw - 1`
-/// test therefore never fired, which is why the first version of the side anchor changed nothing on
-/// screen -- `box=(300,615)-(1539,1539)` was still centred and its cut still visible.
-pub const PORTRAIT_EDGE_CUT_INSET: usize = 3;
-
-/// Left column of the composited portrait: centred, unless a side of the silhouette is cut, in which
-/// case that side is anchored to the matching display edge.
+/// # Why cover, and why the whole render rather than the head's crop box
 ///
-/// Same rule as the bottom, applied sideways. The rect is bottom-anchored so the lower cut lands on
-/// the monitor edge and cannot be seen; a side cut needs the same treatment and did not have it.
-/// Measured live (run br-20260907-200036-738e): `box=(315,621)-(1539,1539)` in a 1542-wide render --
-/// `maxx` is the render's last column, so the character is cut on the right -- composited to
-/// `dst=2792x2095` and centred on a 3840-wide display, which put that straight vertical cut 524px
-/// inside the screen in plain view.
+/// The render is now the same shape as the display (`profile_offscreen_size_target`), so the usual
+/// case here is an exact fit: `dst == (w, h)` at the origin, every edge of the render on the
+/// matching edge of the screen. A silhouette that still runs off the side runs off the screen's own
+/// edge, which reads as a character continuing past the frame rather than as a slice -- so there is
+/// nothing left for an edge-anchor to hide, and the composite can simply be centred.
 ///
-/// Both sides cut cannot be satisfied by placement alone (the rect is narrower than the display), so
-/// that case centres, which spreads the error rather than doubling it on one side.
-pub fn portrait_dst_left(screen_w: usize, dst_w: usize, cut_left: bool, cut_right: bool) -> usize {
-    match (cut_left, cut_right) {
-        (true, false) => 0,
-        (false, true) => screen_w.saturating_sub(dst_w),
-        _ => screen_w.saturating_sub(dst_w) / 2,
+/// It scales the entire render, not the head's alpha bounding box. Scaling the box was what made
+/// apparent size character-dependent: the box grows to whatever the silhouette reaches, so a
+/// two-hander held overhead rendered visibly smaller than the character beside them in the next
+/// load, and the box's own growth during the seed window was the "micro adjustments before it
+/// settles" the user reported. Against the full render the scale is fixed by the display alone, and
+/// the orbit camera is already identical for all ten slots (bd
+/// `portrait-orbit-camera-already-standard-param-row-20-all-slots-2026-08-22`), so every character
+/// is framed the same.
+///
+/// Cover rather than contain handles the case the aspects disagree -- the player moved the game to
+/// another monitor, or resized it, after the size row was patched. Contain would letterbox, which
+/// puts black bars on a loading screen; cover crops the overflowing axis instead, which is why the
+/// origin is signed.
+#[must_use]
+pub fn portrait_cover_rect(
+    screen_w: usize,
+    screen_h: usize,
+    src_w: usize,
+    src_h: usize,
+) -> (usize, usize, isize, isize) {
+    if src_w == 0 || src_h == 0 {
+        return (screen_w, screen_h, 0, 0);
     }
+    // Scale by whichever axis needs the larger factor, so neither ends up short of the viewport.
+    // Compared as a cross-multiplication to keep it in integers: no rounding to argue about, and no
+    // float in a per-frame path.
+    let (dst_w, dst_h) = if src_w * screen_h >= src_h * screen_w {
+        // Wider than the screen: match heights and let the width overflow.
+        ((screen_h * src_w / src_h).max(1), screen_h)
+    } else {
+        (screen_w, (screen_w * src_h / src_w).max(1))
+    };
+    let x0 = (screen_w as isize - dst_w as isize) / 2;
+    let y0 = (screen_h as isize - dst_h as isize) / 2;
+    (dst_w, dst_h, x0, y0)
 }
-
-/// Height of the composited portrait, given the screen height.
-///
-/// One framing for every character. This used to branch on whether the crop envelope's top row was
-/// 0 -- a source the offscreen RT had already truncated -- and stretch those to the full screen
-/// height so the straight cut landed exactly on the monitor's top edge where it could not be seen.
-/// That did hide the seam, and it also made a two-hander with a greatsword above their head render
-/// visibly bigger than the character beside them in the next load: measured on the live run,
-/// `box=(270,0)-(1167,1539)` in a 1542-square source came out `dst=1259x2160`, a 1.40x magnification
-/// against the 1.12x an uncut source got. Framing that changes size with the weapon is a worse
-/// artifact than the one it fixed, and it is the "zoomed in" the user reported.
-///
-/// The seam is now handled where it actually is -- the hard alpha edge along the cut -- by
-/// A truncated source is drawn as it is. Fading its cut edge was tried and reverted: the fade
-/// read as a fade, which is worse than the line it replaced, and it was scope nobody asked for.
-/// silhouette does not end in a line.
-pub fn portrait_dst_height(screen_h: usize) -> usize {
-    (screen_h * PORTRAIT_DST_HEIGHT_PCT / 100).max(1)
-}
-
-/// Share of screen height the portrait occupies, bottom-anchored.
-// +10% (2026-09-07, user): with the camera pulled back to 8.0 the whole body fits in the render, so
-// the composite had headroom left over. 88 -> 97 is that ten percent, still bottom-anchored and still
-// short of the screen so the rect's top edge stays inside the frame.
-pub const PORTRAIT_DST_HEIGHT_PCT: usize = 97;
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_render_shaped_like_the_screen_fills_it_exactly() {
+        // The ordinary case once the size row follows the display: every edge of the render lands on
+        // the matching edge of the screen, so nothing is cropped and nothing is anchored.
+        for (w, h) in [(3840usize, 2160usize), (2560, 1440), (1920, 1080)] {
+            let (dst_w, dst_h, x0, y0) = super::portrait_cover_rect(w, h, w, h);
+            assert_eq!((dst_w, dst_h, x0, y0), (w, h, 0, 0), "{w}x{h}");
+        }
+    }
+
+    #[test]
+    fn a_mismatched_render_covers_and_centres_rather_than_letterboxing() {
+        // The player moved the game to another monitor after the row was patched, so a square render
+        // meets a 16:9 screen. Black bars on a loading screen are worse than a crop, so the square is
+        // scaled until it covers the width and the overflow hangs off the top and bottom evenly.
+        let (dst_w, dst_h, x0, y0) = super::portrait_cover_rect(3840, 2160, 1542, 1542);
+        assert_eq!(dst_w, 3840, "the wide axis is filled exactly");
+        assert_eq!(
+            dst_h, 3840,
+            "the square keeps its shape, so the height overflows"
+        );
+        assert_eq!(x0, 0);
+        assert_eq!(
+            y0,
+            (2160 - 3840) / 2,
+            "the overflow is split between top and bottom"
+        );
+        assert!(y0 < 0);
+    }
+
+    #[test]
+    fn a_square_render_on_a_square_screen_is_untouched() {
+        assert_eq!(
+            super::portrait_cover_rect(1000, 1000, 1542, 1542),
+            (1000, 1000, 0, 0)
+        );
+    }
+
+    #[test]
+    fn a_zero_sized_render_yields_the_viewport_rather_than_dividing_by_it() {
+        assert_eq!(
+            super::portrait_cover_rect(1920, 1080, 0, 0),
+            (1920, 1080, 0, 0)
+        );
+    }
     use super::*;
 
     /// Serializes the tests that drive `portrait_onto`. They share the process-global frame bridge and the
@@ -560,64 +599,20 @@ mod tests {
     /// One size for every character. The cut-source branch used to return the full screen height,
     /// so the same screen framed a two-hander at 1.40x and their neighbour at 1.12x. Both numbers
     /// are measured (`dst=1259x2160` on the live run vs the 88%-of-2160 this now returns).
-    #[test]
-    fn the_framing_does_not_depend_on_whether_the_source_was_cut() {
-        assert_eq!(
-            portrait_dst_height(2160),
-            2160 * PORTRAIT_DST_HEIGHT_PCT / 100
-        );
-        assert!(
-            portrait_dst_height(2160) < 2160,
-            "bottom-anchored and smaller than the screen, so the top edge is inside the frame"
-        );
-    }
-
+    ///
     /// One framing for every character, bottom-anchored, whole crop drawn. A pan-up lift and
     /// fades on the cut edges were tried and reverted: a fade reads as a fade, and neither was
     /// asked for. What was actually wanted -- more of the legs -- is unreachable from the blit:
     /// the crop envelope already spans 1540 of the offscreen render's 1542 rows, so every pixel
     /// the RT holds is on screen. More body needs a different offscreen camera.
-    #[test]
-    fn the_whole_crop_is_drawn_bottom_anchored() {
-        let h = 2160;
-        let dst_h = portrait_dst_height(h);
-        assert_eq!(dst_h, h * PORTRAIT_DST_HEIGHT_PCT / 100);
-        assert_eq!(
-            h.saturating_sub(dst_h) + dst_h,
-            h,
-            "the rect ends at the screen bottom"
-        );
-    }
-
+    ///
     /// A side cut is anchored to that display edge; an uncut portrait still centres. Numbers are the
     /// measured ones: a right-cut crop composited to 2792 wide on a 3840 display sat 524px short.
-    #[test]
-    fn a_cut_side_is_anchored_to_that_display_edge() {
-        assert_eq!(portrait_dst_left(3840, 2792, false, true), 3840 - 2792);
-        assert_eq!(portrait_dst_left(3840, 2792, true, false), 0);
-        assert_eq!(
-            portrait_dst_left(3840, 2792, false, false),
-            (3840 - 2792) / 2
-        );
-        assert_eq!(portrait_dst_left(3840, 2792, true, true), (3840 - 2792) / 2);
-    }
-
+    ///
     /// A rect wider than the display saturates to 0 in every case rather than wrapping.
-    #[test]
-    fn an_overwide_rect_never_underflows() {
-        for cuts in [(false, false), (true, false), (false, true), (true, true)] {
-            assert_eq!(portrait_dst_left(100, 500, cuts.0, cuts.1), 0);
-        }
-    }
-
+    ///
     /// Never zero, at any screen size -- the blit divides by it.
-    #[test]
-    fn the_destination_height_is_never_zero() {
-        for h in [0usize, 1, 2, 7, 1080] {
-            assert!(portrait_dst_height(h) >= 1);
-        }
-    }
-
+    ///
     #[test]
     fn crop_seed_counter_saturates_and_growth_counts_only_real_moves() {
         let _serial = PORTRAIT_GLOBALS.lock().unwrap_or_else(|e| e.into_inner());

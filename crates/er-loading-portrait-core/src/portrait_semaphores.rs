@@ -327,30 +327,102 @@ pub const PROFILE_OFFSCREEN_SIZE_TABLE_RVA: usize = 0x3b39848;
 pub const PROFILE_OFFSCREEN_SIZE_TABLE_STRIDE: usize = 0x20;
 /// The value `FUN_1400a7bb0` writes (base 128x128 = `(128<<32)|128`); self-validate before patching.
 pub const PROFILE_OFFSCREEN_SIZE_INIT: usize = 0x8000000080;
-/// Target base 1542x1542 = `(1542<<32)|1542`, with the native per-slot supersample flag off (2026-07-06:
-/// 1028 -> 1542 = 150% per user, keeping the composite upscale but recovering quality vs the half-res
-/// 1028). `0x606` = 1542. This forces the engine's env-dependent path (`FUN_140bbeee0`: `base*2` iff
-/// global flag && `size_struct[+0x8]`) to stay x1, producing a 1542x1542 portrait RT that the
-/// full-backbuffer GPU composite then scales up. The stats font auto-tracks this (em_px = rt_dim*48/2056),
-/// so on-screen text size is unchanged.
-/// Widened 2026-09-07 (user: a long weapon is "cut off in the viewport, width wise"). The square RT
-/// was the reason: `Bean Smith` came out `box=(300,615)-(1539,1539)` -- the alpha runs to the render's
-/// last usable column, so the weapon was clipped by the render and no compositing change could bring
-/// it back. Width 0x808 = 2056, height unchanged at 0x606 = 1542 (4:3).
+/// Height of the portrait offscreen render target, in pixels before the native supersample flag.
 ///
-/// Which half is width is measured, not assumed. `CS::CSMenuProfModelRend::CSMenuProfModelRend`
-/// (1.16.2 dump, 0x140bbdf20) sets the camera aspect at `+0xa24` to
+/// 1542 since 2026-07-06 (1028 -> 1542, 150% per user: it keeps the composite upscale while
+/// recovering the quality the half-res 1028 lost). The width is no longer equal to it -- see
+/// [`profile_offscreen_size_target`] -- so this is the one dimension that is a constant, and the
+/// stats font sizes against it (`stats_loading_text.rs`) so on-screen text is unaffected by the
+/// aspect the display happens to have.
+pub const PROFILE_OFFSCREEN_SIZE_HEIGHT: usize = 0x606;
+
+/// Widest render this will ask the engine for, as a multiple of the height.
+///
+/// A guard on the arithmetic below rather than a preference: `GetSystemMetrics` returning a
+/// nonsense pair, or a display this code has never seen, must not turn into a request for a
+/// render target of arbitrary size. 32:9 superwide is the widest display sold, and `3.6` clears it.
+const PROFILE_OFFSCREEN_MAX_ASPECT: usize = 36;
+
+/// The size-table value to write: `(height << 32) | width`, with the width derived from the
+/// display's aspect so the render is the same shape as the screen it will be composited onto.
+///
+/// # Why the shape matters more than the pixels
+///
+/// The render is what clips a long weapon, and no compositing change can bring back pixels the
+/// render never drew. A square render on a 16:9 display therefore had two bad options and took both
+/// in turn: centre it and the straight cut edge sits in plain view, or anchor the cut side to the
+/// matching display edge (`portrait_dst_left`) and the character is thrown off centre -- measured
+/// 2026-09-08 on `TTV/RustBucket`, whose halberd reached the render's left column and pushed the
+/// whole composite flush left with the right 45% of the screen left black.
+///
+/// Matching the aspect removes the choice. The render covers the same shape as the display, the
+/// composite fills it edge to edge, and any silhouette that still runs off the side runs off the
+/// screen's own edge -- which reads as a character continuing past the frame rather than as a cut.
+///
+/// # Why the width dword is the one that moves
+///
+/// Measured, not assumed. `CS::CSMenuProfModelRend::CSMenuProfModelRend` (1.16.2 dump,
+/// `0x140bbdf20`) sets the camera aspect at `+0xa24` to
 /// `(float)*(int *)(&DAT_143b39848 + row) / (float)*(int *)(&DAT_143b3984c + row)` -- numerator at
-/// row+0x00, denominator at row+0x04 -- so the low dword is width and the high dword is height, and
-/// the engine derives the render aspect from them rather than stretching a square.
-/// Reverted to square 2026-09-07. Widening the low dword to 0x808 (2056x1542) to give a long weapon
-/// horizontal room was built and launched, and that run died at the title with a C++/Rust throw
-/// before a portrait was ever rendered (run br-20260907-201055-59a5, +35938ms, `exception
-/// code=0xe06d7363`). The same throw address appears in an earlier run on a build without this
-/// change, so this is correlation, not proof -- but a non-square portrait RT is unproven and the
-/// crash is real, so it does not stay in while it is both. The weapon's side cut is handled instead
-/// where it costs nothing: `portrait_dst_left` anchors a cut side to the matching display edge.
-pub const PROFILE_OFFSCREEN_SIZE_TARGET: usize = 0x0000_0606_0000_0606;
+/// `row+0x00`, denominator at `row+0x04` -- so the low dword is width, the high dword is height,
+/// and the engine derives the render aspect from the pair rather than stretching a square.
+///
+/// # The 2026-09-07 revert, and why it does not stand
+///
+/// A 2056x1542 widening was built and backed out the same day because run
+/// `br-20260907-201055-59a5` died at the title with `0xe06d7363`. That crash was read again on
+/// 2026-09-08 and it is not this: caller `#7=0x1800258b0` is the return address of
+/// `mov ecx,5 ; call 0x1800f8e38` at `ersc+0x258ab`, inside Seamless's invade action, throwing
+/// `std::system_error` errno 36 on a session mutex it could not take. Same bug as the cancel-side
+/// crash that day, one action over, and unrelated to the render target. See bd
+/// `nonsquare-portrait-rt-revert-blamed-the-ersc-invade-deadlock-2026-09-08`.
+///
+/// # The resize case
+///
+/// The display is read once, when the row is patched, which is before the renderers are
+/// constructed. A player who moves the game to a different monitor or resizes it mid-load keeps the
+/// aspect this returned, and the composite covers rather than letterboxes, so the result is a crop
+/// rather than a black band. Accepted as an edge case by the user, 2026-09-08.
+#[must_use]
+pub fn profile_offscreen_size_target() -> usize {
+    offscreen_size_for_display(display_size())
+}
+
+/// [`profile_offscreen_size_target`] with the display passed in rather than asked for.
+///
+/// Split out so the fallback has a test. The tests in this crate are built for the windows target
+/// and run under Wine, where `GetSystemMetrics` answers with the real monitor -- so a test that
+/// called the display-reading function and asserted the no-display answer was asserting whatever
+/// screen the machine happened to have, and it failed on a 16:9 one by returning 2741 where it
+/// wanted 1542. The arithmetic is the part worth pinning; reading the display is not.
+#[must_use]
+fn offscreen_size_for_display(display: Option<(usize, usize)>) -> usize {
+    let height = PROFILE_OFFSCREEN_SIZE_HEIGHT;
+    let width = match display {
+        Some((w, h)) if w > 0 && h > 0 => {
+            (height * w / h).clamp(height, height * PROFILE_OFFSCREEN_MAX_ASPECT / 10)
+        }
+        // No display to ask: the square this replaced, which is the shape every measurement in this
+        // module was taken against.
+        _ => height,
+    };
+    (height << 32) | width
+}
+
+/// The primary display's pixel size, or `None` where there is no display to ask.
+#[cfg(windows)]
+fn display_size() -> Option<(usize, usize)> {
+    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
+    let w = unsafe { GetSystemMetrics(SM_CXSCREEN) };
+    let h = unsafe { GetSystemMetrics(SM_CYSCREEN) };
+    (w > 0 && h > 0).then_some((w as usize, h as usize))
+}
+
+/// Host stub: the host tests pin the arithmetic, not the display.
+#[cfg(not(windows))]
+fn display_size() -> Option<(usize, usize)> {
+    None
+}
 /// Byte offset within a size-table row of the per-slot supersample-enable flag (read as
 /// `size_struct[+0x8]` by `FUN_140bbeee0`); zero it to force x1.
 pub const PROFILE_OFFSCREEN_SIZE_SUPERSAMPLE_FLAG_OFFSET: usize = 0x8;
@@ -362,3 +434,61 @@ pub use er_telemetry_core::counters::PROFILE_SIZE_PATCHED;
 /// (GILM not resident at construction) `*envObj` stays 0 -> head is unlit/dark. So
 /// `*(renderer+0x760)` then deref again = the residency oracle (non-zero = IBL built).
 pub const PROFILE_RENDERER_ENV_REGION_OFFSET: usize = 0x760;
+
+#[cfg(test)]
+mod offscreen_size_tests {
+    use super::{
+        PROFILE_OFFSCREEN_MAX_ASPECT, PROFILE_OFFSCREEN_SIZE_HEIGHT, offscreen_size_for_display,
+        profile_offscreen_size_target,
+    };
+
+    /// The packing is the engine's, read out of `CSMenuProfModelRend`'s ctor: low dword width,
+    /// high dword height. Getting the halves the wrong way round would ask for a portrait-shaped
+    /// render on a landscape display, which is the failure this whole change exists to remove.
+    #[test]
+    fn the_low_dword_is_width_and_the_high_dword_is_height() {
+        let target = profile_offscreen_size_target();
+        assert_eq!(
+            (target >> 32) & 0xffff_ffff,
+            PROFILE_OFFSCREEN_SIZE_HEIGHT,
+            "the height is the constant half"
+        );
+        assert!(target & 0xffff_ffff >= PROFILE_OFFSCREEN_SIZE_HEIGHT);
+    }
+
+    /// With no display to ask, the answer has to be the square this replaced -- the shape every
+    /// measurement in this module was taken against.
+    ///
+    /// It passes `None` rather than calling `profile_offscreen_size_target`, because these tests
+    /// are built for the windows target and run under Wine: the real `display_size` answers there,
+    /// so calling it would assert the machine's monitor instead of the fallback.
+    #[test]
+    fn with_no_display_it_falls_back_to_the_square_it_replaced() {
+        let square = (PROFILE_OFFSCREEN_SIZE_HEIGHT << 32) | PROFILE_OFFSCREEN_SIZE_HEIGHT;
+        assert_eq!(offscreen_size_for_display(None), square);
+        // A display that reports zero on either axis is the same "nothing to ask" case, and must
+        // not divide by it.
+        assert_eq!(offscreen_size_for_display(Some((0, 0))), square);
+        assert_eq!(offscreen_size_for_display(Some((1920, 0))), square);
+    }
+
+    /// A landscape display widens the render, and only up to the aspect cap.
+    #[test]
+    fn a_display_widens_the_render_and_the_cap_bounds_it() {
+        let h = PROFILE_OFFSCREEN_SIZE_HEIGHT;
+        assert_eq!(
+            offscreen_size_for_display(Some((1920, 1080))) & 0xffff_ffff,
+            h * 16 / 9
+        );
+        // Portrait display: never narrower than the square, because the composite covers.
+        assert_eq!(
+            offscreen_size_for_display(Some((1080, 1920))) & 0xffff_ffff,
+            h
+        );
+        // Absurdly wide: clamped rather than allocating a render target off the end of the world.
+        assert_eq!(
+            offscreen_size_for_display(Some((10_000, 1000))) & 0xffff_ffff,
+            h * PROFILE_OFFSCREEN_MAX_ASPECT / 10
+        );
+    }
+}

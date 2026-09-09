@@ -27,6 +27,11 @@ eldenring-deobf.bin
 # Same rule, 1.17: a de-Arxan'd copy of the game binary. Regenerate with
 # scripts/dearxan-deobfuscate.rs; never commit it.
 eldenring-deobf-1.17.bin
+# The installed build since 2026-09-08. It was named in AGENTS.md and generated the same day but
+# never listed here, so a 98 MB copyrighted game binary sat untracked and visible to `git add -A`
+# -- the one thing every line in this block exists to prevent. The pattern is spelled out per
+# build rather than globbed on purpose, which is exactly why a new build has to be added by hand.
+eldenring-deobf-1.17.1.bin
 *.deobf.bin
 # Raw executable bytes exported from the Ghidra runtime DUMP (copyrighted) -- used by
 # scripts/dump-deobf-shift.py to ground-truth dump<->deobf addresses. NEVER commit.

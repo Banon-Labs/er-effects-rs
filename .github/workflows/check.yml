@@ -43,7 +43,7 @@ env:
   # KEEPING `2.6.2.0`/`2.6.2.1`. Do not advance this to upstream `main`
   # without re-verifying: `acb2a19` DELETES `rva_ww_270.rs` and rewrites
   # `rva_ww.rs`/`rva_jp.rs` as 1.17-only, dropping 1.16.2 support entirely.
-  FROMSOFTWARE_RS_REV: 1027d24920c0d71fcc17666194d331af0666fc3a
+  FROMSOFTWARE_RS_REV: 16d266146bcc7e896ac0d9a2c020e0d4c07baf52
   # WHICH REMOTE THE PIN ABOVE ACTUALLY EXISTS ON. This step used to clone
   # vswarte/fromsoftware-rs unconditionally, and from 2026-08-30 18:31 that made
   # this whole workflow dead: `1027d24` and its parent `4284a05` (the ones that
@@ -80,6 +80,12 @@ env:
   # places rather than to sprinkle `# shellcheck disable=` at an old version's
   # false positives. Bump this when the developer tree bumps.
   SHELLCHECK_VERSION: v0.11.0
+
+  # The OPA build the policy suite is linted and tested against, pinned for the same reason
+  # shellcheck is: `opa test` and `opa build -t wasm` are what decide whether a cupcake guard
+  # fires, and a silently-moving `latest` decides that differently from the developer tree.
+  # This is the version installed locally (`opa version` -> 1.16.1).
+  OPA_VERSION: v1.16.1
 
 jobs:
   # WHICH LINUX RUNNER `check` LANDS ON, decided per run instead of hard-coded.
@@ -263,11 +269,28 @@ jobs:
           path: ~/.cache/cargo-xwin
           key: xwin-sdk-${{ runner.os }}-cargo-xwin-${{ env.CARGO_XWIN_VERSION }}
 
-      - name: Install OPA policy engine
+      # Pinned, from the release asset, and checked -- three things the previous line was not, each
+      # of which failed or could fail silently.
+      #
+      # It read `curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static`
+      # and that is what broke run 34313440919: `curl: (35) Recv failure: Connection reset by peer`,
+      # after the redirector had already returned an 86-byte body. Without `-f` a curl that receives
+      # an error page writes it to `opa`, `chmod +x` succeeds, and the failure surfaces later as
+      # every policy gate failing to parse -- so the loud network error was the good outcome.
+      #
+      # `latest` is also the wrong contract here. `opa test` and `opa build -t wasm` decide whether
+      # a cupcake guard fires, and one of this repo's guards was inert for hours because a builtin
+      # is missing from the WASM runtime (see check-cupcake-wasm-builtins.py) -- exactly the class
+      # of behaviour that moves between OPA releases. CI must run the version the developer tree
+      # runs, the way the shellcheck step above already does.
+      - name: Install OPA (pinned)
         run: |
-          curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static
-          chmod +x opa
-          sudo mv opa /usr/local/bin/opa
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 -o /tmp/opa \
+            "https://github.com/open-policy-agent/opa/releases/download/${OPA_VERSION}/opa_linux_amd64_static"
+          sudo install -m 0755 /tmp/opa /usr/local/bin/opa
+          # Fail here rather than let every policy gate lint under the wrong engine.
+          opa version
+          opa version | grep -qx "Version: ${OPA_VERSION#v}"
 
       # Cupcake has no prebuilt releases at our pinned rev, so cache the binary
       # we build; the ~4.5 min source build then only runs when CUPCAKE_REV moves.

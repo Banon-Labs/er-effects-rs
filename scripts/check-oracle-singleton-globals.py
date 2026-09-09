@@ -321,9 +321,32 @@ def constant_values(root: Path) -> dict[str, int | None]:
 # whether a right-hand side that is not a named constant is a compiled-in 1.16.2 claim.
 
 
+def _without_outer_parens(expression: str) -> str:
+    """`(lfanew & 0xffff_ffff)` -> `lfanew & 0xffff_ffff`, and `(a) + (b)` unchanged.
+
+    Every test below reads the first token of the expression -- is it a literal, does it name the
+    module base, which local binds it. A wrapping paren hid all three: `base + (lfanew & mask)` in
+    `local_invasion_filter.rs`'s PE walk fell through to "no leading name" and was reported as a
+    compiled-in address, against a site the frozen-negative list names. Only a paren that spans
+    the whole expression is removed, so an expression that merely starts and ends with one is
+    left alone.
+    """
+    while expression.startswith("(") and expression.endswith(")"):
+        depth = 0
+        for index, character in enumerate(expression):
+            if character == "(":
+                depth += 1
+            elif character == ")":
+                depth -= 1
+                if depth == 0 and index != len(expression) - 1:
+                    return expression
+        expression = expression[1:-1].strip()
+    return expression
+
+
 def rhs_is_compiled_in(text: str, bound, rhs: str, base_name: str, before: int) -> bool:
     """Is this right-hand side a compiled-in 1.16.2 claim rather than a runtime-derived value?"""
-    stripped = rhs.strip()
+    stripped = _without_outer_parens(rhs.strip())
     if not stripped:
         return False
     literal = re.match(r"^(0x[0-9a-fA-F_]+|\d+)(?:_?u?size|u32|u64)?\s*$", stripped)

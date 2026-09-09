@@ -42,6 +42,12 @@ pub mod state {
     /// `0x0e -> 0x11 -> 0x0d`, not a handshake -- see [`TIMED_STATES`] for what timing it cost.
     pub const RETRYING: u32 = 0x11;
     pub const CANCELLING: u32 = 0x22;
+    /// The state a driven cancel settles through on its way back to idle. Named so the test that
+    /// refuses to time it can say which state it means.
+    pub const CANCEL_SETTLING: u32 = 0x23;
+    /// A handshake step that is timed, used by the tests that exercise the timing mechanism
+    /// rather than the membership list.
+    pub const CONNECTING: u32 = 0x12;
 }
 
 /// The only states this detector times, listed because each one was measured to be brief.
@@ -67,13 +73,28 @@ pub mod state {
 ///
 /// So: a state earns its place here by having been observed to complete quickly. Anything absent --
 /// unknown, newly introduced by a Seamless update, or simply never seen -- is never timed.
-const TIMED_STATES: [u32; 5] = [
+const TIMED_STATES: [u32; 3] = [
     0x0e, // search -> connect handoff
     0x12, // connect
     0x13, // connect
-    0x22, // cancelling
-    0x23, // cancel settling
 ];
+
+// 0x22 and 0x23 are deliberately absent, and they used to be here. They are the unwind of a cancel
+// that is already in flight, and the only remedy this watchdog has is to drive a cancel -- so on
+// those two states it answers a cancel with another cancel.
+//
+// Measured on run br-20260909-020749-0a75, six times in one session. The sequence each time:
+// `cancelled rejected match (#N)` puts the session at 0x23, five seconds later this fires
+// `about to drive ERSC cancel (stalled attempt) -- state=0x23 CANCELLING`, and the session then
+// holds 0x23 for 30,307ms before reaching 0x24 and idle. From the player's seat that is a search
+// that dies and takes half a minute to come back, reported as "I'm just getting failed
+// invasions".
+//
+// 30 seconds also fails this file's own admission test one line up: a state earns its place by
+// having been observed to complete quickly, and 0x23 has now been measured at six times the
+// threshold that is supposed to catch it. This is the same shape as the 0x11 mistake recorded
+// above -- a detector cancelling the recovery the system was already performing, strictly worse
+// than not existing.
 
 // 0x15 (join data arrived) is deliberately absent, and it used to be here.
 //
@@ -201,21 +222,27 @@ impl StallWatchdog {
 mod tests {
     use super::*;
 
-    /// The failure this module exists for: cancelling hung for 30s where 8 healthy samples took
-    /// 2s or less.
+    /// The inverse of what this test asserted until 2026-09-09, and the reason it flipped.
+    ///
+    /// It used to require that a cancel hung at `CANCELLING` be recovered by driving a cancel.
+    /// That is answering a cancel with another cancel, and run br-20260909-020749-0a75 measured
+    /// the cost six times: `cancelled rejected match (#N)` puts the session at 0x23, this fired
+    /// five seconds later, and the session then held 0x23 for 30,307ms before reaching idle.
+    ///
+    /// A cancel that is settling is already the recovery. There is nothing for this watchdog to
+    /// add to it, and its only action makes it worse.
     #[test]
-    fn a_hung_cancel_is_recovered() {
-        let mut w = StallWatchdog::new();
-        assert_eq!(w.observe(state::CANCELLING, 0), None);
-        assert_eq!(
-            w.observe(state::CANCELLING, 4_999),
-            None,
-            "under threshold must not fire"
-        );
-        assert_eq!(
-            w.observe(state::CANCELLING, 5_000),
-            Some(StallAction::CancelAndResearch),
-        );
+    fn a_settling_cancel_is_never_a_stall() {
+        for state in [state::CANCELLING, state::CANCEL_SETTLING] {
+            let mut w = StallWatchdog::new();
+            w.observe(state, 0);
+            assert_eq!(
+                w.observe(state, 3_600_000),
+                None,
+                "state {state:#04x} is a cancel already unwinding; driving another cancel into it \
+                 is what wedged it for 30s",
+            );
+        }
     }
 
     /// The most obvious way to get this wrong. `SEARCHING` means "nobody matched yet" and is
@@ -306,16 +333,18 @@ mod tests {
     #[test]
     fn standing_down_forgets_the_clock() {
         let mut w = StallWatchdog::new();
-        w.observe(0x22, 0);
+        // A state that is still timed, since this test is about the clock and not the membership
+        // list; 0x22 stopped being timed on 2026-09-09.
+        w.observe(state::CONNECTING, 0);
         w.stand_down();
         assert!(w.timing_state().is_none());
         assert_eq!(
-            w.observe(0x22, 4_000),
+            w.observe(state::CONNECTING, 4_000),
             None,
             "after standing down the clock restarts; 4s must not read as 4s already elapsed",
         );
         assert_eq!(
-            w.observe(0x22, 9_000),
+            w.observe(state::CONNECTING, 9_000),
             Some(StallAction::CancelAndResearch),
             "and the fresh clock still reaches the threshold on its own terms",
         );
@@ -360,11 +389,11 @@ mod tests {
     #[test]
     fn a_stall_fires_once_per_entry() {
         let mut w = StallWatchdog::new();
-        w.observe(state::CANCELLING, 0);
-        assert!(w.observe(state::CANCELLING, 5_000).is_some());
+        w.observe(state::CONNECTING, 0);
+        assert!(w.observe(state::CONNECTING, 5_000).is_some());
         for t in 5..60 {
             assert_eq!(
-                w.observe(state::CANCELLING, t * 1_000),
+                w.observe(state::CONNECTING, t * 1_000),
                 None,
                 "re-fired at {t}s"
             );
@@ -377,14 +406,14 @@ mod tests {
     #[test]
     fn a_second_stall_in_a_later_entry_fires_again() {
         let mut w = StallWatchdog::new();
-        w.observe(state::CANCELLING, 0);
-        assert!(w.observe(state::CANCELLING, 5_000).is_some());
+        w.observe(state::CONNECTING, 0);
+        assert!(w.observe(state::CONNECTING, 5_000).is_some());
         // recovered: back to idle, then searching, then stuck again
         w.observe(state::IDLE, 6_000);
         w.observe(state::SEARCHING, 7_000);
-        w.observe(state::CANCELLING, 8_000);
+        w.observe(state::CONNECTING, 8_000);
         assert!(
-            w.observe(state::CANCELLING, 13_000).is_some(),
+            w.observe(state::CONNECTING, 13_000).is_some(),
             "a repeat stall must be recovered again -- the loop never gives up",
         );
     }
@@ -393,8 +422,8 @@ mod tests {
     #[test]
     fn a_backwards_clock_does_not_fire() {
         let mut w = StallWatchdog::new();
-        w.observe(state::CANCELLING, 10_000);
-        assert_eq!(w.observe(state::CANCELLING, 1_000), None);
+        w.observe(state::CONNECTING, 10_000);
+        assert_eq!(w.observe(state::CONNECTING, 1_000), None);
     }
 
     /// The trace needs to say how long a state has been held; resting states report nothing rather
@@ -404,9 +433,9 @@ mod tests {
         let mut w = StallWatchdog::new();
         w.observe(state::IDLE, 1_000);
         assert_eq!(w.held_ms(2_000), None);
-        w.observe(state::CANCELLING, 3_000);
+        w.observe(state::CONNECTING, 3_000);
         assert_eq!(w.held_ms(4_500), Some(1_500));
-        assert_eq!(w.timing_state(), Some(state::CANCELLING));
+        assert_eq!(w.timing_state(), Some(state::CONNECTING));
     }
 
     /// The threshold must sit strictly between the healthy spread and the observed failure. Pinned

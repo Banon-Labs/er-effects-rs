@@ -173,7 +173,17 @@ def binders(text: str) -> list[tuple[int, str, str, str]]:
             (match.start(), match.group(1), "let", text[match.end() : end if end != -1 else len(text)])
         )
     # `let (a, b) = ...` / `let Some(x) = ...` -- destructuring. The initialiser is shared.
-    for match in re.finditer(r"\blet\s+(?:mut\s+)?[\(\[][^;=\n]{0,120}?[\)\]]\s*(?::[^=;]+)?=", text):
+    #
+    # The constructor path in front of the bracket is optional and was missing until 2026-09-09,
+    # so this arm matched `let (a, b) =` but not the `let Some(x) =` its own comment named. The
+    # cost was a false positive rather than a missed defect: `local_invasion_filter.rs` reads a PE
+    # header with `let Some(lfanew) = safe_read_usize(base + PE_LFANEW)`, no binder was found for
+    # `lfanew`, and the walk that is already derived from the running image was reported as
+    # compiled-in arithmetic -- against a site the gate's own frozen-negative list names.
+    for match in re.finditer(
+        r"\blet\s+(?:mut\s+)?(?:[A-Z][A-Za-z0-9_]*(?:::[A-Za-z0-9_]+)*\s*)?[\(\[][^;=\n]{0,120}?[\)\]]\s*(?::[^=;]+)?=",
+        text,
+    ):
         end = text.find(";", match.end())
         initialiser = text[match.end() : end if end != -1 else len(text)]
         for name in _identifiers(match.group(0)):
