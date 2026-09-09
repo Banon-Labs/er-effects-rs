@@ -409,6 +409,35 @@ dependency-closure walk. Load it only when death-persistence IS the experiment, 
 invade during that run: `--with er-death-persist`."""
 
 [compatible]
+"er-convenient-deaths" = """CO-LOADABLE WITH EVERYTHING, INCLUDING THE PRODUCT, and the reason is \
+structural rather than a run that happened to survive: this shell INSTALLS NO DETOUR. Its whole \
+effect is three one-byte stores into `.text`, from its own install thread, after which the thread \
+exits and nothing here runs again for the session. Neither failure mode this table exists to \
+catch can arise -- no second MinHook instance can overwrite a trampoline it never installed, and \
+no D3D12 Present/compositor is touched.
+
+WHICH BYTES, AND WHO ELSE COULD WANT THEM. The three sites are 1.16.2 `0x5fc0c0+0x0` (the \
+bloodstain writer's entry), `0x25e1e0+0x9` (the rune-arc clear's 16-bit store) and \
+`0x5a6fb0+0x11d` (the `MenuCommonParam` null-check inside `SoloPlayDeath`). No other crate in \
+this workspace declares any of the five addresses involved -- verified 2026-09-09 through \
+`scripts/rva_symbols.py`, which keys on resolved VALUES rather than names, so the claim is \
+checkable and not a naming coincidence.
+
+WHAT HAPPENS IF SOMETHING ELSE DOES OWN ONE. It is reported, not silently lost. Each patch \
+compares the live window byte-for-byte against a constant `build.rs` generated from named \
+`iced-x86` instructions before writing, and reads the byte back afterwards; a mod that got there \
+first fails the first check and the patch DISARMS, and a mod that arrives later cannot corrupt \
+anything of ours because there is no trampoline to overwrite -- the byte is simply theirs.
+
+RELATIONSHIP TO er-seamless-bugfixes, which is the shell a reader will suspect, since it is the \
+only other crate that writes game code. Its single patch is the freelist shutdown assert at \
+1.16.2 `0xc57670`, which is nowhere near these three, and it reaches its address the same way \
+(`resolve_call_site_rva`, window check, one byte, read back). The two are independent by address \
+and identical in mechanism.
+
+DEFAULT-OFF, WHICH IS NOT A CONFLICT ARGUMENT BUT IS WORTH KNOWING: all three patches stay \
+unapplied unless a DLL-adjacent config key asks for one, so a profile that includes this shell \
+without editing that file changes no byte at all."""
 "er-focus-input" = """CO-LOADABLE WITH EVERYTHING, INCLUDING THE PRODUCT, and the reason is \
 structural rather than a run that happened to survive: this shell INSTALLS NO DETOUR. Its entire \
 effect is one byte store, from the game thread, into the `.data` global behind \

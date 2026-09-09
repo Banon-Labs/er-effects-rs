@@ -1,0 +1,31 @@
+[package]
+name = "er-convenient-deaths"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_convenient_deaths"
+crate-type = ["cdylib"]
+
+# Three death conveniences, each one rewritten byte of the game's own code.
+#
+# Ported from github chozandrias76/er-convenient-deaths, whose own offsets are dead on every
+# build this workspace supports. See `src/patches.rs` for the measurement and for the rules a
+# fourth patch would have to satisfy.
+[dependencies]
+er-game-base = { path = "../er-game-base" }
+
+# Assembles each patched window from NAMED instructions in `build.rs` and ground-truths it
+# against `eldenring-deobf.bin`, so a hand-typed byte cannot silently disarm a patch.
+[build-dependencies]
+iced-x86 = { version = "1.21", default-features = false, features = [
+  "std",
+  "code_asm",
+] }
+
+[target.'cfg(windows)'.dependencies]
+er-hook = { path = "../er-hook" }
+
+[lints]
+workspace = true
