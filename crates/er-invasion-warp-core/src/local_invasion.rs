@@ -356,6 +356,17 @@ pub struct LocalInvasionConfig {
     pub mark_key: crate::keybind::VirtualKey,
     /// Virtual-key code that un-marks it.
     pub unmark_key: crate::keybind::VirtualKey,
+    /// Virtual-key code that flips [`Self::enabled`] and writes the file.
+    ///
+    /// The filter had no switch a player could reach mid-session: the only way to stop
+    /// rejecting was to alt-tab and hand-edit the TOML, and the reason to want it is
+    /// immediate -- a player who has been hunting one location decides to take whatever
+    /// comes next, and by the time the file is saved the moment has passed.
+    ///
+    /// It writes the file rather than holding the answer in memory, so the switch survives
+    /// a restart and so a player reading the config later sees the state they are actually
+    /// playing in.
+    pub enable_toggle_key: crate::keybind::VirtualKey,
     /// Virtual-key code for "the nearest invasion point that is not the one under our feet".
     ///
     /// Configurable for a sharper reason than the mark keys. This was hard-coded to `VK_F7`, and
@@ -421,6 +432,7 @@ impl Default for LocalInvasionConfig {
             // muscle memory both keep working without touching the file.
             mark_key: crate::keybind::VK_INSERT,
             unmark_key: crate::keybind::VK_DELETE,
+            enable_toggle_key: crate::keybind::VK_F3,
             warp_nearest_key: crate::keybind::VK_F7,
             warp_next_key: crate::keybind::VK_F8,
             warp_other_area_key: crate::keybind::VK_F9,

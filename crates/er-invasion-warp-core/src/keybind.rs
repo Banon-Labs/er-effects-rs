@@ -35,6 +35,12 @@ pub const VK_INSERT: VirtualKey = 0x2d;
 /// `VK_DELETE` -- the historical un-mark key, still the default.
 pub const VK_DELETE: VirtualKey = 0x2e;
 
+/// `VK_F3` -- the default switch for the filter itself, added 2026-09-09.
+///
+/// It has no historical value to preserve, so it is chosen rather than inherited: F3 is
+/// clear of the three warp keys, of the mark pair, and of the game's own bindings.
+pub const VK_F3: VirtualKey = 0x72;
+
 /// `VK_F7` -- the historical "warp to the nearest invasion point" key, still the default.
 pub const VK_F7: VirtualKey = 0x76;
 /// `VK_F8` -- the historical "next point in the catalog's order" key, still the default.

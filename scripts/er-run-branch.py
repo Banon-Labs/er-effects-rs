@@ -486,8 +486,57 @@ def failed_block(run_id: str, reason: str, detail: list[str]) -> str:
     return "\n".join(lines)
 
 
+def stale_launchers() -> list[tuple[int, str]]:
+    """Live `me3 launch` processes, as `(pid, profile)`.
+
+    A launcher OUTLIVES the game it started. Measured 2026-09-09: three launches in a row failed
+    with `no DLL testimony`, each after the full 90-second budget, because a previous run's `me3`
+    was still alive holding the Wine prefix -- and `er-teardown.py --status` said `no eldenring.exe`
+    and `clean-exit`, which reads as nothing running. So the condition is invisible to the game
+    check and has to be asked for separately.
+
+    Reads `/proc` directly rather than shelling out to a process-name tool, which this workspace
+    forbids for reasons recorded in the Steam-detection guard.
+    """
+    found: list[tuple[int, str]] = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            argv = (entry / "cmdline").read_bytes().split(b"\0")
+        except OSError:
+            continue  # exited between listing and reading; not our business
+        args_text = [part.decode(errors="replace") for part in argv if part]
+        if len(args_text) < 2 or Path(args_text[0]).name != "me3":
+            continue
+        if "launch" not in args_text:
+            continue
+        profile = "<unnamed>"
+        for flag in ("-p", "--profile"):
+            if flag in args_text:
+                index = args_text.index(flag)
+                if index + 1 < len(args_text):
+                    profile = args_text[index + 1]
+        found.append((int(entry.name), profile))
+    return found
+
+
 def preflight(args) -> tuple[dict, dict | None]:
     """Closure + provenance + save pick. Raises RuntimeError with a loud message on any refusal."""
+    # Before anything expensive: a launcher from an earlier run still holds the prefix, and the
+    # only symptom downstream is ninety seconds of silence followed by the wrong diagnosis.
+    if not getattr(args, "allow_stale_launcher", False):
+        held = stale_launchers()
+        if held:
+            raise RuntimeError(
+                "REFUSING TO LAUNCH -- a previous run's me3 launcher is still alive and holding "
+                "the Wine prefix:\n"
+                + "\n".join(f"  pid {pid}  profile {profile}" for pid, profile in held)
+                + "\n\nIts game has already exited, so `er-teardown.py --status` reports "
+                "`no eldenring.exe` and looks clean.\nClear it first:  python3 "
+                "scripts/er-teardown.py --reason stale-launcher"
+            )
+
     if not args.skip_steam_check and not steam_running():
         raise RuntimeError(
             "Steam is not running. Start it (it needs an interactive login), or pass "
@@ -996,6 +1045,19 @@ def selftest() -> int:
 
     failure = failed_block("r2", "no DLL testimony", ["pid 9 exited"])
     check("DID NOT START" in failure, "the failure block cannot be mistaken for success")
+
+    # The stale-launcher reader, against this process rather than a fixture: it must find the
+    # live `me3 launch` processes and nothing else, and it must survive a pid that exits
+    # mid-scan. Asserting the SHAPE rather than a count, because whether a launcher happens to
+    # be up while the selftest runs is not this function's business.
+    for pid, profile in stale_launchers():
+        check(isinstance(pid, int) and pid > 0, f"a launcher pid must be a pid: {pid!r}")
+        check(isinstance(profile, str) and profile, f"a profile must be named: {profile!r}")
+        check(er_run_lib.process_alive(pid), f"a reported launcher must be alive: {pid}")
+    check(
+        "me3" not in {Path(sys.argv[0]).name},
+        "the reader must not be able to match the selftest's own process",
+    )
     check("ELDEN RING IS RUNNING" not in failure, "the failure block never contains the running banner")
 
     # The distinction the first live run exposed: a DLL that loaded and ignored the overlay is
@@ -1406,6 +1468,11 @@ def main() -> int:
     )
     parser.add_argument("--no-fetch", action="store_true", help="skip refreshing origin/main")
     parser.add_argument("--skip-steam-check", action="store_true")
+    parser.add_argument(
+        "--allow-stale-launcher",
+        action="store_true",
+        help="launch even though another me3 launcher is alive (it will probably fail)",
+    )
     parser.add_argument("--dry-run", action="store_true", help="stage everything, launch nothing")
     parser.add_argument("--status", metavar="RUN_ID")
     parser.add_argument("--selftest", action="store_true")
