@@ -1711,6 +1711,12 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry-core --lib
 # bytes are ground-truthed separately, against eldenring-deobf.bin, by the crate's build.rs.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-seamless-bugfixes --lib
 
+# The patch registry invariants (no two patches share a flag, key or address; every
+# patch actually changes its byte; `target` follows a window the running build moved) and
+# the config parser. Host-testable because none of it needs a game -- the addresses are
+# data and the byte arithmetic is pure.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-convenient-deaths --lib
+
 # er-lockon-filter's rule. The crate is one detour plus one predicate over two integers, and the
 # predicate is the whole feature: which character kinds stop being lock-on targets, and which kinds
 # you have to be for that to happen. It cannot be exercised offline any other way -- the live check

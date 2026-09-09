@@ -617,6 +617,67 @@ def _build_scripts():
     ]
 
 
+# A `va:` used to have to be a hex literal in the build script itself, and that is no longer the
+# only honest way to write one. `check-rva-alias-drift.py` requires a game address to be declared
+# exactly once, so a crate whose window starts at its own function entry cannot spell it a second
+# time here -- er-convenient-deaths keeps its addresses in an `include!`d file and derives each
+# `va` as `BASE + (ENTRY + OFFSET) as u64`. The two forms below read that without loosening
+# anything: an unresolvable name still yields None, which still lands the spec in
+# `prologue_spec_gaps()` as a hard failure.
+_INCLUDE = re.compile(r'include!\(concat!\(env!\("CARGO_MANIFEST_DIR"\),\s*"/([^"]+)"\)\)')
+_CONST_LITERAL = re.compile(r"const\s+([A-Z0-9_]+):\s*(?:u64|usize)\s*=\s*(0x[0-9a-fA-F_]+|\d+)\s*;")
+_CONST_EXPR = re.compile(r"const\s+([A-Z0-9_]+):\s*u64\s*=\s*([^;]+);")
+_TERM = re.compile(r"^(?:0x[0-9a-fA-F_]+|\d+|[A-Z][A-Z0-9_]*)$")
+
+
+def _sum_of_known(expr, known):
+    """Value of `A + (B + C) as u64`, or None if any term is not already known.
+
+    Deliberately only addition of literals and named constants. Anything else -- a call, a shift,
+    a subtraction -- returns None and the spec is reported as a gap, which is the behaviour that
+    existed before this function and the behaviour a reader should be able to assume.
+    """
+    cleaned = re.sub(r"\bas\s+\w+", " ", expr).replace("(", " ").replace(")", " ")
+    total = 0
+    for term in cleaned.split("+"):
+        term = term.strip()
+        if not _TERM.match(term or ""):
+            return None
+        if term[:2].lower() == "0x" or term.isdigit():
+            total += int(term, 0)
+        elif term in known:
+            total += known[term]
+        else:
+            return None
+    return total
+
+
+def _constants(build):
+    """Every named integer constant a build script can see, its own and any it `include!`s."""
+    src = build.read_text(encoding="utf-8", errors="replace")
+    text = src
+    for match in _INCLUDE.finditer(src):
+        included = build.parent / match.group(1)
+        if included.is_file():
+            text += "\n" + included.read_text(encoding="utf-8", errors="replace")
+    known = {m.group(1): int(m.group(2), 0) for m in _CONST_LITERAL.finditer(text)}
+    # A derived constant can name another derived constant, so keep folding until nothing new
+    # resolves rather than assuming declaration order.
+    for _ in range(8):
+        added = False
+        for match in _CONST_EXPR.finditer(text):
+            name, expr = match.group(1), match.group(2)
+            if name in known:
+                continue
+            value = _sum_of_known(expr, known)
+            if value is not None:
+                known[name] = value
+                added = True
+        if not added:
+            break
+    return known
+
+
 def _parse_spec(body, crate, consts, pins):
     fields = {}
     for key, rx in _FIELD.items():
@@ -639,10 +700,7 @@ def prologue_specs():
     out = []
     for build in _build_scripts():
         src = build.read_text(encoding="utf-8", errors="replace")
-        consts = {
-            m.group(1): int(m.group(2), 16)
-            for m in re.finditer(r"const\s+([A-Z0-9_]+):\s*u64\s*=\s*(0x[0-9a-fA-F_]+)", src)
-        }
+        consts = _constants(build)
         pins = {
             m.group(1): bytes(int(b, 16) for b in _HEXBYTE.findall(m.group(2)))
             for m in re.finditer(
@@ -669,10 +727,7 @@ def prologue_spec_gaps():
     gaps = []
     for build in _build_scripts():
         src = build.read_text(encoding="utf-8", errors="replace")
-        consts = {
-            m.group(1): int(m.group(2), 16)
-            for m in re.finditer(r"const\s+([A-Z0-9_]+):\s*u64\s*=\s*(0x[0-9a-fA-F_]+)", src)
-        }
+        consts = _constants(build)
         pins = {
             m.group(1): bytes(int(b, 16) for b in _HEXBYTE.findall(m.group(2)))
             for m in re.finditer(

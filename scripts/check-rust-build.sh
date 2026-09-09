@@ -140,6 +140,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 		er-better-refills:er_better_refills
 		er-build-import:er_build_import
 		er-enemynpc-effects:er_enemynpc_effects
+		er-convenient-deaths:er_convenient_deaths
 		er-crash-logging:er_crash_logging
 		er-hotkey-conflicts:er_hotkey_conflicts
 		er-death-persist:er_death_persist

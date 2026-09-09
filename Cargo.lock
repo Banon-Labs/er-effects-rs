@@ -2829,6 +2829,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-convenient-deaths"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+ "er-hook",
+ "iced-x86",
+]
+
+[[package]]
 name = "er-cover-fade"
 version = "0.1.0"
 dependencies = [
