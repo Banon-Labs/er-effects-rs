@@ -167,6 +167,29 @@ except OSError:
     cache_dir = None
 
 
+# The roots a diff may be confined to and still carry forward, kept identical to
+# scripts/check-runtime-evidence.sh. `er-change-scope.py` treats `.github/` as a build input and
+# widens to everything, which is right for "what must CI re-run" and wrong for "could this change
+# the DLL" -- a workflow file cannot end up inside one. All nine build scripts in the workspace
+# were read for the paths they open and the processes they spawn, and none reaches any of these
+# three; the only `Command::new` in any of them is `git`. `docs/` is deliberately absent, because
+# `crates/er-game-base/build.rs` reads `docs/recon/*.tsv`.
+SAFE_ROOTS = (".github/", ".cupcake/", "scripts/")
+
+
+def confined_to_safe_roots(built):
+    diff = subprocess.run(
+        ["git", "diff", "--name-only", f"{built}..{head_sha}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if diff.returncode != 0:
+        return False
+    paths = [line for line in diff.stdout.splitlines() if line]
+    return bool(paths) and all(p.startswith(SAFE_ROOTS) for p in paths)
+
+
 def adds_no_cargo_work(built):
     cached = cache_dir / f"{head_sha}-{built}" if cache_dir else None
     if cached is not None:
@@ -187,12 +210,13 @@ def adds_no_cargo_work(built):
         capture_output=True,
         check=False,
     )
+    verdict = probe.returncode == 3 or confined_to_safe_roots(built)
     if cached is not None:
         try:
-            cached.write_text("3" if probe.returncode == 3 else "0")
+            cached.write_text("3" if verdict else "0")
         except OSError:
             pass
-    return probe.returncode == 3
+    return verdict
 
 
 for built in list(dict.fromkeys(clean_builds))[:CANDIDATES]:

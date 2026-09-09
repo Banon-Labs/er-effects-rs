@@ -73,11 +73,16 @@ else:
     state = "a dirty tree at " if dirty else ""
     print(f"the newest run {run_name} ran {name}, built from {state}{built[:8]}, not {tip}")
 
-# Candidates for the carry-forward below: every clean build sha a run actually executed. The
-# caller decides whether the tip adds anything cargo would compile on top of one of them.
+# Candidates for the carry-forward below: every clean build sha a run actually executed, each named
+# once. The caller decides whether the tip adds anything cargo would compile on top of one of them,
+# and that decision costs a reverse-dependency walk apiece -- so emitting the same sha once per log
+# file made the check take longer than its own caller's timeout. One run writes 26 logs.
+emitted = set()
 for run_name, name, built, dirty in seen:
-    if not dirty:
-        print(f"candidate {built} {run_name}/{name}", file=sys.stderr)
+    if dirty or built in emitted:
+        continue
+    emitted.add(built)
+    print(f"candidate {built} {run_name}/{name}", file=sys.stderr)
 raise SystemExit(1)
 PY
 }
@@ -95,9 +100,41 @@ PY
 # "provably no cargo work required" and 0 otherwise, and it fails open -- a git failure, an
 # unresolvable base, or any build input outside a single crate directory all answer 0, which keeps
 # the refusal. So this can only ever forgive a diff that provably cannot change a DLL.
+#
+# One narrow exception on top of it, because that tool answers a different question than this one.
+# `er-change-scope.py` decides what CI must RE-run, so it treats `.github/` as a build input and
+# widens to everything -- correct there, since a workflow edit changes what CI compiles. It is the
+# wrong answer here: a workflow file cannot end up inside a DLL. The refusal it produced was a
+# commit that edits `.github/workflows/check.yml` and nothing else, told to rebuild and relaunch
+# Elden Ring to prove a `curl` flag.
+#
+# So a diff confined to `.github/`, `.cupcake/` and `scripts/` also carries forward. The three are
+# named explicitly rather than inferred, and the claim was checked rather than assumed: all nine
+# build scripts in the workspace were read for the paths they open and the processes they spawn,
+# and none reaches any of the three -- the only `Command::new` in any of them is `git`. The scope
+# tool already forgives the latter two on their own; this exists for the diff that also touches
+# `.github/`, which drags the whole answer to "everything".
+#
+# `docs/` is deliberately absent. `crates/er-game-base/build.rs` reads `docs/recon/*.tsv`, so a
+# docs diff can change a DLL, which is why the safe set is a short measured list rather than a
+# guess at what looks harmless.
+# Split out so the selftest can assert the two halves separately: the second case below is only
+# meaningful if the first one would have refused on its own.
+scope_says_no_cargo_work() { # scope_says_no_cargo_work <base> <rev>
+	local rc=0
+	python3 scripts/er-change-scope.py --rust-touched --base "$1" --rev "$2" >/dev/null 2>&1 || rc=$?
+	[ "$rc" -eq 3 ]
+}
+
 carried_forward() { # carried_forward <run build sha> <tip>
-	python3 scripts/er-change-scope.py --rust-touched --base "$1" --rev "$2" >/dev/null 2>&1
-	[ $? -eq 3 ]
+	scope_says_no_cargo_work "$1" "$2" && return 0
+
+	local changed
+	changed="$(git diff --name-only "$1".."$2" 2>/dev/null)" || return 1
+	[ -n "$changed" ] || return 1
+	# Every changed path must be under one of the safe roots. `grep -qv` finds the first that is
+	# not, so its failure is what proves the diff is confined.
+	! printf '%s\n' "$changed" | grep -qv '^\(\.github/\|\.cupcake/\|scripts/\)'
 }
 
 selftest() {
@@ -167,6 +204,19 @@ selftest() {
 			carried_forward "$ran_sha" "$tip_sha"
 		expect 1 "a run does NOT carry forward across a change cargo compiles" \
 			carried_forward "$other_sha" "$tip_sha"
+		# The `.github/` case, which the scope tool alone answers wrongly for this question: it
+		# widens to everything on a workflow edit, so a commit touching only check.yml was told
+		# to rebuild and relaunch the game to prove a `curl` flag.
+		local workflow_only_sha workflow_base_sha
+		workflow_only_sha=bd7cbc7b # ci: pin OPA -- .github/workflows/check.yml and nothing else
+		workflow_base_sha=b69c1e79 # its parent, so the diff between them is that one file
+		if git cat-file -e "$workflow_only_sha^{commit}" 2>/dev/null &&
+			git cat-file -e "$workflow_base_sha^{commit}" 2>/dev/null; then
+			expect 0 "a workflow-only commit carries forward" \
+				carried_forward "$workflow_base_sha" "$workflow_only_sha"
+			expect 1 "the scope tool alone would have refused it" \
+				scope_says_no_cargo_work "$workflow_base_sha" "$workflow_only_sha"
+		fi
 	else
 		printf '  skip  carry-forward (the fixture commits are not in this clone)\n'
 	fi
