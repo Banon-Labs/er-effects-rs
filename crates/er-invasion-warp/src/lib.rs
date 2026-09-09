@@ -61,7 +61,22 @@ const WARP_TELEMETRY_FILE_NAME: &str = "er-invasion-warp-run.json";
 #[cfg(windows)]
 static START: std::sync::Once = std::sync::Once::new();
 
-/// Where the standalone log lands: next to the executable, falling back to the CWD.
+/// Where this DLL's files land: this run's artifact directory when the launcher named one,
+/// otherwise next to the game executable. Recorded here because the three writers below each name
+/// their own knob, and this is the reason all three have one.
+///
+/// The redirect is the same knob every other DLL in this workspace honours -- the launcher fills
+/// `ARTIFACT_ENV` in `scripts/er_artifact_env.py`, and `er-run-branch.py`'s selftest asserts that
+/// set covers every variable the Rust reads, so a file added here without an entry there is caught
+/// rather than quietly left behind.
+///
+/// It is here because of a run that cost an hour. On 2026-09-08 the game died on the first rejected
+/// match, and the line naming the cause -- a Rust abort raised out of an ERSC action -- was the last
+/// line of this log, in the game directory. The run's own artifact directory held eleven files and
+/// none of them said it, so the crash read as a process that simply vanished. A log that is not
+/// beside the evidence is a log nobody reads.
+/// Where the standalone log lands when nothing redirects it: next to the executable, falling back
+/// to the CWD. Kept for the telemetry sinks below, which name their own files.
 fn log_dir() -> PathBuf {
     std::env::current_exe()
         .ok()
@@ -76,8 +91,12 @@ fn log_dir() -> PathBuf {
 /// `append(true)`, so twelve separate launches accumulated into one 565 KB file and a count
 /// taken over it read as one run doing something twelve times over.
 fn append_log(dir: &Path, args: std::fmt::Arguments<'_>) {
+    let _ = dir;
     er_game_base::log::append_line(
-        &dir.join(LOG_FILE_NAME),
+        &er_game_base::log::redirected_artifact_path(
+            "ER_QUICKLOAD_INVASION_WARP_LOG_PATH",
+            LOG_FILE_NAME,
+        ),
         format_args!("er-invasion-warp: {args}"),
     );
 }
@@ -90,14 +109,20 @@ fn standalone_log(args: std::fmt::Arguments<'_>) {
 /// oracle document. Failure is silent by design -- a read-only game directory must degrade to
 /// "log lines only", never to a panic on the game thread.
 fn standalone_publish_oracle_json(body: &str) {
-    let path = log_dir().join(TELEMETRY_FILE_NAME);
+    let path = er_game_base::log::redirected_artifact_path(
+        "ER_QUICKLOAD_INVASION_WARP_TELEMETRY_PATH",
+        TELEMETRY_FILE_NAME,
+    );
     let _ = std::fs::write(path, body.as_bytes());
 }
 
 /// Warp telemetry sink: the per-warp oracle document, in its own file so it never overwrites
 /// the catalog's.
 fn standalone_publish_warp_json(body: &str) {
-    let path = log_dir().join(WARP_TELEMETRY_FILE_NAME);
+    let path = er_game_base::log::redirected_artifact_path(
+        "ER_QUICKLOAD_INVASION_WARP_RUN_PATH",
+        WARP_TELEMETRY_FILE_NAME,
+    );
     let _ = std::fs::write(path, body.as_bytes());
 }
 
@@ -360,6 +385,58 @@ pub unsafe extern "system" fn DllMain(
 #[unsafe(no_mangle)]
 pub extern "C" fn er_invasion_warp_host_stub() -> i32 {
     DLL_MAIN_SUCCESS
+}
+
+/// Ask this DLL to start a Seamless search on its own game thread, the next tick.
+///
+/// # Why a request and not a call
+///
+/// `ersc+0x25850` locks the session's `std::mutex` at `session+0x100` before it writes anything,
+/// and calling it from a thread the game does not own blocks there indefinitely. Measured
+/// 2026-09-08: a Frida RPC thread called the invade action with a valid menu object and a session
+/// reading idle, and never returned -- while the game itself stayed healthy at 709 CPU ticks per
+/// three seconds, so it was that one call that parked, not the process.
+///
+/// So this sets the flag the filter's own game task already drains through
+/// `drive_pending_reinvade`, which runs where a player's press would run and takes the same
+/// preconditions ERSC takes: idle session, unpoisoned guard, an owner to pass as `rcx`.
+///
+/// Returns 1 when the request was armed, 0 when there is no menu object to drive yet -- arming
+/// without one would be a request the game task can only ever decline.
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+pub extern "C" fn er_invasion_warp_request_invade() -> i32 {
+    i32::from(local_invasion_filter::request_invade())
+}
+
+/// Hand this DLL Seamless's option-menu object, so it can resolve the session without detouring
+/// `ersc.dll` itself.
+///
+/// # Why an export rather than the hook next door
+///
+/// The hook works and is the right shape; installing it is what breaks. Measured three times on
+/// 2026-09-08, with `ersc_invade_observer = true` and nothing else changed: the game raises
+/// `STATUS_ILLEGAL_INSTRUCTION` at `eldenring.exe+0x10043` at `ms_since_install` 29288, 29299 and
+/// again on the third run -- deterministic to eleven milliseconds, so a schedule and not a race.
+/// The same configuration with the observer off produced zero exception records at all. The fault
+/// address decodes mid-instruction: the game's SSE block copy has `sub rdx, 6` at 0x140010041, and
+/// 0x140010043 is two bytes into it, where `ea` has no 64-bit encoding. `rdx` held 0xd000004d and
+/// `rdi` held 0xb8, so the copy was entered with garbage arguments.
+///
+/// A Frida `Interceptor` on that exact address ran a whole invasion session the same day with no
+/// fault, so observing the function is safe and MinHook's way of installing there is not. This
+/// export is the seam that keeps the observation and drops the detour: whoever can hook `ersc`
+/// safely passes the pointer in, and this DLL does the judging, the cancelling and the banner.
+///
+/// Returns 1 when the pointer was adopted, 0 when it did not lead to a session-shaped object.
+/// Rejecting is the important half: a wrong pointer here would make the filter cancel invasions
+/// against a stranger's state.
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+pub extern "C" fn er_invasion_warp_adopt_menu_object(menu_object: usize) -> i32 {
+    i32::from(local_invasion_filter::menu_object::adopt_menu_object(
+        menu_object,
+    ))
 }
 
 #[cfg(test)]

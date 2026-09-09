@@ -62,6 +62,24 @@ IGNORED_FILES = {
     # process flatlining, or its leader going Z), never a timer. There is no readiness primitive
     # for "the game has stopped doing work" -- measuring whether it has is the tool.
     Path("scripts/er-wedge-stacks.py"),
+    # Frida agent, running inside the game as JavaScript. Its `setTimeout` re-reads
+    # `session+0x150` waiting for Seamless's session to fall back to `0x01` idle, which is what
+    # re-arms the hunt after a match this mod did not end.
+    #
+    # There is nothing to hook for that transition. The two ersc.dll entry points this repo has
+    # reversed write the other two states -- `+0x25850` invade writes `0x0e`, `+0x258d0` cancel
+    # writes `0x23` -- and both are already attached to in this same file, which covers every idle
+    # this agent or the player causes. The case the watchdog exists for is the one neither does:
+    # Seamless ending its own attempt ("Failed to invade. Could not invade host of session",
+    # measured 2026-09-08) and returning the session to idle from code with no identified writer,
+    # the same wall the two frida lobby probes above ran into. Reading the word is the only
+    # detector, and inside Frida's JS runtime `setTimeout` is the only non-blocking way to read it
+    # again -- `Thread.sleep` would block the agent thread, which is strictly worse.
+    #
+    # Its sibling `scripts/frida/drive-cancel-now.js` is deliberately not listed: the state it
+    # waited for is `0x0e`, whose sole writer is the invade action, so that one became an
+    # `Interceptor` and needs no exemption.
+    Path("scripts/frida/ersc-session.js"),
 }
 SOURCE_SUFFIXES = {
     ".rs",

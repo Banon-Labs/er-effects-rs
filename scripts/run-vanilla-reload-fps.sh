@@ -91,6 +91,9 @@ echo "======================================================================"
 # this run has clobbered the previous one's file -- and a crashed run never reaches the copy.
 env \
 	ER_QUICKLOAD_TELEMETRY_PATH="$ARTIFACT_DIR/er-quickload-telemetry.json" \
+	ER_QUICKLOAD_INVASION_WARP_LOG_PATH="$ARTIFACT_DIR/er-invasion-warp.log" \
+	ER_QUICKLOAD_INVASION_WARP_TELEMETRY_PATH="$ARTIFACT_DIR/er-invasion-warp-telemetry.json" \
+	ER_QUICKLOAD_INVASION_WARP_RUN_PATH="$ARTIFACT_DIR/er-invasion-warp-run.json" \
 	ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH="$ARTIFACT_DIR/er-quickload-autoload-debug.log" \
 	ER_QUICKLOAD_CRASH_LOG_PATH="$ARTIFACT_DIR/er-quickload-crash-log.txt" \
 	ER_QUICKLOAD_TRACE_CONTINUE_PATH="$ARTIFACT_DIR/er-quickload-continue-trace.log" \

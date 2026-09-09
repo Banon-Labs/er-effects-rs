@@ -102,6 +102,12 @@ PGD_REL_VOICE_TYPE = 0xBA
 PGD_REL_STARTING_GIFT = 0xBB
 PGD_REL_UNLOCKED_TALISMAN_SLOTS = 0xBE
 PGD_REL_MATCHMAKING_SPIRIT_ASHES_LEVEL = 0xBF
+# Highest weapon upgrade level on the character, which the game maintains for matchmaking. One of
+# the two numbers Seamless puts in its `matchmaking_breakin_lobby_ykssr_199_6` filter string, so a
+# character whose armament is reinforced far above its rune level searches a pool almost nobody is
+# in. ClayAmore's `SL2.bt` names it `MatchmakingWeaponLvl` at `player+0xda`; `er-save-loader`'s
+# `stats.rs` reads the same byte through its own anchor, which sits 8 lower.
+PGD_REL_MATCHMAKING_WEAPON_LEVEL = 0xDA
 PGD_REL_MAX_CRIMSON_FLASK_COUNT = 0xF9
 PGD_REL_MAX_CERULEAN_FLASK_COUNT = 0xFA
 
@@ -582,6 +588,7 @@ def decode_fields_at(
         "stats_named": stats_named,
         "humanity": read_u32_le(slot_data, pgd(PGD_REL_HUMANITY)),
         "level": read_u32_le(slot_data, pgd(PGD_REL_LEVEL)),
+        "matchmaking_weapon_level": slot_data[pgd(PGD_REL_MATCHMAKING_WEAPON_LEVEL)],
         "runes": read_u32_le(slot_data, pgd(PGD_REL_RUNES)),
         "souls": read_u32_le(slot_data, pgd(PGD_REL_RUNES)),
         "rune_memory": read_u32_le(slot_data, pgd(PGD_REL_RUNE_MEMORY)),

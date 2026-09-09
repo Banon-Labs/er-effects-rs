@@ -104,14 +104,30 @@ pub struct Abi {
     /// client matches, which is not ours to do.
     pub build_lobby_key_rva: usize,
     pub show_prologue: &'static [u8],
-    /// Also the version DISCRIMINATOR -- see [`SUPPORTED`].
+    /// Also the one-shot version DISCRIMINATOR -- see [`SUPPORTED`].
     pub invade_prologue: &'static [u8],
+    /// Also the recurring fingerprint `super::resolve_session` re-proves on every use. That job
+    /// belongs to whichever entry point nothing patches, and since 2026-09-08 the cancel action
+    /// is the only one left: `show` and `invade` both carry observers of ours, and a fingerprint
+    /// taken on a detoured prologue measures our own patch. We are cancel's only caller, so
+    /// there is nothing to observe there and no reason it will ever be hooked.
     pub cancel_prologue: &'static [u8],
     pub build_lobby_key_prologue: &'static [u8],
     /// Session state, the field every option action writes.
     pub session_state_offset: usize,
-    /// Guard field. [`SESSION_GUARD_POISON`] is the value every action refuses to proceed
-    /// past -- they take a fatal-error branch instead -- so the filter refuses too.
+    /// The dword at `session+0x14c`, which every option action compares against
+    /// [`SESSION_GUARD_POISON`] before it proceeds.
+    ///
+    /// It is not a Seamless field. The `std::mutex` each action locks first occupies
+    /// `session+0x100..0x150`, so this offset is `mutex+0x4c` -- MSVC's `_Count`, the recursion
+    /// counter -- and the comparison is `_Verify_ownership_levels`, the overflow check the STL
+    /// inlines into `_Mutex_base::lock()`. Read out of `_Mtx_unlock` at `ersc+0xf9830`, which
+    /// decrements this dword and, at zero, writes `-1` to `+0x48` and releases the lock word.
+    ///
+    /// The consequence is that the guard this module was built around never fires: on a
+    /// non-recursive mutex `_Count` only ever goes `0 -> 1`, so it cannot reach `INT_MAX`. The
+    /// fields worth checking on this object are the mutex's own, which
+    /// `local_invasion_filter::lock_report` reads and refuses on.
     pub session_guard_offset: usize,
     /// Idle: the state a cancelled search settles back to, and the state `invade` requires.
     pub state_idle: u32,
@@ -149,6 +165,14 @@ pub struct Abi {
 /// one build from the other at all. And this module hooks `show`, so once the detour is
 /// installed those bytes are our own; a fingerprint taken there measures our patch and concludes
 /// Seamless is a stranger, which is a bug this module has already had once.
+///
+/// Since 2026-09-08 this module hooks the invade action as well, which puts the discriminator on
+/// bytes that also get overwritten. What keeps it working is ordering plus the latch:
+/// `super::resolve_ersc_abi` caches its answer on the first success, and
+/// `super::install_invade_observer` calls it before it writes anything, so the fingerprint is
+/// always taken against Seamless's own prologue. Anything that installs that detour without
+/// resolving the build first breaks the discriminator, silently, in the direction of "Seamless is
+/// not loaded".
 pub const SUPPORTED: &[Abi] = &[Abi {
     // Not a literal. The runtime armed against v2.0.1 on 2026-09-02 while this field still read
     // "v2.0.0", so the log line announced the wrong Seamless build beside correctly re-pinned
@@ -198,8 +222,12 @@ pub const STD_STRING_SIZE_OFFSET: usize = 0x10;
 pub const STD_STRING_CAPACITY_OFFSET: usize = 0x18;
 pub const STD_STRING_HEAP_CAPACITY: usize = 0x10;
 
-/// `OSM+0x58` is the session object, and it has survived every update so far: all five option
-/// actions still open `mov rdi,[rcx+0x58]`.
+/// `OSM+0x58` is the session object, and it has survived every update so far: every option action
+/// that touches the session still opens `mov rdi,[rcx+0x58]`.
+///
+/// "All five option actions" is what this line used to say. `ersc+0x2a1e0` registers about twenty
+/// actions across eleven menu groups; five of them use the mutex-and-guard idiom, and those five
+/// are the ones this module drives or recognises.
 ///
 /// A `.data` singleton holding OSM would have let this module hook nothing in Seamless. One
 /// was looked for and not found: the only `.data` global that is loaded and then dereferenced
@@ -213,8 +241,12 @@ pub const NEXT_OBJECT_OFFSET: usize = 0x58;
 /// a diagnostic and believed by nothing -- see `show_observer` for the day it was a gate.
 pub const OSM_TAG_OFFSET: usize = 0x68;
 pub const OSM_TAG: &[u8] = b"seamless";
-/// The value the guard field holds when the session is unusable. Every option action still
-/// compares against it.
+/// The value the guard field holds when the session is unusable -- or so this constant claimed
+/// until 2026-09-08. It is `INT_MAX`, and the comparison against it is MSVC's own
+/// `_Verify_ownership_levels`: see [`Abi::session_guard_offset`] for what the field actually is.
+///
+/// Kept because the actions do compare against it, and a reading of it is still worth logging. It
+/// is no longer treated as a refusal on its own, because reaching it needs 2^31 nested locks.
 pub const SESSION_GUARD_POISON: u32 = 0x7fff_ffff;
 /// The highest plausible session state, used to reject a pointer that is not a session at all.
 /// Comfortably above the largest code the build writes (`0x24`).

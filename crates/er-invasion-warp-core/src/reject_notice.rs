@@ -33,8 +33,24 @@ use crate::local_invasion::RejectReason;
 #[must_use]
 pub const fn reason_phrase(reason: RejectReason) -> &'static str {
     match reason {
-        // The ordinary case during a hunt: right rules, wrong place.
-        RejectReason::WrongBlock | RejectReason::WrongPlaceName => "elsewhere",
+        // The ordinary case during a hunt, and the two halves read very differently to a player.
+        //
+        // `WrongBlock` is a destination whose block differs from the anchor's -- and in Seamless
+        // that is routinely the same place in someone else's world. Calling it "elsewhere" then
+        // contradicts what the player can see: reported live 2026-09-08, standing in The First
+        // Step, the banner read `Rejected The First Step (elsewhere)`. The place was right; the
+        // world was not, and that is what the phrase has to say.
+        // The action, not the geography. Both of these are matches the mod cancelled, and that is
+        // the question the player actually had: read live on 2026-09-08, "Rejected The First Step
+        // (elsewhere)" named the ground under their feet and then called it somewhere else, and
+        // they asked "do we mean we cancelled?" -- which is exactly what it meant.
+        //
+        // A wrong block is routinely the same place in another player's world, so no wording built
+        // on geography can be both short and unconfusing here; "another world" and "not this one"
+        // were each tried and each needed explaining. The other reasons below stay distinct
+        // because they lead to different actions -- move, un-exclude, open the map -- while these
+        // two lead to the same one: keep hunting.
+        RejectReason::WrongBlock | RejectReason::WrongPlaceName => "cancelled",
         RejectReason::NotNamed => "not on your list",
         // Actionable in a way the others are not: the map has not been opened, so no destination
         // has a name and everything fails closed. Saying "unnamed" would read as the game's fault.
@@ -224,6 +240,30 @@ mod tests {
     const LIMGRAVE: u32 = 0x3c2a_2400; // m60_42_36_00
     const ELSEWHERE: u32 = 0x1501_0000; // m21_01_00_00
 
+    /// A different block is routinely the same place in another player's world, and the banner has
+    /// to say so. Reported live 2026-09-08: standing in The First Step, the notice read
+    /// `Rejected The First Step (elsewhere)` -- naming the place the player was looking at and
+    /// then calling it somewhere else.
+    #[test]
+    fn a_wrong_block_is_reported_as_another_world_not_as_elsewhere() {
+        // Both say what the mod did. That is the half the player asked for out loud, and the half
+        // no amount of geography was supplying.
+        for reason in [RejectReason::WrongBlock, RejectReason::WrongPlaceName] {
+            assert_eq!(reason_phrase(reason), "cancelled");
+        }
+        // The reasons that lead somewhere else must stay distinguishable, or this has traded one
+        // confusion for a worse one: these three each ask the player to do a different thing.
+        assert_eq!(reason_phrase(RejectReason::NotNamed), "not on your list");
+        assert_eq!(
+            reason_phrase(RejectReason::ExcludedByUser),
+            "you excluded it"
+        );
+        assert_eq!(
+            reason_phrase(RejectReason::CandidateUnnamed),
+            "open your map"
+        );
+    }
+
     #[test]
     fn the_first_rejection_at_a_place_is_announced() {
         let mut notice = RejectNotice::new();
@@ -251,7 +291,10 @@ mod tests {
             "the raw block id must not survive alongside the name -- the banner is one short line \
              and the id is the part a player cannot read: {text}"
         );
-        assert!(text.contains("elsewhere"), "still says why: {text}");
+        assert!(
+            text.contains("cancelled"),
+            "still says what happened: {text}"
+        );
     }
 
     #[test]

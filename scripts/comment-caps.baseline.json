@@ -9,7 +9,6 @@
     "crates/er-input-harness/src/game_mem.rs": 2,
     "crates/er-input-harness/src/lib.rs": 4,
     "crates/er-invasion-warp/src/announce.rs": 4,
-    "crates/er-invasion-warp/src/local_invasion_filter.rs": 4,
     "crates/er-loading-portrait-core/src/bridge.rs": 1,
     "crates/er-loading-portrait-core/src/native_overlay.rs": 4,
     "crates/er-loading-portrait-core/src/pgd_layout.rs": 1,

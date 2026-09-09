@@ -325,6 +325,20 @@ pub struct LocalInvasionConfig {
     /// `SHA256_hex(AES_decrypt(ctx[0xB8]) ++ ...)` -- worth noting only because the crash lands
     /// inside AES-NI code, which is suggestive and not evidence.
     pub ersc_lobby_key_observer: bool,
+    /// Install the invade-action observer specifically, when [`Self::ersc_observers`] is on.
+    ///
+    /// It has its own key rather than riding [`Self::ersc_show_observer`] because the two answer
+    /// different questions and the pair is what the master switch was turned off for. This one is
+    /// the only observer that fires when the player invades with an ITEM: `show` runs only when
+    /// Seamless's own option menu is built, and the item path never builds it. Measured in run
+    /// `br-20260908-230004-d163`: 13 matches judged and rejected, every one of them
+    /// `NOT cancelled`, with zero `captured Seamless's option-menu object` lines in the log.
+    ///
+    /// A Frida `Interceptor` sat on this exact address for that entire run -- dozens of invades,
+    /// no crash -- which says an inline hook here is survivable. It does not say MinHook's is:
+    /// different patcher, different install mechanics. Turning this on alone is the smallest
+    /// experiment that can tell the two apart.
+    pub ersc_invade_observer: bool,
     /// How destinations are judged.
     pub mode: LocalInvasionMode,
     /// Place-name text ids accepted in [`LocalInvasionMode::NamedOnly`], and -- see [`Self::judge`]
@@ -399,6 +413,7 @@ impl Default for LocalInvasionConfig {
             // ON: both halves of the pair, so the master switch alone reproduces the old behaviour.
             ersc_show_observer: true,
             ersc_lobby_key_observer: true,
+            ersc_invade_observer: true,
             mode: LocalInvasionMode::ExactOnly,
             named_location_text_ids: BTreeSet::new(),
             named_locations: Vec::new(),

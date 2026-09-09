@@ -149,7 +149,7 @@ fn the_configured_keys_render_names_a_player_would_recognise() {
 }
 
 #[test]
-fn this_module_installs_exactly_three_detours_and_both_seamless_ones_are_read_only() {
+fn this_module_installs_exactly_four_detours_and_all_three_seamless_ones_are_read_only() {
     // The budget, made explicit so growing it is a decision rather than a drift:
     //   ORIG_SET_JOIN_DATA    -- the game's SetMultiplayJoinData, where matches are judged.
     //   ORIG_SHOW             -- ersc's menu builder, observation only, because OSM has no
@@ -160,19 +160,123 @@ fn this_module_installs_exactly_three_detours_and_both_seamless_ones_are_read_on
     //                            only as a stack `std::string` inside one function, and no
     //                            field holds it afterwards -- so there is nothing to read
     //                            passively and a hook is the only way to observe it.
-    // The two option actions are deliberately not hooked: they read `rcx` only, so calling
-    // them with `(OSM, 0, 1, 1)` needs no captured arguments and therefore no detour.
-    let source = include_str!("../local_invasion_filter.rs");
+    //   ORIG_INVADE_ACTION    -- ersc's "Invade world" action, observation only. Grown from
+    //                            three to four on 2026-09-08 for a measured reason: `show` runs
+    //                            only when the player opens Seamless's menu, and an invasion
+    //                            item does not open it. Run `br-20260908-230004-d163` judged 13
+    //                            matches with zero `captured Seamless's option-menu object`
+    //                            lines, so every one of them ended `NOT cancelled`. This action
+    //                            is the seam that sees the object on the item path.
+    // The cancel action stays un-hooked: it reads `rcx` only and nothing calls it but us, so
+    // calling it with `(OSM, 0, 1, 1)` needs no captured arguments and therefore no detour.
+    let source = filter_module_code();
     let orig_slots = source.matches("\nstatic ORIG_").count();
-    assert_eq!(orig_slots, 3, "detour budget is three trampolines");
+    assert_eq!(orig_slots, 4, "detour budget is four trampolines");
     assert!(source.contains("\nstatic ORIG_SET_JOIN_DATA"));
     assert!(source.contains("\nstatic ORIG_SHOW"));
     assert!(source.contains("\nstatic ORIG_BUILD_LOBBY_KEY"));
-    for banned in ["ORIG_INVADE_ACTION", "ORIG_CANCEL_ACTION"] {
+    assert!(source.contains("\nstatic ORIG_INVADE_ACTION"));
+    assert!(
+        !source.contains("static ORIG_CANCEL_ACTION"),
+        "the cancel action must stay un-hooked -- we are its only caller, so a detour on it \
+         would only ever observe ourselves"
+    );
+    // The three Seamless seams are observers: each one runs the original with its arguments
+    // untouched and alters nothing. The invade one is the newest, so it is the one a future
+    // edit is most likely to turn into a driver by accident.
+    assert!(
+        source.contains("unsafe { core::mem::transmute::<usize, ErscActionFn>(orig)(a, b, c, d) }"),
+        "the invade observer must pass every argument through unchanged"
+    );
+}
+
+/// A session that reads idle while a join is in flight is proven wrong, and must be dropped.
+///
+/// Measured live, run `br-20260909-000018-d691`: the scan reported `found at 0x309c0038 ... owner
+/// 0x0`, the player invaded, and the one rejection came back `cannot cancel (WrongBlock) -- the
+/// session is in state 0x1`. The player was mid-search, so the real session read `state_searching`
+/// and the cached object could not have been it. Without this the same wrong pointer refuses every
+/// rejection for the rest of the run, which is exactly what that run did: one reject, one
+/// `NOT cancelled`, the invasion proceeded, no banner.
+#[test]
+fn a_session_reading_idle_during_a_join_is_dropped_rather_than_waited_out() {
+    let source = filter_module_code();
+    let body = source
+        .split_once("fn cancel_match(")
+        .expect("cancel_match exists")
+        .1;
+    // Anchored on the reading itself rather than on the old refusal arm: the cancel-row check
+    // became a report on 2026-09-08 (it was a UI rule refusing a state measured to cancel), and
+    // the idle drop is now its own arm just after it.
+    let refusal = body
+        .split_once("cancel_row_refusal(")
+        .expect("the cancel-row reading is still taken")
+        .1;
+    // Bounded, so a call to the same function anywhere else in `cancel_match` cannot satisfy this.
+    // Three earlier gates in this file matched their own assertion text; scoping the window is
+    // what stops that class of false pass.
+    let arm = &refusal[..refusal.len().min(2_500)];
+    assert!(
+        arm.contains("JOIN_IN_FLIGHT.load("),
+        "the refusal must distinguish an idle session mid-join from one that is merely idle"
+    );
+    assert!(
+        arm.contains("state_idle"),
+        "it is specifically the idle reading that proves the pointer wrong"
+    );
+    assert!(
+        arm.contains("session_scan::invalidate_cached_session()"),
+        "a pointer proven wrong must be dropped, or every later rejection refuses on the same \
+         reading"
+    );
+    // And the row reading itself must stay a report. It is ERSC's hide-predicate -- when Seamless
+    // draws the Cancel row -- while the cancel action at ersc+0x258d0 has no state precondition at
+    // all. Obeying it refused `state 0x16` on 2026-09-08, the same state a Frida-driven cancel had
+    // succeeded from eight times that evening (22 -> 35 every time, no crash).
+    // `arm` already begins after the call, so the row-reading block is everything up to the first
+    // line that closes it. Splitting on the call name again finds nothing and would hand back the
+    // whole window, which then matches the idle drop's own `return false` -- a false fail this
+    // test produced on its first run.
+    let row_reading = arm.split_once("\n    }").map_or(arm, |(inside, _)| inside);
+    assert!(
+        !row_reading.contains("return false"),
+        "the cancel-row reading must not refuse: it describes the row Seamless draws, not what \
+         the action accepts"
+    );
+}
+
+/// Turning the filter off must not turn the banner off.
+///
+/// `enabled = false` means "judge nothing", not "say nothing": the player still wants to be told
+/// where the server sent them, stated as the server's choice rather than as something this mod
+/// approved. The switch that governs the banner is `reject_notice`, and conflating the two would
+/// make a player who only wanted the filter paused go silent as well.
+///
+/// Asserted structurally, on the order of the two: the announcement has to come before the
+/// `enabled` early return, or it can never run in the disabled case.
+#[test]
+fn disabling_the_filter_leaves_the_arrival_banner_speaking() {
+    let source = filter_module_code();
+    let judge = source
+        .split_once("fn judge_incoming_match(")
+        .expect("judge_incoming_match exists")
+        .1;
+    let disabled = judge
+        .split_once("if !config.enabled {")
+        .expect("the disabled arm exists")
+        .1;
+    let arm = &disabled[..disabled.len().min(600)];
+    assert!(
+        arm.contains("banner::announce_arrival(config.reject_notice"),
+        "a disabled filter must still announce the arrival, gated on reject_notice rather than on \
+         enabled"
+    );
+    // And it must be the arrival wording, not a verdict: nothing was judged, so claiming a
+    // rejection or a success there would be a lie about what the mod did.
+    for verdict in ["announce_rejection", "announce_success"] {
         assert!(
-            !source.contains(&format!("static {banned}")),
-            "{banned}: the option actions must stay un-hooked -- they ignore every argument \
-             past rcx, so there is nothing to capture"
+            !arm.contains(verdict),
+            "the disabled arm must not claim a verdict it never reached: {verdict}"
         );
     }
 }
@@ -232,6 +336,40 @@ fn the_lobby_key_is_never_published_or_altered() {
 ///   new guards failed exactly that way on first run.
 fn product_code() -> String {
     let source = include_str!("../local_invasion_filter.rs");
+    let shipping = source
+        .split_once("#[cfg(test)]")
+        .map_or(source, |(before, _)| before);
+    shipping
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The session scanner's shipping code, comments and test module removed.
+///
+/// A second reader rather than a widened `product_code`, because these guards pin the shape of one
+/// function each and a reader that concatenated both files would let a string in either satisfy a
+/// guard written for the other.
+/// The filter's own source plus the submodules split out of it, as one string.
+///
+/// Every gate in this file that scans `local_invasion_filter.rs` for a pattern went silently blind
+/// the moment a block moved into a submodule -- the needle was simply absent and the assertion
+/// read as satisfied, or the `expect` fired against correct code. Both happened on 2026-09-08 when
+/// the file crossed the 3200-line limit and `capture_osm` moved to `menu_object.rs`. Concatenating
+/// here means a future split costs one line in this function rather than a gate nobody notices.
+fn filter_module_code() -> String {
+    [
+        include_str!("../local_invasion_filter.rs"),
+        include_str!("menu_object.rs"),
+        include_str!("banner.rs"),
+        include_str!("menu_seams.rs"),
+    ]
+    .join("\n")
+}
+
+fn session_scan_code() -> String {
+    let source = include_str!("session_scan.rs");
     let shipping = source
         .split_once("#[cfg(test)]")
         .map_or(source, |(before, _)| before);
@@ -592,20 +730,29 @@ fn capturing_the_menu_object_is_not_gated_on_the_seamless_tag() {
     // where it was supposed to work -- the live log read `REJECT ...` immediately followed by
     // `cannot cancel -- session is not resolvable`. A single observation is evidence, not a
     // gate. The tag is now a diagnostic string and nothing branches on it.
-    let source = include_str!("../local_invasion_filter.rs");
+    let source = filter_module_code();
+    // Both observers hand their pointer to the same helper, so the gate could only reappear
+    // there. Checking the helper covers `show` and the invade action at once.
     let observer = source
-        .split_once("fn show_observer(")
-        .expect("show_observer exists")
+        .as_str()
+        .split_once("fn capture_osm(")
+        .expect("capture_osm exists")
         .1
         .split_once("\n}")
-        .expect("observer body")
+        .expect("helper body")
         .0;
     assert!(
-        observer.contains("OSM.swap(a,"),
-        "the observer must store the pointer it was handed"
+        observer.contains("OSM.swap(osm,"),
+        "the helper must store the pointer it was handed"
     );
+    // The tag is still read, once, as a diagnostic in the log line that follows the store -- so
+    // the property to assert is order, not absence. Nothing before the store may consult it.
+    let before_store = observer
+        .split_once("OSM.swap(osm,")
+        .expect("the store is in the helper")
+        .0;
     assert!(
-        !observer.contains("if a != 0 && osm_tag_matches"),
+        !before_store.contains("osm_tag_matches"),
         "storing OSM must not be conditional on the tag"
     );
     // And the resolver must validate the shape it actually depends on instead.
@@ -829,18 +976,36 @@ fn the_recurring_build_fingerprint_never_reads_a_function_this_module_hooks() {
         .split_once("\n}")
         .expect("resolver body")
         .0;
+    // No prologue at all. The fingerprint moved off code entirely on 2026-09-08 after being
+    // broken a third time: `show` (our detour, 2026-08-05), then `invade` (our detour), then
+    // `cancel` (a Frida Interceptor attached beside us for twenty minutes), each time reading a
+    // trampoline and reporting `ErscUnrecognised` on a live rejection. Any function may be hooked
+    // by anyone, so naming a currently-unhooked one just schedules the next occurrence.
+    for prologue in ["show_prologue", "invade_prologue", "cancel_prologue"] {
+        assert!(
+            !resolver.contains(prologue),
+            "the recurring fingerprint must not read {prologue} -- any function's bytes can be \
+             replaced by a hook, ours or someone else's"
+        );
+    }
     assert!(
-        !resolver.contains("show_prologue"),
-        "the recurring fingerprint must not read `show` -- it is hooked, so its bytes are ours"
+        resolver.contains("module_identity_holds("),
+        "fingerprint the mapped file rather than the state of its code"
+    );
+    // And that check must read the PE header rather than reaching back to a prologue.
+    let identity = source
+        .split_once("fn module_identity_holds(")
+        .expect("module_identity_holds exists")
+        .1;
+    let identity = &identity[..identity.len().min(2_000)];
+    assert!(
+        identity.contains("PE_TIME_DATE_STAMP") && identity.contains("PE_SIZE_OF_IMAGE"),
+        "the identity must come from PE-header fields, which no hook rewrites"
     );
     assert!(
-        resolver.contains("invade_prologue"),
-        "fingerprint an entry point that is called but never hooked"
+        !identity.contains("_prologue"),
+        "the identity check must not fall back to reading code"
     );
-    // And `invade` must in fact stay un-hooked, or this fix silently rots. The needle is
-    // assembled rather than written out, because a test that scans its own file finds its own
-    // assertion text -- which is exactly how this test first failed.
-    assert!(!source.contains(&format!("static ORIG_{}", "INVADE_ACTION")));
 }
 
 #[test]
@@ -945,6 +1110,362 @@ fn the_session_identity_check_rejects_implausible_pointers_first() {
     );
 }
 
+/// The identity check must ask for the session's mutex, not just its state field.
+///
+/// # The run that bought this
+///
+/// br-20260908-193258-27ba: the scan resolved `0x860f90f8`, the filter judged one match, and
+/// `ersc_owner_or_refuse` then declined to cancel it because `_Type` at `session+0x100` was not a
+/// shape MSVC's mutex constructors write. The refusal was correct and it came too late --
+/// `cached_scan_for_session` had already latched that pointer, and it revalidates through this
+/// same function, so the wrong answer held for the whole process and the rejected invasion
+/// proceeded.
+///
+/// The discriminator existed; it ran at the wrong end of the run. This pins it to the scan.
+#[test]
+fn the_session_identity_check_requires_a_mutex_where_a_session_carries_one() {
+    let code = product_code();
+    let body = code
+        .split_once("fn identifies_a_session(")
+        .expect("identifies_a_session must exist")
+        .1;
+    let body = body.split_once("\n}").expect("a function body").0;
+    assert!(
+        body.contains("mutex_shape_identifies_a_session("),
+        "identifies_a_session must require an _Mtx_internal_imp_t at session+0x100 -- four small \
+         integers at known offsets is a signature the scan has already false-positived on four \
+         times, and the mutex is the check that caught the fourth one after the fact"
+    );
+}
+
+/// Judging a match must not throw away the session that would cancel it.
+///
+/// # The run that bought this
+///
+/// br-20260908-212740-ea7c is the first run in which the drive worked end to end: the session
+/// resolved at `0x55080038`, and ERSC's own cancel executed through a synthesized owner, moving
+/// the state `0x0e SEARCHING -> 0x23 CANCELLING`. The very next rejection -- `reject 0x3c2b1f00
+/// (WrongBlock)` -- then reported `MenuNeverOpened` and let the invasion proceed.
+///
+/// Nothing about Seamless changed in between. `judge_incoming_match` called
+/// `invalidate_cached_session()` two lines before it judged, so the session was cleared by the
+/// arrival of the event that needed it, and the sweeper that would replace it runs on a fifteen
+/// second interval on another thread. The cache is revalidated on every read by
+/// `cached_scan_for_session`, so a dead session is already discarded on evidence; clearing it
+/// here only ever discarded a live one.
+#[test]
+fn judging_a_match_keeps_the_session_it_will_need_to_cancel_with() {
+    let code = product_code();
+    let body = code
+        .split_once("fn judge_incoming_match(")
+        .expect("judge_incoming_match must exist")
+        .1;
+    let body = body.split_once("\nfn ").expect("a function body").0;
+    assert!(
+        !body.contains("invalidate_cached_session("),
+        "judge_incoming_match must not clear the cached session -- the rejection it is about to \
+         make is the one thing that session exists to enforce, and the sweeper takes seconds to \
+         find another while the join takes ten"
+    );
+}
+
+/// The join-in-flight idle refusal is a discovery rule and must not be applied to retention.
+///
+/// # Why the same predicate cannot answer both questions
+///
+/// While a join is in flight the real session is never idle, which is a sound way to shrink a
+/// haystack of a million candidates: `identifies_a_session` uses it to refuse the ocean of memory
+/// that merely happens to hold `0x01`. Applied to the pointer already in hand it inverts --
+/// br-20260908-212740-ea7c drove ERSC's cancel through the cached session and then could not
+/// resolve it for the next rejection, because the join that made the cancel necessary is what
+/// made the rule refuse the pointer that would have performed it.
+///
+/// So the caller says which question it is asking. If `discovering` ever stops gating this, the
+/// cached session becomes unresolvable for the whole duration of every match.
+#[test]
+fn the_idle_refusal_applies_only_while_choosing_a_new_candidate() {
+    let code = product_code();
+    let body = code
+        .split_once("fn identifies_a_session(")
+        .expect("identifies_a_session must exist")
+        .1;
+    let body = body.split_once("\n}").expect("a function body").0;
+    assert!(
+        body.contains("if discovering && JOIN_IN_FLIGHT.load("),
+        "the idle refusal must be gated on `discovering`, or revalidating the cached session \
+         fails for exactly as long as a match is in flight"
+    );
+    let scan = session_scan_code();
+    assert!(
+        scan.contains("identifies_a_session(abi, session, false)"),
+        "cached_scan_for_session revalidates an answer it already holds, so it must ask the \
+         retention question, not the discovery one"
+    );
+    assert!(
+        scan.contains("identifies_a_session(abi, candidate, true)"),
+        "the sweep is choosing between candidates, so it must ask the discovery question"
+    );
+}
+
+/// The first reading of a session must not arm the auto-search loop.
+///
+/// # The run that bought this
+///
+/// br-20260908-212740-ea7c resolved a session whose very first read was `0x0e SEARCHING`. The
+/// tracer treated that as a transition, logged "you started a search", and armed the hunt --
+/// before the player had used an invasion item. Five seconds later the stall watchdog called the
+/// handshake stuck and cancelled it, parking the session at `0x23`, which is outside the set
+/// ERSC's hide-predicate draws its Cancel row for. So the genuine rejection later in that run
+/// could not have been enforced even with a session in hand.
+///
+/// `usize::MAX` is the sentinel `LAST_SESSION_STATE` starts at, and it separates "this is what the
+/// session reads" from "this is what the session just became".
+#[test]
+fn the_first_reading_of_a_session_is_a_baseline_not_a_search_the_player_started() {
+    let code = product_code();
+    let body = code
+        .split_once("fn trace_session_state(")
+        .expect("trace_session_state must exist")
+        .1;
+    let body = body.split_once("\n}").expect("a function body").0;
+    assert!(
+        body.contains("previous != usize::MAX"),
+        "arming the hunt must require a real transition -- armed off a first reading, the stall \
+         watchdog cancels a search the player never started and parks the session outside the \
+         states ERSC will cancel from"
+    );
+}
+
+/// The scan's mutex signature must reject a bare `_Mtx_plain`.
+///
+/// # Why this is stricter than the refusal it shares code with
+///
+/// `lock_shape_refusal` lets `_Mtx_plain` through, correctly: `mtx_do_lock` cannot report a plain
+/// mutex busy, so it is no reason to decline an action. As a signature it is worthless -- the
+/// value is `1`.
+///
+/// Live proof, run br-20260908-200726-15d4. With the budget finally covering all of ersc.dll the
+/// scan reached `ersc+0x62c908` and accepted the session `0x451200`; read back out of the running
+/// process, that address is a table with stride `0x50` whose every boundary holds
+/// `01 00 00 00 00 00 00 00`. The state field sits at `+0x150` and the mutex at `+0x100` -- one
+/// stride apart -- so the state check and the mutex check read the same repeating `1` and
+/// corroborated each other about an object that is neither a session nor a mutex. Its `_Count`
+/// reads `0x6fff`.
+#[test]
+fn the_scans_mutex_signature_rejects_a_bare_plain_type() {
+    let code = include_str!("lock_report.rs");
+    let body = code
+        .split_once("fn mutex_shape_identifies_a_session(")
+        .expect("the scan's mutex signature must exist")
+        .1;
+    let body = body.split_once("\n}").expect("a function body").0;
+    assert!(
+        body.contains("(kind & MTX_TRY) == 0"),
+        "the scan's signature must require the _Mtx_try bit MSVC's std::mutex constructor writes; \
+         accepting _Mtx_plain accepts the literal value 1, which is what a stride-0x50 table of \
+         ones already defeated once"
+    );
+    assert!(
+        body.contains("MTX_COUNT_OFFSET"),
+        "the signature must also read _Count -- a non-recursive std::mutex only goes 0 -> 1, and \
+         the object that defeated the previous version read 0x6fff there"
+    );
+}
+
+/// The scan's budget has to cross the module it is scanning.
+///
+/// Measured from the installed Seamless v2.0.1 PE section table: the writable sections total
+/// `0xafa0a5` = 10.98 MB, of which the `ERSC` section alone is 10.94 MB. The budget was `1 << 18`
+/// qwords = 2.00 MB, so the scan crossed 18.2% of the image and then stopped without saying so --
+/// a scan that gave up 8.9 MB early was indistinguishable from a scan that looked everywhere and
+/// found nothing. An owner-bearing global past that cut was simply unreachable.
+///
+/// A byte figure rather than a repeat of the constant, so a future shrink has to argue with the
+/// measurement instead of with a number that agrees with itself.
+#[test]
+fn the_session_scan_budget_covers_all_of_seamlesss_writable_data() {
+    /// `0xafa0a5`, rounded up: what ersc.dll v2.0.1's writable sections actually total.
+    const ERSC_WRITABLE_BYTES: usize = 11 * 1024 * 1024;
+    let covered = super::session_scan::SESSION_SCAN_QWORD_BUDGET * 8;
+    assert!(
+        covered >= ERSC_WRITABLE_BYTES,
+        "the scan budget covers {covered} bytes but ersc.dll has {ERSC_WRITABLE_BYTES} bytes of \
+         writable sections, so the scan would stop short and report the miss as an absence"
+    );
+}
+
+/// A missing OSM must no longer refuse the action.
+///
+/// # What reading the function settled
+///
+/// Both driven actions were read end to end out of the installed ersc.dll v2.0.1 with
+/// `scripts/disas-ersc.py --whole`. They are 0x64 and 0x75 bytes, and in each one `rcx` is read
+/// exactly once:
+///
+/// ```text
+/// cancel ersc+0x258d0:  mov rdi, [rcx + 0x58]   then everything via rdi
+/// invade ersc+0x25850:  mov rdi, [rcx + 0x58]   then everything via rdi
+/// ```
+///
+/// So `this` is a box with a session pointer at `+0x58`, and whose box it is does not matter to
+/// them. `synthesized_owner` supplies one we own, which cannot be a misidentification and cannot
+/// be freed under a call -- strictly safer than the object the scan spent four false positives,
+/// two killed processes and a whole-address-space sweep failing to identify.
+///
+/// This guards the direction of the change: a null OSM must produce a shim, never a refusal.
+#[test]
+fn a_missing_osm_is_answered_with_a_synthesized_owner_rather_than_a_refusal() {
+    let code = product_code();
+    let body = code
+        .split_once("fn ersc_owner_or_refuse(")
+        .expect("the owner gate must exist")
+        .1;
+    let body = body.split_once("\n}").expect("a function body").0;
+    assert!(
+        body.contains("synthesized_owner(session.session)"),
+        "a session with no OSM must be driven through a synthesized owner -- the actions read rcx \
+         only at +0x58, so Seamless's own object was never required"
+    );
+    let shim = code
+        .split_once("fn synthesized_owner(")
+        .expect("the shim must exist")
+        .1;
+    let shim = shim.split_once("\n}").expect("a function body").0;
+    assert!(
+        shim.contains("ersc::NEXT_OBJECT_OFFSET"),
+        "the shim must write the session at the offset the actions read, derived from the ABI \
+         rather than spelled again"
+    );
+    assert!(
+        shim.contains("Ordering::Acquire"),
+        "the allocation must be published once and shared, not remade per call"
+    );
+}
+
+/// The game thread must never sweep.
+///
+/// # The freeze this closes
+///
+/// Measured on run br-20260908-204210-6513: a 3.5-second stall every 11 seconds -- six in sixty
+/// -- during which the game task advanced between one and five ticks. Read out of
+/// `er-telemetry-timeseries.jsonl` as gaps in a stream whose median sample spacing is 218 ms. The
+/// frame-delta oracle in the same file saturates at exactly 50.0 ms, so it cannot report a stall
+/// this size at all and the gaps are the measurement rather than the samples.
+///
+/// Reading pages in bulk fixed the wrong half of the cost. Crossing 10.98 MB is 2,812 calls, but
+/// `identifies_a_session` asks the kernel about each candidate -- state, then `_Type`, then
+/// `_Count` -- and those pointers are on the heap, outside the page in hand, so they cannot be
+/// served from the buffer. In 1.4 million qwords that is hundreds of thousands of round trips.
+///
+/// None of it needs the game thread, so none of it may run there.
+#[test]
+fn the_game_thread_reads_the_cache_and_never_sweeps() {
+    let code = session_scan_code();
+    let body = code
+        // The name only. Anchoring on `(base: usize` broke the moment rustfmt wrapped the
+        // signature across lines, and a source-scanning test that cannot find its subject reports
+        // a fail against code that is correct.
+        .split_once("fn cached_scan_for_session(")
+        .expect("the windows cached_scan_for_session must exist")
+        .1;
+    let body = body.split_once("\n}").expect("a function body").0;
+    assert!(
+        !body.contains("scan_for_session(base, abi)"),
+        "the game-thread entry point must not call the sweep -- it stalled the game task for 3.5s \
+         every 11s. It may only validate the cache and ask the worker for another pass"
+    );
+    assert!(
+        body.contains("request_sweep("),
+        "it must still ask for a sweep, or a session that appears later is never found"
+    );
+}
+
+/// A session found without an owner is provisional, and the sweeper keeps looking.
+///
+/// `owner == 0` is the shape that lets the filter judge and log while `ersc_owner_or_refuse`
+/// declines every cancel -- open issue er-effects-rs-9i0g, and the state every live run has ended
+/// in so far. Settling for it permanently would stop the search that is meant to end it.
+#[test]
+fn a_session_found_without_an_owner_keeps_the_sweeper_looking() {
+    let code = session_scan_code();
+    let body = code
+        // The name only. Anchoring on `(base: usize` broke the moment rustfmt wrapped the
+        // signature across lines, and a source-scanning test that cannot find its subject reports
+        // a fail against code that is correct.
+        .split_once("fn cached_scan_for_session(")
+        .expect("the windows cached_scan_for_session must exist")
+        .1;
+    let body = body.split_once("\n}").expect("a function body").0;
+    assert!(
+        body.contains("owner == 0"),
+        "a cached session with no owner must still request a sweep, or the bare answer becomes \
+         permanent and the owner is never looked for again"
+    );
+}
+
+/// The sweeper is bounded, and blocks between passes.
+///
+/// A worker thread cannot stall a frame, but it can still burn a core forever. The thing it looks
+/// for arrives when Seamless builds it -- a human-scale event -- so every iteration of the loop
+/// ends in a blocking wait, and the loop stops rather than running for the life of the process.
+///
+/// The wait is a condvar rather than a sleep, which `scripts/check-no-timeouts.py` requires and
+/// which is also the better mechanism: the two callers that raise a request are the two moments the
+/// answer is wanted, so the sweeper starts its pass then instead of up to fifteen seconds later.
+#[test]
+fn the_sweeper_is_bounded_and_paces_itself() {
+    let code = session_scan_code();
+    let body = code
+        .split_once("fn sweep_until_answered(")
+        .expect("the sweeper must exist")
+        .1;
+    let body = body.split_once("\n}").expect("a function body").0;
+    assert!(
+        body.contains("SESSION_SCAN_MAX_SWEEPS"),
+        "the sweeper loop must be bounded"
+    );
+    assert!(
+        body.contains("await_sweep_request(&mut seen, Pacing::AtMostOnePassPerInterval)"),
+        "a pass that found nothing must block until the next request, capped by the interval, \
+         rather than spinning a core"
+    );
+    assert!(
+        body.contains("await_sweep_request(&mut seen, Pacing::UntilRequested)"),
+        "with no passes owed the sweeper must park on a request, not wake on a timer to re-read a \
+         budget nothing has touched"
+    );
+    assert!(
+        !body.contains("thread::sleep"),
+        "the sweeper must not sleep -- readiness here is the request, and the interval is only its \
+         cap"
+    );
+    const {
+        assert!(
+            super::session_scan::SESSION_SCAN_MAX_SWEEPS <= 16,
+            "the cap has to be small enough that the worst case is a handful of passes, not a habit"
+        );
+    }
+}
+
+/// Every refill of the sweep budget must also wake the sweeper.
+///
+/// The budget and the wake-up are two halves of one event. A refill that does not raise a request
+/// leaves the sweeper parked in `await_sweep_request` with passes owed and nothing coming to end
+/// the wait -- which is worse than the sleep this replaced, because that at least woke on its own.
+#[test]
+fn refilling_the_sweep_budget_always_wakes_the_sweeper() {
+    let code = session_scan_code();
+    for owner in ["fn invalidate_cached_session(", "fn request_sweep_now("] {
+        let body = code.split_once(owner).expect("the refill must exist").1;
+        let body = body.split_once("\n}").expect("a function body").0;
+        assert!(
+            body.contains("SWEEP_BUDGET.store(SESSION_SCAN_MAX_SWEEPS")
+                && body.contains("raise_sweep_request()"),
+            "{owner} refills the budget, so it must raise a request too"
+        );
+    }
+}
+
 /// A bare session find may never veto an owner find.
 ///
 /// # The shape of the bug this pins
@@ -965,7 +1486,7 @@ fn the_session_identity_check_rejects_implausible_pointers_first() {
 /// reject.
 #[test]
 fn a_bare_session_find_cannot_veto_an_owner_find() {
-    let code = product_code();
+    let code = session_scan_code();
     let body = code
         .split_once("fn scan_for_session(base: usize")
         .expect("the windows scan_for_session must exist")
@@ -1015,4 +1536,37 @@ fn an_unenforced_rejection_is_counted_and_reported() {
         "the heartbeat must print the unenforced count -- it is the one number that says whether \
          the filter worked, as opposed to whether it ran"
     );
+}
+
+#[test]
+fn a_rejection_arms_the_pending_cancel_rather_than_driving_it_where_it_is_judged() {
+    // The verdict is reached inside `set_join_data_hook`, a detour on the game's own
+    // `SetMultiplayJoinData`. Driving from there calls into ersc.dll in the state the server's
+    // offer left behind, which is outside the set ERSC draws its own Cancel row for.
+    super::arm_pending_cancel(0x3d2f2c00, RejectReason::WrongBlock, true);
+    let armed = {
+        let guard = super::PENDING_CANCEL.lock();
+        let guard = match guard {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *guard
+    };
+    let armed = armed.expect("the rejection is armed for the game task");
+    assert_eq!(armed.destination, 0x3d2f2c00);
+
+    // One slot, not a queue: the server is waiting on the newest offer, so a second rejection
+    // replaces the first rather than queueing a cancel for a match already superseded.
+    super::arm_pending_cancel(0x12000000, RejectReason::WrongPlaceName, false);
+    let armed = {
+        let guard = super::PENDING_CANCEL.lock();
+        let mut guard = match guard {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.take()
+    };
+    let armed = armed.expect("the newer rejection replaced the older one");
+    assert_eq!(armed.destination, 0x12000000);
+    assert!(!armed.notice);
 }

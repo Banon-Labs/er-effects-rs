@@ -164,6 +164,13 @@ def occupied_slots(module, path: Path) -> list[dict]:
                 "level": level,
                 "runes": fields.get("runes"),
                 "stats": fields.get("stats_named"),
+                # Carried because it is half of what Seamless matches on. Its
+                # `matchmaking_breakin_lobby_ykssr_199_6` filter is a `<level>_<weapon>` pair, so a
+                # character reinforced far above its rune level searches a pool almost nobody is in
+                # -- and that is invisible in a block that prints only the rune level. Measured
+                # 2026-09-08 on the corpus: RL9 reads +0, RL90 +12, RL100 +20, while the character
+                # getting no invasions read +25 at RL9.
+                "matchmaking_weapon_level": fields.get("matchmaking_weapon_level"),
             }
         )
     return results

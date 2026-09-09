@@ -126,6 +126,12 @@ ersc_observers = false
 ersc_show_observer = true
 ersc_lobby_key_observer = true
 
+# The third one, and the only one that sees the option-menu object when you invade with an ITEM --
+# `show` runs only when Seamless's own menu is built, and the item path never builds it. Without
+# this the filter judges matches correctly and then cannot cancel them, which is what run
+# br-20260908-230004-d163 did 13 times in a row.
+ersc_invade_observer = true
+
 # Match ONLY other players running this DLL with this option turned on.
 #
 # Seamless finds worlds with a `lobby_key` that is a fingerprint of your game's params and Seamless
@@ -349,6 +355,13 @@ pub fn parse_local_invasion_config_with_fallback(
                 None => issues.push(ConfigIssue {
                     line: line_no,
                     message: format!("ersc_observers must be true or false, got {value:?}"),
+                }),
+            },
+            "ersc_invade_observer" => match parse_bool(value) {
+                Some(v) => config.ersc_invade_observer = v,
+                None => issues.push(ConfigIssue {
+                    line: line_no,
+                    message: format!("ersc_invade_observer must be true or false, got {value:?}"),
                 }),
             },
             "ersc_show_observer" => match parse_bool(value) {
@@ -603,6 +616,15 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
                 out.push_str(&format!(
                     "ersc_show_observer = {}\n",
                     config.ersc_show_observer
+                ));
+            }
+            // Named here for the reason two keys above it were not: an unnamed key is copied from
+            // the shipped template verbatim on every save, so leaving it out would silently reset
+            // it to the template's value whenever the player marks a location.
+            "ersc_invade_observer" => {
+                out.push_str(&format!(
+                    "ersc_invade_observer = {}\n",
+                    config.ersc_invade_observer
                 ));
             }
             "ersc_lobby_key_observer" => {
