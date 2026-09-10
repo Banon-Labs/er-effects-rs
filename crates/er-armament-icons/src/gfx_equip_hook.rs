@@ -43,8 +43,33 @@ const MEMORY_FILE_CURSOR_OFFSET: usize = 0x24;
 /// (verified 1.16.2: passes param_2 as the File to the tag reader `FUN_141162800`,
 /// which reads it via vtable +0x50 Read / +0x20 Tell). Unique 30-byte
 /// position-independent prologue (verified count==1 in the 1.16.2 image).
+///
+/// Kept as documentation of the whole opening; the scan matches [`parse_sig_after_patch`].
 const PARSE_SIG: &str =
     "40 53 48 83 EC 40 48 8B 41 18 48 8B D9 C6 44 24 30 01 48 83 C1 50 4C 8B 50 20 4C 8B 58 48";
+
+/// How many bytes of the prologue a five-byte detour overwrites.
+const PARSE_SIG_PATCH_BYTES: usize = 5;
+
+/// [`PARSE_SIG`] past the bytes a detour can overwrite, which is what the scan matches.
+///
+/// # Why the whole prologue is the wrong thing to look for
+///
+/// `er-invasion-warp` detours this same function, having located it with the byte-identical
+/// signature independently. Today `er_armament_icons.dll` sorts first in me3's name-ordered natives
+/// list and therefore gets the pristine bytes -- but that is load order, not a guarantee, and when
+/// it went the other way the symptom was silent: on 2026-09-10 the other module scanned a live
+/// `.text` where these five bytes had already become `E9 <rel32>`, found nothing, and switched its
+/// whole movie swap off. Matching bytes 5..30 and subtracting 5 makes the scan indifferent to who
+/// arrived first. MinHook relocates a leading `E9` into its trampoline, so a chained detour calls
+/// the earlier one, which calls the original.
+fn parse_sig_after_patch() -> String {
+    PARSE_SIG
+        .split_whitespace()
+        .skip(PARSE_SIG_PATCH_BYTES)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
 
 /// File-open observer (logs the `.gfx` open sequence and provides a live loader to resolve
 /// FileOpener::OpenFile from). Known-good hardcoded 1.16.2 RVA.
@@ -676,9 +701,14 @@ pub(crate) fn install(base: usize) {
             ));
             break 'parse false;
         }
-        let Some(addr) = scan_unique(&text, start, PARSE_SIG) else {
+        let Some(addr) = scan_unique(&text, start, &parse_sig_after_patch())
+            .map(|address| address - PARSE_SIG_PATCH_BYTES)
+        else {
             log_message(format_args!(
-                "gfx-equip: parse hook DISABLED -- signature not unique in live .text"
+                "gfx-equip: parse hook DISABLED -- the patched-prologue tail is absent or not \
+                 unique in the live .text. These 25 bytes sit past anything a five-byte detour \
+                 overwrites, so this means the function moved rather than that another mod hooked \
+                 it first"
             ));
             break 'parse false;
         };
