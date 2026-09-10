@@ -158,6 +158,27 @@ def hostile_phantom_summon_param_types(
     return sorted(seen, reverse=True)
 
 
+def hostile_phantom_multiplay_roles(
+    properties: list[dict], roles: list[dict]
+) -> list[int]:
+    """Every `MultiplayRole` whose row resolves to a hostile-phantom `CharacterType`.
+
+    The per-person half of the same join. `CS::PlayerIns::GetMultiplayRole` (1.16.2
+    `0x140655fd0`) returns `PlayerGameData+229`, so this set is what that field has to hold
+    for a candidate to be a fellow invader -- the question `ChrIns::chr_type` failed to
+    answer under Seamless Co-op, where a remote player has measured `Local`.
+
+    The NPC kinds are dropped here for the same reason they are dropped from the candidate
+    `ChrType` set: they are characters the game spawned, not other humans.
+    """
+    hostile = {
+        chr_type
+        for chr_type in hostile_phantom_chr_types(properties)
+        if chr_type not in NPC_CHR_TYPES
+    }
+    return sorted(row["role"] for row in roles if row["chr_type"] in hostile)
+
+
 def report(properties: list[dict], roles: list[dict]) -> None:
     print("CharacterTypeProperties")
     print(f"{'chrType':>7}  {'name':<22} hostLike friendly hostile")
@@ -185,6 +206,11 @@ def rust(properties: list[dict], roles: list[dict]) -> None:
     print(f"pub(crate) const HOSTILE_PHANTOM_CHR_TYPES: [i32; {len(candidates)}] = {candidates:};".replace("[", "[", 1))
     print(f"// their SummonParamTypes, via MultiplayProperties")
     print(f"pub(crate) const HOSTILE_PHANTOM_SUMMON_PARAM_TYPES: [i32; {len(summon)}] = {summon};")
+    role_set = hostile_phantom_multiplay_roles(properties, roles)
+    print(f"// their MultiplayRoles, the per-person field PlayerGameData+229 carries")
+    print(
+        f"pub(crate) const HOSTILE_PHANTOM_MULTIPLAY_ROLES: [u8; {len(role_set)}] = {role_set};"
+    )
 
 
 def selftest(args: argparse.Namespace) -> int:
@@ -218,6 +244,15 @@ def selftest(args: argparse.Namespace) -> int:
         failures.append(f"summonParamType -12 no longer maps to Duelist: {anor}")
     if -12 not in hostile_phantom_summon_param_types(properties, roles):
         failures.append("-12 is not derived as a hostile-phantom role")
+
+    # The per-person set the lock-on filter's candidate half now reads. Role 0 must stay out of
+    # it: it is the value a `PlayerGameData` holds before anyone has been assigned a role, and a
+    # rule that treated it as an invader would hide the host.
+    role_set = hostile_phantom_multiplay_roles(properties, roles)
+    if role_set != [2, 3, 4, 5, 9, 10, 11, 12, 17, 18, 19, 20, 26, 27, 30, 31]:
+        failures.append(f"hostile phantom MultiplayRoles changed: {role_set}")
+    if 0 in role_set:
+        failures.append("role 0 is derived as a hostile phantom, which would hide the host")
 
     for failure in failures:
         print(f"FAIL {failure}")

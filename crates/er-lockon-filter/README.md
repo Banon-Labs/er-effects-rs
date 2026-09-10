@@ -48,6 +48,18 @@ carries a `CharacterTypeProperties` table (1.16.2 `0x143b17c00`, byte-identical 
 `FesteringBloodyFinger` (18) and the three npc kinds `20`, `21`, `22`. The npc kinds are dropped
 -- the game spawned them, and an invader may want to lock one -- and the other four are the set.
 
+A candidate is asked twice, because once was not enough. Beside `ChrIns::chr_type` the filter
+reads that player's `PlayerGameData::multiplayRole` -- `PlayerIns+0x580` then `+229`, which is the
+whole of `CS::PlayerIns::GetMultiplayRole` (1.16.2 `0x140655fd0`) -- and hides them if either
+answer is a hostile phantom. The role set is the same `MultiplayProperties` join read the other
+way round: every row whose `CharacterType` lands in the set above, which is roles `2, 3, 4, 5, 9,
+10, 11, 12, 17, 18, 19, 20, 26, 27, 30, 31`. Role `0` is deliberately not among them -- it is what
+a `PlayerGameData` holds before anyone is assigned a role, so treating it as an invader would take
+the host off the lock-on list.
+
+That second read is the fix for the 2026-09-10 failure below: a `chr_type` of `0` cannot tell a
+fellow invader from the host, and under Seamless Co-op that is what a remote player reads.
+
 Whether you are invading is asked of two fields, and either is enough. `ChrIns::chr_type` is the
 one the engine derives; `GameMan::summonParamType` is what it derives it from, and the
 `MultiplayProperties` table (`0x143b11230`, 1.17.1 `0x143b15230`) is the derivation: each row
@@ -90,7 +102,8 @@ data instead of the code, and would stop two invaders damaging each other as wel
 | `census: first candidate with chr_type N; ...` | each character kind the lock-on system asked about, named once |
 | `census: GameMan summon param type is N ...` | your multiplayer role, once per change |
 | `census: a candidate with chr_type N has team_type T` | the team byte behind each kind, once per pairing |
-| `hidden: a chr_type N character is out of the lock-on candidate set ...` | the filter fired |
+| `census: candidate "name" steam_id=... multiplay_role=... ...` | one line per person the lock-on system offered, and one for you |
+| `hidden: a chr_type N multiplay_role R character is out of the lock-on candidate set ...` | the filter fired |
 
 The census is there because the feature can only be exercised by two players invading one
 world, which no offline check can produce. If the filter never fires, those lines say whether
@@ -113,28 +126,36 @@ behaviour change.
 
 ## Status
 
-Never yet run in a live double invasion. What changed on 2026-09-09 is that the rule can now
-arm at all in the sessions this user plays: the 2026-09-07 run measured the local player at
-`chr_type` 2 / `summonParamType` -12, the rule of the day required 15/16/18 or -3/-4/-5, and so
-the filter was inert no matter who was standing in the world. Both values are members now, and
-both are members because the game's own tables say they are hostile-phantom roles, not because
-they were added to make a run fire.
+Run in a live double invasion on 2026-09-10, and the candidate half failed. The invader at the
+keyboard was `chr_type` 2 with `summonParamType` 0, the gate armed, and `hidden:` fired 4096
+times -- and every fellow invader in the world was still lockable. The two facts fit together
+only one way: the candidates that were hidden were not the ones being locked. The walk quoted at
+the top of this file skips a point whose owner resolves to null before it asks
+`CanTargetTeamType`, so a hidden candidate is genuinely gone; the players who were locked
+therefore never matched the `ChrType` set. That is the `chr_type` 0 case this section had
+predicted and left open, arriving as a lost invasion rather than as a census line.
 
-What is still unmeasured is the candidate half. Remote players in an ordinary Seamless session
-read `chr_type` 0, which is `Local` and is also what the host reads, so if a fellow invader also
-reads 0 the filter still has nobody to hide and the candidate set must stay strict rather than
-grow to cover it -- hiding 0 would hide the host, which is the one failure worse than doing
-nothing. The census answers it on the first double invasion: a `census: first candidate with
-chr_type N` line naming 2, 15, 16 or 18 means the filter has what it needs, and a `hidden:` line
-means it fired.
+The multiplay-role term above is the answer, and it is not yet proven. It is derived from the
+same table the rest of the rule comes from, it cannot reach role 0, and it is pinned by five
+tests -- but no invasion has run against it. The `census: candidate "name" steam_id=...` line is
+what will say whether it worked: one row per person, carrying the Steam name, the role, the team
+byte and both `chr_type` readings, so a player who was still lockable can be matched to the row
+that let them through.
+
+The identity census this replaced read `isHost`, `isLocalPlayer` and `preCeremonyMultiplayRole`
+off `SessionManagerPlayerEntry`. All three offsets are right -- Ghidra's typed
+`CS::SessionManagerPlayerEntry` puts them exactly there -- and all three were useless: six
+distinct entries in that invasion each reported `is_host=true`, `pre_ceremony_role=0`, and most
+of them `is_local_player=true`. Under Seamless those booleans say the same thing about everybody,
+which is why the census now leads with the Steam ID.
 
 The widened invading half carries one risk worth naming rather than burying: `Duelist` (2) is
 now a member, and a Seamless session was measured putting the LOCAL player on it during ordinary
 co-op. So the gate can arm when nobody is invading. That hides nobody by itself -- the candidate
-still has to be a hostile phantom, and every candidate that session asked about was `Local` (0),
-`Npc` (5) or `Unk7` (7) -- but if Seamless ever types a co-op partner `Duelist`, they would stop
-being a lock-on target. `the_measured_seamless_session_hides_nobody` pins the measured case; the
-partner case is the one to watch for in the log.
+still has to be a hostile phantom by kind or by role -- but if Seamless ever types a co-op
+partner `Duelist`, or hands them an invader role, they would stop being a lock-on target.
+`the_measured_seamless_session_hides_nobody` pins the measured case; the partner case is the one
+to watch for in the log.
 
 The candidate walk, the detour target, the offsets it reads (`ChrIns::chr_type` at `+0x68`,
 `WorldChrManImp::mainPlayer` at `+0x1e508`, `GameMan::summonParamType` at `+0xd84`), the two

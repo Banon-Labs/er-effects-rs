@@ -110,6 +110,28 @@ pub(crate) const HOSTILE_PHANTOM_SUMMON_PARAM_TYPES: [i32; 19] = [
     -30,
 ];
 
+/// Every `MultiplayRole` whose `MultiplayProperties` row resolves to a hostile-phantom
+/// `CharacterType`.
+///
+/// The per-person field, and the one the candidate half of the rule was missing. On 2026-09-10 a
+/// live Seamless Co-op invasion hid 4096 `chr_type` 2 candidates and the invader at the keyboard
+/// could still lock on to every fellow invader in the world. The lock-on candidate walk in
+/// `LockTgtMan` (1.16.2 `0x140716260`) skips a point whose owner resolves to null before it even
+/// asks `CS::ChrIns::CanTargetTeamType`, so a hidden candidate is genuinely gone: the players who
+/// were locked never matched the `ChrType` set. Under Seamless a remote player has measured
+/// `Local` (0), which is also what the host reads, so no `ChrType` rule can separate them.
+///
+/// `CS::PlayerIns::GetMultiplayRole` (1.16.2 `0x140655fd0`) is `PlayerGameData+229`, and
+/// `MultiplayProperties` maps each role to the `CharacterType` the engine derives from it. This is
+/// that join, computed by `scripts/er-character-type-tables.py`, whose `--selftest` re-reads both
+/// tables out of the image and asserts this exact list.
+///
+/// Role 0 is not a member, and its absence is what keeps the host lockable: 0 is the value a
+/// `PlayerGameData` carries before a role is assigned, so a rule that read it as an invader would
+/// take the host off the lock-on list -- the one outcome worse than doing nothing.
+pub(crate) const HOSTILE_PHANTOM_MULTIPLAY_ROLES: [u8; 16] =
+    [2, 3, 4, 5, 9, 10, 11, 12, 17, 18, 19, 20, 26, 27, 30, 31];
+
 /// The value the hook passes when it has no `GameMan` to read, so the summon-param half stands
 /// down and the `ChrType` half decides alone. `Host` would do the same job and would be a lie
 /// about what was read.
@@ -193,11 +215,31 @@ pub(crate) fn hides(
     self_chr_type: i32,
     self_summon_param_type: i32,
     candidate_chr_type: i32,
+    candidate_multiplay_role: Option<u8>,
     candidate_is_player: bool,
 ) -> bool {
     candidate_is_player
         && local_player_is_invading(self_chr_type, self_summon_param_type)
-        && HOSTILE_PHANTOMS.contains(candidate_chr_type)
+        && candidate_is_hostile_phantom(candidate_chr_type, candidate_multiplay_role)
+}
+
+/// Is this candidate a hostile phantom, according to either field that can say so?
+///
+/// Two independent reads of the same fact, and either is enough, for the same reason
+/// [`local_player_is_invading`] takes two: the fields agree in vanilla, and where a session layer
+/// writes one and not the other the useful answer is the one that says yes.
+///
+/// The asymmetry with the local half is deliberate. A false yes on the local side hides nobody --
+/// the candidate still has to be typed as an invader -- while a false yes here takes a character
+/// off the lock-on list. So this half stays keyed to two derived tables and nothing else:
+/// `HOSTILE_PHANTOMS`, which excludes the kinds the game spawns, and
+/// [`HOSTILE_PHANTOM_MULTIPLAY_ROLES`], which excludes role 0 and every friendly and hunter role.
+///
+/// `None` is "the candidate has no readable `PlayerGameData`", which decides nothing rather than
+/// deciding no.
+pub(crate) fn candidate_is_hostile_phantom(chr_type: i32, multiplay_role: Option<u8>) -> bool {
+    HOSTILE_PHANTOMS.contains(chr_type)
+        || multiplay_role.is_some_and(|role| HOSTILE_PHANTOM_MULTIPLAY_ROLES.contains(&role))
 }
 
 #[cfg(test)]
@@ -208,6 +250,11 @@ mod tests {
     /// that is about the invasion rule passes it, because the rule only ever applies to players;
     /// the tests that pass `false` are the ones asserting that.
     const PLAYER: bool = true;
+
+    /// The value the runtime passes for a candidate whose `PlayerGameData` could not be read, and
+    /// the value every test written before the role term existed passes: the `ChrType` half has to
+    /// keep deciding those cases exactly as it did.
+    const NO_ROLE: Option<u8> = None;
 
     /// A `CS::EnemyIns` is out of scope whatever number it carries.
     ///
@@ -222,7 +269,7 @@ mod tests {
             for role in HOSTILE_PHANTOM_SUMMON_PARAM_TYPES {
                 for candidate in HOSTILE_PHANTOM_CHR_TYPES {
                     assert!(
-                        !hides(local, role, candidate, NOT_A_PLAYER),
+                        !hides(local, role, candidate, NO_ROLE, NOT_A_PLAYER),
                         "{local}/{role}/{candidate}"
                     );
                 }
@@ -234,7 +281,7 @@ mod tests {
     /// the rest of the rule leaves alone.
     #[test]
     fn being_a_player_is_not_by_itself_grounds_to_hide() {
-        assert!(!hides(CHR_TYPE_BLOODY_FINGER, HOST, HOST, PLAYER));
+        assert!(!hides(CHR_TYPE_BLOODY_FINGER, HOST, HOST, NO_ROLE, PLAYER));
     }
 
     /// The value the runtime passes when `GameMan` answered, and said "not invading".
@@ -245,7 +292,7 @@ mod tests {
         for local in HOSTILE_PHANTOM_CHR_TYPES {
             for candidate in HOSTILE_PHANTOM_CHR_TYPES {
                 assert!(
-                    hides(local, SUMMON_PARAM_TYPE_UNKNOWN, candidate, PLAYER),
+                    hides(local, SUMMON_PARAM_TYPE_UNKNOWN, candidate, NO_ROLE, PLAYER),
                     "{local}/{candidate}"
                 );
             }
@@ -257,7 +304,10 @@ mod tests {
         // The case this second signal exists for: a session layer that leaves the derived
         // `ChrType` at `Local` while the role the engine matched on says otherwise.
         for role in HOSTILE_PHANTOM_SUMMON_PARAM_TYPES {
-            assert!(hides(0, role, CHR_TYPE_BLOODY_FINGER, PLAYER), "{role}");
+            assert!(
+                hides(0, role, CHR_TYPE_BLOODY_FINGER, NO_ROLE, PLAYER),
+                "{role}"
+            );
         }
     }
 
@@ -267,6 +317,7 @@ mod tests {
             CHR_TYPE_RECUSANT,
             HOST,
             CHR_TYPE_BLOODY_FINGER,
+            NO_ROLE,
             PLAYER
         ));
     }
@@ -291,7 +342,8 @@ mod tests {
             CHR_TYPE_DUELIST,
             SUMMON_PARAM_TYPE_ANOR_MAP_GUARDIAN,
             CHR_TYPE_DUELIST,
-            PLAYER,
+            NO_ROLE,
+            PLAYER
         ));
     }
 
@@ -307,7 +359,8 @@ mod tests {
                     CHR_TYPE_BLOODY_FINGER,
                     SUMMON_PARAM_TYPE_RED_INVASION_A,
                     candidate,
-                    PLAYER,
+                    NO_ROLE,
+                    PLAYER
                 ),
                 "{candidate}"
             );
@@ -325,7 +378,8 @@ mod tests {
                     CHR_TYPE_BLOODY_FINGER,
                     SUMMON_PARAM_TYPE_RED_INVASION_A,
                     candidate,
-                    PLAYER,
+                    NO_ROLE,
+                    PLAYER
                 ),
                 "{candidate}"
             );
@@ -339,7 +393,7 @@ mod tests {
         for local in [0, 1, 5, 8, 13, 17] {
             for role in [HOST, -1, SUMMON_PARAM_TYPE_UNKNOWN] {
                 assert!(
-                    !hides(local, role, CHR_TYPE_BLOODY_FINGER, PLAYER),
+                    !hides(local, role, CHR_TYPE_BLOODY_FINGER, NO_ROLE, PLAYER),
                     "{local}/{role}"
                 );
             }
@@ -356,7 +410,7 @@ mod tests {
         for chr_type in [-1, -999, MAX_CHR_TYPE + 1, i32::MAX, i32::MIN] {
             assert!(!HOSTILE_PHANTOMS.contains(chr_type), "{chr_type}");
             assert!(
-                !hides(chr_type, HOST, CHR_TYPE_BLOODY_FINGER, PLAYER),
+                !hides(chr_type, HOST, CHR_TYPE_BLOODY_FINGER, NO_ROLE, PLAYER),
                 "{chr_type}"
             );
             assert!(
@@ -364,7 +418,8 @@ mod tests {
                     CHR_TYPE_BLOODY_FINGER,
                     SUMMON_PARAM_TYPE_RED_INVASION_A,
                     chr_type,
-                    PLAYER,
+                    NO_ROLE,
+                    PLAYER
                 ),
                 "{chr_type}"
             );
@@ -393,7 +448,7 @@ mod tests {
         ] {
             for candidate in [0, 5, 7] {
                 assert!(
-                    !hides(local, role, candidate, PLAYER),
+                    !hides(local, role, candidate, NO_ROLE, PLAYER),
                     "{local}/{role}/{candidate}"
                 );
             }
@@ -409,5 +464,84 @@ mod tests {
         for role in [0, -1, -9, -14, -28] {
             assert!(!local_player_is_invading(0, role), "{role}");
         }
+    }
+    /// The fault the role term exists for, in the shape the live run produced it: the invader at
+    /// the keyboard is typed `Duelist`, the fellow invader beside them reads `Local` like the
+    /// host, and only the role tells the two apart.
+    #[test]
+    fn a_fellow_invader_typed_local_is_hidden_by_their_role() {
+        const SEAMLESS_REMOTE_CHR_TYPE: i32 = 0;
+        for role in HOSTILE_PHANTOM_MULTIPLAY_ROLES {
+            assert!(
+                hides(
+                    CHR_TYPE_DUELIST,
+                    SUMMON_PARAM_TYPE_ANOR_MAP_GUARDIAN,
+                    SEAMLESS_REMOTE_CHR_TYPE,
+                    Some(role),
+                    PLAYER,
+                ),
+                "{role}"
+            );
+        }
+    }
+
+    /// The counterpart, and the one that decides whether this crate is safe to load: the host and
+    /// everyone fighting for them keep their roles and stay lockable.
+    #[test]
+    fn the_host_and_the_friendly_roles_are_never_hidden_by_the_role_term() {
+        // 0 no role assigned, 1 white summon, 6 berserker white, 7 red hunter, 8 sinner hero
+        // white, 13 avatar battle, 15 ceremony summon, 21 white NPC summon, 25 NPC pseudo-multi
+        // white, 29 red hunter 2.
+        for role in [0_u8, 1, 6, 7, 8, 13, 15, 21, 25, 29] {
+            assert!(!HOSTILE_PHANTOM_MULTIPLAY_ROLES.contains(&role), "{role}");
+            assert!(
+                !hides(
+                    CHR_TYPE_BLOODY_FINGER,
+                    SUMMON_PARAM_TYPE_RED_INVASION_A,
+                    0,
+                    Some(role),
+                    PLAYER,
+                ),
+                "{role}"
+            );
+        }
+    }
+
+    /// A candidate the game spawned is still out of scope however its role reads, because the
+    /// player precondition gates the whole rule and not just the `ChrType` half.
+    #[test]
+    fn the_role_term_does_not_reach_non_players() {
+        const NOT_A_PLAYER: bool = false;
+        for role in HOSTILE_PHANTOM_MULTIPLAY_ROLES {
+            assert!(
+                !hides(
+                    CHR_TYPE_BLOODY_FINGER,
+                    SUMMON_PARAM_TYPE_RED_INVASION_A,
+                    0,
+                    Some(role),
+                    NOT_A_PLAYER,
+                ),
+                "{role}"
+            );
+        }
+    }
+
+    /// An unreadable `PlayerGameData` decides nothing rather than deciding no.
+    #[test]
+    fn an_unreadable_role_leaves_the_chr_type_half_in_charge() {
+        assert!(candidate_is_hostile_phantom(CHR_TYPE_DUELIST, NO_ROLE));
+        assert!(!candidate_is_hostile_phantom(0, NO_ROLE));
+        assert!(candidate_is_hostile_phantom(0, Some(3)));
+        assert!(!candidate_is_hostile_phantom(0, Some(0)));
+    }
+
+    /// The set the game's own two tables give, joined. `scripts/er-character-type-tables.py
+    /// --selftest` is the half that reads the image; this half pins what the crate did with it.
+    #[test]
+    fn the_role_set_is_the_games_hostile_phantom_roles() {
+        assert_eq!(
+            HOSTILE_PHANTOM_MULTIPLAY_ROLES,
+            [2, 3, 4, 5, 9, 10, 11, 12, 17, 18, 19, 20, 26, 27, 30, 31]
+        );
     }
 }
