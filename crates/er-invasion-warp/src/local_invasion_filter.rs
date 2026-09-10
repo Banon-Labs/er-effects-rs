@@ -819,6 +819,17 @@ fn resolve_session() -> Result<SeamlessSession, NoSession> {
                  and logs but declines to drive cancel/invade, because passing 0 as their first \
                  argument dereferences null inside ersc.dll."
             ));
+            // The seam report used to be reachable only from the `show` detour, and that detour
+            // killed the game 29.5s into run `br-20260909-234159-0a54`. This owner passed the same
+            // tag-and-session test `capture_osm` applies to the detour's argument, so the report
+            // can run from here with nothing written into Seamless. What it is wanted for now is
+            // `OSM+0x88`: the seam Seamless calls to show its own notices, and the last hop
+            // between the static work on "Failed to invade session: No sessions found" and a hook
+            // that can refuse it.
+            #[cfg(windows)]
+            if owner != 0 {
+                menu_seams::report_menu_seams(owner);
+            }
         }
         return Ok(SeamlessSession {
             osm: owner,

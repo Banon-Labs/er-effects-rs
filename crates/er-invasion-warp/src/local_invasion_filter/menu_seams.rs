@@ -3,7 +3,7 @@
 //! Lives beside `local_invasion_filter` rather than inside it because it is a diagnostic with no
 //! callers on any decision path -- the filter never branches on anything here.
 
-use super::ersc_module_base;
+use super::{ersc, ersc_module_base};
 
 /// Report which module owns the option-menu function pointers Seamless calls.
 ///
@@ -25,27 +25,44 @@ use super::ersc_module_base;
 /// guessed to be the teardown and is not: it points below the game image entirely, into a separate
 /// anonymous region, so treat that offset as unmapped rather than as a fourth seam.
 ///
-/// Module attribution is by base-address arithmetic on purpose. Under Wine every PE maps as
-/// anonymous memory, so `/proc/<pid>/maps` carries no file name to match against and a
-/// name-based lookup would report "unknown" for pointers that are plainly inside the game.
+/// # Why `+0x88` is in the table
 ///
-/// Nothing is written and nothing is called: this only reads pointers already sitting in an object
-/// we hold.
+/// It is the seam that shows a Seamless message, and naming it is the one hop still missing before
+/// "Failed to invade session: No sessions found" can be refused. The static half is settled and
+/// recorded on [`ersc::MESSAGE_DISPLAY_SEAM_OFFSET`]: `ersc+0x25a50` formats a message through
+/// `ersc+0x25020` and then calls `[OSM+0x88](0, 0, MenuString*, 0)` with the formatted text in the
+/// `MenuString`. What that pointer resolves to is not in `ersc.dll`, for exactly the reason the
+/// three seams above were not: Seamless pattern-scans for it. One line of this report answers it.
+///
+/// # Why this now runs without a detour in `ersc.dll`
+///
+/// It used to be reachable only from the `show` observer, and installing that detour killed the
+/// game 29.5s into run `br-20260909-234159-0a54`. The scan half of `resolve_session` hands back
+/// the same object -- `scan_for_session` accepts an owner only when `osm_tag_matches` agrees, so
+/// the pointer it returns has the `seamless` tag at `+0x68` and a live session at `+0x58`, which
+/// is what `capture_osm` proves for the detour's argument. So the report is driven from there
+/// instead, and nothing is written into Seamless to get it.
 #[cfg(windows)]
 pub(super) fn report_menu_seams(osm: usize) {
-    /// `+0xa8` open dialog, `+0xb0` clear list, `+0xb8` append row; `+0xe0` probed and found not
-    /// to be a menu function (see above) -- kept only so the report keeps saying so.
-    const SEAMS: [(usize, &str); 4] = [
+    /// `+0x88` show a message, `+0xa8` open dialog, `+0xb0` clear list, `+0xb8` append row,
+    /// `+0xc0` fetch the allocator a `MenuString` is built with; `+0xe0` probed and found not to be
+    /// a menu function (see above) -- kept only so the report keeps saying so.
+    const SEAMS: [(usize, &str); 6] = [
+        (ersc::MESSAGE_DISPLAY_SEAM_OFFSET, "show_message"),
         (0xa8, "open_dialog"),
         (0xb0, "clear_options"),
         (0xb8, "append_option"),
+        (
+            ersc::MENU_STRING_ALLOCATOR_SEAM_OFFSET,
+            "menu_string_allocator",
+        ),
         (0xe0, "teardown"),
     ];
     // Attributed against the only two modules that could own them, both of which this module
     // already resolves. A plausible in-image offset identifies the owner; an implausible one says
     // the pointer belongs to neither, which is itself the answer.
     const PLAUSIBLE_IMAGE_SIZE: usize = 0x0800_0000;
-    let ersc = ersc_module_base();
+    let ersc_base = ersc_module_base();
     let game = er_game_base::mem::game_module_base().ok();
     let mut parts = Vec::new();
     for (offset, name) in SEAMS {
@@ -53,7 +70,7 @@ pub(super) fn report_menu_seams(osm: usize) {
             parts.push(format!("{name}@+{offset:#x}=<unreadable>"));
             continue;
         };
-        let owner = [("ersc.dll", ersc), ("eldenring.exe", game)]
+        let owner = [("ersc.dll", ersc_base), ("eldenring.exe", game)]
             .into_iter()
             .filter_map(|(module, base)| base.map(|base| (module, base)))
             .find(|(_, base)| pointer >= *base && pointer - base < PLAUSIBLE_IMAGE_SIZE)
@@ -74,8 +91,16 @@ pub(super) fn report_menu_seams(osm: usize) {
         }
         _ => "<unreadable>".to_owned(),
     };
+    // The message repository, so the next step can read the format string for the id below out of
+    // Seamless's own maps rather than out of a locale file the player may have edited.
+    let repository =
+        unsafe { er_game_base::mem::safe_read_usize(osm + ersc::MOD_MESSAGE_REPOSITORY_OFFSET) }
+            .map_or_else(|| "<unreadable>".to_owned(), |value| format!("0x{value:x}"));
     crate::standalone_log(format_args!(
-        "local-invasion: menu seams -- {} | visible options: {visible}",
-        parts.join(" ")
+        "local-invasion: menu seams -- {} | visible options: {visible} | message repository \
+         @+{:#x}={repository} | the notice to refuse is id {:#x} (YKNX3_BREAKINFAILED)",
+        parts.join(" "),
+        ersc::MOD_MESSAGE_REPOSITORY_OFFSET,
+        ersc::YKNX3_BREAKIN_FAILED_MESSAGE_ID,
     ));
 }

@@ -257,6 +257,44 @@ pub const NEXT_OBJECT_OFFSET: usize = 0x58;
 /// a diagnostic and believed by nothing -- see `show_observer` for the day it was a gate.
 pub const OSM_TAG_OFFSET: usize = 0x68;
 pub const OSM_TAG: &[u8] = b"seamless";
+
+/// `OSM+0x50` -- Seamless's own message repository, the `{id -> text}` maps its locale file fills.
+///
+/// Read out of `ersc+0x25a50`, the plaintext function that announces `YKNX3_INFORMTOGGLEPVP`:
+/// `mov rcx,[rsi+0x50]; mov edx,<id>; lea r8,[rsp+0x40]; call 0x180025020`, with `rsi` holding
+/// OSM. `ersc+0x25020` is the formatter, `(repository, id, args)`, and it returns null for an id
+/// the maps do not hold -- `ersc+0x250d8` is a plain `xor edi,edi; ret`. Its caller tests the
+/// result at `ersc+0x25ac6` and jumps past the display call, so declining to format a message is
+/// Seamless's own way of not showing one.
+pub const MOD_MESSAGE_REPOSITORY_OFFSET: usize = 0x50;
+/// `OSM+0x88` -- the function pointer Seamless calls to put one of its own messages on screen.
+///
+/// Called as `(0, 0, MenuString*, 0)` at `ersc+0x25b15`. The `MenuString` is a stack local whose
+/// `+0x00` is the formatted wide text, `+0x08` the allocator fetched through
+/// [`MENU_STRING_ALLOCATOR_SEAM_OFFSET`], `+0x10` a sixteen-byte inline buffer, `+0x20` a length
+/// of zero and `+0x28` a capacity of seven -- the same shape the game's own
+/// `GetGR_System_Message` fills in and hands to `showPopupMenu`.
+///
+/// Whose function it is cannot be read out of the file. Seamless stores no absolute game address
+/// in its image and resolves these seams by pattern scan at init, which is exactly why the
+/// siblings at `+0xa8`, `+0xb0` and `+0xb8` had to be read from a live game -- see `menu_seams`,
+/// which now reads this one too.
+pub const MESSAGE_DISPLAY_SEAM_OFFSET: usize = 0x88;
+/// `OSM+0xc0` -- a no-argument getter called immediately before the display, whose result goes in
+/// the `MenuString`'s allocator field. An allocator getter, then, not a menu function.
+pub const MENU_STRING_ALLOCATOR_SEAM_OFFSET: usize = 0xc0;
+/// `YKNX3_BREAKINFAILED`: the notice a search that found nothing ends on, which the player reads
+/// as "Failed to invade session:" followed by "No sessions found".
+///
+/// Decoded from Seamless's own registration table at `ersc+0x47400..0x49b00`, which builds one
+/// `{u32 id, std::string key}` record per locale key. The record at `ersc+0x48b82` carries this
+/// id, and the key beside it is the nineteen bytes at `ersc+0x1e1fe6`, `YKNX3_BREAKINFAILED`. The
+/// substituted reason is the literal at `ersc+0x1e13e0`.
+///
+/// The wording is not in the module at all -- it comes from `SeamlessCoop/locale/english.json`,
+/// which the player owns and may edit -- so this id is the only stable handle on the message, and
+/// matching its text would be matching a file that is not ours.
+pub const YKNX3_BREAKIN_FAILED_MESSAGE_ID: u32 = 0x6fff_43d9;
 /// The value the guard field holds when the session is unusable -- or so this constant claimed
 /// until 2026-09-08. It is `INT_MAX`, and the comparison against it is MSVC's own
 /// `_Verify_ownership_levels`: see [`Abi::session_guard_offset`] for what the field actually is.

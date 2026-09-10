@@ -29,8 +29,18 @@
 //! ```
 //!
 //! So filling `view->msg` ourselves is byte-for-byte the state a successful pop would have left,
-//! and Update walks straight to the display step. The queue is bypassed rather than fought — which
-//! matters, because the queue's push function is not symbolised and was never found.
+//! and Update walks straight to the display step. The queue is bypassed rather than fought.
+//!
+//! The reason that used to be given for bypassing it -- "the queue's push function is not
+//! symbolised and was never found" -- is no longer true, and is corrected here rather than left to
+//! be re-discovered. It is `CS::FeSystemAnnounceViewModel::PushMessageForDisplay`, 1.16.2
+//! `0x140841b60`, `bool(FeSystemAnnounceViewModel*, wchar_t*)`, whose whole body is a bounds test
+//! (`queue.size + 1 < 10`) and a push. It was found by looking for it from the caller's side
+//! instead of the queue's: only two of the 841 rip-relative references to `GLOBAL_CSMenuMan` in
+//! `eldenring-deobf-1.17.1.bin` touch `+0x860` within `0x40` bytes, and one of them is
+//! `CS::CSNetMan::Update` (1.16.2 `0x1401cca70`), which the dump names and which calls it. Nothing
+//! here has been changed to use it: the write to `view->msg` is measured and working, and a push
+//! would put our line behind whatever the engine has queued.
 //!
 //! # Where the text comes from, and why not the embedded `DLString`
 //!
