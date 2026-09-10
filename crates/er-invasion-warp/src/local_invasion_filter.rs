@@ -1387,6 +1387,30 @@ static JOIN_PROGRESS_LAST: AtomicU64 = AtomicU64::new(u64::MAX);
 /// Frames sampled where the engine had nothing in flight while ERSC still claimed an attempt.
 static JOIN_PROGRESS_IDLE_SAMPLES: AtomicUsize = AtomicUsize::new(0);
 
+/// When the engine first reported a dead join while Seamless still claimed a match, in [`now_ms`].
+/// `0` = not currently reporting one.
+static DEAD_JOIN_SINCE_MS: AtomicU64 = AtomicU64::new(0);
+
+/// How many stranded matches have been dropped without the player reaching for the item.
+static DEAD_JOIN_RECOVERIES: AtomicUsize = AtomicUsize::new(0);
+
+/// How long the engine must keep saying the join is dead before the match is dropped.
+///
+/// The reading is a fact rather than a timer -- `lobbyState` is `CreateFailed` or `JoinFailed`, so
+/// the engine has already been out to Steam and been told no -- but a single frame sampled across
+/// a state change is not worth acting on. Two thirds of a second is several frames at any rate the
+/// game runs at and is still far below the point where the player would reach for the item.
+const DEAD_JOIN_GRACE_MS: u64 = 650;
+
+/// The same, for a session the engine has torn down rather than failed.
+///
+/// Longer because this reading is also what the normal rejection path passes through for a moment:
+/// our refusal leaves `lobbyState` at `None` while Seamless takes about 1.3s to walk its own state
+/// down, and a cancel driven into that window is a second cancel racing the first. Eight seconds
+/// clears that flow by a wide margin and is still nothing against the 2029 seconds measured on run
+/// br-20260910-021456-38bc.
+const TORN_DOWN_GRACE_MS: u64 = 8_000;
+
 /// Monotonic milliseconds since the first call.
 ///
 /// The DLL log carries no timestamps of its own, so every elapsed measurement in this module comes
@@ -2617,6 +2641,33 @@ fn arm_self_recovery(session: SeamlessSession) {
 /// handshake otherwise sits forever. The action driven here is the same "Cancel search" the player
 /// could press, and the restart afterwards is the ordinary one -- nothing here ends the hunt.
 fn cancel_stalled_attempt(session: SeamlessSession, state: u32, held_ms: u64) {
+    cancel_stalled_attempt_inner(session, state, held_ms, false);
+}
+
+/// As above, with the option to drive the action in a state where Seamless hides its own Cancel
+/// row.
+///
+/// `engine_has_no_session` is the only thing that unlocks that, and it is not a preference. The
+/// row predicate exists so this mod does not drive an action outside the preconditions its author
+/// arranged for a LIVE session -- but when `CSSessionManagerImp` reads `lobbyState == None` with
+/// no outstanding RPC and both phase timers clear, `DisconnectCleanup` has already run and there
+/// is no live session left to protect. What remains is Seamless holding a match against a session
+/// the engine destroyed, which is the state the player cannot leave without spending the item.
+///
+/// Measured on run br-20260910-022111-750c: five attempts to clear it, every one refused with
+/// `the session is in state 0x16, and ERSC's own hide-predicate draws its Cancel row only for
+/// [0xe, 0xf, 0x10, 0x12]`, while the player stayed stuck. The guard was right about the row and
+/// wrong about the situation.
+///
+/// The guard-poison and mutex-shape refusals above are NOT relaxed by this: those are about
+/// whether the call is safe to make, not about whether the row is on screen.
+#[cfg(windows)]
+fn cancel_stalled_attempt_inner(
+    session: SeamlessSession,
+    state: u32,
+    held_ms: u64,
+    engine_has_no_session: bool,
+) {
     if session_guard_poisoned(session.abi, session.session) {
         return;
     }
@@ -2642,11 +2693,18 @@ fn cancel_stalled_attempt(session: SeamlessSession, state: u32, held_ms: u64) {
         return;
     }
     if let Some(refusal) = cancel_row_refusal(&session) {
-        log_refusal_once(
-            &STALLED_REFUSAL_SAID,
-            format_args!("local-invasion: not cancelling the stalled attempt -- {refusal}"),
-        );
-        return;
+        if !engine_has_no_session {
+            log_refusal_once(
+                &STALLED_REFUSAL_SAID,
+                format_args!("local-invasion: not cancelling the stalled attempt -- {refusal}"),
+            );
+            return;
+        }
+        crate::standalone_log(format_args!(
+            "local-invasion: driving the cancel anyway -- {refusal}. The engine has already torn \
+             its session down, so there is no live session for that predicate to protect and \
+             leaving it alone strands the player."
+        ));
     }
     let _call = OurCall::enter();
     unsafe { cancel(owner, 0, 1, 1) };
@@ -3298,6 +3356,87 @@ static LIVENESS_LAST_ENGINE: AtomicUsize = AtomicUsize::new(usize::MAX);
 static LIVENESS_LAST_STATE: AtomicUsize = AtomicUsize::new(usize::MAX);
 static LIVENESS_REFUSAL_SAID: Mutex<Option<String>> = Mutex::new(None);
 
+/// Drop a match the engine has already failed, without waiting for the player.
+///
+/// # The complaint
+///
+/// Reported live 2026-09-10: "Seamless claiming a live match means I have to use the item to leave
+/// before I can invade again". That is the state this clears. Seamless keeps its session at an
+/// active value after the engine's join has died, and nothing in the game takes it back down, so
+/// the player is holding a match that cannot become an invasion and the only way out is to spend
+/// the item on a cancel.
+///
+/// # Why this can act where the stall watchdog cannot
+///
+/// `crate::stall_watchdog` returns before it reads anything unless `AUTO_SEARCH_ARMED`, because it
+/// is part of the hunt loop -- a search the player started themselves, or one whose loop has stood
+/// down, gets no watchdog at all. And its trigger is a dwell: five seconds in a timed state, which
+/// is a guess that something is wrong.
+///
+/// This is not a guess and not a dwell. `Verdict::Failed` means `lobbyState` is `CreateFailed` or
+/// `JoinFailed` -- the engine went out to Steam and was told no -- so the attempt is over as a
+/// matter of fact, whoever started it. Until the `Failed` verdict existed this reading was
+/// `Verdict::Idle`, which also means "the engine never started", and the two cannot be told apart:
+/// acting on `Idle` would have cancelled attempts that had not begun yet.
+///
+/// The grace window exists only so a frame sampled across a transition cannot fire it.
+#[cfg(windows)]
+fn drop_a_match_the_engine_has_already_failed(
+    progress: &er_invasion_warp_core::join_progress::JoinProgress,
+    ersc_claims_attempt: bool,
+) {
+    use er_invasion_warp_core::join_progress::Verdict;
+    // `Failed` is the engine saying Steam told it no. `Idle` here is narrower than it sounds: the
+    // verdict only reads `Idle` with `lobbyState == None`, no outstanding RPC and both phase timers
+    // clear, which is `DisconnectCleanup` having run. Either way the engine has no session, and
+    // Seamless is holding a match against one.
+    let engine_has_no_session =
+        progress.lobby_state == er_invasion_warp_core::join_progress::lobby_state::NONE;
+    let grace = match progress.verdict() {
+        Verdict::Failed => DEAD_JOIN_GRACE_MS,
+        Verdict::Idle => TORN_DOWN_GRACE_MS,
+        Verdict::Progressing | Verdict::Committed => {
+            DEAD_JOIN_SINCE_MS.store(0, Ordering::SeqCst);
+            return;
+        }
+    };
+    if !ersc_claims_attempt {
+        DEAD_JOIN_SINCE_MS.store(0, Ordering::SeqCst);
+        return;
+    }
+    let now = now_ms();
+    let since =
+        match DEAD_JOIN_SINCE_MS.compare_exchange(0, now, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => now,
+            Err(first) => first,
+        };
+    let held = now.saturating_sub(since);
+    if held < grace {
+        return;
+    }
+    let Ok(session) = resolve_session() else {
+        return;
+    };
+    let Some(state) = read_session_state(session.abi, session.session) else {
+        return;
+    };
+    if state == session.abi.state_idle {
+        DEAD_JOIN_SINCE_MS.store(0, Ordering::SeqCst);
+        return;
+    }
+    // Cleared before the cancel rather than after it, so a cancel that is refused -- a poisoned
+    // guard, a lock the wrong shape -- re-arms the window instead of latching this off forever.
+    DEAD_JOIN_SINCE_MS.store(0, Ordering::SeqCst);
+    let count = DEAD_JOIN_RECOVERIES.fetch_add(1, Ordering::SeqCst) + 1;
+    crate::standalone_log(format_args!(
+        "local-invasion: dropping a match the engine has no session for (#{count}) -- {progress}, \
+         held {held}ms while Seamless still read {state:#04x}. Nothing in the game takes that back \
+         down, so without this the player has to spend the invasion item to leave before invading \
+         again."
+    ));
+    cancel_stalled_attempt_inner(session, state, held, engine_has_no_session);
+}
+
 #[cfg(windows)]
 fn trace_join_progress(session: Result<(u32, u32), &'static str>) {
     let ersc_state = session.ok().map(|(state, _)| state);
@@ -3305,7 +3444,6 @@ fn trace_join_progress(session: Result<(u32, u32), &'static str>) {
     let Some(progress) = read_join_progress() else {
         return;
     };
-    let verdict = progress.verdict();
     note_session_liveness(
         ersc_state,
         progress.lobby_state as u32,
@@ -3339,9 +3477,10 @@ fn trace_join_progress(session: Result<(u32, u32), &'static str>) {
     // Only an attempt ERSC actually claims can be a stalled one. An unresolvable session is not
     // evidence of anything, so it never counts.
     let ersc_claims_attempt = ersc_state.is_some_and(|state| state != idle_state);
-    if verdict == er_invasion_warp_core::join_progress::Verdict::Idle && ersc_claims_attempt {
+    if progress.is_finished() && ersc_claims_attempt {
         JOIN_PROGRESS_IDLE_SAMPLES.fetch_add(1, Ordering::Relaxed);
     }
+    drop_a_match_the_engine_has_already_failed(&progress, ersc_claims_attempt);
     if JOIN_PROGRESS_LAST.swap(packed, Ordering::SeqCst) == packed {
         return;
     }
