@@ -724,6 +724,12 @@ python3 "$repo_root/scripts/test-challenged-convention-classifier.py"
 # and the launch banner AGENTS.md mandates. It also re-reads the promissory closer's own verb list
 # out of that signal and fails if the two rules ever claim the same gerund.
 python3 "$repo_root/scripts/test-narrated-action-classifier.py"
+# The other half of the admission-with-defence guard. Its negatives carry the weight: an admission
+# that simply stops, one that reports the substitute work, and one that owns the consequence of its
+# own mistake all have to pass, because a rule that charges those teaches agents to admit less. It
+# also re-reads the friction stall's own admission patterns out of that signal and fails if a
+# sentence would ever be charged by both rules.
+python3 "$repo_root/scripts/test-admission-with-defence-classifier.py"
 # The SessionStart/PreCompact prime hook must stay small enough that the harness INLINES it.
 # At 2452 memories it emitted 157.4 KB, which Claude Code persisted to a file and replaced
 # with a 2 KB preview -- so the priming content never reached the agent while still costing

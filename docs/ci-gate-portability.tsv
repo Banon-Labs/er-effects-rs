@@ -239,6 +239,7 @@ partial	git-baseline	check-runtime-evidence.sh --selftest	seven fixture cases ru
 portable	-	er-character-type-tables.py --selftest	source/AST/text analysis only
 portable	-	test-challenged-convention-classifier.py	source/AST/text analysis only
 portable	-	test-narrated-action-classifier.py	source/AST/text analysis only
+portable	-	test-admission-with-defence-classifier.py	source/AST/text analysis only
 portable	-	test-diagnosis-signal.py	source/AST/text analysis only
 portable	-	test-future-commitment-signal.py	source/AST/text analysis only
 portable	-	test-deferred-evidence-read-signal.py	source/AST/text analysis only
