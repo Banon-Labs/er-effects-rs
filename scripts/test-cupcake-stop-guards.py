@@ -220,6 +220,129 @@ CASES = [
         "relaying what an agent actually reported is punished identically to predicting it",
     ),
     Case(
+        "challenged_convention.jsonl",
+        "challenged a choice you made",
+        "asked 'Do you crutch on 1.16.2 addreses for a specific reason?' the turn answered with a "
+        "table of why the convention exists and changed nothing (the 2026-09-10 directive). Every "
+        "neighbour was disarmed: no_stall_on_friction exempts a prompt that asked a question, "
+        "no_diagnosis_without_fix needs a defect named, and no_future_tense_commitment cleared the "
+        "closing promise because the class it named was a read the turn had already done",
+    ),
+    Case(
+        "challenged_convention_pivot.jsonl",
+        "challenged a choice you made",
+        "'Why on earth would I want that convention?' answered with 'You wouldn't -- and there's "
+        "no need to invent a new field, because ...' plus 160 words of rationale. One turn, both "
+        "arms: the challenge was justified rather than acted on, and the concession was argued "
+        "past",
+    ),
+    Case(
+        "challenged_convention_insist.jsonl",
+        "challenged a choice you made",
+        "the third consecutive turn, in which the user names the shape itself -- 'Why do you insist "
+        "on going My real point <em-dash> massive amount of prose that is never worth reading' -- "
+        "and the turn does it again",
+    ),
+    Case(
+        "challenged_convention_pivot_only.jsonl",
+        "concession and then argued past it",
+        "a concession opening a closer that changed nothing, with no detectable challenge in the "
+        "prompt -- the arm that reaches the shape the challenge detector cannot see",
+    ),
+    Case(
+        "challenged_convention_changed.jsonl",
+        None,
+        "the same challenge answered with the Edit that settles it -- must NOT halt, or making the "
+        "change and saying why is punished identically to only saying why",
+    ),
+    Case(
+        "challenged_convention_asked.jsonl",
+        None,
+        "'Explain why you start from 1.16.2 before we change it' -- an explicit ask, so explaining "
+        "is the deliverable and gagging it would be the worse failure",
+    ),
+    Case(
+        "challenged_convention_codebase_question.jsonl",
+        None,
+        "'Why does the engine park the disconnect until the next frame?' -- a third-person "
+        "question about the binary, which this repo must always be able to answer at length",
+    ),
+    Case(
+        "challenged_convention_short_reply.jsonl",
+        None,
+        "the same challenge answered in two words -- 'You wouldn't.' -- must NOT halt: the third "
+        "conjunct is a wall of justification, and a plain concession is not one",
+    ),
+    Case(
+        "challenged_convention_blocked.jsonl",
+        None,
+        "the same challenge beside a read that needs the game running and a daemon that needs "
+        "sudo -- dependencies the agent cannot dissolve by working harder. Its first wording said "
+        "'the guard refused the write' and ER-EFFECTS-NO-BLAME-DEFLECTION halted it correctly, "
+        "which is worth knowing: a blocker has to be stated with the agent's own hand in it",
+    ),
+    Case(
+        "narrated_action_rerun.jsonl",
+        "narrating the action instead of having taken it",
+        "the turn closes on 'Re-running it now without the cap.' -- the command was its own and "
+        "unblocked, and it stopped to say so (the 2026-09-10 directive). The present participle is "
+        "the gap: no_future_tense_commitment needs a first-person future opener, and a bare "
+        "participial clause commits nobody",
+    ),
+    Case(
+        "narrated_action_rebuild.jsonl",
+        "narrating the action instead of having taken it",
+        "'Rebuilding and relaunching now.' -- the one spelling ER-EFFECTS-NO-ZERO-INFORMATION-STOP "
+        "also reaches, so cupcake returns both halts here. Kept as a fixture because it is one of "
+        "the five verbatim closers, and the overlap is worth pinning rather than discovering",
+    ),
+    Case(
+        "narrated_action_bringing_up.jsonl",
+        "narrating the action instead of having taken it",
+        "'Bringing it up to read the pointer chain live rather than guessing another offset:' -- a "
+        "colon closing the clause, which is the announce-then-do shape with the tool call missing",
+    ),
+    Case(
+        "narrated_action_diagnosable.jsonl",
+        "narrating the action instead of having taken it",
+        "'Making the empty read diagnosable ... :' -- a code-shaped verb the promissory closer's "
+        "gerund list does not carry, in a turn that wrote nothing after it",
+    ),
+    Case(
+        "narrated_action_dispatch.jsonl",
+        "narrating the action instead of having taken it",
+        "'Dispatching a subagent to enumerate the menu builder's rows properly, and unblocking you "
+        "now ...:' -- the dispatch is one tool call away and the turn ended instead",
+    ),
+    Case(
+        "narrated_action_reported.jsonl",
+        None,
+        "the same participle carrying what came back -- 'Re-running it now - exit 0, 26 rows.' -- "
+        "must NOT halt, or reporting an outcome in the present participle is punished identically "
+        "to announcing one that does not exist",
+    ),
+    Case(
+        "narrated_action_banner.jsonl",
+        None,
+        "the loud teardown/launch banner AGENTS.md mandates, closing on 'Bringing the new build up "
+        "on the same character now.' -- must NOT halt. The banner is a required form: the user "
+        "stops what they are doing and turns to a screen because of it, and a rule that made it "
+        "unspeakable would take a safety announcement away to save a round trip",
+    ),
+    Case(
+        "narrated_action_blocked.jsonl",
+        None,
+        "the same narration ending on a dependency the agent cannot dissolve -- no run is up and "
+        "reading the chain needs the game running -- must NOT halt",
+    ),
+    Case(
+        "narrated_action_mid_turn.jsonl",
+        None,
+        "'Making the empty read diagnosable ...:' as a mid-turn preamble before the Edit, with an "
+        "ordinary closing report -- the correct shape, and the one this rule must never touch. "
+        "wall_of_text.rego draws the same line in its own correction text",
+    ),
+    Case(
         "clean.jsonl",
         None,
         "substantive work, no banned prose -- must NOT halt, or every turn wedges",

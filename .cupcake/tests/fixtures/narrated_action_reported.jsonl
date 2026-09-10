@@ -1,0 +1,4 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "the ledger never changed, why"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "name": "Bash", "id": "t1", "input": {"command": "python3 scripts/er-run-natives-history.py --refresh"}}]}}
+{"type": "user", "message": {"role": "user", "content": [{"tool_use_id": "t1", "type": "tool_result", "content": [{"type": "text", "text": "wrote 26 rows"}]}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "The earlier \"exit 0\" was the 120s timeout killing it mid-run, not a completed refresh. Re-running it now \u2014 exit 0, 26 rows."}]}}
