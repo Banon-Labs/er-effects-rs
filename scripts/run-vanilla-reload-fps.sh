@@ -116,6 +116,7 @@ env \
 	ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH="$ARTIFACT_DIR/er-crash-latest.txt" \
 	ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH="$ARTIFACT_DIR/er-crash-breadcrumb-latest.txt" \
 	ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH="$ARTIFACT_DIR/er-crash-modules.txt" \
+	ER_QUICKLOAD_LOCKON_FILTER_LOG_PATH="$ARTIFACT_DIR/er-lockon-filter.log" \
 	"$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
 ME3_PID=$!
 echo "== ER launching (me3 pid $ME3_PID). The telemetry-only DLL APPENDS a timeseries to:"

@@ -123,12 +123,25 @@ static ORIG_OPEN_CHOICES: AtomicUsize = AtomicUsize::new(0);
 /// Whether the animation byte has been written this session.
 #[cfg(windows)]
 static ANIM_SHORTENED: AtomicUsize = AtomicUsize::new(0);
+/// Whether the row lookup has already said it could not resolve. Without this the tick says so
+/// once a frame: the first build of this module wrote 2,685 identical refusal lines into one
+/// session's log, which is the shape that makes a log unreadable rather than informative.
+#[cfg(windows)]
+static ROW_REFUSAL_SAID: AtomicUsize = AtomicUsize::new(0);
+/// The same latch for the popup skip, for the same reason.
+#[cfg(windows)]
+static SKIP_REFUSAL_SAID: AtomicUsize = AtomicUsize::new(0);
 /// Frames of use-state override still owed.
 #[cfg(windows)]
 static PIN_FRAMES_LEFT: AtomicUsize = AtomicUsize::new(0);
 /// The inventory index the current override is pinning.
 #[cfg(windows)]
 static PINNED_ITEM_IDX: AtomicUsize = AtomicUsize::new(0);
+/// Whether the pass-through branch has said so once. It was entirely silent until 2026-09-09,
+/// which is how a log showing one skip and nothing else read as the feature working while every
+/// use after the first showed the dialog.
+#[cfg(windows)]
+static PASS_REPORTED: AtomicUsize = AtomicUsize::new(0);
 /// Dialogs this module declined to open, and dialogs it let through.
 #[cfg(windows)]
 static POPUPS_SKIPPED: AtomicUsize = AtomicUsize::new(0);
@@ -142,6 +155,21 @@ static POPUPS_PASSED: AtomicUsize = AtomicUsize::new(0);
 /// Game task thread. The call is the engine's own lookup and takes no lock this module holds.
 #[cfg(windows)]
 unsafe fn goods_row(goods_id: u32) -> Option<usize> {
+    let base = er_game_base::mem::game_module_base().ok()?;
+    // The engine's own precondition, and the reason the first build of this module killed the
+    // process 1140ms into boot. `EquipParamGoods::GetEntry` opens by loading
+    // `GLOBAL_SoloParamRepository` and, when it is null, calls the assert at 1.17.1
+    // `0x141ebb610` with file `0x1429caaa0` line 0xb4 -- and that assert path itself faults on a
+    // null `rcx` this early, so the refusal is a `0xc0000005`, not a returned error. Reading the
+    // slot first turns the engine's fatal precondition into this function's `None`.
+    if er_game_base::mem::read_global_ptr(
+        base,
+        er_game_base::rva::SOLO_PARAM_REPOSITORY_GLOBAL_RVA,
+        "SOLO_PARAM_REPOSITORY_GLOBAL_RVA",
+    ) == 0
+    {
+        return None;
+    }
     let entry = er_game_base::mem::game_rva_named(
         EQUIP_PARAM_GOODS_GET_ENTRY_RVA,
         "EQUIP_PARAM_GOODS_GET_ENTRY_RVA",
@@ -174,6 +202,13 @@ pub unsafe fn shorten_use_animation() -> bool {
     }
     // SAFETY: game task thread; returns `None` rather than faulting before the tables exist.
     let Some(row) = (unsafe { goods_row(LYNCHPIN_GOODS_ID) }) else {
+        if ROW_REFUSAL_SAID.swap(1, Ordering::SeqCst) == 0 {
+            crate::standalone_log(format_args!(
+                "lynchpin: the goods row is not resolvable yet -- either the param tables are not \
+                 up or the lookup address was refused for this build. Retried every tick; this \
+                 line is printed once."
+            ));
+        }
         return false;
     };
     let field = row + GOODS_USE_ANIM_OFFSET;
@@ -191,6 +226,67 @@ pub unsafe fn shorten_use_animation() -> bool {
     true
 }
 
+/// `r14` as it stood when `OpenConversationChoicesMenu` was entered. The option-menu object is
+/// `r14 - 0x120`.
+///
+/// # Measured, on the live game, not derived
+///
+/// A read-only Frida agent (`scripts/frida/ersc-owner-truth.js`) watched `ersc+0x241a0` and the
+/// dialog opener in the same use of the item, on run `br-20260910-003108-c109`:
+///
+/// ```text
+///   show:        osm=0x466ad518  session=0x466ac930  state=0x1  r12=0x7fde63
+///   open_dialog: r12=0x45eae1c8  r14=0x466ad638  ret=0x18002438e
+/// ```
+///
+/// `0x466ad638 - 0x120 == 0x466ad518`, exactly the object `show` was called with, and the return
+/// address `0x18002438e` is inside `show` itself, so the opener is called from there directly. The
+/// `0x120` is not a fitted constant either -- it is the third instruction of `show`:
+///
+/// ```text
+///   ersc+0x241c8: mov  r12, rcx            <- rcx is the menu object
+///   ersc+0x241cb: lea  r14, [rcx + 0x120]  <- and r14 keeps a fixed interior pointer to it
+/// ```
+///
+/// Two earlier builds read `r12` instead, on the reasoning that `mov r12, rcx` makes it the menu
+/// object. The register dump above is why that failed twice: at the OPENER `r12` is `0x45eae1c8`,
+/// something else entirely, and at `show`'s own entry it is `0x7fde63` -- the Lynchpin's goods id,
+/// arriving from show's caller. `r12` is only the menu object between `+0x241c8` and whatever
+/// reuses it, which does not include this frame.
+///
+/// Nothing is written into `ersc.dll` for this: it is a register read in our own frame, so the
+/// MinHook patch that faults a Themida-protected module at `0x140010043` is not involved.
+///
+/// A wrong read still cannot be believed -- `adopt_menu_object` requires `+0x58` to lead to an
+/// object carrying a live session state before it stores anything.
+#[cfg(windows)]
+static SHOW_R14: AtomicUsize = AtomicUsize::new(0);
+
+/// How far into the menu object `show` keeps `r14` pointing: `lea r14, [rcx + 0x120]`.
+#[cfg(windows)]
+const SHOW_R14_INTERIOR_OFFSET: usize = 0x120;
+
+/// The registered detour: capture `r14`, then tail-jump to the real handler with the arguments
+/// untouched.
+///
+/// It has to be naked. A plain Rust function may spill or reuse `r14` in its own prologue, so the
+/// capture must be the very first instruction executed at the detour address.
+///
+/// # Safety
+///
+/// Installed as a bare detour on a byte-verified prologue; the jump preserves every argument
+/// register.
+#[cfg(windows)]
+#[unsafe(naked)]
+unsafe extern "system" fn open_choices_entry(a: usize, b: usize, c: usize, d: usize) -> usize {
+    core::arch::naked_asm!(
+        "mov qword ptr [rip + {slot}], r14",
+        "jmp {handler}",
+        slot = sym SHOW_R14,
+        handler = sym open_choices_hook,
+    )
+}
+
 /// The detour on `OpenConversationChoicesMenu`.
 ///
 /// # Safety
@@ -198,21 +294,60 @@ pub unsafe fn shorten_use_animation() -> bool {
 /// Installed by the union on a byte-verified prologue; the ABI is `(dialog)`.
 #[cfg(windows)]
 unsafe extern "system" fn open_choices_hook(dialog: usize, b: usize, c: usize, d: usize) -> usize {
-    if crate::local_invasion_filter::session_is_idle() {
+    // The Frida agent's `Interceptor.attach(ersc+0x241a0)` did this; the register read replaces it.
+    // `adopt_menu_object` validates before storing, so a frame whose `r12` is not the menu object
+    // is refused and the gate simply falls back.
+    let menu_object = SHOW_R14
+        .load(Ordering::SeqCst)
+        .wrapping_sub(SHOW_R14_INTERIOR_OFFSET);
+    let adopted = crate::local_invasion_filter::menu_object::adopt_menu_object(menu_object);
+    let (idle, source) = crate::local_invasion_filter::popup_skip_gate_is_idle();
+    if idle {
         POPUPS_SKIPPED.fetch_add(1, Ordering::SeqCst);
-        // The option this menu offers is the invade action. Arming rather than calling it here is
-        // deliberate: the action takes Seamless's session mutex, and this detour runs on whatever
-        // thread opened the menu.
-        crate::local_invasion_filter::request_invade();
+        // Inline, on this thread, which is the whole difference between this and the version that
+        // hard-locked the game.
+        //
+        // Declining the dialog means the option is never chosen, so if nothing calls the invade
+        // action no search starts at all -- the popup vanishes and the item does nothing. The
+        // Frida prototype called `invadeAction(menuObject)` right here, from the replacement
+        // itself, on the thread Seamless had already driven into: one entrant, no contention.
+        //
+        // `request_invade()` was used instead and it deadlocked, because arming moves the call to
+        // the game task tick, and the player's next item use puts the game's own goods path inside
+        // `ersc.dll` holding the session mutex at the same moment (run `br-20260909-234803-535c`:
+        // `about to drive ERSC invade` with no successor line, 122 threads, 9 cpu ticks in 3s).
+        //
+        // `inside_ersc_callback()` does not refuse this: that guard is set by the ersc observers,
+        // and this detour is on a game function and never enters it.
+        // Through the real menu object when we have it, which is what Frida passed. The
+        // synthesized-owner path is the fallback and it is the one that wedged the game, so it is
+        // only reached when the register capture was refused.
+        let started = if adopted {
+            crate::local_invasion_filter::drive_invade_with_owner(
+                menu_object,
+                "the Lynchpin's own use",
+            )
+        } else {
+            crate::local_invasion_filter::drive_invade_inline("the Lynchpin's own use")
+        };
         crate::standalone_log(format_args!(
-            "lynchpin: skipped Seamless's start-a-search popup and armed the search instead \
-             (skipped {}, passed through {})",
+            "lynchpin: skipped Seamless's start-a-search popup and started the search inline \
+             (started={started}, skipped {}, passed through {}) -- gate answered from {source}",
             POPUPS_SKIPPED.load(Ordering::SeqCst),
             POPUPS_PASSED.load(Ordering::SeqCst)
         ));
         return 0;
     }
-    POPUPS_PASSED.fetch_add(1, Ordering::SeqCst);
+    let passed = POPUPS_PASSED.fetch_add(1, Ordering::SeqCst) + 1;
+    if PASS_REPORTED.swap(1, Ordering::SeqCst) == 0 {
+        crate::standalone_log(format_args!(
+            "lynchpin: a dialog was let through because the session does not read idle \
+             (passed {passed}, skipped {}) -- gate answered from {source}. If this was \
+             the item's own start-a-search prompt then the gate is wrong, not the \
+             dialog. Printed once.",
+            POPUPS_SKIPPED.load(Ordering::SeqCst)
+        ));
+    }
     let orig = ORIG_OPEN_CHOICES.load(Ordering::SeqCst);
     if orig == 0 {
         return 0;
@@ -235,34 +370,69 @@ pub unsafe fn install_popup_skip() -> bool {
     let address = match unsafe { verify_seam(&OPEN_CONVERSATION_CHOICES_MENU) } {
         Ok(address) => address,
         Err(error) => {
+            if SKIP_REFUSAL_SAID.swap(1, Ordering::SeqCst) == 0 {
+                crate::standalone_log(format_args!(
+                    "lynchpin: refused {} -- {error}; the popup will appear as Seamless built it. \
+                     This line is printed once, not once per tick.",
+                    OPEN_CONVERSATION_CHOICES_MENU.name
+                ));
+            }
+            return false;
+        }
+    };
+    // A bare `MhHook`, deliberately NOT `register_union_hook`, and the reason is the register
+    // capture above.
+    //
+    // The union does not put `open_choices_entry` at the detour address -- it installs
+    // `union_dispatch`, an ordinary Rust function that loads its head handler and calls it. That
+    // prologue runs before the naked shim does, and it does not preserve `r12` for a callee: on
+    // run `br-20260910-000334-453e` the capture came back `0x1` and the log said `REFUSED an
+    // option-menu object handed in at 0x1`. A bare hook puts the shim's first instruction AT the
+    // detour address, which is the only place the register is still Seamless's.
+    //
+    // The cost is the union's one guarantee: if another feature ever hooks this same function,
+    // MinHook binds one detour per address and one of the two is silently dropped. Nothing else
+    // in this DLL touches `OpenConversationChoicesMenu` today, and a capture that reads `1` is
+    // worth nothing at all, so the trade is made here and written down rather than assumed.
+    let hook = match unsafe {
+        er_hook::MhHook::new(
+            address as *mut core::ffi::c_void,
+            open_choices_entry as *mut core::ffi::c_void,
+        )
+    } {
+        Ok(hook) => hook,
+        Err(status) => {
             crate::standalone_log(format_args!(
-                "lynchpin: REFUSED {} -- {error}; the popup will appear as Seamless built it",
-                OPEN_CONVERSATION_CHOICES_MENU.name
+                "lynchpin: FAILED to create the popup-skip detour @0x{address:x} -- {status:?}. \
+                 The address resolved and its prologue matched, so this is MinHook refusing a \
+                 verified address; the popup will appear as Seamless built it"
             ));
             return false;
         }
     };
-    // SAFETY: byte-verified address, four-argument union shape, one argument used.
-    match unsafe {
-        er_hook::register_union_hook(
-            address,
-            open_choices_hook as er_hook::UnionFn,
-            &ORIG_OPEN_CHOICES,
-        )
-    } {
-        Ok(()) => {
+    ORIG_OPEN_CHOICES.store(hook.trampoline() as usize, Ordering::SeqCst);
+    // SAFETY: the hook was created above; enabling is MinHook's own queued path.
+    if unsafe { hook.queue_enable() }.is_err() {
+        ORIG_OPEN_CHOICES.store(0, Ordering::SeqCst);
+        return false;
+    }
+    // SAFETY: applies the queue this function just added to.
+    match unsafe { er_hook::MH_ApplyQueued() } {
+        er_hook::MH_STATUS::MH_OK => {
             crate::standalone_log(format_args!(
-                "lynchpin: armed the popup skip on {} @0x{address:x} -- a dialog is declined only \
-                 while the session reads idle, so the leave-invasion prompt still opens",
+                "lynchpin: armed the popup skip on {} @0x{address:x} as a bare detour, so `r14` \
+                 still points 0x120 into Seamless's option-menu object when it runs (measured, \
+                 not assumed: `lea r14,[rcx+0x120]` at ersc+0x241cb, and a live dump gave \
+                 r14=0x466ad638 against show's own osm=0x466ad518) -- a dialog is declined only \
+                 while that object's session reads idle, so the leave-invasion prompt still opens",
                 OPEN_CONVERSATION_CHOICES_MENU.name
             ));
             true
         }
-        Err(status) => {
+        status => {
+            ORIG_OPEN_CHOICES.store(0, Ordering::SeqCst);
             crate::standalone_log(format_args!(
-                "lynchpin: FAILED to arm the popup skip @0x{address:x} -- {status:?}. The address \
-                 resolved and its prologue matched, so this is the hook engine refusing a verified \
-                 address; the popup will appear as Seamless built it"
+                "lynchpin: FAILED to enable the popup skip @0x{address:x} -- {status:?}"
             ));
             false
         }
@@ -303,10 +473,15 @@ unsafe fn inventory_index(item_id: u32) -> Option<usize> {
         "GET_ITEM_INVENTORY_IDX_RVA",
     )
     .ok()?;
-    let game_data_man =
-        er_game_base::mem::game_module_base().ok()? + er_game_base::rva::GAME_DATA_MAN_GLOBAL_RVA;
-    // SAFETY: fault-closed reads of two singleton hops.
-    let game_data_man = unsafe { er_game_base::mem::safe_read_usize(game_data_man) }?;
+    let base = er_game_base::mem::game_module_base().ok()?;
+    let game_data_man = er_game_base::mem::read_global_ptr(
+        base,
+        er_game_base::rva::GAME_DATA_MAN_GLOBAL_RVA,
+        "GAME_DATA_MAN_GLOBAL_RVA",
+    );
+    if game_data_man == 0 {
+        return None;
+    }
     // SAFETY: as above; `PlayerGameData` is the first pointer inside `GameDataMan`.
     let player_game_data = unsafe { er_game_base::mem::safe_read_usize(game_data_man + 0x8) }?;
     if player_game_data == 0 {
@@ -331,10 +506,14 @@ unsafe fn inventory_index(item_id: u32) -> Option<usize> {
 #[cfg(windows)]
 unsafe fn main_player_chr_ins() -> Option<usize> {
     let base = er_game_base::mem::game_module_base().ok()?;
-    // SAFETY: fault-closed read of the singleton slot; null until the world is up.
-    let world_chr_man = unsafe {
-        er_game_base::mem::safe_read_usize(base + er_game_base::rva::WORLD_CHR_MAN_GLOBAL_RVA)
-    }?;
+    // Null until the world is up. Resolved for the running build rather than read raw: every
+    // `.data` global moved on 1.17, so a raw read succeeds and hands back whatever now occupies
+    // the 1.16.2 slot -- and this pointer is written through.
+    let world_chr_man = er_game_base::mem::read_global_ptr(
+        base,
+        er_game_base::rva::WORLD_CHR_MAN_GLOBAL_RVA,
+        "WORLD_CHR_MAN_GLOBAL_RVA",
+    );
     if world_chr_man == 0 {
         return None;
     }
@@ -362,12 +541,16 @@ unsafe fn drive_pinned_use() {
     let Ok(base) = er_game_base::mem::game_module_base() else {
         return;
     };
-    // SAFETY: fault-closed singleton reads.
-    let Some(menu_man) = (unsafe {
-        er_game_base::mem::safe_read_usize(base + er_game_base::rva::CS_MENU_MAN_GLOBAL_RVA)
-    }) else {
+    // Resolved rather than read raw, for the reason in `main_player_chr_ins`: this pointer is
+    // written through, and a stale global would put those writes on whatever moved into the slot.
+    let menu_man = er_game_base::mem::read_global_ptr(
+        base,
+        er_game_base::rva::CS_MENU_MAN_GLOBAL_RVA,
+        "CS_MENU_MAN_GLOBAL_RVA",
+    );
+    if menu_man == 0 {
         return;
-    };
+    }
     // SAFETY: as above.
     let Some(menu_data) = (unsafe {
         er_game_base::mem::safe_read_usize(
@@ -426,6 +609,22 @@ pub unsafe fn tick() {
         install_popup_skip();
         drive_pinned_use();
     }
+    // No `install_menu_object_observer()` call here, and this is not an omission.
+    //
+    // Detouring `ersc.dll` to capture the menu object is what the local-invasion filter already
+    // gates off, and installing it from here reproduced that crash exactly, measured on run
+    // `br-20260909-234159-0a54`: `observing ersc show @0x1800241a0` at boot, then at +29493ms a
+    // read fault at `game+0x11f42` -- the `0x140010043` page MinHook's ersc patch faults on --
+    // followed by 215
+    // recursive access violations with `rsp` marching down 0x1260 a frame until the thread was
+    // gone. On screen that is a loading screen that never finishes. The filter's comment says
+    // "~50s and 30.6s"; this was 29.5s.
+    //
+    // So the menu object has to arrive without a detour inside Seamless. `resolve_session` already
+    // reaches the session that way -- "via a pointer in ersc's own writable data at 0x1806088f0"
+    // -- and `er_invasion_warp_adopt_menu_object` takes one from outside the DLL. Until one of
+    // those supplies `OSM`, `menu_object_session_is_idle` answers false and every dialog is let
+    // through, which shows the popup rather than swallowing the prompt that leaves an invasion.
 }
 
 /// How many popups this module declined and how many it let through.

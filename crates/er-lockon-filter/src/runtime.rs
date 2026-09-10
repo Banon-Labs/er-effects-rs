@@ -7,19 +7,23 @@
 //! This feature can only be exercised by two players invading the same world, which is not a
 //! state any offline check can produce. So the hook records the distinct `ChrType` values it was
 //! asked about -- yours and each candidate's -- the first time it sees each one. That turns "the
-//! filter never fired" into a readable answer: either your kind or the other invader's was not
-//! one of the three this crate knows, and the log says which number turned up instead. Seamless
-//! Co-op is why that is worth writing down rather than assuming: it runs its own session layer,
-//! and a roster walk in an ordinary Seamless session has been measured typing remote players
-//! `Local` (0), a kind the vanilla enum reserves for the player at the keyboard.
+//! filter never fired" into a readable answer: either your kind or the other invader's was not a
+//! hostile phantom, and the log says which number turned up instead. Seamless Co-op is why that
+//! is worth writing down rather than assuming: it runs its own session layer, and a roster walk
+//! in an ordinary Seamless session has been measured typing remote players `Local` (0), a kind
+//! the vanilla enum reserves for the player at the keyboard.
+//!
+//! The census has already paid for itself once. A run on 2026-09-07 recorded the local player at
+//! `chr_type` 2 with `summonParamType` -12, and the rule at the time held neither value, so the
+//! filter could not arm however many invaders were standing in the world. Those two log lines are
+//! what the widened rule in [`crate::rules`] was derived against.
 
 use std::ffi::c_void;
 use std::fmt;
-use std::path::PathBuf;
 use std::sync::Once;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
-use er_game_base::log::{append_line, game_directory_path};
+use er_game_base::log::append_line;
 use er_game_base::mem::{game_module_base, is_heap_aligned_ptr, read_bytes, vtable_in_game_image};
 use er_game_base::prologue::{compared_mismatches, matches_masked};
 use er_game_base::rva::{
@@ -28,12 +32,13 @@ use er_game_base::rva::{
 use er_hook::UnionFn;
 
 use crate::rules::{
-    INVADER_SUMMON_PARAM_TYPES, INVADERS, MAX_CHR_TYPE, SUMMON_PARAM_TYPE_UNKNOWN, hides,
-    local_player_is_invading,
+    HOSTILE_PHANTOM_SUMMON_PARAM_TYPES, HOSTILE_PHANTOMS, MAX_CHR_TYPE, SUMMON_PARAM_TYPE_UNKNOWN,
+    hides, local_player_is_invading,
 };
 use crate::{
-    CHR_INS_CHR_TYPE_OFFSET, GAME_MAN_SUMMON_PARAM_TYPE_OFFSET, LOCK_ON_POINT_OWNER_PROLOGUE,
-    LOCK_ON_POINT_OWNER_PROLOGUE_MASK, LOCK_ON_POINT_OWNER_RVA, LOG_FILE_NAME,
+    CHR_INS_CHR_TYPE_OFFSET, CHR_INS_TEAM_TYPE_OFFSET, GAME_MAN_SUMMON_PARAM_TYPE_OFFSET,
+    LOCK_ON_POINT_OWNER_PROLOGUE, LOCK_ON_POINT_OWNER_PROLOGUE_MASK, LOCK_ON_POINT_OWNER_RVA,
+    LOG_FILE_NAME,
 };
 
 const DLL_PROCESS_ATTACH: u32 = 1;
@@ -66,6 +71,13 @@ static SEEN_CANDIDATE_TYPES: AtomicU32 = AtomicU32::new(0);
 /// Set once if a `chr_type` outside the representable range ever turns up, which would mean the
 /// census is blind to it and the rule can never match it.
 static SEEN_UNREPRESENTABLE_TYPE: AtomicBool = AtomicBool::new(false);
+/// `(chr_type, team_type)` pairings already reported, one bit per `chr_type << 8 | team`, hashed
+/// down to a word. A pairing rather than two independent censuses because the question the team
+/// byte is being read for is whether it says something `chr_type` does not: two characters with
+/// the same kind and different teams is the answer that matters, and two separate sets cannot
+/// express it.
+static SEEN_SELF_PAIRINGS: AtomicU64 = AtomicU64::new(0);
+static SEEN_CANDIDATE_PAIRINGS: AtomicU64 = AtomicU64::new(0);
 /// The last `GameMan::summonParamType` the census reported, so the log carries one line per
 /// change of multiplayer role rather than one per lock-on point. A bitmask would not do: the
 /// roles are negative.
@@ -159,10 +171,11 @@ fn install() {
     } {
         Ok(()) => log_message(format_args!(
             "install: hooked the lock-on point-owner resolver (1.16.2 rva \
-             0x{LOCK_ON_POINT_OWNER_RVA:x}). While your own chr_type is one of [{}], a candidate \
-             whose chr_type is one of the same set is not offered to lock-on. No switch, no \
-             hotkey, no config: loading this DLL is the feature.",
-            INVADERS.describe()
+             0x{LOCK_ON_POINT_OWNER_RVA:x}). While you are a hostile phantom -- chr_type one of \
+             [{}], or a multiplayer role that resolves to one -- a candidate whose chr_type is \
+             one of the same set is not offered to lock-on. No switch, no hotkey, no config: \
+             loading this DLL is the feature.",
+            HOSTILE_PHANTOMS.describe()
         )),
         Err(status) => log_message(format_args!(
             "install: register_union_hook failed: {status:?}; the filter is inert this run"
@@ -257,6 +270,18 @@ unsafe extern "system" fn lock_on_point_owner_hook(
     };
     let summon_param_type = summon_param_type();
     note_seen(self_chr_type, summon_param_type, candidate_chr_type);
+    note_team_pairing(
+        &SEEN_SELF_PAIRINGS,
+        Role::LocalPlayer,
+        self_chr_type,
+        local_player,
+    );
+    note_team_pairing(
+        &SEEN_CANDIDATE_PAIRINGS,
+        Role::Candidate,
+        candidate_chr_type,
+        owner,
+    );
     if !hides(self_chr_type, summon_param_type, candidate_chr_type) {
         return owner;
     }
@@ -327,6 +352,16 @@ fn chr_type_of(chr_ins: usize) -> Option<i32> {
     Some(unsafe { ((chr_ins + CHR_INS_CHR_TYPE_OFFSET) as *const i32).read_volatile() })
 }
 
+/// `ChrIns::team_type`, the raw byte. Census only -- no rule reads it.
+fn team_type_of(chr_ins: usize) -> Option<u8> {
+    if !plausible_chr_ins(chr_ins) {
+        return None;
+    }
+    // SAFETY: same object and same screen as `chr_type_of`, one byte further into a struct the
+    // game's own `GetTeamType` reads at this offset.
+    Some(unsafe { ((chr_ins + CHR_INS_TEAM_TYPE_OFFSET) as *const u8).read_volatile() })
+}
+
 /// Cheap screen: heap-shaped, with a vtable inside the game image.
 fn plausible_chr_ins(chr_ins: usize) -> bool {
     if !unsafe { is_heap_aligned_ptr(chr_ins) } {
@@ -380,7 +415,7 @@ fn note_summon_param_type(self_chr_type: i32, summon_param_type: i32) {
          {self_chr_type} that reads as {}",
         if summon_param_type == SUMMON_PARAM_TYPE_UNKNOWN {
             "unread".to_owned()
-        } else if INVADER_SUMMON_PARAM_TYPES.contains(&summon_param_type) {
+        } else if HOSTILE_PHANTOM_SUMMON_PARAM_TYPES.contains(&summon_param_type) {
             "an invasion role".to_owned()
         } else {
             "not an invasion role".to_owned()
@@ -415,14 +450,42 @@ fn note_seen_one(seen: &AtomicU32, chr_type: i32, role: Role) {
         return;
     }
     log_message(format_args!(
-        "census: first {} with chr_type {chr_type}; the invader set [{}] {} it",
+        "census: first {} with chr_type {chr_type}; the hostile-phantom set [{}] {} it",
         role.label(),
-        INVADERS.describe(),
-        if INVADERS.contains(chr_type) {
+        HOSTILE_PHANTOMS.describe(),
+        if HOSTILE_PHANTOMS.contains(chr_type) {
             "holds"
         } else {
             "does not hold"
         }
+    ));
+}
+
+/// Report each `(chr_type, team_type)` pairing once per side.
+///
+/// The pairing is what makes this worth a log line. `chr_type` alone has already been measured
+/// reading 0 for every remote player in a Seamless session, which is also what the host reads, so
+/// the census cannot currently tell a fellow invader from the person an invader is there to fight.
+/// If the team byte differs across two characters that share a `chr_type`, it is the discriminator
+/// the rule is missing; if it tracks `chr_type` exactly, it is derived from it, as
+/// `CS::ChrIns::InitTeamType` says it is in the vanilla path, and this line closes that question
+/// rather than leaving it to be re-argued.
+fn note_team_pairing(seen: &AtomicU64, role: Role, chr_type: i32, chr_ins: usize) {
+    let Some(team) = team_type_of(chr_ins) else {
+        return;
+    };
+    // 64 bits over a `chr_type` that is 0..=31 and a team byte that is 0..=78: too small to hold
+    // every pairing, so it holds a mix and a collision costs one unlogged line, never a wrong one.
+    let bit = 1_u64 << ((((chr_type as u32) << 3) ^ u32::from(team)) & 63);
+    if seen.load(Ordering::Relaxed) & bit != 0 {
+        return;
+    }
+    if seen.fetch_or(bit, Ordering::Relaxed) & bit != 0 {
+        return;
+    }
+    log_message(format_args!(
+        "census: a {} with chr_type {chr_type} has team_type {team}",
+        role.label()
     ));
 }
 
@@ -438,9 +501,27 @@ fn note_hidden(self_chr_type: i32, summon_param_type: i32, candidate_chr_type: i
     ));
 }
 
+/// Where this run's log lands: the artifact directory the launcher named, else beside the game
+/// executable.
+///
+/// This crate wrote straight into the game directory until 2026-09-09, and it is the reason the
+/// question "did the filter fire in that invasion you ran last week" has no answer. A
+/// game-directory artifact is single-slot: `begin_fresh_run` rotates `<name>` to `<name>.prev` and
+/// truncates on the first write of each process, so two launches destroy the run before last.
+/// Reconstructed from the launcher logs afterwards, 43 separate runs had loaded this DLL and every
+/// one of their logs was gone except the last two -- and neither of those two was an invasion.
+///
+/// The knob is the one every other shell here honours, so the launcher already knows how to set
+/// it: `ARTIFACT_ENV` in `scripts/er_artifact_env.py` maps it to this file name, and
+/// `er-run-branch.py`'s selftest asserts that table covers every variable the Rust reads.
 fn log_message(args: fmt::Arguments<'_>) {
-    let path = game_directory_path()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
-        .join(LOG_FILE_NAME);
+    // The knob is spelled inline rather than through a `const` on purpose:
+    // `scripts/er-artifact-redirect-audit.py` discovers every launcher knob by reading the Rust for
+    // this exact call shape with a literal, so a name hidden behind a constant is a knob the audit
+    // cannot see -- and an invisible knob is how this file went unredirected in the first place.
+    let path = er_game_base::log::redirected_artifact_path(
+        "ER_QUICKLOAD_LOCKON_FILTER_LOG_PATH",
+        LOG_FILE_NAME,
+    );
     append_line(&path, format_args!("{args}"));
 }

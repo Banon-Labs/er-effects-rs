@@ -58,7 +58,8 @@
 //! # No switch
 //!
 //! Loading the DLL is the feature. There is no hotkey, no toggle and no config file: the rule is
-//! [`rules::hides`] over two constant lists, and the only state the crate keeps is the trampoline,
+//! [`rules::hides`] over two constant sets, both read out of the game's own classification
+//! tables rather than written by hand, and the only state the crate keeps is the trampoline,
 //! the addresses it resolved at install, and the counters its log lines are made of. A profile
 //! that lists this DLL wants invaders unlockable while invading; a profile that does not, does
 //! not load it.
@@ -94,6 +95,36 @@ const LOCK_ON_POINT_OWNER_RVA: usize = 0x0071_3db0;
 /// `CS::ChrIns::chr_type`, from the two-instruction getter `CS::ChrIns::GetCharacterType`
 /// (1.16.2 `0x1403eec10`, 1.17 `0x1403eee40`), which is `mov eax,[rcx+0x68]` in both images.
 const CHR_INS_CHR_TYPE_OFFSET: usize = 0x68;
+
+/// `CS::ChrIns::teamType`, the byte `CS::ChrIns::GetTeamType` reads before its two overrides -- a
+/// `Charmed` special effect and a `ChrSlotSys` temporary-team slot.
+///
+/// Byte-verified on both images rather than carried across: the getter opens
+/// `48 89 5c 24 10 57 48 83 ec 20 0f b6 41 6c 48 8b f9 88 02` at 1.16.2 `0x1403f1a60`, and that
+/// exact 19-byte sequence has a unique hit at `0x1403f1c90` in `eldenring-deobf-1.17.1.bin`. The
+/// `0f b6 41 6c` in the middle of it is the load, so the offset is the same on the build the game
+/// actually runs.
+///
+/// Read only for the census, never by [`rules::hides`]. It is here because it is the obvious
+/// candidate for a discriminator that survives Seamless Co-op, and the static evidence is
+/// genuinely two-sided rather than settled:
+///
+/// * Against it -- in the vanilla path this byte is derived from `chrType`, not independently of
+///   it. `CS::ChrIns::InitTeamType` (`0x1403f7580`) resolves the character's `RoleParam` row and
+///   takes `RoleParam::GetTeamType`, and `CalculateRoleParamId` (`0x1404d8320`) keys that row as
+///   `(vowType * 10000) + chrType`. A session that leaves every player at `chrType 0` would give
+///   every player the same team byte, and the byte would add nothing chr_type does not already say.
+/// * For it -- `CanTargetTeamType` and the damage table both call the player teams `Friend` to one
+///   another, so the relation matrix cannot separate a host from an invader; but that is a
+///   statement about the relation between two teams, not about whether the two carry different
+///   values. Those are
+///   different questions and only the second one matters here. Seamless also ships an explicit
+///   `OPTIONSELECT_TOGGLEPVPTEAMS` option, so its session layer may write this byte itself rather
+///   than let the game derive it.
+///
+/// One session's census settles which, and unlike the invasion question it needs no second
+/// invader -- an ordinary co-op session already has a remote player to read.
+const CHR_INS_TEAM_TYPE_OFFSET: usize = 0x6c;
 
 /// `CS::GameMan::summonParamType` -- the multiplayer role this session was matched on.
 ///

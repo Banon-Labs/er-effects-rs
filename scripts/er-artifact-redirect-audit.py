@@ -261,9 +261,41 @@ def _const_value(text: str, ident: str) -> str | None:
     return const.group(1) if const else None
 
 
+def _crate_of(source: Path) -> Path | None:
+    """The crate directory `source` belongs to, or None when it is not under `crates/`."""
+    try:
+        relative = source.relative_to(CRATES)
+    except ValueError:
+        return None
+    return CRATES / relative.parts[0]
+
+
+def _crate_const_value(source: Path, ident: str) -> str | None:
+    """Resolve a `const NAME: &str = "..."` anywhere in `source`'s crate, not just its own file.
+
+    A crate that declares the filename in `lib.rs` and calls the resolver from a sibling module is
+    the ordinary shape here, and reading only the calling file made that knob vanish -- the loop
+    below used to `continue` past an unresolved identifier, so an undiscovered knob and a knob that
+    does not exist were the same outcome. That is how `ER_QUICKLOAD_LOCKON_FILTER_LOG_PATH` could be
+    added to the Rust, added to the shared table, and still fail the completeness check with no
+    line anywhere naming it.
+    """
+    crate = _crate_of(source)
+    if crate is None:
+        return None
+    for sibling in sorted(crate.rglob("*.rs")):
+        if "target" in sibling.parts:
+            continue
+        value = _const_value(sibling.read_text(encoding="utf-8", errors="replace"), ident)
+        if value is not None:
+            return value
+    return None
+
+
 def discover_knobs() -> list[Knob]:
     """Every `ER_QUICKLOAD_*` env var the DLLs consult for an output path, from the code itself."""
     found: dict[str, Knob] = {}
+    unresolved: list[tuple[str, str, str]] = []
     for source in _rust_sources():
         text = source.read_text(encoding="utf-8", errors="replace")
         relative = str(source.relative_to(REPO_ROOT))
@@ -276,18 +308,33 @@ def discover_knobs() -> list[Knob]:
                 continue
             name = fallback.group("literal")
             if name is None:
-                name = _const_value(text, fallback.group("ident"))
+                ident = fallback.group("ident")
+                name = _const_value(text, ident) or _crate_const_value(source, ident)
                 if name is None:
+                    unresolved.append((env, ident, relative))
                     continue
             _record(found, env, name, relative)
         for match in SHARED_RESOLVER.finditer(text):
             env = match.group("env")
             if env in INPUT_CHANNEL_KNOBS or not env.endswith("_PATH"):
                 continue
-            name = match.group("literal") or _const_value(text, match.group("ident"))
+            ident = match.group("ident")
+            name = match.group("literal")
             if name is None:
+                name = _const_value(text, ident) or _crate_const_value(source, ident)
+            if name is None:
+                unresolved.append((env, ident, relative))
                 continue
             _record(found, env, name, relative)
+    if unresolved:
+        # Not a `continue`. A knob whose default filename cannot be resolved is a knob no launcher
+        # can be held to, and skipping it quietly is indistinguishable from the crate never having
+        # asked for a redirect -- the exact failure this whole file exists to refuse.
+        detail = "; ".join(f"{env} -> {ident} ({where})" for env, ident, where in unresolved)
+        raise SystemExit(
+            f"er-artifact-redirect-audit: cannot resolve the default filename for {detail}. "
+            "Name it with a string literal, or declare the const inside the same crate."
+        )
     return sorted(found.values(), key=lambda knob: knob.env)
 
 

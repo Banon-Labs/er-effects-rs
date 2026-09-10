@@ -1,14 +1,28 @@
 //! Which characters this DLL hides from lock-on.
 //!
-//! There is no switch and no config file: loading the DLL is the feature, so the rule is two lists
+//! There is no switch and no config file: loading the DLL is the feature, so the rule is two sets
 //! of constants and one predicate over the three integers the hook reads out of live memory. It
 //! lives here, free of `cfg(windows)`, so the host test run covers it -- both ways it can be wrong
 //! are silent. Hiding
 //! nobody looks exactly like an invasion where nobody else turned up; hiding the host looks like
 //! the lock-on button being broken. Neither is visible until someone is mid-invasion.
+//!
+//! # Both sets are read out of the game, not written from the wiki
+//!
+//! The first version of this file listed the three invasion items' `ChrType` values and their
+//! three `SummonParamType` values, and that list was narrower than the game's own answer in a way
+//! that cost the whole feature: a live Seamless Co-op session measured the local player at
+//! `chrType 2` / `summonParamType -12`, and neither was a member, so the filter could never arm.
+//! Both sets are now derived from the two tables the engine itself consults --
+//! `CharacterTypeProperties` and `MultiplayProperties` -- which is why `Duelist` and the
+//! map-guardian roles are members without anyone having had to think of them.
+//! `scripts/er-character-type-tables.py` prints both tables and re-derives both sets.
 
 use std::fmt::Write as _;
 
+/// `ChrType::Duelist` -- a red summoned into the host's world, and an ally of the invaders
+/// rather than of the host. The game classifies it as a hostile phantom; so does this crate.
+pub(crate) const CHR_TYPE_DUELIST: i32 = 2;
 /// `ChrType::BloodyFinger` -- an ordinary invader.
 pub(crate) const CHR_TYPE_BLOODY_FINGER: i32 = 15;
 /// `ChrType::Recusant` -- a Volcano Manor invader.
@@ -21,20 +35,34 @@ pub(crate) const CHR_TYPE_FESTERING_BLOODY_FINGER: i32 = 18;
 /// rather than one to test against.
 pub(crate) const MAX_CHR_TYPE: i32 = 31;
 
-/// The three player invader kinds. Both halves of the rule read this one set: it says who is
-/// hidden, and it says who you have to be for anyone to be hidden from you.
+/// The `ChrType` values the game itself calls hostile phantoms, less the kinds it spawns.
 ///
-/// `Duelist` (2), `BloodyFingerNpc` (20) and `RecusantNpc` (21) are absent on purpose. A duelist
-/// was summoned by the host and an npc invader is a character the game spawned, so neither is a
-/// fellow player invader -- and both are people an invader may legitimately want to lock.
-pub(crate) const INVADER_CHR_TYPES: [i32; 3] = [
+/// Not a hand-written list of the invasion items. Elden Ring keeps a
+/// `CharacterTypeProperties` table -- 23 records of 20 bytes at 1.16.2 `0x143b17c00`, and
+/// byte-identical at 1.17.1 `0x143b1bc00` -- whose `isHostilePhantom` byte
+/// `CS::CharacterTypeProperties::IsHostilePhantom` (1.16.2 `0x1404c7d10`) reads at record
+/// `+0xa`. That table answers `true` for `2, 15, 16, 18, 20, 21, 22`, and
+/// `scripts/er-character-type-tables.py --selftest` re-reads it rather than trusting this
+/// sentence.
+///
+/// Two edits to that set, both deliberate:
+///
+/// * `20 BloodyFingerNpc`, `21 RecusantNpc` and `22` are dropped. They are characters the game
+///   spawned, not other humans, and an invader may legitimately want to lock one.
+/// * `2 Duelist` is kept, and this is the correction that matters. The previous list here had
+///   three entries and excluded it on the reasoning that "a duelist was summoned by the host".
+///   The game's own row disagrees, and so does the role table: `MultiplayProperties` role 2 is
+///   `赤召喚`, a red summon, which fights beside the invaders. It is also the value the live
+///   census has actually measured on the local player under Seamless Co-op.
+pub(crate) const HOSTILE_PHANTOM_CHR_TYPES: [i32; 4] = [
+    CHR_TYPE_DUELIST,
     CHR_TYPE_BLOODY_FINGER,
     CHR_TYPE_RECUSANT,
     CHR_TYPE_FESTERING_BLOODY_FINGER,
 ];
 
-/// [`INVADER_CHR_TYPES`] as the one word the hook consults.
-pub(crate) const INVADERS: ChrTypeSet = ChrTypeSet::of(&INVADER_CHR_TYPES);
+/// [`HOSTILE_PHANTOM_CHR_TYPES`] as the one word the hook consults.
+pub(crate) const HOSTILE_PHANTOMS: ChrTypeSet = ChrTypeSet::of(&HOSTILE_PHANTOM_CHR_TYPES);
 
 /// `SummonParamType::RedInvasionA` -- the Bloody Finger role.
 pub(crate) const SUMMON_PARAM_TYPE_RED_INVASION_A: i32 = -3;
@@ -42,22 +70,44 @@ pub(crate) const SUMMON_PARAM_TYPE_RED_INVASION_A: i32 = -3;
 pub(crate) const SUMMON_PARAM_TYPE_RED_INVASION_A_LIMITED: i32 = -4;
 /// `SummonParamType::RedInvasionB` -- the Recusant role.
 pub(crate) const SUMMON_PARAM_TYPE_RED_INVASION_B: i32 = -5;
+/// The role the live census measured on the local player in a Seamless Co-op session:
+/// `MultiplayProperties` role 12, debug name `アノールマップ守護`, whose `CharacterType` is
+/// `Duelist`. Named because it is the single value that decides whether this crate does
+/// anything at all in the sessions the user actually plays.
+pub(crate) const SUMMON_PARAM_TYPE_ANOR_MAP_GUARDIAN: i32 = -12;
 
-/// The multiplayer roles that mean the local player is invading, as `GameMan::summonParamType`
-/// spells them.
+/// Every `SummonParamType` whose multiplayer role resolves to a hostile-phantom `CharacterType`.
 ///
-/// A second, independent answer to "am I invading", and the reason it is worth reading a second
-/// field: `ChrType` is what the engine derives, and `summonParamType` is what it derives it from
-/// (`CS::GameMan::GetSummonParamType` -> `MultiplayProperties` -> `PlayerGameData::SetChrType`).
-/// Under Seamless Co-op, which runs its own session layer, a roster walk has been measured typing
-/// remote players `Local`, so the derived kind is the half more likely to be surprising.
+/// Derived, like [`HOSTILE_PHANTOM_CHR_TYPES`], from a game table rather than from the item that
+/// starts the invasion: `MultiplayProperties` (32 records of 64 bytes, 1.16.2 `0x143b11230`,
+/// 1.17.1 `0x143b15230`, walked by `GetMultiplayPropertiesByMultiplayRole` at 1.16.2
+/// `0x1401db340`) carries both the `SummonParamType` the engine matched the session on and the
+/// `CharacterType` it derives from it. Every row landing on a hostile phantom is here, which is
+/// what makes the map-guardian and red-sign roles members without anyone having to think of them
+/// one at a time.
 ///
-/// `Host` (0), `Summon` (-1) and `RedSummon` (-2) are absent for the same reason `Duelist` is
-/// absent from [`INVADER_CHR_TYPES`]: a summoned red is not invading.
-pub(crate) const INVADER_SUMMON_PARAM_TYPES: [i32; 3] = [
+/// `Host` (0), `Summon` (-1) and the hunter roles are absent because their rows resolve to
+/// `Local`, `WhitePhantom` or `BluePhantom`, not because a person judged them friendly.
+pub(crate) const HOSTILE_PHANTOM_SUMMON_PARAM_TYPES: [i32; 19] = [
+    -2,
     SUMMON_PARAM_TYPE_RED_INVASION_A,
     SUMMON_PARAM_TYPE_RED_INVASION_A_LIMITED,
     SUMMON_PARAM_TYPE_RED_INVASION_B,
+    -8,
+    -10,
+    -11,
+    SUMMON_PARAM_TYPE_ANOR_MAP_GUARDIAN,
+    -16,
+    -17,
+    -18,
+    -19,
+    -21,
+    -22,
+    -23,
+    -25,
+    -26,
+    -29,
+    -30,
 ];
 
 /// The value the hook passes when it has no `GameMan` to read, so the summon-param half stands
@@ -118,7 +168,8 @@ impl ChrTypeSet {
 /// candidate still has to be typed as an invader, so a false yes here costs nothing while a false
 /// no costs the whole feature.
 pub(crate) fn local_player_is_invading(chr_type: i32, summon_param_type: i32) -> bool {
-    INVADERS.contains(chr_type) || INVADER_SUMMON_PARAM_TYPES.contains(&summon_param_type)
+    HOSTILE_PHANTOMS.contains(chr_type)
+        || HOSTILE_PHANTOM_SUMMON_PARAM_TYPES.contains(&summon_param_type)
 }
 
 /// Should the character typed `candidate_chr_type` be hidden from the lock-on candidate set of
@@ -133,7 +184,7 @@ pub(crate) fn hides(
     candidate_chr_type: i32,
 ) -> bool {
     local_player_is_invading(self_chr_type, self_summon_param_type)
-        && INVADERS.contains(candidate_chr_type)
+        && HOSTILE_PHANTOMS.contains(candidate_chr_type)
 }
 
 #[cfg(test)]
@@ -144,9 +195,9 @@ mod tests {
     const HOST: i32 = 0;
 
     #[test]
-    fn an_invader_stops_seeing_invaders() {
-        for local in INVADER_CHR_TYPES {
-            for candidate in INVADER_CHR_TYPES {
+    fn a_hostile_phantom_stops_seeing_hostile_phantoms() {
+        for local in HOSTILE_PHANTOM_CHR_TYPES {
+            for candidate in HOSTILE_PHANTOM_CHR_TYPES {
                 assert!(
                     hides(local, SUMMON_PARAM_TYPE_UNKNOWN, candidate),
                     "{local}/{candidate}"
@@ -159,7 +210,7 @@ mod tests {
     fn the_summon_param_type_alone_is_enough_to_be_invading() {
         // The case this second signal exists for: a session layer that leaves the derived
         // `ChrType` at `Local` while the role the engine matched on says otherwise.
-        for role in INVADER_SUMMON_PARAM_TYPES {
+        for role in HOSTILE_PHANTOM_SUMMON_PARAM_TYPES {
             assert!(hides(0, role, CHR_TYPE_BLOODY_FINGER), "{role}");
         }
     }
@@ -169,10 +220,35 @@ mod tests {
         assert!(hides(CHR_TYPE_RECUSANT, HOST, CHR_TYPE_BLOODY_FINGER));
     }
 
+    /// The pairing a live Seamless Co-op session measured on the local player, and the one the
+    /// previous three-entry lists could not express. Either field alone has to arm the gate.
+    #[test]
+    fn the_seamless_measured_pairing_reads_as_invading() {
+        assert!(local_player_is_invading(
+            CHR_TYPE_DUELIST,
+            SUMMON_PARAM_TYPE_ANOR_MAP_GUARDIAN
+        ));
+        assert!(local_player_is_invading(
+            CHR_TYPE_DUELIST,
+            SUMMON_PARAM_TYPE_UNKNOWN
+        ));
+        assert!(local_player_is_invading(
+            0,
+            SUMMON_PARAM_TYPE_ANOR_MAP_GUARDIAN
+        ));
+        assert!(hides(
+            CHR_TYPE_DUELIST,
+            SUMMON_PARAM_TYPE_ANOR_MAP_GUARDIAN,
+            CHR_TYPE_DUELIST
+        ));
+    }
+
     #[test]
     fn an_invader_still_sees_the_host_and_their_phantoms() {
         // 0 Local, 1 WhitePhantom, 8 GrayPhantom, 17 BluePhantom: the people an invader is there
         // to fight, and the ones a filter that hid them would look like a broken lock-on button.
+        // The host reading 0 is measured, not assumed, which is what keeps the candidate half
+        // strict no matter how wide the invading half gets.
         for candidate in [0, 1, 8, 17] {
             assert!(
                 !hides(
@@ -186,9 +262,11 @@ mod tests {
     }
 
     #[test]
-    fn an_invader_still_sees_summoned_reds_and_npc_invaders() {
-        // 2 Duelist, 20 BloodyFingerNpc, 21 RecusantNpc: reds, but not fellow player invaders.
-        for candidate in [2, 20, 21] {
+    fn an_invader_still_sees_npc_invaders() {
+        // 20 BloodyFingerNpc, 21 RecusantNpc, 22: the game's own table calls all three hostile
+        // phantoms, and all three are dropped from the candidate set on purpose -- they are
+        // characters the game spawned, not other humans.
+        for candidate in [20, 21, 22] {
             assert!(
                 !hides(
                     CHR_TYPE_BLOODY_FINGER,
@@ -201,11 +279,11 @@ mod tests {
     }
 
     #[test]
-    fn anyone_who_is_not_invading_is_unaffected() {
-        // Every non-invader kind, paired with the roles that are not an invasion: host, an
-        // ordinary summon, a summoned red, and no answer at all.
-        for local in [0, 1, 2, 5, 8, 13, 17] {
-            for role in [HOST, -1, -2, SUMMON_PARAM_TYPE_UNKNOWN] {
+    fn anyone_who_is_not_a_hostile_phantom_is_unaffected() {
+        // Every non-hostile kind, paired with the roles that resolve to one: host, an ordinary
+        // summon, and no answer at all.
+        for local in [0, 1, 5, 8, 13, 17] {
+            for role in [HOST, -1, SUMMON_PARAM_TYPE_UNKNOWN] {
                 assert!(
                     !hides(local, role, CHR_TYPE_BLOODY_FINGER),
                     "{local}/{role}"
@@ -222,7 +300,7 @@ mod tests {
     #[test]
     fn an_unrepresentable_chr_type_is_never_a_member() {
         for chr_type in [-1, -999, MAX_CHR_TYPE + 1, i32::MAX, i32::MIN] {
-            assert!(!INVADERS.contains(chr_type), "{chr_type}");
+            assert!(!HOSTILE_PHANTOMS.contains(chr_type), "{chr_type}");
             assert!(!hides(chr_type, HOST, CHR_TYPE_BLOODY_FINGER), "{chr_type}");
             assert!(
                 !hides(
@@ -235,8 +313,40 @@ mod tests {
         }
     }
 
+    /// The set the game's `CharacterTypeProperties` table gives, less the three kinds the game
+    /// spawns. `scripts/er-character-type-tables.py --selftest` is the half of this that reads
+    /// the image; this half pins what the crate did with the answer.
     #[test]
-    fn the_set_holds_exactly_the_three_invader_kinds() {
-        assert_eq!(INVADERS.describe(), "15, 16, 18");
+    fn the_set_is_the_games_hostile_phantoms_less_the_npc_kinds() {
+        assert_eq!(HOSTILE_PHANTOMS.describe(), "2, 15, 16, 18");
+    }
+
+    /// The whole of the 2026-09-07 Seamless run, replayed: the gate now arms on the local
+    /// player's measured pairing, and still hides nobody, because every candidate that session
+    /// asked about was `Local` (0), `Npc` (5) or `Unk7` (7). Widening the invading half is only
+    /// safe while that stays true, so the run is a test rather than a paragraph.
+    #[test]
+    fn the_measured_seamless_session_hides_nobody() {
+        for (local, role) in [
+            (0, 0),
+            (2, SUMMON_PARAM_TYPE_ANOR_MAP_GUARDIAN),
+            (2, 0),
+            (0, SUMMON_PARAM_TYPE_ANOR_MAP_GUARDIAN),
+        ] {
+            for candidate in [0, 5, 7] {
+                assert!(!hides(local, role, candidate), "{local}/{role}/{candidate}");
+            }
+        }
+    }
+
+    /// A role table row that resolves to a friendly or neutral kind must not arm the gate, or
+    /// the crate would hide invaders from a blue hunter and from a co-op phantom.
+    #[test]
+    fn the_hunter_and_summon_roles_are_not_invading() {
+        // -1 Summon (WhitePhantom), -9 red hunter (BluePhantom), -14 battle royale, -28 red
+        // hunter 2 (BluePhantom), 0 an invalid sign.
+        for role in [0, -1, -9, -14, -28] {
+            assert!(!local_player_is_invading(0, role), "{role}");
+        }
     }
 }

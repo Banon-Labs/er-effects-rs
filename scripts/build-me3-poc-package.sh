@@ -274,6 +274,7 @@ export ER_QUICKLOAD_CRASH_LOGGING_LOG_PATH="$LOG_DIR/er-crash-log.txt"
 export ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH="$LOG_DIR/er-crash-latest.txt"
 export ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH="$LOG_DIR/er-crash-breadcrumb-latest.txt"
 export ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH="$LOG_DIR/er-crash-modules.txt"
+export ER_QUICKLOAD_LOCKON_FILTER_LOG_PATH="$LOG_DIR/er-lockon-filter.log"
 
 args=()
 if [[ -n "$STEAM_DIR" ]]; then

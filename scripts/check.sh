@@ -638,6 +638,15 @@ python3 "$repo_root/scripts/check-oracle-singleton-globals.py"
 # image when there is one. Only `--selftest` runs: the bare form is a report, and it exits
 # non-zero when no game is installed, which is not a repo defect.
 python3 "$repo_root/scripts/ersc_identify.py" --selftest
+# er-lockon-filter decides who is a hostile phantom from two tables in the game image --
+# `CharacterTypeProperties` and `MultiplayProperties` -- and carries the answer as constants,
+# because reading them at runtime would need two more pinned data addresses for the sake of
+# values that have not moved between builds. This is the gate that keeps the constants honest:
+# it re-reads both tables and fails if the game's own classification stops being the one they
+# were derived from. It exists because the hand-written predecessor was narrower than the game's
+# answer in a way nothing caught -- the crate required chr_type 15/16/18, the live session
+# measured 2, and the feature was silently inert. An absent image is a skip, not a pass.
+python3 "$repo_root/scripts/er-character-type-tables.py" --selftest
 # The workspace uses `../fromsoftware-rs` path dependencies, and CI clones that sibling at one
 # pinned revision while a developer's is whatever they have checked out -- often a fork carrying
 # types upstream does not have. Everything below compiles against the developer's copy, so it
@@ -1999,6 +2008,11 @@ python3 "$repo_root/scripts/er-pick-save.py" --selftest
 python3 "$repo_root/scripts/er-gen-me3-profile.py" --selftest
 python3 "$repo_root/scripts/er-run-reaper.py" --selftest
 python3 "$repo_root/scripts/er-run-branch.py" --selftest
+# Reads the natives list out of every staged run's me3-launcher.log, so "was that DLL actually in
+# the process on the day I tested it" is answerable after the DLL's own log has been rotated away.
+# Only the selftest runs here: the bare form reports on this machine's run cache, which CI has none
+# of, and an empty report is not a repo defect.
+python3 "$repo_root/scripts/er-run-natives-history.py" --selftest
 
 # Scoring a DLL by launching it alone. Its verdict is the husk oracle -- thread count and CPU
 # burn, not a pid existing -- and its selftest drives every branch of that classification,

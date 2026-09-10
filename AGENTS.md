@@ -287,7 +287,36 @@ cp -rf source dest          # NOT: cp -r source dest
 ### Rules
 
 - Use `$HOME/.local/bin/bd` for ALL task tracking -- do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `$HOME/.local/bin/bd prime` for the memory search index, the newest memories, and the top of the ready queue. It does NOT carry a command reference or the session-close protocol -- those are in this file (`## Quick Reference`, `## Session Completion`), and bd's own non-memory output is a 367-byte header (measured). `bd prime` is bounded to ~4 KB by `scripts/beads-prime.sh` + `scripts/gen-beads-prime.py`, because the unbounded form is 4.6 MB and even a titles-only index was 157 KB -- past what the harness inlines, so it got persisted to a file and never read. The full title list is written beside it at `.beads/PRIME-memory-index.txt`; `scripts/test-beads-prime-size.py` keeps the output small.
+- Run `$HOME/.local/bin/bd prime` for the memory search index, the newest memories, and the top of the ready queue. It does NOT carry a command reference or the session-close protocol -- those are in this file (`## Quick Reference`, `## Never End A Turn The User Would Answer With Nothing (user directive 2026-09-09)
+
+Before ending a turn, ask what the ideal user reply is. If the honest answer is **nothing** -- they
+would have to say "ok, go on" -- the turn must not end. Ending there costs the user a round trip
+that carries zero information, and it is the single most common way this repo's work stalls.
+
+The shapes that mean you stopped too early, all of them observed:
+
+- Telling the user their input is not needed: "nothing", "the ball is in my court", "no action
+  needed from you".
+- Announcing your own next action instead of taking it: "Rebuilding and relaunching now", "next
+  I'll ...", "let me now ...". If you know the command, run it.
+- Offering work you are already authorised to do: "say the word and I'll ...", "want me to ...".
+  The standing orders in this file already say yes; asking again is the round trip.
+- A diagnosis with no edit. The finding is not the deliverable.
+
+A turn MAY legitimately end on the user, and these are the only cases:
+
+- A real external blocker: a credential, an interactive login, a purchase, a decision only they own.
+- A question only they can answer: a preference, a subjective judgement.
+- An in-game **observation** you have no oracle for ("did the popup appear?"). Asking them to
+  perform an in-game **input** is never legitimate -- see the 2026-07-22 standing order; the agent
+  drives every input itself.
+- The finished thing is delivered and you are reporting it.
+
+This is enforced, not advisory: the Stop hook halts a turn whose closing message matches the first
+list without matching the second. When it fires, do not rewrite the sentence to slip past it --
+take the next action instead, then report what happened.
+
+## Session Completion`), and bd's own non-memory output is a 367-byte header (measured). `bd prime` is bounded to ~4 KB by `scripts/beads-prime.sh` + `scripts/gen-beads-prime.py`, because the unbounded form is 4.6 MB and even a titles-only index was 157 KB -- past what the harness inlines, so it got persisted to a file and never read. The full title list is written beside it at `.beads/PRIME-memory-index.txt`; `scripts/test-beads-prime-size.py` keeps the output small.
 - Use `$HOME/.local/bin/bd remember` for persistent knowledge -- do NOT use MEMORY.md files (and to READ a memory use `$HOME/.local/bin/bd recall <key>`, NOT `bd remember <key>` which clobbers it)
 
 ## RTK / Code Search Caveat
