@@ -307,9 +307,9 @@ fn spawn_catalog_task() {
                         // with a hundred read identically. `drawn` is the one that matters -- a
                         // notice can be placed and render nothing.
                         let (shown, refused) = crate::announce::tally();
-                        let (drawn, _empty) = crate::announce::measurement_tally();
+                        let (drawn, empty) = crate::announce::measurement_tally();
                         er_invasion_warp_core::oracles::publish_notice_oracles(
-                            shown, refused, drawn,
+                            shown, refused, drawn, empty,
                         );
                         er_invasion_warp_core::oracles::republish_if_location_matchmaking_changed();
                     }
