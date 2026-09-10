@@ -13,6 +13,13 @@
 //! in an ordinary Seamless session has been measured typing remote players `Local` (0), a kind
 //! the vanilla enum reserves for the player at the keyboard.
 //!
+//! The candidate half of that census speaks only for candidates that are other players. The first
+//! version did not, and it was worse than useless: standing still in an ordinary world, with
+//! nobody invading, it reported the `ChrType` and team byte of every kind of enemy that wandered
+//! into lock-on range. Those lines cannot answer a question about two humans, and each one arrived
+//! as a notification. [`is_player_ins`] is the gate, and it gates the rule too -- see [`hides`]
+//! for why a non-player is never hidden however it is typed.
+//!
 //! The census has already paid for itself once. A run on 2026-09-07 recorded the local player at
 //! `chr_type` 2 with `summonParamType` -12, and the rule at the time held neither value, so the
 //! filter could not arm however many invaders were standing in the world. Those two log lines are
@@ -71,6 +78,17 @@ static SEEN_CANDIDATE_TYPES: AtomicU32 = AtomicU32::new(0);
 /// Set once if a `chr_type` outside the representable range ever turns up, which would mean the
 /// census is blind to it and the rule can never match it.
 static SEEN_UNREPRESENTABLE_TYPE: AtomicBool = AtomicBool::new(false);
+/// The `CS::PlayerIns` vtable, taken from the main player the first time it is read.
+///
+/// Every player in the world is a `PlayerIns` -- the RTTI carries one class for all of them
+/// (`.?AVPlayerIns@CS@@`, 1.17.1 `0x143c85de8`), with no separate kind for a remote or a main
+/// player -- while a non-player character is a `CS::EnemyIns` (`0x143c84e70`). So the main
+/// player's own vtable word identifies the class for the whole session, and the test costs one
+/// load and one compare with no address to translate between builds.
+static PLAYER_INS_VTABLE: AtomicUsize = AtomicUsize::new(0);
+/// Set once when a non-player candidate is first passed over, so the log explains its own
+/// quiet rather than reading like a hook that never fired.
+static SAID_NON_PLAYERS_ARE_SKIPPED: AtomicBool = AtomicBool::new(false);
 /// `(chr_type, team_type)` pairings already reported, one bit per `chr_type << 8 | team`, hashed
 /// down to a word. A pairing rather than two independent censuses because the question the team
 /// byte is being read for is whether it says something `chr_type` does not: two characters with
@@ -269,20 +287,34 @@ unsafe extern "system" fn lock_on_point_owner_hook(
         return owner;
     };
     let summon_param_type = summon_param_type();
-    note_seen(self_chr_type, summon_param_type, candidate_chr_type);
+    note_seen_local_player(self_chr_type, summon_param_type);
     note_team_pairing(
         &SEEN_SELF_PAIRINGS,
         Role::LocalPlayer,
         self_chr_type,
         local_player,
     );
+    // Everything below this line is about one other human. A non-player candidate is neither
+    // filtered nor written down: the rule cannot apply to it, and a census of the enemies standing
+    // near you answers nothing the question needs while emitting a line per kind of wildlife.
+    let candidate_is_player = is_player_ins(owner, local_player);
+    if !candidate_is_player {
+        note_non_players_are_skipped();
+        return owner;
+    }
+    note_seen_one(&SEEN_CANDIDATE_TYPES, candidate_chr_type, Role::Candidate);
     note_team_pairing(
         &SEEN_CANDIDATE_PAIRINGS,
         Role::Candidate,
         candidate_chr_type,
         owner,
     );
-    if !hides(self_chr_type, summon_param_type, candidate_chr_type) {
+    if !hides(
+        self_chr_type,
+        summon_param_type,
+        candidate_chr_type,
+        candidate_is_player,
+    ) {
         return owner;
     }
     note_hidden(self_chr_type, summon_param_type, candidate_chr_type);
@@ -352,6 +384,56 @@ fn chr_type_of(chr_ins: usize) -> Option<i32> {
     Some(unsafe { ((chr_ins + CHR_INS_CHR_TYPE_OFFSET) as *const i32).read_volatile() })
 }
 
+/// Is `candidate` a `CS::PlayerIns`, judged against the class the main player is an instance of?
+///
+/// A class test rather than a `chr_type` test on purpose. `chr_type` is the field a session layer
+/// rewrites -- Seamless Co-op has been measured typing every remote player `Local` -- so it cannot
+/// separate a player from anything; the vtable is written once by the constructor and no mod in
+/// this profile replaces it. `main` supplies the reference rather than a pinned address, so the
+/// comparison needs no per-build translation and cannot drift.
+///
+/// Answers `false` when the reference has not been captured yet, which stands the filter down for
+/// that point rather than guessing. The main player is read first on every call into the hook, so
+/// the reference exists from the first candidate onward.
+fn is_player_ins(candidate: usize, main: usize) -> bool {
+    let mut reference = PLAYER_INS_VTABLE.load(Ordering::Relaxed);
+    if reference == 0 {
+        let Some(main_vtable) = vtable_of(main) else {
+            return false;
+        };
+        PLAYER_INS_VTABLE.store(main_vtable, Ordering::Relaxed);
+        reference = main_vtable;
+    }
+    vtable_of(candidate) == Some(reference)
+}
+
+/// The object's vtable word, screened first.
+fn vtable_of(chr_ins: usize) -> Option<usize> {
+    if !plausible_chr_ins(chr_ins) {
+        return None;
+    }
+    // SAFETY: `plausible_chr_ins` has already read this word and found it pointing inside the
+    // game image, which is what makes the object a live C++ instance rather than a stale pointer.
+    Some(unsafe { (chr_ins as *const usize).read_volatile() })
+}
+
+/// Say once that non-player candidates are being passed over.
+///
+/// Without this the log of a session where nobody invaded is indistinguishable from the log of a
+/// session where the hook never ran, and the previous version of this census answered that by
+/// naming every kind of enemy it saw -- a line per wildlife type, none of which can say anything
+/// about two humans.
+fn note_non_players_are_skipped() {
+    if SAID_NON_PLAYERS_ARE_SKIPPED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    log_message(format_args!(
+        "census: the lock-on system is offering non-player characters, which are passed over \
+         without being filtered or counted -- this rule is only ever about another player. From \
+         here, a `census: a candidate ...` line means a real player was offered."
+    ));
+}
+
 /// `ChrIns::team_type`, the raw byte. Census only -- no rule reads it.
 fn team_type_of(chr_ins: usize) -> Option<u8> {
     if !plausible_chr_ins(chr_ins) {
@@ -393,11 +475,12 @@ impl Role {
     }
 }
 
-/// Name each `ChrType` the lock-on system asks about, once, and each multiplayer role once per
-/// change.
-fn note_seen(self_chr_type: i32, summon_param_type: i32, candidate_chr_type: i32) {
+/// Name the local player's `ChrType`, once, and each multiplayer role once per change.
+///
+/// The candidate's half is not here: it is reported by the caller, and only for a candidate that
+/// is another player.
+fn note_seen_local_player(self_chr_type: i32, summon_param_type: i32) {
     note_seen_one(&SEEN_SELF_TYPES, self_chr_type, Role::LocalPlayer);
-    note_seen_one(&SEEN_CANDIDATE_TYPES, candidate_chr_type, Role::Candidate);
     note_summon_param_type(self_chr_type, summon_param_type);
 }
 

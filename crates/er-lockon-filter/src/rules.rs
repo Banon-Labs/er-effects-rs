@@ -178,18 +178,64 @@ pub(crate) fn local_player_is_invading(chr_type: i32, summon_param_type: i32) ->
 /// The caller has already established that the two are different characters. This decides nothing
 /// about the game's own targeting rules: a candidate it leaves alone still has to pass
 /// `CS::ChrIns::CanTargetTeamType` and the distance and angle tests that follow it.
+///
+/// # Why a non-player candidate is never hidden
+///
+/// `candidate_is_player` is the runtime's answer to "is this a `CS::PlayerIns`", and it is a hard
+/// precondition rather than one more term in the disjunction. The feature is about not locking on
+/// to a fellow invader, so an `EnemyIns` is out of scope by definition -- but the sets this rule
+/// tests are `chr_type` numbers, and nothing stops the game giving a non-player character a number
+/// the hostile-phantom set holds. Without this term such a character would be taken off the lock-on
+/// list, which is an ordinary enemy becoming untargetable: a far worse fault than the one the
+/// filter exists to fix, and one that would show up in normal play rather than only during an
+/// invasion.
 pub(crate) fn hides(
     self_chr_type: i32,
     self_summon_param_type: i32,
     candidate_chr_type: i32,
+    candidate_is_player: bool,
 ) -> bool {
-    local_player_is_invading(self_chr_type, self_summon_param_type)
+    candidate_is_player
+        && local_player_is_invading(self_chr_type, self_summon_param_type)
         && HOSTILE_PHANTOMS.contains(candidate_chr_type)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The value the runtime passes for a candidate that is a `CS::PlayerIns`. Every test below
+    /// that is about the invasion rule passes it, because the rule only ever applies to players;
+    /// the tests that pass `false` are the ones asserting that.
+    const PLAYER: bool = true;
+
+    /// A `CS::EnemyIns` is out of scope whatever number it carries.
+    ///
+    /// This is the fault the precondition exists to refuse, and it is worth a test of its own
+    /// because it fires in ordinary play rather than during an invasion: without the term, an
+    /// invader walking past any non-player character the game happened to type 2, 15, 16 or 18
+    /// would find it silently missing from the lock-on list.
+    #[test]
+    fn a_non_player_candidate_is_never_hidden() {
+        const NOT_A_PLAYER: bool = false;
+        for local in HOSTILE_PHANTOM_CHR_TYPES {
+            for role in HOSTILE_PHANTOM_SUMMON_PARAM_TYPES {
+                for candidate in HOSTILE_PHANTOM_CHR_TYPES {
+                    assert!(
+                        !hides(local, role, candidate, NOT_A_PLAYER),
+                        "{local}/{role}/{candidate}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The precondition is a gate, not a reason on its own: being a player does not hide anyone
+    /// the rest of the rule leaves alone.
+    #[test]
+    fn being_a_player_is_not_by_itself_grounds_to_hide() {
+        assert!(!hides(CHR_TYPE_BLOODY_FINGER, HOST, HOST, PLAYER));
+    }
 
     /// The value the runtime passes when `GameMan` answered, and said "not invading".
     const HOST: i32 = 0;
@@ -199,7 +245,7 @@ mod tests {
         for local in HOSTILE_PHANTOM_CHR_TYPES {
             for candidate in HOSTILE_PHANTOM_CHR_TYPES {
                 assert!(
-                    hides(local, SUMMON_PARAM_TYPE_UNKNOWN, candidate),
+                    hides(local, SUMMON_PARAM_TYPE_UNKNOWN, candidate, PLAYER),
                     "{local}/{candidate}"
                 );
             }
@@ -211,13 +257,18 @@ mod tests {
         // The case this second signal exists for: a session layer that leaves the derived
         // `ChrType` at `Local` while the role the engine matched on says otherwise.
         for role in HOSTILE_PHANTOM_SUMMON_PARAM_TYPES {
-            assert!(hides(0, role, CHR_TYPE_BLOODY_FINGER), "{role}");
+            assert!(hides(0, role, CHR_TYPE_BLOODY_FINGER, PLAYER), "{role}");
         }
     }
 
     #[test]
     fn the_chr_type_alone_is_enough_to_be_invading() {
-        assert!(hides(CHR_TYPE_RECUSANT, HOST, CHR_TYPE_BLOODY_FINGER));
+        assert!(hides(
+            CHR_TYPE_RECUSANT,
+            HOST,
+            CHR_TYPE_BLOODY_FINGER,
+            PLAYER
+        ));
     }
 
     /// The pairing a live Seamless Co-op session measured on the local player, and the one the
@@ -239,7 +290,8 @@ mod tests {
         assert!(hides(
             CHR_TYPE_DUELIST,
             SUMMON_PARAM_TYPE_ANOR_MAP_GUARDIAN,
-            CHR_TYPE_DUELIST
+            CHR_TYPE_DUELIST,
+            PLAYER,
         ));
     }
 
@@ -254,7 +306,8 @@ mod tests {
                 !hides(
                     CHR_TYPE_BLOODY_FINGER,
                     SUMMON_PARAM_TYPE_RED_INVASION_A,
-                    candidate
+                    candidate,
+                    PLAYER,
                 ),
                 "{candidate}"
             );
@@ -271,7 +324,8 @@ mod tests {
                 !hides(
                     CHR_TYPE_BLOODY_FINGER,
                     SUMMON_PARAM_TYPE_RED_INVASION_A,
-                    candidate
+                    candidate,
+                    PLAYER,
                 ),
                 "{candidate}"
             );
@@ -285,7 +339,7 @@ mod tests {
         for local in [0, 1, 5, 8, 13, 17] {
             for role in [HOST, -1, SUMMON_PARAM_TYPE_UNKNOWN] {
                 assert!(
-                    !hides(local, role, CHR_TYPE_BLOODY_FINGER),
+                    !hides(local, role, CHR_TYPE_BLOODY_FINGER, PLAYER),
                     "{local}/{role}"
                 );
             }
@@ -301,12 +355,16 @@ mod tests {
     fn an_unrepresentable_chr_type_is_never_a_member() {
         for chr_type in [-1, -999, MAX_CHR_TYPE + 1, i32::MAX, i32::MIN] {
             assert!(!HOSTILE_PHANTOMS.contains(chr_type), "{chr_type}");
-            assert!(!hides(chr_type, HOST, CHR_TYPE_BLOODY_FINGER), "{chr_type}");
+            assert!(
+                !hides(chr_type, HOST, CHR_TYPE_BLOODY_FINGER, PLAYER),
+                "{chr_type}"
+            );
             assert!(
                 !hides(
                     CHR_TYPE_BLOODY_FINGER,
                     SUMMON_PARAM_TYPE_RED_INVASION_A,
-                    chr_type
+                    chr_type,
+                    PLAYER,
                 ),
                 "{chr_type}"
             );
@@ -334,7 +392,10 @@ mod tests {
             (0, SUMMON_PARAM_TYPE_ANOR_MAP_GUARDIAN),
         ] {
             for candidate in [0, 5, 7] {
-                assert!(!hides(local, role, candidate), "{local}/{role}/{candidate}");
+                assert!(
+                    !hides(local, role, candidate, PLAYER),
+                    "{local}/{role}/{candidate}"
+                );
             }
         }
     }
