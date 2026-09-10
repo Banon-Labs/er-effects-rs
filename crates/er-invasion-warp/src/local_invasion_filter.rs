@@ -2206,6 +2206,39 @@ fn ersc_module_base() -> Option<usize> {
 /// through the action's state write. Five different functions share the first fourteen
 /// bytes, so a short check would prove only that some option action is at this address -- and
 /// calling the wrong one cancels other players' invasions.
+/// Action rvas whose byte check has already been reported as failing.
+///
+/// # Why this is latched
+///
+/// The refusal below is a property of the loaded `ersc.dll`, not of the moment: once a build's
+/// bytes do not match, they do not match on the next tick either. It was logged unconditionally
+/// from a per-tick caller, and run br-20260909-005147-56c1 came back with 6061 identical copies of
+/// it -- half of a 12826-line log. A message that repeats six thousand times is not a diagnostic,
+/// it is what buries one. Tracked as bd er-effects-rs-m86t.
+///
+/// Keyed by rva so a second action refusing for a different reason still gets its own line, and
+/// cleared when the bytes read correctly again so a recovery is reported once too.
+static REFUSED_ACTION_RVAS: std::sync::Mutex<std::collections::BTreeSet<usize>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+/// Record that `rva` refuses, and answer whether this is the first time since it last worked.
+fn first_refusal_of(rva: usize) -> bool {
+    match REFUSED_ACTION_RVAS.lock() {
+        Ok(mut refused) => refused.insert(rva),
+        // A poisoned latch must not silence the refusal: saying it twice is recoverable, saying it
+        // never is the bug this exists to fix.
+        Err(poisoned) => poisoned.into_inner().insert(rva),
+    }
+}
+
+/// Forget a refusal, and answer whether one was standing.
+fn clear_refusal_of(rva: usize) -> bool {
+    match REFUSED_ACTION_RVAS.lock() {
+        Ok(mut refused) => refused.remove(&rva),
+        Err(poisoned) => poisoned.into_inner().remove(&rva),
+    }
+}
+
 fn ersc_action(abi: &ersc::Abi, rva: usize, prologue: &[u8]) -> Option<ErscActionFn> {
     if inside_ersc_callback() {
         crate::standalone_log(format_args!(
@@ -2224,14 +2257,23 @@ fn ersc_action(abi: &ersc::Abi, rva: usize, prologue: &[u8]) -> Option<ErscActio
     })?;
     let address = base + rva;
     if !prologue_matches(address, prologue) {
-        crate::standalone_log(format_args!(
-            "local-invasion: ersc+{rva:#x} does not hold the {} bytes this module measured for {} \
-             -- refusing to call it. The filter is disarmed until the RVAs are re-read against \
-             this ersc.dll: uv run --with capstone python3 scripts/locate-ersc-entry-points.py",
-            prologue.len(),
-            abi.version,
-        ));
+        if first_refusal_of(rva) {
+            crate::standalone_log(format_args!(
+                "local-invasion: ersc+{rva:#x} does not hold the {} bytes this module measured for \
+                 {} -- refusing to call it. The filter is disarmed until the RVAs are re-read \
+                 against this ersc.dll: uv run --with capstone python3 \
+                 scripts/locate-ersc-entry-points.py. This line is printed once per change, not \
+                 once per tick.",
+                prologue.len(),
+                abi.version,
+            ));
+        }
         return None;
+    }
+    if clear_refusal_of(rva) {
+        crate::standalone_log(format_args!(
+            "local-invasion: ersc+{rva:#x} reads as itself again -- the action is callable"
+        ));
     }
     Some(unsafe { core::mem::transmute::<usize, ErscActionFn>(address) })
 }
