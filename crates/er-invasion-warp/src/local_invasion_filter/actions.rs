@@ -24,7 +24,7 @@ use super::{
     SELF_RECOVERIES, STALL_RECOVERIES, STALL_WATCHDOG, SeamlessSession, cancel_row_refusal, ersc,
     ersc_action, inside_ersc_callback, lock_shape_refusal, module_backing, not_identified_detail,
     note_state_after_our_action, now_ms, read_session_state, report_lock_preconditions,
-    resolve_ersc_abi, resolve_session, session_guard_poisoned, session_scan,
+    resolve_ersc_abi, resolve_session, session_guard_refuses, session_scan,
 };
 
 /// Refuse to invoke a Seamless action with a null `this`, and say why.
@@ -255,10 +255,10 @@ pub(super) fn cancel_match(reason: RejectReason) -> bool {
             return false;
         }
     };
-    if session_guard_poisoned(session.abi, session.session) {
+    if let Some(why) = session_guard_refuses(session.abi, session.session) {
         crate::standalone_log(format_args!(
-            "local-invasion: cannot cancel ({reason:?}) -- the session is in the state ERSC's own \
-             actions refuse to proceed past; leaving it alone rather than tripping its abort path"
+            "local-invasion: cannot cancel ({reason:?}) -- {why}. Leaving the session alone rather \
+             than tripping its abort path"
         ));
         return false;
     }
@@ -293,7 +293,7 @@ pub(super) fn cancel_match(reason: RejectReason) -> bool {
     // evening: a Frida-driven cancel succeeded eight times from `state_before 22` (`0x16`), every
     // one landing on `state_after 35` (`0x23`), with no crash -- and on the very next run this
     // same reading refused `state 0x16` and the rejected invasion proceeded. The guard that does
-    // matter is `session_guard_poisoned`, checked above and left in force.
+    // matter is `session_guard_refuses`, checked above and left in force.
     if let Some(note) = cancel_row_refusal(&session) {
         log_refusal_once(
             &CANCEL_REFUSAL_SAID,
@@ -432,7 +432,7 @@ pub fn drive_invade_inline(why: &str) -> bool {
     if read_session_state(session.abi, session.session) != Some(session.abi.state_idle) {
         return false;
     }
-    if session_guard_poisoned(session.abi, session.session) {
+    if session_guard_refuses(session.abi, session.session).is_some() {
         return false;
     }
     let Some(invade) = ersc_action(
@@ -502,7 +502,7 @@ pub fn drive_invade_with_owner(owner: usize, why: &str) -> bool {
     if read_session_state(abi, session) != Some(abi.state_idle) {
         return false;
     }
-    if session_guard_poisoned(abi, session) {
+    if session_guard_refuses(abi, session).is_some() {
         return false;
     }
     let resolved = SeamlessSession {
@@ -621,7 +621,7 @@ pub(super) fn drive_pending_reinvade(session: SeamlessSession) {
         return;
     }
     REINVADE_NOT_IDLE_SAID.store(false, Ordering::SeqCst);
-    if session_guard_poisoned(session.abi, session.session) {
+    if session_guard_refuses(session.abi, session.session).is_some() {
         PENDING_REINVADE.store(false, Ordering::SeqCst);
         return;
     }
@@ -798,7 +798,7 @@ pub(super) fn cancel_stalled_attempt_inner(
     held_ms: u64,
     engine_has_no_session: bool,
 ) {
-    if session_guard_poisoned(session.abi, session.session) {
+    if session_guard_refuses(session.abi, session.session).is_some() {
         return;
     }
     let Some(cancel) = ersc_action(

@@ -1264,11 +1264,32 @@ fn plausible_session_pointer(candidate: usize) -> bool {
     addressable_session_pointer(candidate) && !inside_a_loaded_module(candidate)
 }
 
-/// True when the session is in the state every option action refuses to proceed past. They take a
-/// fatal-error branch on it; this refuses instead.
-fn session_guard_poisoned(abi: &ersc::Abi, session: usize) -> bool {
-    unsafe { er_game_base::mem::safe_read_i32(session + abi.session_guard_offset) }
-        .is_none_or(|raw| raw as u32 == ersc::SESSION_GUARD_POISON)
+/// Why the session's own guard says not to drive an action through it, or `None`.
+///
+/// # Two conditions, and only one of them is the sentinel
+///
+/// Every Seamless option action opens the same way: take the mutex at `session+0x100`, then
+/// `cmp dword [rdi+0x14c], 0x7fffffff` and bail on equal. This mirrors that comparison, so we
+/// never call an action in a state where it would silently do nothing.
+///
+/// The sentinel is `INT_MAX` and the field is MSVC's recursion count, so reaching it needs 2^31
+/// nested locks and it will not happen. That is expected: this arm is parity with the callee, not
+/// a safety net, and its never firing is not evidence that anything works.
+///
+/// The arm that does fire is the other one. A session pointer that cannot be read at all is a real
+/// refusal and a good one -- and it used to be folded into the same `bool` as the sentinel under
+/// the name `session_guard_poisoned`, so a refusal reported a poisoned mutex when what had actually
+/// happened was that the pointer was stale. Each condition now names itself, and the caller prints
+/// what it was told. Tracked as bd er-effects-rs-s1v4.
+fn session_guard_refuses(abi: &ersc::Abi, session: usize) -> Option<&'static str> {
+    match unsafe { er_game_base::mem::safe_read_i32(session + abi.session_guard_offset) } {
+        None => Some("the session pointer did not read, so it is stale or was never a session"),
+        Some(raw) if raw as u32 == ersc::SESSION_GUARD_POISON => Some(
+            "the lock-recursion field holds the sentinel ERSC's own actions bail on, so calling \
+             one would do nothing",
+        ),
+        Some(_) => None,
+    }
 }
 
 /// Log every session-state transition, and arm the auto re-search when the user starts one.
