@@ -437,9 +437,31 @@ Interceptor.attach(erscBase.add(SHOW), {
 //
 // Whatever needs observing about a cancel, observe it somewhere else.
 
-Interceptor.attach(erscBase.add(INVADE), {
+// THE INVADE HOOK DETACHES ITSELF THE INSTANT IT HAS HANDED THE POINTER OVER, and that is not
+// tidiness -- leaving it attached breaks the feature it exists to enable.
+//
+// The note above says why no hook may sit on the cancel action. The invade action has the
+// identical hazard and it was not covered: `er_invasion_warp` byte-checks `ersc+0x25850`'s
+// prologue before every call to it, this Interceptor writes a trampoline over exactly those
+// bytes, and the DLL then reads our detour, fails its own 64-byte comparison, and refuses to
+// invade. Cancel keeps working (nothing patches `ersc+0x258d0`), so rejected matches are
+// cancelled and never restarted, and `arm_self_recovery` re-arms every tick against an action
+// that can never fire: measured 2026-09-09 as 7523 `attempt ended without us cancelling it`
+// lines with `rearmed=0`, and on 2026-09-08 as 6061/6056 in a 12826-line log.
+//
+// One capture is all this hook is for -- the DLL keeps the adopted pointer for the life of the
+// process -- so detaching after the first hand-over costs nothing and restores the prologue the
+// DLL is about to read.
+const invadeHook = Interceptor.attach(erscBase.add(INVADE), {
     onEnter: function (args) {
         handOver(args[0]);
+        // Detach on the pointer being held, not on this call having been the one to hand it over:
+        // `handOver` returns early when the DLL already has this exact object, and a re-attached
+        // agent on a process that adopted it earlier must still get out of the way.
+        if (invadeHook !== null) {
+            invadeHook.detach();
+            send({ kind: 'invade_hook_detached', adopted: adopted !== null });
+        }
     }
 });
 

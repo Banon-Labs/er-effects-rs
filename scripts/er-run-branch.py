@@ -521,6 +521,45 @@ def stale_launchers() -> list[tuple[int, str]]:
     return found
 
 
+def game_pid() -> int | None:
+    """The live `eldenring.exe`, or `None`.
+
+    Asked so the stale-launcher refusal can describe what is actually there. The refusal used to
+    assert that the game had already exited, because that is the case the check was written for --
+    but a launcher is also alive during a perfectly healthy run, and then the sentence told the
+    reader the opposite of the truth and invited them to tear down a session someone was playing.
+    Observed 2026-09-09 against pid 1574375, up and burning cpu, while the message said it was gone.
+
+    Same `/proc` walk as `stale_launchers`, and for the same reason: this workspace forbids
+    process-name tools.
+    """
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            comm = (entry / "comm").read_text().strip()
+        except OSError:
+            continue
+        if comm == "eldenring.exe":
+            return int(entry.name)
+    return None
+
+
+def stale_launcher_state() -> str:
+    """What the live launcher currently has under it, said as observed rather than assumed."""
+    pid = game_pid()
+    if pid is None:
+        return (
+            "Its game has already exited, so `er-teardown.py --status` reports `no eldenring.exe` "
+            "and looks clean."
+        )
+    return (
+        f"A game is still running under it: eldenring.exe pid {pid}. This is a live session, not "
+        "a leftover -- clearing it ends whatever is on screen right now. If that session is "
+        "someone's, leave it alone; the launch you are attempting would have taken it down."
+    )
+
+
 def preflight(args) -> tuple[dict, dict | None]:
     """Closure + provenance + save pick. Raises RuntimeError with a loud message on any refusal."""
     # Before anything expensive: a launcher from an earlier run still holds the prefix, and the
@@ -532,9 +571,9 @@ def preflight(args) -> tuple[dict, dict | None]:
                 "REFUSING TO LAUNCH -- a previous run's me3 launcher is still alive and holding "
                 "the Wine prefix:\n"
                 + "\n".join(f"  pid {pid}  profile {profile}" for pid, profile in held)
-                + "\n\nIts game has already exited, so `er-teardown.py --status` reports "
-                "`no eldenring.exe` and looks clean.\nClear it first:  python3 "
-                "scripts/er-teardown.py --reason stale-launcher"
+                + "\n\n"
+                + stale_launcher_state()
+                + "\nClear it first:  python3 scripts/er-teardown.py --reason stale-launcher"
             )
 
     if not args.skip_steam_check and not steam_running():

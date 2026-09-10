@@ -23,7 +23,7 @@ static shape and no `ersc.dll` global points at it. Frida answers it in one hook
 the session, handed over by the game rather than guessed at.
 
     python3 scripts/er-frida-up.py            # start it, or report the one already running
-    python3 scripts/er-frida-up.py --status
+    uv run --with frida python3 scripts/er-frida-up.py --status   # needs frida in the interpreter
     python3 scripts/er-frida-up.py --stop
     python3 scripts/er-frida-up.py --selftest # no game required
 
