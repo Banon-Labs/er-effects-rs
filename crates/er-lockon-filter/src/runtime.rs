@@ -27,8 +27,8 @@
 
 use std::ffi::c_void;
 use std::fmt;
-use std::sync::Once;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Mutex, Once};
 
 use er_game_base::log::append_line;
 use er_game_base::mem::{game_module_base, is_heap_aligned_ptr, read_bytes, vtable_in_game_image};
@@ -96,6 +96,12 @@ static SAID_NON_PLAYERS_ARE_SKIPPED: AtomicBool = AtomicBool::new(false);
 /// express it.
 static SEEN_SELF_PAIRINGS: AtomicU64 = AtomicU64::new(0);
 static SEEN_CANDIDATE_PAIRINGS: AtomicU64 = AtomicU64::new(0);
+/// Candidate `SessionManagerPlayerEntry` addresses already written down, so the identity census
+/// costs one line per person rather than one per lock-on point.
+static SEEN_CANDIDATE_ENTRIES: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+/// How many distinct candidates the identity census reports before it stops. One double invasion
+/// needs three, and a cap keeps a long session from turning the log into a roster.
+const IDENTITY_CENSUS_LIMIT: usize = 8;
 /// The last `GameMan::summonParamType` the census reported, so the log carries one line per
 /// change of multiplayer role rather than one per lock-on point. A bitmask would not do: the
 /// roles are negative.
@@ -309,6 +315,7 @@ unsafe extern "system" fn lock_on_point_owner_hook(
         candidate_chr_type,
         owner,
     );
+    note_candidate_identity(owner, candidate_chr_type);
     if !hides(
         self_chr_type,
         summon_param_type,
@@ -319,6 +326,90 @@ unsafe extern "system" fn lock_on_point_owner_hook(
     }
     note_hidden(self_chr_type, summon_param_type, candidate_chr_type);
     0
+}
+
+/// `PlayerIns+0x6b8` -- this character's `SessionManagerPlayerEntry`, or 0.
+///
+/// # Why the offset can be read rather than called
+///
+/// `CS::PlayerIns::GetSessionManagerPlayerEntry` is the whole of `mov rax,[rcx+0x6b8]; ret`, and
+/// those eight bytes `48 8b 81 b8 06 00 00 c3` occur exactly once in `eldenring-deobf.bin`
+/// (`0x140657b20`) and exactly once in `eldenring-deobf-1.17.1.bin` (`0x140658970`). A unique
+/// identical body in both images is what says the constant inside it did not move, so reading the
+/// field directly needs no call and no address translation. `er-player-name-filter` pins the same
+/// offset.
+const PLAYER_INS_SESSION_MANAGER_PLAYER_ENTRY_OFFSET: usize = 0x6b8;
+/// `SessionManagerPlayerEntry+232` -- whether this player is the host of the session.
+///
+/// The one field that names, directly and without going through a character type, the person an
+/// invader must never be allowed to lose sight of.
+const SESSION_ENTRY_IS_HOST_OFFSET: usize = 232;
+/// `SessionManagerPlayerEntry+233` -- whether this entry is the local player's own.
+const SESSION_ENTRY_IS_LOCAL_PLAYER_OFFSET: usize = 233;
+/// `SessionManagerPlayerEntry+252` -- the multiplayer role the session assigned before the
+/// ceremony, which `MultiplayProperties` maps to the `ChrType` the engine would derive.
+const SESSION_ENTRY_PRE_CEREMONY_ROLE_OFFSET: usize = 252;
+
+/// What the session says this candidate is, independent of `chr_type`.
+///
+/// # Why the census asks at all
+///
+/// The rule identifies a candidate by `ChrIns::chr_type`, and under Seamless Co-op every remote
+/// player has measured 0 -- which is also what the host reads. If a fellow invader reads 0 too,
+/// then no `chr_type` rule can hide them without also hiding the host, and hiding the host is the
+/// one outcome worse than doing nothing. So the fields that could separate them are written down
+/// first and the rule follows the measurement, rather than the other way round. Tracked as bd
+/// er-effects-rs-hgfy.
+///
+/// Read, never acted on: nothing in `rules::hides` sees any of this.
+#[must_use]
+fn session_identity_of(player_ins: usize) -> Option<(usize, bool, bool, u8)> {
+    if !plausible_chr_ins(player_ins) {
+        return None;
+    }
+    let entry = unsafe {
+        er_game_base::mem::safe_read_usize(
+            player_ins + PLAYER_INS_SESSION_MANAGER_PLAYER_ENTRY_OFFSET,
+        )
+    }?;
+    if entry == 0 {
+        return None;
+    }
+    // SAFETY: a screen on the value, not a dereference -- the reads below all go through the
+    // fault-closed reader.
+    if !unsafe { is_heap_aligned_ptr(entry) } {
+        return None;
+    }
+    let is_host =
+        unsafe { er_game_base::mem::safe_read_u8(entry + SESSION_ENTRY_IS_HOST_OFFSET) }? != 0;
+    let is_local =
+        unsafe { er_game_base::mem::safe_read_u8(entry + SESSION_ENTRY_IS_LOCAL_PLAYER_OFFSET) }?
+            != 0;
+    let role =
+        unsafe { er_game_base::mem::safe_read_u8(entry + SESSION_ENTRY_PRE_CEREMONY_ROLE_OFFSET) }?;
+    Some((entry, is_host, is_local, role))
+}
+
+/// Write down one candidate's session identity, once per person.
+fn note_candidate_identity(owner: usize, candidate_chr_type: i32) {
+    let Some((entry, is_host, is_local, role)) = session_identity_of(owner) else {
+        return;
+    };
+    {
+        let mut seen = SEEN_CANDIDATE_ENTRIES
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if seen.contains(&entry) || seen.len() >= IDENTITY_CENSUS_LIMIT {
+            return;
+        }
+        seen.push(entry);
+    }
+    log_message(format_args!(
+        "census: candidate entry {entry:#x} chr_type={candidate_chr_type} is_host={is_host} \
+         is_local_player={is_local} pre_ceremony_role={role}. Read for the census only -- no rule \
+         consults any of it. `is_host` is what a chr_type of 0 cannot tell apart from a fellow \
+         invader."
+    ));
 }
 
 /// `GameMan::summonParamType` -- the multiplayer role the engine matched this session on, and the
