@@ -381,6 +381,14 @@ const PLAYER_INS_PLAYER_GAME_DATA_OFFSET: usize = 0x580;
 /// `MultiplayProperties` maps it to the `CharacterType` the engine would derive. It is the
 /// per-person answer to the question `chr_type` failed to answer under Seamless Co-op.
 const PLAYER_GAME_DATA_MULTIPLAY_ROLE_OFFSET: usize = 229;
+// `PlayerGameData+2705 usedInvasionItemType` was in this census and has been removed. The offset
+// is right -- `MultiplayType::GetByInvasionItemType` (1.16.2 `0x1401dafb0`) is `movzx edx, byte
+// ptr [rdx+0xa91]` and branches on 0, 1, 2 for `BloodyFinger`, `FesteringBloodyFinger` and
+// `Recusant` -- but the live readings were 161, 182 and 186 on three different people, none of
+// them a member of that enum. Seamless Co-op runs its own invasion plumbing and evidently never
+// writes the field, so the census was printing whatever the allocation happened to hold. A number
+// nobody can interpret is worse than an absent one: someone will read meaning into it.
+
 /// `PlayerGameData+152` -- the `CharacterType` the session recorded for this person, which need
 /// not agree with the `ChrIns::chr_type` the rule reads.
 ///
@@ -388,9 +396,6 @@ const PLAYER_GAME_DATA_MULTIPLAY_ROLE_OFFSET: usize = 229;
 /// `MultiplayProperties` table carries -1 on the invalid-sign row, so a byte read would report
 /// 255 for a value the game means as negative.
 const PLAYER_GAME_DATA_CHR_TYPE_OFFSET: usize = 152;
-/// `PlayerGameData+2705` -- the invasion item this person used, if any. A non-zero value names an
-/// invader directly.
-const PLAYER_GAME_DATA_INVASION_ITEM_TYPE_OFFSET: usize = 2705;
 /// `PlayerGameData+2288` -- whether this `PlayerGameData` belongs to the player at the keyboard.
 /// `er-player-name-filter` pins the same offset, which is what says this is the same struct.
 const PLAYER_GAME_DATA_IS_MAIN_PLAYER_OFFSET: usize = 2288;
@@ -431,7 +436,6 @@ struct SessionIdentity {
 struct GameDataIdentity {
     multiplay_role: u8,
     chr_type: i32,
-    invasion_item_type: u8,
     is_main_player: bool,
 }
 
@@ -479,9 +483,6 @@ fn game_data_identity_of(player_ins: usize) -> Option<GameDataIdentity> {
         }?,
         chr_type: unsafe {
             er_game_base::mem::safe_read_i32(data + PLAYER_GAME_DATA_CHR_TYPE_OFFSET)
-        }?,
-        invasion_item_type: unsafe {
-            er_game_base::mem::safe_read_u8(data + PLAYER_GAME_DATA_INVASION_ITEM_TYPE_OFFSET)
         }?,
         is_main_player: unsafe {
             er_game_base::mem::safe_read_u8(data + PLAYER_GAME_DATA_IS_MAIN_PLAYER_OFFSET)
@@ -615,8 +616,8 @@ fn note_identity(role: Role, chr_ins: usize, chr_type: i32) {
     };
     let game_data = match game_data_identity_of(chr_ins) {
         Some(data) => format!(
-            "multiplay_role={} game_data_chr_type={} invasion_item_type={} is_main_player={}",
-            data.multiplay_role, data.chr_type, data.invasion_item_type, data.is_main_player
+            "multiplay_role={} game_data_chr_type={} is_main_player={}",
+            data.multiplay_role, data.chr_type, data.is_main_player
         ),
         None => "player_game_data unreadable".to_owned(),
     };
