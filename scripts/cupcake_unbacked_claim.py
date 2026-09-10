@@ -54,6 +54,45 @@ _BASH_WRITE = re.compile(
 
 _WRITE_TOOLS = ("Edit", "Write", "NotebookEdit", "MultiEdit")
 
+# Punctuation that closes whatever came before it, so the next word begins a clause. Markdown
+# emphasis markers and the table pipe are in the set because this repo's prose is full of both.
+_CLAUSE_BREAK = set(".,;:!?()[]{}*_|\"'—–-\n")
+
+# Words that introduce a clause instead of being modified by one. Deliberately excludes the
+# relativizers "that", "which" and "who": those are the explicit spelling of the shape below.
+_CLAUSE_OPENER = {
+    "and", "but", "so", "or", "yet", "nor", "then", "because", "since", "after", "before",
+    "when", "while", "if", "once", "though", "although", "however", "therefore", "thus",
+    "meanwhile", "instead", "plus",
+}
+
+
+def _opens_a_clause(before: str) -> bool:
+    """True when a claim starting where `before` ends is asserting, not referring back.
+
+    Measured over 2,370 real turns on 2026-09-09, the first time this guard could fire at all: it hit
+    ten turns and nine of them read "the gate I wrote", "the staleness test I shipped", "the function
+    I hooked", "an importer I built". Those are relative clauses with the relativizer dropped, and
+    grammatically they do the opposite of what the guard is looking for -- they presuppose the
+    artifact as already given and go on to say something else about it, which is ordinary reporting
+    prose. Only "I wrote a cupcake guard" asserts the creation, and assertion is the whole violation.
+
+    The test is positional, not semantic: the pronoun must open its clause. Start of text, any
+    closing punctuation, or a conjunction before it means it does. An ordinary word before it means
+    the pronoun is inside a noun phrase, so the sentence refers rather than claims.
+    """
+    tail = before.rstrip()
+    if not tail:
+        return True
+    if tail[-1] in _CLAUSE_BREAK:
+        return True
+    return tail.split()[-1].lower().strip("".join(_CLAUSE_BREAK)) in _CLAUSE_OPENER
+
+
+def _asserts_completion(sentence: str) -> bool:
+    """True when the sentence carries a completion claim that opens its own clause."""
+    return any(_opens_a_clause(sentence[: m.start()]) for m in _CLAIM.finditer(sentence))
+
 
 def strip_quoted(text: str) -> str:
     """Remove fenced/backticked/quoted spans so quoting a claim cannot trip the guard."""
@@ -85,7 +124,7 @@ def claim_sentences(text: str) -> list[str]:
         sentence = raw.strip()
         if not sentence or _DISCLAIMED.search(sentence):
             continue
-        if _CLAIM.search(sentence) and _ARTIFACT.search(sentence):
+        if _asserts_completion(sentence) and _ARTIFACT.search(sentence):
             hits.append(" ".join(sentence.split())[:220])
     return hits
 

@@ -1,0 +1,4 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "why did the re-invade not fire"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "name": "Bash", "id": "t1", "input": {"command": "sed -n '1,40p' crates/er-invasion-warp/src/local_invasion_filter.rs"}}]}}
+{"type": "user", "message": {"role": "user", "content": [{"tool_use_id": "t1", "type": "tool_result", "content": [{"type": "text", "text": "ok"}]}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "The gate cannot say anything until it runs again; the next run's log will say whether the adopted object was used."}]}}

@@ -1,0 +1,2 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "did the animation change land?"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "The short animation is proven -- the DLL loaded and the address translated."}]}}
