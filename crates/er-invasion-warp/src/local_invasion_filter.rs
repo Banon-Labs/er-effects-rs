@@ -3064,6 +3064,23 @@ fn note_session_liveness(ersc_state: Option<u32>, lobby: u32, protocol: u32) {
         LIVENESS_STALE_SAMPLES.store(0, Ordering::SeqCst);
         return;
     };
+    // A session Seamless handed over is never judged by this heuristic. `OSM` is only ever set by
+    // `capture_osm`, which requires `+0x58` to lead to an object carrying a live session state --
+    // so the pointer came from Seamless calling its own action, not from a scan guessing. The
+    // heuristic exists to disown a GUESS, and applying it to a handed-over pointer disowns the
+    // real thing.
+    //
+    // Measured on run `br-20260910-003946-b9b0`, which adopted the real object at
+    // `OSM=0x466ad518 session=0x466ac930`: the session sat at state `0x16` while the engine's
+    // lobby/protocol advanced, this heuristic called it "not a session" four times, and the log
+    // recorded `0x16 -> 0x23 CANCELLING -- held 5995 ticks / 181264ms` and again `8873 ticks /
+    // 215212ms`. `0x16` is a state the real session genuinely holds for the length of an invasion
+    // -- Frida saw the same session enter the `0x24` writer with `state_on_entry=0x16` -- so a
+    // multi-minute stay there is a player fighting, not a dead pointer.
+    if OSM.load(Ordering::SeqCst) != 0 {
+        LIVENESS_STALE_SAMPLES.store(0, Ordering::SeqCst);
+        return;
+    }
     let engine = ((lobby as usize) << 16) | (protocol as usize);
     let previous_engine = LIVENESS_LAST_ENGINE.swap(engine, Ordering::SeqCst);
     let previous_state = LIVENESS_LAST_STATE.swap(state as usize, Ordering::SeqCst);
