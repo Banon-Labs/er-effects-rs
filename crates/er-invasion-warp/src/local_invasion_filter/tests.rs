@@ -904,6 +904,53 @@ fn the_auto_search_arms_on_the_invade_transition_not_on_merely_being_busy() {
     );
 }
 
+/// The recovery loop must not re-arm against an invade action it cannot call.
+///
+/// Measured twice on live runs -- 6056 restart lines with `rearmed=0` on 2026-09-08 and 7523 on
+/// 2026-09-09 -- both times because `ersc_action` returned `None` inside `drive_pending_reinvade`,
+/// which clears the flag and returns without a word, so the next tick re-armed having learned
+/// nothing. The probe has to sit where the arming decision is, and the report has to be once per
+/// change or it is 6061 identical lines instead of one.
+#[test]
+fn the_recovery_loop_probes_the_invade_action_before_re_arming() {
+    let source = include_str!("../local_invasion_filter.rs");
+    let recovery = source
+        .split_once("fn arm_self_recovery(")
+        .expect("self-recovery exists")
+        .1
+        .split_once("\n}")
+        .expect("self-recovery body")
+        .0;
+    let probe = recovery
+        .find("invade_action_callable")
+        .expect("the re-arm is gated on the action being callable");
+    let arm = recovery
+        .find("PENDING_REINVADE.store(true")
+        .expect("the re-arm sets the pending flag");
+    assert!(
+        probe < arm,
+        "the probe must come BEFORE the arming, or the tick that learns the action is uncallable \
+         has already queued a restart that nothing can consume"
+    );
+    let callable = source
+        .split_once("fn invade_action_callable(")
+        .expect("the probe exists")
+        .1
+        .split_once("\n}\n")
+        .expect("probe body")
+        .0;
+    assert!(
+        callable.matches("INVADE_ACTION_UNCALLABLE.swap(").count() == 2,
+        "the latch must report BOTH directions with a swap -- a load-then-store would log every \
+         tick, and a one-way latch leaves a recovered session looking dead"
+    );
+    assert!(
+        callable.contains("inside_ersc_callback"),
+        "a thread inside an ersc callback is a temporary refusal, not a broken build; latching on \
+         it would stand the hunt down for the session over one badly-timed tick"
+    );
+}
+
 #[test]
 fn starting_or_ending_an_invasion_attempt_invalidates_the_pin_cache() {
     // The coupling that makes the dim appear on a map that is already open. `restyle_live_pins`
@@ -1569,4 +1616,141 @@ fn a_rejection_arms_the_pending_cancel_rather_than_driving_it_where_it_is_judged
     let armed = armed.expect("the newer rejection replaced the older one");
     assert_eq!(armed.destination, 0x12000000);
     assert!(!armed.notice);
+}
+
+/// Discarding a wrong shape-scan guess must not delete the differential snapshot.
+///
+/// The two answer different questions about different pointers. `invalidate_cached_session` is
+/// called when a latched candidate proves it cannot be a session; the snapshot is a list of
+/// addresses that read idle a moment ago, and no discovery about some other pointer can falsify
+/// that. Losing it costs the invasion it was collected for, because it can only be taken while
+/// the session is idle -- so once a join has started there is no way to rebuild it.
+///
+/// Measured on run br-20260909-194041-6558: the sweeper armed the scan with 12,129 candidates, the
+/// shape scan latched `0xce40038`, the liveness check discarded it and came through here, and the
+/// player's invasion seconds later found an empty list. The rejection was reported
+/// `MenuNeverOpened` and the invasion landed in the wrong block.
+#[test]
+fn discarding_a_bad_shape_guess_keeps_the_differential_snapshot() {
+    let source = include_str!("session_scan.rs");
+    let body = source
+        .split_once("pub(super) fn invalidate_cached_session() {")
+        .expect("the invalidation exists")
+        .1
+        .split_once("\n}")
+        .expect("its body")
+        .0;
+    assert!(
+        !body.contains("differential_scan::"),
+        "invalidating the cached session must not touch the differential scan -- it is independent \
+         evidence, and it cannot be retaken once a join is under way:\n{body}"
+    );
+}
+
+/// A differential scan with nothing recorded has to say so.
+///
+/// The silent early return is what made the failure above invisible for a whole run: the log went
+/// from `differential scan armed -- 12129 object(s)` straight to `cannot cancel -- MenuNeverOpened`
+/// with nothing in between, so the message the reader got named a menu for a fault that had
+/// nothing to do with one.
+#[test]
+fn an_empty_differential_scan_reports_itself() {
+    let source = include_str!("differential_scan.rs");
+    let body = source
+        .split_once("pub(super) fn narrow_to_changed(abi: &ersc::Abi) -> Option<usize> {")
+        .expect("the narrowing exists")
+        .1
+        .split_once("\n    let before = candidates.len();")
+        .expect("its empty-list guard comes before the retain")
+        .0;
+    assert!(
+        body.contains("standalone_log"),
+        "an empty candidate list must be logged where it is discovered:\n{body}"
+    );
+}
+
+/// The sweeper must not retire on a session it could not prove.
+///
+/// A bare hit -- a session with no owner -- is what the shape scan produces almost every time, and
+/// it has been a look-alike on five separate runs. Returning on it ends the sweeper thread for the
+/// life of the process, which silently disables every later pass: the owner scan, the differential
+/// re-arm, and any narrowing a subsequent join could have supplied.
+///
+/// Measured on run br-20260909-202153-5a46: a join took 12,493 differential candidates down to 8,
+/// and `owner scan over` was never written, because the thread that would have run it had exited
+/// at boot on `0xbdd0038` -- a pointer that read idle through the whole join.
+#[test]
+fn the_sweeper_does_not_retire_on_a_session_with_no_owner() {
+    let source = include_str!("session_scan.rs");
+    let body = source
+        .split_once("fn sweep_until_answered(")
+        .expect("the sweeper exists")
+        .1;
+    let bare = body
+        .split_once("if owner != 0 {")
+        .expect("the owner check exists")
+        .1
+        .split_once("await_sweep_request")
+        .expect("the bare-session arm waits for another request rather than returning")
+        .0;
+    assert!(
+        !bare.contains("return;") || bare.matches("return;").count() == 1,
+        "only the proven arm may return; the bare-session arm has to keep the loop alive:\n{bare}"
+    );
+}
+
+/// The externally-requested search must not demand a pointer the shipping build can never hold.
+///
+/// `OSM` is written only by a detour on `ersc.dll`, and every such detour is disabled because
+/// installing one faults the game at `eldenring.exe+0x10043`. Gating the request on it meant the
+/// export reported "nothing to drive" in exactly the configuration it ships in, while the drive
+/// path underneath was able to run the whole time -- `ersc_owner_or_refuse` synthesizes a `this`
+/// when no menu object was captured, and needs only a session to put inside it.
+#[test]
+fn requesting_a_search_asks_for_a_session_not_a_hooked_menu_object() {
+    let source = include_str!("../local_invasion_filter.rs");
+    let body = source
+        .split_once("pub fn request_invade() -> bool {")
+        .expect("the export's backing function exists")
+        .1
+        .split_once("\n}")
+        .expect("its body")
+        .0;
+    assert!(
+        body.contains("resolve_session()"),
+        "the precondition has to be a resolvable session:\n{body}"
+    );
+    assert!(
+        !body.contains("OSM.load("),
+        "gating on the hooked menu object closes the gate permanently under the shipping \
+         configuration:\n{body}"
+    );
+}
+
+/// A session at rest is idle, and discovery must say so in both directions.
+///
+/// The join-in-flight arm has been there since the scan started accepting a state field at all: a
+/// real session is never idle during a join, so an idle candidate is refused then. The other half
+/// was missing, and it is the same argument run backwards -- with no join in flight there is
+/// nothing for a session to be doing, so a candidate reading `searching` or `cancelling` while the
+/// player stands still is holding a constant rather than a state.
+///
+/// Measured on run br-20260909-213454-2c38: `0x11500038` was resolved out of ERSC's own writable
+/// data reading `0x23 cancelling`, with no search anywhere in the session. Every drive through it
+/// was then declined, correctly, because the invade action only runs from idle -- so a useless
+/// pointer held the cache while the sweeper had stopped looking.
+#[test]
+fn discovery_refuses_a_busy_candidate_while_nothing_is_happening() {
+    let code = product_code();
+    let body = code
+        .split_once("fn identifies_a_session(")
+        .expect("identifies_a_session must exist")
+        .1
+        .split_once("\n}")
+        .expect("a function body")
+        .0;
+    assert!(
+        body.contains("!JOIN_IN_FLIGHT.load(Ordering::SeqCst) && state != abi.state_idle"),
+        "discovery has to refuse a candidate that is busy while no join is in flight:\n{body}"
+    );
 }

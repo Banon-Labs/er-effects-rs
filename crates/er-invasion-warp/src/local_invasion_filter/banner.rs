@@ -19,6 +19,9 @@ use super::{NOTICE_FAILED, REJECT_NOTICE, RejectReason};
 #[cfg(not(windows))]
 pub(super) fn announce_rejection(_enabled: bool, _destination: u32, _reason: RejectReason) {}
 
+#[cfg(not(windows))]
+pub(super) fn announce_verdict(_enabled: bool, _destination: u32, _reason: RejectReason) {}
+
 /// Host-side stub.
 #[cfg(not(windows))]
 pub(super) fn announce_arrival(_enabled: bool, _destination: u32) {}
@@ -139,3 +142,48 @@ pub(super) fn announce_rejection(enabled: bool, destination: u32, reason: Reject
         ));
     }
 }
+
+/// Say, the moment a match is judged, that it is not one the filter wanted.
+///
+/// # Why this is separate from [`announce_rejection`]
+///
+/// Because the verdict and the enforcement are two facts and one banner cannot carry both without
+/// lying about one of them. That has now been got wrong in both directions on live sessions:
+/// announcing "Rejected" at the verdict told the player an invasion had been stopped when the
+/// cancel then failed and it proceeded (2026-09-04), and moving the banner behind a successful
+/// cancel meant an uncancellable rejection showed nothing at all, which reads exactly like the mod
+/// not being loaded (2026-09-09).
+///
+/// So this one states only what is certainly true at the instant it fires -- this match is not
+/// local -- and never claims anything was stopped. `announce_rejection` still fires from
+/// `drive_pending_cancel` when a cancel actually lands, and that one may say so.
+///
+/// Deduplicated by destination, because a rejection is judged once but the tick can revisit it.
+#[cfg(windows)]
+pub(super) fn announce_verdict(enabled: bool, destination: u32, reason: RejectReason) {
+    if !enabled {
+        return;
+    }
+    if LAST_VERDICT_BLOCK.swap(destination, Ordering::SeqCst) == destination {
+        return;
+    }
+    let place = crate::place_name::place_name_for_block(destination)
+        .unwrap_or_else(|| format!("{destination:#010x}"));
+    // Short because the announce field is 1728px wide and the first attempt at a message like this
+    // measured 1729px, so it was placed successfully and never rendered.
+    let text = format!("Not local: {place}");
+    // SAFETY: game thread, inside the join-data hook -- the context `announce_rejection` shows
+    // from, and `show` byte-checks both game functions before using them.
+    if !unsafe { crate::announce::show(&text) } {
+        if NOTICE_FAILED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        crate::standalone_log(format_args!(
+            "local-invasion: could not show the verdict banner (\"{text}\") -- reason {reason:?}"
+        ));
+    }
+}
+
+/// The last destination a verdict banner named, so a re-judged match does not repeat it.
+#[cfg(windows)]
+static LAST_VERDICT_BLOCK: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);

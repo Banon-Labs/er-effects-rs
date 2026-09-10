@@ -301,6 +301,26 @@ unsafe extern "system" fn open_choices_hook(dialog: usize, b: usize, c: usize, d
         .load(Ordering::SeqCst)
         .wrapping_sub(SHOW_R14_INTERIOR_OFFSET);
     let adopted = crate::local_invasion_filter::menu_object::adopt_menu_object(menu_object);
+    // A hunt in flight means this menu is the player reaching for CANCEL, so it must be shown.
+    //
+    // Measured complaint, run br-20260910-012230-666e: the same item both starts and cancels a
+    // search, and with the auto-loop running the session reads `0x01` idle for the instant between
+    // our cancel and our re-invade. The gate saw idle, declined the dialog, and drove yet another
+    // search -- so every attempt to cancel started one instead, and there was no point at which
+    // the player could stop.
+    //
+    // Standing the loop down here is the same rule `show_observer` already applies to Seamless's
+    // own menu: opening it is a deliberate act and it hands control back.
+    if crate::local_invasion_filter::auto_search_armed() {
+        crate::local_invasion_filter::stand_down_auto_search();
+        POPUPS_PASSED.fetch_add(1, Ordering::SeqCst);
+        let orig = ORIG_OPEN_CHOICES.load(Ordering::SeqCst);
+        if orig == 0 {
+            return 0;
+        }
+        // SAFETY: the union stored the trampoline for this exact target.
+        return unsafe { core::mem::transmute::<usize, er_hook::UnionFn>(orig)(dialog, b, c, d) };
+    }
     let (idle, source) = crate::local_invasion_filter::popup_skip_gate_is_idle();
     if idle {
         POPUPS_SKIPPED.fetch_add(1, Ordering::SeqCst);

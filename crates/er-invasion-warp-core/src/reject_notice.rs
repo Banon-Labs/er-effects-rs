@@ -40,17 +40,17 @@ pub const fn reason_phrase(reason: RejectReason) -> &'static str {
         // contradicts what the player can see: reported live 2026-09-08, standing in The First
         // Step, the banner read `Rejected The First Step (elsewhere)`. The place was right; the
         // world was not, and that is what the phrase has to say.
-        // The action, not the geography. Both of these are matches the mod cancelled, and that is
-        // the question the player actually had: read live on 2026-09-08, "Rejected The First Step
-        // (elsewhere)" named the ground under their feet and then called it somewhere else, and
-        // they asked "do we mean we cancelled?" -- which is exactly what it meant.
+        // The world, not the action. "cancelled" was tried here and is worse than what it
+        // replaced: the banner already opens with `Rejected`, so the second word repeated the
+        // action and left the one fact the player cannot see -- which world -- unsaid. Reported
+        // live 2026-09-09 as unreadable, from a session where it fired eight times.
         //
         // A wrong block is routinely the same place in another player's world, so no wording built
         // on geography can be both short and unconfusing here; "another world" and "not this one"
         // were each tried and each needed explaining. The other reasons below stay distinct
         // because they lead to different actions -- move, un-exclude, open the map -- while these
         // two lead to the same one: keep hunting.
-        RejectReason::WrongBlock | RejectReason::WrongPlaceName => "cancelled",
+        RejectReason::WrongBlock | RejectReason::WrongPlaceName => "another world",
         RejectReason::NotNamed => "not on your list",
         // Actionable in a way the others are not: the map has not been opened, so no destination
         // has a name and everything fails closed. Saying "unnamed" would read as the game's fault.
@@ -246,10 +246,12 @@ mod tests {
     /// then calling it somewhere else.
     #[test]
     fn a_wrong_block_is_reported_as_another_world_not_as_elsewhere() {
-        // Both say what the mod did. That is the half the player asked for out loud, and the half
-        // no amount of geography was supplying.
+        // The name of this test is the contract, and for a while the assertion under it read
+        // "cancelled" while the name promised "another world" -- a test that could never fail and
+        // never tell the truth. The banner already opens with `Rejected`, so a second word for the
+        // same action says nothing; the fact the player cannot see is which world it was.
         for reason in [RejectReason::WrongBlock, RejectReason::WrongPlaceName] {
-            assert_eq!(reason_phrase(reason), "cancelled");
+            assert_eq!(reason_phrase(reason), "another world");
         }
         // The reasons that lead somewhere else must stay distinguishable, or this has traded one
         // confusion for a worse one: these three each ask the player to do a different thing.
@@ -292,7 +294,7 @@ mod tests {
              and the id is the part a player cannot read: {text}"
         );
         assert!(
-            text.contains("cancelled"),
+            text.contains("another world"),
             "still says what happened: {text}"
         );
     }

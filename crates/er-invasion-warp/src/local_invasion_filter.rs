@@ -276,6 +276,24 @@ static CONFIG: Mutex<Option<HotConfig>> = Mutex::new(None);
 /// game, not on Seamless.
 static ORIG_SET_JOIN_DATA: AtomicUsize = AtomicUsize::new(0);
 
+/// Trampoline to the original `CS::CSSessionManager::JoinSession`.
+static ORIG_JOIN_SESSION: AtomicUsize = AtomicUsize::new(0);
+
+/// Install-once latch for the join refusal.
+static JOIN_SESSION_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+
+/// Set by a `Verdict::Reject` and consumed by the very next `JoinSession`, which the game makes 87
+/// bytes later in the same caller.
+///
+/// It is a one-shot rather than a mode: `SosSignMan::JoinSession` calls `SetMultiplayJoinData` and
+/// then `CSSessionManager::JoinSession` with nothing between them that can fail, so a latch set at
+/// the judgement is consumed by the join it was set for. Anything that reaches the join without
+/// passing the judgement -- a co-op sign, a summon, the player's own quickmatch -- finds it clear.
+static REFUSE_NEXT_JOIN: AtomicBool = AtomicBool::new(false);
+
+/// How many joins have been refused before the RPC was sent.
+static JOINS_REFUSED: AtomicUsize = AtomicUsize::new(0);
+
 /// Install-once latch. The installer runs from the recurring game task rather than `DllMain`
 /// because MinHook must not run under the loader lock.
 static JOIN_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
@@ -1741,6 +1759,12 @@ pub fn judge_incoming_match(join_data: usize) {
             // time: this match is not local. Whether Seamless could be driven to drop it is the
             // second fact, and `drive_pending_cancel` still owns it.
             banner::announce_verdict(config.reject_notice, destination, reason);
+            // Refuse the join itself rather than cancel it afterwards. `SosSignMan::JoinSession`
+            // calls this seam and then `CSSessionManager::JoinSession`; once that second call has
+            // run, `lobbyState` is `Joining` and the engine parks any disconnect request until the
+            // Steam RPC resolves on its own -- 30.2s and 30.3s on the two rejections of run
+            // br-20260910-012622-fd23 whose RPC never came back. See `CS_SESSION_MANAGER_JOIN_SESSION`.
+            REFUSE_NEXT_JOIN.store(true, Ordering::SeqCst);
             arm_pending_cancel(destination, reason, config.reject_notice);
         }
     }
@@ -2159,6 +2183,21 @@ fn cancel_match(reason: RejectReason) -> bool {
         session_scan::invalidate_cached_session();
         return false;
     }
+    // Nothing is refused here, and the reading that looked like it should refuse does not.
+    //
+    // Measured on run br-20260910-012622-fd23: four cancels, each driven immediately after a
+    // `join-progress` line, and all four of those lines read `Progressing`. Two settled in ~1.6s
+    // and two took ~30.2s, so that verdict does not separate them and a guard on it would have
+    // refused every cancel this filter has ever driven. `JOIN_IN_FLIGHT` is worse still: it is set
+    // on every match and cleared in exactly one place, `lobby_state::CLIENT`, which is the moment
+    // a join LANDS -- a match this filter rejects never lands, so gating on it refuses the cancel
+    // forever rather than for a tick.
+    //
+    // The 30s is not spent deciding whether to cancel; it is spent inside `0x23` afterwards. The
+    // two fast cancels passed through `lobby=7 proto=1 joinCheck=30.0 -> proto=2 joinCheck=29.7`
+    // and left 0x23 three tenths of a second into that countdown; the two slow ones never reached
+    // `lobby=7` at all and sat out its full 30.0s. `joinCheck`/`waitInit` are f32 seconds, which is
+    // why no `30000` immediate was ever found in ersc's `.text`.
     let _call = OurCall::enter();
     unsafe { cancel(owner, 0, 1, 1) };
     drop(_call);
@@ -2167,16 +2206,27 @@ fn cancel_match(reason: RejectReason) -> bool {
     // Search again once the session settles. Armed here, fired from the tick -- ERSC's own tick
     // does not run while the session is idle, which is why the frida attempt to re-invade from
     // inside an ERSC callback never fired.
-    if AUTO_SEARCH_ARMED.load(Ordering::SeqCst) {
-        PENDING_REINVADE.store(true, Ordering::SeqCst);
-    }
+    //
+    // The arm is UNCONDITIONAL, and that is the fix for the complaint that a rejection ends the
+    // hunt: cancelling a match this filter rejected IS the hunt, whoever started the search.
+    //
+    // It used to require `AUTO_SEARCH_ARMED` to already be true, and that flag is set in exactly
+    // one other place -- the state tracker, on sampling the `0x01 -> 0x0e` edge. That edge took
+    // 38ms on run br-20260909-233549-72f5, which is inside one tick at 40fps, so it is missable;
+    // and a search Seamless started from its own menu never produces it for us at all. Measured on
+    // run br-20260910-011752-2910: `REJECT 0x0b000000 (WrongBlock)` followed immediately by
+    // `cancelled rejected match (#1) -- ... auto re-search is disarmed, so this stops here`. The
+    // player then watched the invasion item time out and had to use it again, which is not a delay
+    // before the next search -- it is no next search at all.
+    //
+    // Standing the loop down stays possible and stays the player's call: opening Seamless's own
+    // menu clears the flag (`show_observer`), and that is a deliberate act, unlike a sampling miss.
+    AUTO_SEARCH_ARMED.store(true, Ordering::SeqCst);
+    PENDING_REINVADE.store(true, Ordering::SeqCst);
     crate::standalone_log(format_args!(
-        "local-invasion: cancelled rejected match (#{fired}) -- session returns to idle{}",
-        if AUTO_SEARCH_ARMED.load(Ordering::SeqCst) {
-            " and the search restarts automatically"
-        } else {
-            "; auto re-search is disarmed, so this stops here"
-        }
+        "local-invasion: cancelled rejected match (#{fired}) -- session returns to idle and the \
+         search restarts automatically. Press Cancel search yourself, or open Seamless's own menu, \
+         to stand the loop down."
     ));
     true
 }
@@ -2262,6 +2312,9 @@ pub fn drive_invade_inline(why: &str) -> bool {
     // `ersc_owner_or_refuse` validated, on the thread Seamless is already on.
     unsafe { invade(owner, 0, 1, 1) };
     drop(_call);
+    // Same reason as `drive_invade_with_owner`: a search this DLL drove is one it watched
+    // begin, so it owns the loop rather than hoping the tracker samples the edge.
+    AUTO_SEARCH_ARMED.store(true, Ordering::SeqCst);
     note_state_after_our_action(session, why);
     crate::standalone_log(format_args!(
         "local-invasion: started the search inline ({why}) on the calling thread -- one entrant,          so it cannot contend with the game's own goods path the way an armed request did"
@@ -2722,6 +2775,26 @@ pub fn menu_object_session_is_idle() -> bool {
     read_session_state(abi, session).is_some_and(|state| state == abi.state_idle)
 }
 
+/// Whether the auto re-search loop is running.
+///
+/// The popup skip asks, because a player opening the invasion item while a hunt is in flight is
+/// reaching for Cancel, not for another search.
+#[must_use]
+pub fn auto_search_armed() -> bool {
+    AUTO_SEARCH_ARMED.load(Ordering::SeqCst)
+}
+
+/// Stand the auto re-search loop down, because the player asked for the menu.
+pub fn stand_down_auto_search() {
+    if AUTO_SEARCH_ARMED.swap(false, Ordering::SeqCst) {
+        PENDING_REINVADE.store(false, Ordering::SeqCst);
+        crate::standalone_log(format_args!(
+            "local-invasion: you opened the invasion item's own menu -- auto re-search stood down, \
+             so the row in front of you is Seamless's and nothing here will act while you decide"
+        ));
+    }
+}
+
 /// The gate the popup skip actually calls: the menu object's own session when Seamless has handed
 /// one over, and otherwise the filter's non-detour resolution.
 ///
@@ -2745,6 +2818,19 @@ pub fn popup_skip_gate_is_idle() -> (bool, &'static str) {
             menu_object_session_is_idle(),
             "the menu object Seamless handed over",
         );
+    }
+    // A discard that happened BEFORE the menu object arrived says nothing about the object that
+    // arrived after it. The latch exists to distrust a SCANNED pointer once the scan has been
+    // wrong; `OSM` is not a scan result -- `capture_osm` only stores a pointer whose `+0x58` leads
+    // to an object carrying a live session state, handed over by Seamless calling its own action.
+    //
+    // Without this the latch is a run-long death sentence for the popup skip: the scan is running
+    // from boot and discards long before the player first opens the item, so by the time the real
+    // object is adopted the fallback is already disabled and `popup_skip_gate_is_idle` answers
+    // "nothing trustworthy" for the rest of the session. That is a bug this module introduced on
+    // 2026-09-09 in the same change that added the latch.
+    if OSM.load(Ordering::SeqCst) != 0 {
+        SESSION_EVER_DISCARDED.store(0, Ordering::SeqCst);
     }
     if SESSION_EVER_DISCARDED.load(Ordering::SeqCst) != 0 {
         return (
@@ -2851,6 +2937,76 @@ fn prologue_matches(address: usize, expected: &[u8]) -> bool {
 // Installation
 // ---------------------------------------------------------------------------------------------
 
+/// `CS::CSSessionManager::JoinSession(this, MultiplayType, FnVector<byte>* lobbyIds, int limit)`.
+///
+/// Returns `false` without issuing the Steam join RPC when the match was just rejected, and calls
+/// the original otherwise. Refusing here is what makes a rejection instant: after the original has
+/// run there is no path back that does not wait out the RPC.
+#[cfg(windows)]
+unsafe extern "system" fn join_session_hook(a: usize, b: usize, c: usize, d: usize) -> usize {
+    if REFUSE_NEXT_JOIN.swap(false, Ordering::SeqCst) {
+        let refused = JOINS_REFUSED.fetch_add(1, Ordering::SeqCst) + 1;
+        crate::standalone_log(format_args!(
+            "local-invasion: refused the join before the RPC was sent (#{refused}) -- the engine \
+             stays at its current lobby state with nothing outstanding, so the search resumes \
+             without the 30s the parked disconnect would have cost"
+        ));
+        return 0;
+    }
+    let orig = ORIG_JOIN_SESSION.load(Ordering::SeqCst);
+    if orig == 0 {
+        return 0;
+    }
+    // SAFETY: the union stored the trampoline for this exact target.
+    unsafe { core::mem::transmute::<usize, er_hook::UnionFn>(orig)(a, b, c, d) }
+}
+
+/// Hook `CS::CSSessionManager::JoinSession`. Idempotent; returns 1 on success.
+///
+/// Its absence is not fatal the way `install_join_hook`'s is: without it a rejection still cancels
+/// through Seamless, it just costs the player the engine's own 30s wait.
+#[cfg(windows)]
+fn install_join_session_hook() -> usize {
+    if JOIN_SESSION_HOOK_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
+        return 0;
+    }
+    let seam = crate::map_seams::CS_SESSION_MANAGER_JOIN_SESSION;
+    let address = match unsafe { crate::map_seams::verify_seam(&seam) } {
+        Ok(address) => address,
+        Err(error) => {
+            crate::standalone_log(format_args!(
+                "local-invasion: {error} -- rejections will still cancel, but each one costs the \
+                 engine's own 30s join wait"
+            ));
+            return 0;
+        }
+    };
+    match unsafe {
+        er_hook::register_union_hook(
+            address,
+            join_session_hook as er_hook::UnionFn,
+            &ORIG_JOIN_SESSION,
+        )
+    } {
+        Ok(()) => {
+            crate::standalone_log(format_args!(
+                "local-invasion: refusing rejected joins at {} @0x{address:x} (the seam's own \
+                 address; the HOOK TRANSLATED line above names where the detour went)",
+                seam.name
+            ));
+            1
+        }
+        Err(status) => {
+            crate::standalone_log(format_args!(
+                "local-invasion: union registration for {} failed: {status:?} -- rejections fall \
+                 back to cancelling after the join, which costs 30s when the RPC does not resolve",
+                seam.name
+            ));
+            0
+        }
+    }
+}
+
 /// Hook `CS::SosSignMan::SetMultiplayJoinData`. Idempotent; returns 1 on success.
 ///
 /// This is the hook that makes the feature exist. Without it the filter never sees a match and the
@@ -2930,6 +3086,7 @@ pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
     // resolvable still reflects the frames that actually passed.
     TICKS.fetch_add(1, Ordering::SeqCst);
     install_join_hook();
+    install_join_session_hook();
     // The two detours this DLL places inside `ersc.dll`, both withheld by one key. Read once per
     // tick rather than cached at attach, because the config is re-read when a match arrives and a
     // player mid-A/B should not have to restart the game to move the switch.
@@ -3124,6 +3281,14 @@ fn note_session_liveness(ersc_state: Option<u32>, lobby: u32, protocol: u32) {
 /// cleared: once the scan has been wrong once, its later answers are not trustworthy enough to
 /// suppress a dialog on.
 static SESSION_EVER_DISCARDED: AtomicUsize = AtomicUsize::new(0);
+
+/// `session+0x238` -- an f64 in the upper half of the qword, advancing once per frame while the
+/// session sits in a state. Measured climbing 0.386s -> 14.1s across one stuck `0x23` on run
+/// br-20260910-012230-666e.
+const SESSION_COOLDOWN_OFFSET: usize = 0x238;
+/// The last whole second reported for that clock, so it is logged once a second rather than once
+/// a frame.
+static COOLDOWN_LAST_WHOLE_SECOND: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 /// Engine samples with an unchanged session state before the cache is discarded. The measured
 /// runs showed nine in a row, so four is decisive without being twitchy.
@@ -3347,6 +3512,36 @@ fn trace_session_field_writes(seamless: SeamlessSession) {
     let state =
         unsafe { er_game_base::mem::safe_read_i32(session + seamless.abi.session_state_offset) }
             .unwrap_or(-1);
+    // `+0x238` alone is not a field change worth a line: it is a CLOCK, and it ticks once a frame.
+    //
+    // Measured on run br-20260910-012230-666e, where the second cancel stuck at 0x23 and this
+    // logger wrote one line per tick for the whole wait. The upper half of the qword decodes as an
+    // f64 running 0.386 -> 0.443 -> ... -> 14.1 seconds and still climbing, one step per tick, so
+    // the "change" is a cooldown advancing normally rather than anything a reader needs told 500
+    // times. Reporting it as a cooldown once a second says strictly more in 1/40th the lines.
+    if changed.len() == 1 && changed[0].0 == SESSION_COOLDOWN_OFFSET {
+        let seconds = f64::from_bits(changed[0].2 & 0xffff_ffff_0000_0000);
+        let whole = seconds as usize;
+        if COOLDOWN_LAST_WHOLE_SECOND.swap(whole, Ordering::SeqCst) != whole {
+            // The meaning is per-state and must not be asserted across all of them. This line
+            // first fired at state 0x16 saying "this is the wait the player sees after a cancel",
+            // which is false there -- 0x16 is being IN an invasion, and its clock is how long the
+            // player has been fighting.
+            let meaning = if state == seamless.abi.state_cancelling as i32 {
+                "an armed re-invade waits for idle, so this clock is the wait after a cancel"
+            } else if state == seamless.abi.state_searching as i32 {
+                "this clock is how long the search has been running"
+            } else {
+                "what this clock measures in this state has not been established"
+            };
+            crate::standalone_log(format_args!(
+                "local-invasion: the session has been in state {state:#04x} for {whole}s -- \
+                 `session+0x{SESSION_COOLDOWN_OFFSET:x}` is a clock, not a field change, and it \
+                 advances once a frame. {meaning}."
+            ));
+        }
+        return;
+    }
     let line = SESSION_FIELD_LINES.fetch_add(1, Ordering::SeqCst) + 1;
     crate::standalone_log(format_args!(
         "local-invasion: session fields changed at state {state:#04x} -- {changed:x?} \
