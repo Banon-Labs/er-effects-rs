@@ -304,10 +304,10 @@ pub(super) fn cached_scan_for_session(
 /// the filter still unable to drive ERSC -- measured on run br-20260910-171939-d923, which
 /// adopted `0x868728b8` six times and never once looked for what holds it.
 ///
-/// A proven session makes that search EASIER, not unnecessary. [`owner_among`] asks which of a
+/// A proven session makes that search easier, not unnecessary. [`owner_among`] asks which of a
 /// candidate set some other object holds at `+ NEXT_OBJECT_OFFSET`, and its weakness is a wide
 /// set: 13,221 of 13,223 idle-shaped objects had a holder on run br-20260909-211819-87a5, so the
-/// test says nothing when asked of everything. Asked of ONE proven address it has no such
+/// test says nothing when asked of everything. Asked of one proven address it has no such
 /// weakness -- the answer is a holder or nothing.
 #[cfg(windows)]
 pub(super) fn adopt_proven_session(session: usize) {
