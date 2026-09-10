@@ -59,6 +59,53 @@ fn the_no_skill_ash_is_an_ash_and_is_mounted() {
     );
 }
 
+/// Two rows of one armour part can both claim to be worn; the `equipIndex` cache decides.
+///
+/// The payload for `1fb907af574a44` lists, for every part, the piece the build wears with both
+/// `equipSet: [1]` and `equipIndex: 1`, plus a second row at `order 0` carrying `equipSet: [1]`
+/// and no cache. Claims are settled `FirstWins` in `order`, so the phantom took all four parts
+/// and the character came out in the wrong armour entirely.
+#[test]
+fn a_second_armour_row_without_the_equip_index_cache_does_not_win() {
+    let doc = model::parse(
+        r#"{"protectors":{"head":{"slots":[
+             {"name":"High Priest Hat","order":0,"equipSet":[1]},
+             {"name":"Divine Beast Helm","order":4,"equipSet":[1],"equipIndex":1}
+           ]}}}"#,
+    )
+    .expect("parses");
+    let plan = er_build_import_core::equip::equip_plan(
+        &doc,
+        &fixture_catalog::catalog(),
+        er_build_import_core::equip::Capacity::default(),
+    );
+    assert_eq!(
+        plan.head.as_ref().map(|worn| worn.name.as_str()),
+        Some("Divine Beast Helm"),
+        "the row carrying the active set's equipIndex is the one the build wears"
+    );
+}
+
+/// A payload whose only worn row has no cache is untouched by that preference.
+#[test]
+fn one_armour_row_without_a_cache_is_still_worn() {
+    let doc = model::parse(
+        r#"{"protectors":{"head":{"slots":[
+             {"name":"High Priest Hat","order":0,"equipSet":[1]}
+           ]}}}"#,
+    )
+    .expect("parses");
+    let plan = er_build_import_core::equip::equip_plan(
+        &doc,
+        &fixture_catalog::catalog(),
+        er_build_import_core::equip::Capacity::default(),
+    );
+    assert_eq!(
+        plan.head.as_ref().map(|worn| worn.name.as_str()),
+        Some("High Priest Hat")
+    );
+}
+
 #[test]
 fn every_referenced_item_resolves() {
     let (_, result) = planned();

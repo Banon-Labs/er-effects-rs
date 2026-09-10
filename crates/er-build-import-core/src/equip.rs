@@ -910,11 +910,29 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
     // Armour carries a set membership, not a position: the planner writes a
     // constant `1` for every worn piece and resolves the part by which list the
     // row lives in, so the value is deliberately not read here.
+    //
+    // Two rows of one part can both carry that membership, and then the `equipIndex` cache is
+    // the only thing that separates them. Measured on the payload for build `1fb907af574a44`,
+    // 2026-09-10: every part listed the worn piece with `equipSet: [1]` and `equipIndex: 1`, and
+    // a second row at `order 0` with `equipSet: [1]` and `equipIndex: null`. Sorting by `order`
+    // under `FirstWins` handed all four parts to the phantom, so the character came out in
+    // Circlet of Light and Beast Champion Armor instead of the Verdigris set the build asks for.
+    // The same author's `e316f03a794492` lists exactly one row per part, carrying both keys, and
+    // imported correctly -- which is what identifies the cache as the discriminator rather than
+    // the order.
     let active_protectors = doc.sets.active_protectors();
     for (part, list) in &doc.protectors {
+        let worn: Vec<&crate::model::Slot> = list
+            .slots
+            .iter()
+            .filter(|slot| slot.equip_index_in_set(active_protectors).is_some())
+            .collect();
+        // Only when the two kinds coexist. A payload whose worn row carries no cache -- anything
+        // written before the planner kept one -- is left exactly as it was.
+        let cached = worn.iter().any(|slot| slot.equip_index.is_some());
         let mut claims = Vec::new();
-        for slot in &list.slots {
-            if slot.equip_index_in_set(active_protectors).is_none() {
+        for slot in worn {
+            if cached && slot.equip_index.is_none() {
                 continue;
             }
             let Some(found) = catalog.lookup(Kind::Protector, &slot.name) else {

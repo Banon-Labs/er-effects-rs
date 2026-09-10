@@ -25,6 +25,13 @@ unsafe extern "system" {
         size: usize,
         bytes_read: *mut usize,
     ) -> i32;
+    fn WriteProcessMemory(
+        process: isize,
+        base_address: *mut c_void,
+        buffer: *const c_void,
+        size: usize,
+        bytes_written: *mut usize,
+    ) -> i32;
 }
 
 /// Resolve the running game module's base address (`GetModuleHandleA(NULL)`).
@@ -324,6 +331,33 @@ pub unsafe fn safe_read_i32(addr: usize) -> Option<i32> {
     } else {
         None
     }
+}
+
+/// Fault-tolerant i32 store: answers whether the four bytes were written.
+///
+/// The write twin of [`safe_read_i32`], and it exists for the same reason: a store into a live
+/// engine object addressed by a chain of read offsets must fail rather than fault when one of
+/// those offsets is wrong on the running build. `WriteProcessMemory` validates the range in the
+/// kernel and answers `FALSE`, where a raw store would raise an access violation with no unwind
+/// information inside a game thread.
+///
+/// # Safety
+///
+/// `addr` has no precondition -- 0, a freed pointer or wholly unmapped memory are all safe to
+/// pass, and answer `false`. What the caller owns is that the four bytes at `addr` are a field the
+/// engine will tolerate being changed: this cannot tell a sort key from a vtable pointer.
+pub unsafe fn safe_write_i32(addr: usize, value: i32) -> bool {
+    let mut written: usize = ZERO;
+    let ok = unsafe {
+        WriteProcessMemory(
+            CURRENT_PROCESS_PSEUDO_HANDLE,
+            addr as *mut c_void,
+            &value as *const i32 as *const c_void,
+            core::mem::size_of::<i32>(),
+            &mut written,
+        )
+    };
+    ok != RPM_FALSE && written == core::mem::size_of::<i32>()
 }
 
 /// Fault-tolerant f32 read (None on unmapped memory).

@@ -308,6 +308,12 @@ pub struct GrantOutcome {
     pub already_held: usize,
     /// Per-armament read-back, in grant order.
     pub armaments: Vec<ArmamentOutcome>,
+    /// How many of those were already in the pockets and were adopted rather than minted.
+    ///
+    /// The number that says a re-import is idempotent. It used to be structurally zero: every
+    /// armament in the build was minted on every import, so importing one build twice handed out
+    /// every weapon in it twice.
+    pub armaments_adopted: usize,
 }
 
 impl GrantOutcome {
@@ -524,9 +530,48 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
         .flat_map(|grant| std::iter::once(grant.item_id).chain(grant.also_known_as.iter().copied()))
         .collect();
 
+    // Armaments the character already carries, so a re-import adopts them instead of minting a
+    // second copy of each. Everything else in this loop reconciles to a target -- "the build wants
+    // three Fire Pots, you have two, here is one" -- and armaments alone did not: they were minted
+    // unconditionally, so importing the same build twice handed out every weapon in it twice.
+    // Reported 2026-09-10 after repeated imports while tuning one build.
+    //
+    // Safety: game thread, character in the world; the pool is read once and only from entries
+    // the inventory already holds.
+    let mut pool = unsafe { CarriedArmaments::read(module_base, storage.as_ref()) };
+
     for grant in grants {
         let armament = is_armament(grant);
         if armament {
+            let full_id = armament_item_id(
+                grant.item_id,
+                levels.game_level_for(
+                    grant.item_id & ITEM_ROW_MASK,
+                    grant.reinforce_lv,
+                    grant.upgrade_is_character_default,
+                ),
+            );
+            // The skill the build asks this armament to carry, as the row the instance will
+            // report. `None` means the build named no ash, and then any copy at the right id
+            // qualifies -- the build expressed no opinion about the skill.
+            let wanted_arts =
+                gem_row_of(grant.weapon_skill).and_then(crate::catalog::arts_row_for_gem);
+            if let Some(adopted) = pool.claim(module_base, full_id, wanted_arts) {
+                let outcome_of_adoption = ArmamentOutcome {
+                    label: grant.label.clone(),
+                    item_id: full_id,
+                    wanted_gem: gem_row_of(grant.weapon_skill),
+                    arts_id: adopted.arts,
+                    wanted_level: grant.reinforce_lv,
+                    level: (full_id % er_build_import_core::plan::ARMAMENT_LEVEL_STEP) as i32,
+                    inventory_index: adopted.index,
+                    handle: adopted.handle,
+                };
+                confirms.push(Requested::armament(&outcome_of_adoption, grant.quantity));
+                outcome.armaments.push(outcome_of_adoption);
+                outcome.armaments_adopted += 1;
+                continue;
+            }
             // Safety: same context; the armament path is documented on the helper.
             if let Some(outcome_of_mint) =
                 unsafe { grant_armament(module_base, egd, grant, &levels) }
@@ -957,6 +1002,99 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
 /// # Safety
 ///
 /// Game thread, `egd` a live `EquipGameData*`, `module_base` the loaded image base.
+/// One armament the character already carries, as a candidate for a build that names it.
+#[derive(Clone, Copy)]
+struct Adopted {
+    index: i32,
+    handle: u32,
+    item_id: u32,
+    /// The `SwordArtsParam` row this instance reports, or `None` when it could not be read.
+    arts: Option<u32>,
+    claimed: bool,
+}
+
+/// The armaments already in the pockets, so a re-import does not mint a second of each.
+///
+/// # Why this is the only category that needed one
+///
+/// Every other grant reconciles to a target: it measures what is held and adds the shortfall.
+/// Armaments were minted unconditionally, because an ash of war lives on the gaitem instance
+/// rather than in the item id, so "do I hold this item" was thought not to answer "do I hold this
+/// armament as the build wants it". It does answer it, as long as the skill is compared too --
+/// and reading the skill off the instance is one call.
+///
+/// Without this, importing one build twice hands out every weapon in it twice. Reported
+/// 2026-09-10 by a player tuning a build across repeated imports, with many copies of Leontiel's
+/// Greatsword to show for it.
+struct CarriedArmaments {
+    entries: Vec<Adopted>,
+}
+
+impl CarriedArmaments {
+    /// Read every carried armament and the skill its instance reports.
+    ///
+    /// Empty when the storage box could not be opened, which costs adoption and nothing else: the
+    /// grant then mints, exactly as it did before.
+    ///
+    /// # Safety
+    ///
+    /// Game thread, character in the world.
+    unsafe fn read(module_base: usize, storage: Option<&crate::storage::Storage>) -> Self {
+        let Some(storage) = storage else {
+            return Self {
+                entries: Vec::new(),
+            };
+        };
+        // Safety: game thread, read only.
+        let entries = unsafe { storage.carried_entries() }
+            .into_iter()
+            .filter(|entry| {
+                entry.item_id & ITEM_CATEGORY_MASK == 0 && entry.item_id != UNARMED_ITEM_ID
+            })
+            .map(|entry| {
+                // Safety: the handle is the engine's own, read out of a live entry.
+                let arts = unsafe {
+                    crate::gaitem::GaitemLookupResult::from_handle(module_base, entry.handle)
+                }
+                // Safety: game thread; the lookup owns the record it reads.
+                .and_then(|mut lookup| unsafe { lookup.sword_arts_id(module_base) });
+                Adopted {
+                    index: entry.index,
+                    handle: entry.handle,
+                    item_id: entry.item_id,
+                    arts,
+                    claimed: false,
+                }
+            })
+            .collect();
+        Self { entries }
+    }
+
+    /// Take a carried copy that satisfies this grant, if there is one left.
+    ///
+    /// `wanted_arts` of `None` means the build named no ash, so any copy at the right id will do
+    /// -- the build expressed no opinion about the skill and adopting one is what it asked for.
+    /// A copy is claimed at most once, so a build naming the same armament twice still mints the
+    /// second.
+    fn claim(
+        &mut self,
+        _module_base: usize,
+        full_id: u32,
+        wanted_arts: Option<u32>,
+    ) -> Option<Adopted> {
+        let found = self.entries.iter_mut().find(|entry| {
+            !entry.claimed
+                && entry.item_id == full_id
+                && wanted_arts.is_none_or(|wanted| entry.arts == Some(wanted))
+        })?;
+        found.claimed = true;
+        Some(*found)
+    }
+}
+
+/// The Unarmed fist, which a cleared hand holds and which is never a build's armament.
+const UNARMED_ITEM_ID: u32 = 0x0001_ADB0;
+
 unsafe fn grant_armament(
     module_base: usize,
     egd: usize,

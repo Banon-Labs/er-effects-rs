@@ -719,8 +719,12 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         .filter(|arm| arm.wanted_gem.is_some() && arm.has_ash())
         .count();
     log_line(&format!(
-        "[build-import] ARMAMENTS (read back off the minted gaitem): {ashes_mounted}/{wanted_ashes}          ashes mounted, {} armaments granted",
-        outcome.armaments.len()
+        "[build-import] ARMAMENTS (read back off the gaitem): {ashes_mounted}/{wanted_ashes} ashes \
+         mounted, {} armaments the build names -- {} minted, {} already in the pockets and \
+         adopted rather than duplicated",
+        outcome.armaments.len(),
+        outcome.armaments.len() - outcome.armaments_adopted,
+        outcome.armaments_adopted
     ));
     for arm in &outcome.armaments {
         log_line(&format!(

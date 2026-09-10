@@ -94,6 +94,10 @@ const EQUIPMENT_ITEM_IDX_LIST_OFFSET: usize = 0x8;
 const EQUIP_INVENTORY_ITEM_ENTRIES_COUNT: usize = 0x80;
 /// Length of the list above.
 const EQUIPMENT_ITEM_IDX_LIST_LEN: usize = 22;
+/// `EquipInventoryData.nextSortId`, the counter `InsertItem` stamps an entry from.
+///
+/// Directly after [`EQUIP_INVENTORY_ITEM_ENTRIES_COUNT`] in the same 1.16.2 structure.
+const EQUIP_INVENTORY_NEXT_SORT_ID: usize = 0x84;
 /// `EquipInventoryData.itemsData.normalItems.capacity`: how many ordinary entries fit.
 ///
 /// From the same 1.16.2 structure: `itemsData` at `+0x8`, `normalItems` at `itemsData+0x4`, and
@@ -622,6 +626,60 @@ impl Storage {
             }
         }
         out
+    }
+
+    /// The acquisition counter the game will stamp the next inserted entry from.
+    ///
+    /// # Safety
+    ///
+    /// Game thread.
+    pub unsafe fn next_sort_id(&self) -> Option<i32> {
+        // Safety: a fault-checked read of one int in a live inventory.
+        unsafe { er_game_base::mem::safe_read_i32(self.carried + EQUIP_INVENTORY_NEXT_SORT_ID) }
+    }
+
+    /// Move the counter on, so later acquisitions sort above everything this pass stamped.
+    ///
+    /// # Safety
+    ///
+    /// Game thread.
+    pub unsafe fn set_next_sort_id(&self, value: i32) -> bool {
+        // Safety: a fault-checked store of one int in a live inventory.
+        unsafe {
+            er_game_base::mem::safe_write_i32(self.carried + EQUIP_INVENTORY_NEXT_SORT_ID, value)
+        }
+    }
+
+    /// Stamp one carried entry's acquisition order directly.
+    ///
+    /// # Why this is written rather than earned
+    ///
+    /// The order an item sorts in is `InventoryItemEntry.sortId`, and the game's own way to earn a
+    /// new one is to acquire the item again -- which [`Storage::recycle`] did by depositing into
+    /// the storage box and taking it straight back. That needs a free entry in the box, and a
+    /// player whose box is full has none: measured 2026-09-10 on a box at `1920 of 1920`, the
+    /// reorder pass re-acquired 6 items of 137 and declined the other 131 with "the box would not
+    /// take it", so the inventory kept whatever order it had.
+    ///
+    /// The field is a sort key and nothing else. Writing it is what `InsertItem` does, minus the
+    /// two transfers, and it cannot strand an item in the box because no item moves.
+    ///
+    /// # Safety
+    ///
+    /// Game thread, `index` a live carried entry.
+    pub unsafe fn restamp(&self, index: i32, sort_id: i32) -> bool {
+        let Ok(slot) = u32::try_from(index) else {
+            return false;
+        };
+        // Safety: engine-owned inventory and an index it bounds-checks; null means no entry.
+        let entry = unsafe { (self.get_entry)(self.carried, slot) };
+        if entry == 0 {
+            return false;
+        }
+        // Safety: a fault-checked store at a confirmed offset in a live 24-byte entry.
+        unsafe {
+            er_game_base::mem::safe_write_i32(entry + INVENTORY_ITEM_ENTRY_SORT_ID_OFFSET, sort_id)
+        }
     }
 
     /// The item id filed at one carried index, or `None` when nothing is there.

@@ -1136,7 +1136,6 @@ pub fn arts_row_for_gem(gem_row: u32) -> Option<u32> {
     repo.rows::<EquipParamGem>()
         .find(|(id, _)| *id == gem_row)
         .and_then(|(_, row)| u32::try_from(row.sword_arts_param_id()).ok())
-        .filter(|arts| *arts != 0)
 }
 
 /// Which upgrade levels the game actually has rows for, so a requested level cannot invent one.

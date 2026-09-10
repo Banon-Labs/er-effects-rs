@@ -23,10 +23,17 @@
 //! arrived, and an item arrives when it enters the inventory -- including when it comes back out
 //! of the storage box.
 //!
-//! That is the whole mechanism: deposit the stack, take it straight back, and the game re-acquires
-//! it at the top of the order because its own acquisition path is what ran. Walking the build's
-//! items in the build's order therefore leaves them in the build's order, as a contiguous run
-//! above everything else the character owns.
+//! The obvious way to earn a new one is to make the game acquire the item again: deposit the
+//! stack into the storage box and take it straight back. That is what this pass did until
+//! 2026-09-10, and it fails completely on a full box -- a deposit needs a free entry, and
+//! `GetAddOrRemoveAmount` answers zero for a non-stackable when there is none. Measured on a box
+//! at `1920 of 1920`: 6 items of 137 re-acquired, 131 declined with "the box would not take it",
+//! and the inventory kept whatever order it had.
+//!
+//! So the counter is used directly. Walking the build's items in the build's order and stamping
+//! each entry from `nextSortId` is exactly what `InsertItem` does, minus the two transfers -- and
+//! it cannot strand an item in the box, because no item moves. The counter is left past the last
+//! value written, so anything the player picks up afterwards still sorts above the build.
 //!
 //! # Why nothing else has to be moved out of the way
 //!
@@ -39,16 +46,13 @@
 //!
 //! # What it will not do
 //!
-//! Three declines, all of them reported and none of them silent: an item the box refuses, a
-//! partial deposit (the retrieve then merges into the remainder instead of re-acquiring), and an
-//! armament whose id the box already holds, where retrieving by id could hand back the wrong copy.
-//! See [`crate::storage::Storage::recycle`].
+//! An entry whose store fails is reported by name rather than counted, and nothing else can go
+//! wrong: there is no transfer to be half-completed and no copy to be confused with another.
 
 use er_build_import_core::plan::Grant;
 use er_game_base::rva::GET_EQUIP_INVENTORY_DATA_RVA;
 
-use crate::equip_native::SlotClearer;
-use crate::storage::{Recycled, Storage};
+use crate::storage::Storage;
 
 /// `CS::EquipGameData::GetEquipInventoryData(egd) -> EquipInventoryData*`.
 type GetInventoryFn = unsafe extern "system" fn(usize) -> usize;
@@ -168,9 +172,6 @@ pub unsafe fn apply_build_order(
         outcome.unavailable = Some("the storage box is unreachable this session");
         return outcome;
     };
-    // Optional on purpose. Without it a worn item is declined rather than moved, which costs the
-    // order of however many items the character is wearing and nothing else.
-    let clearer = SlotClearer::open(module_base);
 
     // One entry per distinct item id, in the order the build lists it. The build can name the same
     // id twice -- two copies of an armament that differ only by their ash, a consumable that
@@ -196,6 +197,14 @@ pub unsafe fn apply_build_order(
         return outcome;
     }
 
+    // The counter the game itself stamps from, so everything this pass writes sits above every
+    // acquisition the character already had and below everything they pick up afterwards.
+    // Safety: game thread, read only.
+    let Some(mut next) = (unsafe { storage.next_sort_id() }) else {
+        outcome.unavailable = Some("the inventory's acquisition counter could not be read");
+        return outcome;
+    };
+
     for grant in &ordered {
         // Safety: game thread, read only.
         if unsafe { storage.carried_quantity(grant.item_id) } <= 0 {
@@ -203,71 +212,28 @@ pub unsafe fn apply_build_order(
         }
         outcome.attempted += 1;
 
-        // Take it off if it is worn, because `equipmentItemIdxList` holds inventory indices and a
-        // deposit would leave a slot naming an entry that no longer exists.
         // Safety: game thread, read only.
         let index = unsafe { storage.carried_index(grant.item_id) };
-        // Safety: a bounded read of 22 ints inside a live `EquipGameData`.
-        if let Some(slot) = unsafe { storage.equipped_slot_of_index(index) } {
-            match clearer.as_ref() {
-                Some(clearer) => {
-                    // Safety: game thread, player in the world (the caller's contract), and the
-                    // item stays in the inventory.
-                    unsafe { clearer.clear(slot) };
-                    outcome.unequipped += 1;
-                }
-                None => {
-                    outcome.declined.push((
-                        grant.label.clone(),
-                        "worn, and `UnequipItem` has no verified mapping for the running build",
-                    ));
-                    continue;
-                }
-            }
+        // Safety: game thread; a store of one int into a live entry, fault-checked.
+        if unsafe { storage.restamp(index, next) } {
+            outcome.restamped += 1;
+            next = next.saturating_add(1);
+        } else {
+            outcome.declined.push((
+                grant.label.clone(),
+                "its inventory entry could not be stamped with a new acquisition order",
+            ));
         }
-
-        // Safety: game thread; the entry is no longer worn, and `recycle` re-resolves every index
-        // it uses immediately before it uses it.
-        let recycled = unsafe { storage.recycle(grant.item_id, grant.armament) };
-        record(&mut outcome, grant, recycled);
     }
+
+    // Safety: game thread; a store of one int into a live inventory, fault-checked.
+    unsafe { storage.set_next_sort_id(next) };
 
     // Safety: game thread, read only.
     let (in_order, checked) = unsafe { verify_order(&storage, &ordered) };
     outcome.in_order = in_order;
     outcome.order_checked = checked;
     outcome
-}
-
-/// Fold one round trip into the outcome.
-fn record(outcome: &mut ReorderOutcome, grant: &Grant, recycled: Recycled) {
-    if let Some(why) = recycled.declined {
-        outcome.declined.push((grant.label.clone(), why));
-        return;
-    }
-    if !recycled.count_preserved() {
-        outcome
-            .stranded
-            .push((grant.label.clone(), recycled.deposited, recycled.retrieved));
-    }
-    if recycled.restamped() {
-        outcome.restamped += 1;
-        return;
-    }
-    // Not restamped, and the two reasons are different facts. Saying "the deposit was partial"
-    // about an entry whose acquisition order could not be read is a claim nothing here
-    // established -- the round trip may well have worked and the read is what failed.
-    let why = match (recycled.sort_id_before, recycled.sort_id_after) {
-        (Some(_), Some(_)) => {
-            "it made the round trip and kept its old acquisition order, so the deposit was \
-             partial and the retrieve merged into the stack left behind rather than re-acquiring"
-        }
-        _ => {
-            "its inventory entry could not be read either side of the round trip, so whether the \
-             game re-acquired it is unknown"
-        }
-    };
-    outcome.declined.push((grant.label.clone(), why));
 }
 
 /// Whether the build's items now read back in the build's order, and over how many of them.
