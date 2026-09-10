@@ -1391,6 +1391,17 @@ static JOIN_PROGRESS_IDLE_SAMPLES: AtomicUsize = AtomicUsize::new(0);
 /// `0` = not currently reporting one.
 static DEAD_JOIN_SINCE_MS: AtomicU64 = AtomicU64::new(0);
 
+/// A match this filter KEPT whose join has not yet landed or died.
+///
+/// Set at the accept, cleared the moment the engine reaches `lobbyState::CLIENT` -- the same
+/// instant `INVASION_ACTUALLY_HAPPENED` latches, because that is when the invasion is real. If the
+/// join dies while this is still set, the player never got the invasion they accepted, and the
+/// hunt is re-armed rather than left stood down.
+static KEPT_JOIN_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// How many hunts were resumed because an accepted join died before it landed.
+static KEPT_JOIN_FAILURES: AtomicUsize = AtomicUsize::new(0);
+
 /// How many stranded matches have been dropped without the player reaching for the item.
 static DEAD_JOIN_RECOVERIES: AtomicUsize = AtomicUsize::new(0);
 
@@ -1743,6 +1754,14 @@ pub fn judge_incoming_match(join_data: usize) {
         Verdict::Keep(reason) => {
             KEEPS.fetch_add(1, Ordering::SeqCst);
             // The search that just landed is over; nothing to re-arm.
+            //
+            // Unless the join then dies, which is what `KEPT_JOIN_PENDING` is for. Reported live
+            // 2026-09-10: "attempt, stall, wait 30 seconds, failed to invade, and invasion loop
+            // canceled". Measured on run br-20260910-022619-1fa2 -- `KEEP 0x0f000000 (ExactBlock)`
+            // at line 1193, `lobby=4 proto=6 rpc=5 -> Progressing` at 1194, and 30830ms later
+            // everything zero. The hunt disarmed on the accept and nothing armed it again, so a
+            // join the player never got to play ended their session's hunting outright.
+            KEPT_JOIN_PENDING.store(true, Ordering::SeqCst);
             AUTO_SEARCH_ARMED.store(false, Ordering::SeqCst);
             PENDING_REINVADE.store(false, Ordering::SeqCst);
             crate::standalone_log(format_args!(
@@ -2692,24 +2711,56 @@ fn cancel_stalled_attempt_inner(
         );
         return;
     }
+    // The Cancel row is not the only way out, and where it is withdrawn the right answer is the
+    // other row rather than overriding the refusal.
+    //
+    // `OPTIONSELECT_LEAVEWORLD` (`ersc+0x259d0`, menu 3's only row) is hidden by its predicate
+    // `ersc+0x26ac0` only at idle, so Seamless draws it in every state where the Cancel row's
+    // `ersc+0x26b40` has withdrawn -- `0x16` included, which is the state a stranded player is
+    // actually in. Both actions do the same thing: take the session mutex, write `0x23` to
+    // `session+0x150`, unlock. So this drives a row the player could have clicked, which is the
+    // invariant the refusal exists to protect, instead of driving one they could not.
+    let mut action = cancel;
+    let mut what = "cancel";
     if let Some(refusal) = cancel_row_refusal(&session) {
-        if !engine_has_no_session {
-            log_refusal_once(
-                &STALLED_REFUSAL_SAID,
-                format_args!("local-invasion: not cancelling the stalled attempt -- {refusal}"),
-            );
-            return;
+        let leave_world = ersc_action(
+            session.abi,
+            session.abi.leave_world_action_rva,
+            session.abi.leave_world_prologue,
+        );
+        match leave_world {
+            // `Leave world` is itself withdrawn at idle, and there is nothing to leave from there.
+            Some(leave) if state != session.abi.state_idle => {
+                action = leave;
+                what = "leave world";
+                crate::standalone_log(format_args!(
+                    "local-invasion: {refusal} -- driving OPTIONSELECT_LEAVEWORLD instead, which \
+                     ERSC does draw in this state and which performs the same 0x23 transition."
+                ));
+            }
+            _ => {
+                if !engine_has_no_session {
+                    log_refusal_once(
+                        &STALLED_REFUSAL_SAID,
+                        format_args!(
+                            "local-invasion: not cancelling the stalled attempt -- {refusal}"
+                        ),
+                    );
+                    return;
+                }
+                crate::standalone_log(format_args!(
+                    "local-invasion: driving the cancel anyway -- {refusal}, and \
+                     OPTIONSELECT_LEAVEWORLD did not resolve either. The engine has already torn \
+                     its session down, so there is no live session for that predicate to protect \
+                     and leaving it alone strands the player."
+                ));
+            }
         }
-        crate::standalone_log(format_args!(
-            "local-invasion: driving the cancel anyway -- {refusal}. The engine has already torn \
-             its session down, so there is no live session for that predicate to protect and \
-             leaving it alone strands the player."
-        ));
     }
     let _call = OurCall::enter();
-    unsafe { cancel(owner, 0, 1, 1) };
+    unsafe { action(owner, 0, 1, 1) };
     drop(_call);
-    note_state_after_our_action(session, "cancel stalled attempt");
+    note_state_after_our_action(session, what);
     if AUTO_SEARCH_ARMED.load(Ordering::SeqCst) {
         PENDING_REINVADE.store(true, Ordering::SeqCst);
     }
@@ -3356,6 +3407,33 @@ static LIVENESS_LAST_ENGINE: AtomicUsize = AtomicUsize::new(usize::MAX);
 static LIVENESS_LAST_STATE: AtomicUsize = AtomicUsize::new(usize::MAX);
 static LIVENESS_REFUSAL_SAID: Mutex<Option<String>> = Mutex::new(None);
 
+/// Re-arm the hunt when a join this filter accepted dies before it lands.
+///
+/// Accepting a match stands the hunt down, which is right while the invasion is coming. It is wrong
+/// once the join has failed: the player accepted an invasion, never got it, and was left with no
+/// search running and no indication why.
+///
+/// The clearing rule is what keeps this from fighting the deliberate disarm. `KEPT_JOIN_PENDING`
+/// is cleared at `lobbyState::CLIENT`, the same instant `INVASION_ACTUALLY_HAPPENED` latches, so a
+/// join that LANDS is never re-armed here -- the disarm at the end of a real invasion is taken from
+/// what the engine did and stays that way.
+#[cfg(windows)]
+fn resume_the_hunt_if_an_accepted_join_died(
+    progress: &er_invasion_warp_core::join_progress::JoinProgress,
+) {
+    if !progress.is_finished() || !KEPT_JOIN_PENDING.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    let count = KEPT_JOIN_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
+    AUTO_SEARCH_ARMED.store(true, Ordering::SeqCst);
+    PENDING_REINVADE.store(true, Ordering::SeqCst);
+    crate::standalone_log(format_args!(
+        "local-invasion: the match this filter accepted never landed (#{count}) -- {progress}. \
+         Accepting stands the hunt down, so without this the player is left with no search running \
+         after an invasion they never got to play."
+    ));
+}
+
 /// Drop a match the engine has already failed, without waiting for the player.
 ///
 /// # The complaint
@@ -3455,7 +3533,10 @@ fn trace_join_progress(session: Result<(u32, u32), &'static str>) {
     if progress.lobby_state == er_invasion_warp_core::join_progress::lobby_state::CLIENT {
         // The join landed, so the session is allowed to read idle again.
         JOIN_IN_FLIGHT.store(false, Ordering::SeqCst);
+        // And the accept is settled: from here `INVASION_ACTUALLY_HAPPENED` owns the disarm.
+        KEPT_JOIN_PENDING.store(false, Ordering::SeqCst);
     }
+    resume_the_hunt_if_an_accepted_join_died(&progress);
     if progress.lobby_state == er_invasion_warp_core::join_progress::lobby_state::CLIENT
         && !INVASION_ACTUALLY_HAPPENED.swap(true, Ordering::SeqCst)
     {

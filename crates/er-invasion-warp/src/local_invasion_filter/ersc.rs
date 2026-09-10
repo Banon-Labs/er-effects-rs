@@ -80,6 +80,8 @@ pub struct Abi {
     pub invade_action_rva: usize,
     /// The "Cancel search" option action. Reads `rcx` only.
     pub cancel_action_rva: usize,
+    /// `OPTIONSELECT_LEAVEWORLD`'s action -- see [`V201_LEAVE_WORLD_ACTION_RVA`].
+    pub leave_world_action_rva: usize,
     /// `BuildLobbyKey(ctx, std::string* out)` -- produces the `lobby_key` string.
     ///
     /// # Why this one matters more than it looks
@@ -112,6 +114,8 @@ pub struct Abi {
     /// taken on a detoured prologue measures our own patch. We are cancel's only caller, so
     /// there is nothing to observe there and no reason it will ever be hooked.
     pub cancel_prologue: &'static [u8],
+    /// Prologue for [`Abi::leave_world_action_rva`].
+    pub leave_world_prologue: &'static [u8],
     pub build_lobby_key_prologue: &'static [u8],
     /// Session state, the field every option action writes.
     pub session_state_offset: usize,
@@ -183,10 +187,12 @@ pub const SUPPORTED: &[Abi] = &[Abi {
     show_rva: V201_SHOW_RVA,
     invade_action_rva: V201_INVADE_ACTION_RVA,
     cancel_action_rva: V201_CANCEL_ACTION_RVA,
+    leave_world_action_rva: V201_LEAVE_WORLD_ACTION_RVA,
     build_lobby_key_rva: V201_BUILD_LOBBY_KEY_RVA,
     show_prologue: V201_SHOW_PROLOGUE,
     invade_prologue: V201_INVADE_PROLOGUE,
     cancel_prologue: V201_CANCEL_PROLOGUE,
+    leave_world_prologue: V201_LEAVE_WORLD_PROLOGUE,
     build_lobby_key_prologue: V201_BUILD_LOBBY_KEY_PROLOGUE,
     session_state_offset: V201_SESSION_STATE_OFFSET,
     session_guard_offset: V201_SESSION_GUARD_OFFSET,
@@ -208,6 +214,22 @@ pub const SUPPORTED: &[Abi] = &[Abi {
 pub const V201_SHOW_RVA: usize = 0x2_41a0;
 pub const V201_INVADE_ACTION_RVA: usize = 0x2_5850;
 pub const V201_CANCEL_ACTION_RVA: usize = 0x2_58d0;
+/// `OPTIONSELECT_LEAVEWORLD` -- menu 3's only row, and the escape Seamless leaves open in states
+/// where its Cancel row is withdrawn.
+///
+/// Its hide predicate is `ersc+0x26ac0`, `hide = (state == 1)`, so the row is drawn in every state
+/// but idle -- including `0x16`, where the Cancel row's predicate at `ersc+0x26b40` hides it and a
+/// player is otherwise stranded. The action is `0x64` bytes and does the same thing cancel does:
+/// take the session mutex at `session+0x100`, check the recursion count, write `0x23` to
+/// `session+0x150`, unlock. Driving it is therefore driving a row the player could have clicked,
+/// which is the invariant the cancel-row refusal exists to protect.
+pub const V201_LEAVE_WORLD_ACTION_RVA: usize = 0x2_59d0;
+/// `endbr64; push rsi; push rdi; sub rsp,0x28; mov rdi,[rcx+0x58]` -- byte-read from the installed
+/// v2.0.1 module, and the `[rcx+0x58]` load is the only dereference of the argument in the whole
+/// function.
+pub const V201_LEAVE_WORLD_PROLOGUE: &[u8] = &[
+    0xf3, 0x0f, 0x1e, 0xfa, 0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x8b, 0x79, 0x58,
+];
 pub const V201_BUILD_LOBBY_KEY_RVA: usize = 0xa_d6e0;
 pub const V201_SESSION_STATE_OFFSET: usize = 0x150;
 pub const V201_SESSION_GUARD_OFFSET: usize = 0x14c;
