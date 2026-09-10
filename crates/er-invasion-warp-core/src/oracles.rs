@@ -172,6 +172,29 @@ pub const ORACLE_INVASION_WARP_HUNT_HOOKED: &str = "oracle_invasion_warp_hunt_ho
 /// is the only proof that Seamless's own search went out narrowed to one place.
 pub const ORACLE_INVASION_WARP_HUNT_FILTERS: &str = "oracle_invasion_warp_hunt_filters";
 
+/// How many notices this run put on the game's auto-closing banner.
+///
+/// The banner is the one part of this mod the player experiences directly, and until now it was
+/// the one part with no counter at all: `announce::show` logs `first notice placed` exactly once
+/// and is silent afterwards, so a log carrying that line and a log carrying a hundred banners are
+/// byte-identical after the first. A reader asking "did my rejection get announced" had nothing in
+/// the artifacts to read and could only look at the screen. Measured 2026-09-10 on run
+/// br-20260910-090720-ae54, where ten rejections were cancelled and the log said nothing about
+/// any of their banners.
+pub const ORACLE_INVASION_WARP_NOTICES_SHOWN: &str = "oracle_invasion_warp_notices_shown";
+
+/// Notices the surface refused, because the view had not ticked yet or the message functions did
+/// not byte-verify.
+pub const ORACLE_INVASION_WARP_NOTICES_REFUSED: &str = "oracle_invasion_warp_notices_refused";
+
+/// Notices the game measured as having a positive text width.
+///
+/// The failure that looks like success: a notice can be placed successfully and render nothing,
+/// because the text pointer led to a zeroed inline buffer. `shown` counts what we wrote; this
+/// counts what the engine's own text measurement found afterwards, so `shown > 0 && drawn == 0` is
+/// a banner the player never saw.
+pub const ORACLE_INVASION_WARP_NOTICES_DRAWN: &str = "oracle_invasion_warp_notices_drawn";
+
 // --- Oracle 1 counters --------------------------------------------------------------------
 //
 // Written by `crate::sampler` on every successful read of the live `CSAutoInvadePoint`, read
@@ -202,6 +225,12 @@ pub static INVASION_WARP_LOBBY_REFUSALS: AtomicUsize = AtomicUsize::new(0);
 pub static INVASION_WARP_HUNT_HOOKED: AtomicUsize = AtomicUsize::new(0);
 /// Outgoing lobby queries that carried our location filter.
 pub static INVASION_WARP_HUNT_FILTERS: AtomicUsize = AtomicUsize::new(0);
+/// Notices written to the announcement surface.
+pub static INVASION_WARP_NOTICES_SHOWN: AtomicUsize = AtomicUsize::new(0);
+/// Notices the surface declined.
+pub static INVASION_WARP_NOTICES_REFUSED: AtomicUsize = AtomicUsize::new(0);
+/// Notices the game measured at a positive width.
+pub static INVASION_WARP_NOTICES_DRAWN: AtomicUsize = AtomicUsize::new(0);
 
 /// Publish the legacy-dungeon placement pair measured by a world-map injection.
 pub fn publish_legacy_pin_oracles(seen: usize, placed: usize) {
@@ -273,8 +302,15 @@ static LAST_DOCUMENT_STATUS: Mutex<Option<(String, String)>> = Mutex::new(None);
 /// The location-matchmaking counters as of the last document write, so a republish costs four
 /// comparisons in the steady state. Seeded with the all-zero state so a run that never publishes
 /// or hunts never writes at all.
-static LAST_DOCUMENT_MATCHMAKING: Mutex<((usize, usize), (bool, usize))> =
-    Mutex::new(((0, 0), (false, 0)));
+/// Every counter the republish gate watches: the lobby pair, the hunt pair, and the banner triple.
+///
+/// The banner joined it on 2026-09-10. Without that, a run whose only moving counters were notices
+/// froze its document at zero while banners went up -- the same freeze the location counters were
+/// added to this gate to fix.
+type WatchedCounters = ((usize, usize), (bool, usize), (usize, usize, usize));
+
+static LAST_DOCUMENT_MATCHMAKING: Mutex<WatchedCounters> =
+    Mutex::new(((0, 0), (false, 0), (0, 0, 0)));
 
 /// Write the telemetry document and remember the phase it was written in.
 ///
@@ -288,7 +324,11 @@ pub fn publish_document(status: &str, detail: &str) {
         .unwrap_or_else(|e| e.into_inner()) = Some((status.to_string(), detail.to_string()));
     *LAST_DOCUMENT_MATCHMAKING
         .lock()
-        .unwrap_or_else(|e| e.into_inner()) = (lobby_oracle_snapshot(), hunt_oracle_snapshot());
+        .unwrap_or_else(|e| e.into_inner()) = (
+        lobby_oracle_snapshot(),
+        hunt_oracle_snapshot(),
+        notice_oracle_snapshot(),
+    );
     crate::host::publish_oracle_json(&catalog_oracle_json(status, detail));
 }
 
@@ -309,7 +349,11 @@ pub fn publish_document(status: &str, detail: &str) {
 ///
 /// Returns whether anything was written, so a caller can tell a quiet tick from a stale one.
 pub fn republish_if_location_matchmaking_changed() -> bool {
-    let now = (lobby_oracle_snapshot(), hunt_oracle_snapshot());
+    let now = (
+        lobby_oracle_snapshot(),
+        hunt_oracle_snapshot(),
+        notice_oracle_snapshot(),
+    );
     {
         let mut last = LAST_DOCUMENT_MATCHMAKING
             .lock()
@@ -354,6 +398,45 @@ pub fn lobby_oracle_snapshot() -> (usize, usize) {
         INVASION_WARP_LOBBY_PUBLISHES.load(Ordering::SeqCst),
         INVASION_WARP_LOBBY_REFUSALS.load(Ordering::SeqCst),
     )
+}
+
+/// Publish the banner counters, `(placed, declined, measured at a positive width)`.
+pub fn publish_notice_oracles(shown: usize, refused: usize, drawn: usize) {
+    INVASION_WARP_NOTICES_SHOWN.store(shown, Ordering::SeqCst);
+    INVASION_WARP_NOTICES_REFUSED.store(refused, Ordering::SeqCst);
+    INVASION_WARP_NOTICES_DRAWN.store(drawn, Ordering::SeqCst);
+}
+
+/// The banner triple as it currently stands.
+#[must_use]
+pub fn notice_oracle_snapshot() -> (usize, usize, usize) {
+    (
+        INVASION_WARP_NOTICES_SHOWN.load(Ordering::SeqCst),
+        INVASION_WARP_NOTICES_REFUSED.load(Ordering::SeqCst),
+        INVASION_WARP_NOTICES_DRAWN.load(Ordering::SeqCst),
+    )
+}
+
+/// What the three banner counters mean, in one line.
+#[must_use]
+pub fn describe_notice_banner(shown: usize, refused: usize, drawn: usize) -> String {
+    match (shown, refused, drawn) {
+        (0, 0, _) => "banner: nothing was announced this run -- no match arrived, or the notice \
+                      is switched off in the config"
+            .to_string(),
+        (0, r, _) => format!(
+            "banner: REFUSED all {r} attempt(s) and showed nothing -- the announce view had not \
+             ticked, or its message functions did not byte-verify on this build"
+        ),
+        (s, r, 0) => format!(
+            "banner: placed {s} notice(s) ({r} declined) and the game measured NONE of them as \
+             having any width -- they were written and drew nothing"
+        ),
+        (s, r, d) => format!(
+            "banner: placed {s} notice(s) ({r} declined), {d} of them measured by the game as \
+             actually carrying glyphs"
+        ),
+    }
 }
 
 /// The invader-side pair as it currently stands, `(hooked, filters)`.
@@ -535,6 +618,7 @@ pub fn catalog_oracle_json(status: &str, detail: &str) -> String {
     let (legacy_seen, legacy_placed) = legacy_pin_oracle_snapshot();
     let (publishes, refusals) = lobby_oracle_snapshot();
     let (hooked, filters) = hunt_oracle_snapshot();
+    let (notices_shown, notices_refused, notices_drawn) = notice_oracle_snapshot();
     let summary = InvasionWarpCatalogSummary {
         block_count: blocks,
         target_count: targets,
@@ -562,6 +646,10 @@ value above zero is missing icons, not missing captions\",\
 \"{ORACLE_INVASION_WARP_HUNT_HOOKED}\":{hooked},\
 \"{ORACLE_INVASION_WARP_HUNT_FILTERS}\":{filters},\
 \"location_matchmaking_note\":\"{matchmaking_note}\",\
+\"{ORACLE_INVASION_WARP_NOTICES_SHOWN}\":{notices_shown},\
+\"{ORACLE_INVASION_WARP_NOTICES_REFUSED}\":{notices_refused},\
+\"{ORACLE_INVASION_WARP_NOTICES_DRAWN}\":{notices_drawn},\
+\"notice_banner_note\":\"{notice_note}\",\
 \"{ORACLE_INVASION_WARP_SESSION_TOUCHES}\":null,\
 \"{ORACLE_INVASION_WARP_MSGBOX_BUILDS}\":null,\
 \"negative_oracles_measured\":false,\
@@ -571,6 +659,14 @@ value above zero is missing icons, not missing captions\",\
         legacy_note = json_escape(describe_legacy_pin_oracle(legacy_seen, legacy_placed)),
         matchmaking_note = json_escape(&describe_location_matchmaking(
             publishes, refusals, hooked, filters
+        )),
+        notices_shown = notices_shown,
+        notices_refused = notices_refused,
+        notices_drawn = notices_drawn,
+        notice_note = json_escape(&describe_notice_banner(
+            notices_shown,
+            notices_refused,
+            notices_drawn
         )),
         verdict_tag = verdict.tag(),
         passed = verdict.passed(),
@@ -1016,5 +1112,36 @@ mod tests {
         // A non-finite reading encodes to a value no real measurement can produce, so a
         // broken read can never be mistaken for a legitimate coordinate.
         assert_eq!(encode_scalar_oracle(f32::NAN), i64::MIN);
+    }
+    /// The banner counters reach the document, and the one failure that looks like success is
+    /// called out rather than left to arithmetic.
+    ///
+    /// `shown > 0 && drawn == 0` is a notice that was placed and rendered nothing -- the exact
+    /// shape the blank-banner bug produced, and indistinguishable from a healthy run if the
+    /// reader only checks that something was placed.
+    #[test]
+    fn the_banner_counters_are_documented_and_a_blank_banner_is_named() {
+        publish_notice_oracles(7, 2, 0);
+        let json = catalog_oracle_json("latched", "totals settled");
+        for field in [
+            "\"oracle_invasion_warp_notices_shown\":7",
+            "\"oracle_invasion_warp_notices_refused\":2",
+            "\"oracle_invasion_warp_notices_drawn\":0",
+        ] {
+            assert!(json.contains(field), "{field} missing from {json}");
+        }
+        assert!(
+            describe_notice_banner(7, 2, 0).contains("measured NONE"),
+            "a placed-but-blank banner must say so"
+        );
+        assert!(
+            describe_notice_banner(7, 2, 7).contains("actually carrying glyphs"),
+            "a drawn banner reads differently"
+        );
+        assert!(
+            describe_notice_banner(0, 0, 0).contains("nothing was announced"),
+            "a quiet run is not a failure"
+        );
+        publish_notice_oracles(0, 0, 0);
     }
 }

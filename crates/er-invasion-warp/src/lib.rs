@@ -302,6 +302,15 @@ fn spawn_catalog_task() {
                         // once the totals latch -- seconds into a run, and long before anyone
                         // hunts. Without this the file freezes at zero while the counters climb.
                         // Gated on a change, so a steady run costs four comparisons and no I/O.
+                        // The banner's own counters, for the same reason: `announce::show` logs
+                        // its first notice and nothing after, so a run with one banner and a run
+                        // with a hundred read identically. `drawn` is the one that matters -- a
+                        // notice can be placed and render nothing.
+                        let (shown, refused) = crate::announce::tally();
+                        let (drawn, _empty) = crate::announce::measurement_tally();
+                        er_invasion_warp_core::oracles::publish_notice_oracles(
+                            shown, refused, drawn,
+                        );
                         er_invasion_warp_core::oracles::republish_if_location_matchmaking_changed();
                     }
                     // Re-colour pins that already exist. Gated internally on the user's lists
