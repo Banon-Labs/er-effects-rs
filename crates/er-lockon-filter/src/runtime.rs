@@ -96,14 +96,25 @@ static SAID_NON_PLAYERS_ARE_SKIPPED: AtomicBool = AtomicBool::new(false);
 /// express it.
 static SEEN_SELF_PAIRINGS: AtomicU64 = AtomicU64::new(0);
 static SEEN_CANDIDATE_PAIRINGS: AtomicU64 = AtomicU64::new(0);
-/// `SessionManagerPlayerEntry` addresses already written down, for the local player and for
-/// candidates alike, so the identity census costs one line per person rather than one per lock-on
-/// point. One list across both roles because the question it answers -- which field separates you
-/// from a fellow invader -- needs your own row beside theirs.
-static SEEN_IDENTITY_ENTRIES: Mutex<Vec<usize>> = Mutex::new(Vec::new());
-/// How many distinct candidates the identity census reports before it stops. One double invasion
-/// needs three, and a cap keeps a long session from turning the log into a roster.
-const IDENTITY_CENSUS_LIMIT: usize = 8;
+/// `SessionManagerPlayerEntry` addresses already written down, one list per role.
+///
+/// Two lists rather than one, and the reason is a measured near-miss. A single shared budget was
+/// spent by the local player: every world reload gives you a fresh entry, so a session that
+/// invaded, returned and invaded again burned four of eight slots on rows that all say the same
+/// thing, and the census was two people away from going silent before the row it exists to
+/// capture -- a fellow invader -- could arrive.
+static SEEN_LOCAL_PLAYER_ENTRIES: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+static SEEN_CANDIDATE_ENTRIES: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+/// How many distinct local-player identities are reported. Small on purpose: after the first
+/// couple, each new one is the same person after another load.
+const LOCAL_PLAYER_CENSUS_LIMIT: usize = 4;
+/// Set once each when a census budget is spent, so the log says so instead of going quiet.
+static SAID_LOCAL_PLAYER_CENSUS_FULL: AtomicBool = AtomicBool::new(false);
+static SAID_CANDIDATE_CENSUS_FULL: AtomicBool = AtomicBool::new(false);
+/// How many distinct other players are reported. A Seamless session holds six, and an invader can
+/// meet a host, their phantoms and other invaders across several worlds in one launch, so the
+/// budget is a log-size cap rather than a guess at the roster.
+const CANDIDATE_CENSUS_LIMIT: usize = 24;
 /// The last `GameMan::summonParamType` the census reported, so the log carries one line per
 /// change of multiplayer role rather than one per lock-on point. A bitmask would not do: the
 /// roles are negative.
@@ -372,6 +383,10 @@ const PLAYER_INS_PLAYER_GAME_DATA_OFFSET: usize = 0x580;
 const PLAYER_GAME_DATA_MULTIPLAY_ROLE_OFFSET: usize = 229;
 /// `PlayerGameData+152` -- the `CharacterType` the session recorded for this person, which need
 /// not agree with the `ChrIns::chr_type` the rule reads.
+///
+/// Four bytes, not one: Ghidra types the field `CharacterType` with length 4, and the
+/// `MultiplayProperties` table carries -1 on the invalid-sign row, so a byte read would report
+/// 255 for a value the game means as negative.
 const PLAYER_GAME_DATA_CHR_TYPE_OFFSET: usize = 152;
 /// `PlayerGameData+2705` -- the invasion item this person used, if any. A non-zero value names an
 /// invader directly.
@@ -415,7 +430,7 @@ struct SessionIdentity {
 /// What `PlayerGameData` says one character is.
 struct GameDataIdentity {
     multiplay_role: u8,
-    chr_type: u8,
+    chr_type: i32,
     invasion_item_type: u8,
     is_main_player: bool,
 }
@@ -463,7 +478,7 @@ fn game_data_identity_of(player_ins: usize) -> Option<GameDataIdentity> {
             er_game_base::mem::safe_read_u8(data + PLAYER_GAME_DATA_MULTIPLAY_ROLE_OFFSET)
         }?,
         chr_type: unsafe {
-            er_game_base::mem::safe_read_u8(data + PLAYER_GAME_DATA_CHR_TYPE_OFFSET)
+            er_game_base::mem::safe_read_i32(data + PLAYER_GAME_DATA_CHR_TYPE_OFFSET)
         }?,
         invasion_item_type: unsafe {
             er_game_base::mem::safe_read_u8(data + PLAYER_GAME_DATA_INVASION_ITEM_TYPE_OFFSET)
@@ -557,23 +572,47 @@ fn steam_name_of(entry: usize) -> Option<String> {
 
 /// Write down one character's session identity, once per person.
 fn note_identity(role: Role, chr_ins: usize, chr_type: i32) {
-    let Some(identity) = session_identity_of(chr_ins) else {
-        return;
-    };
+    let identity = session_identity_of(chr_ins);
+    // Keyed on the session entry when there is one, so a person is written down once however many
+    // lock-on points they carry, and on the character otherwise. A candidate with a
+    // `PlayerGameData` and no session entry is exactly the case worth reporting -- dropping it
+    // would leave the census blind in the sessions it was built to measure.
+    let key = identity.as_ref().map_or(chr_ins, |identity| identity.entry);
     {
-        let mut seen = SEEN_IDENTITY_ENTRIES
+        let (entries, limit) = match role {
+            Role::LocalPlayer => (&SEEN_LOCAL_PLAYER_ENTRIES, LOCAL_PLAYER_CENSUS_LIMIT),
+            Role::Candidate => (&SEEN_CANDIDATE_ENTRIES, CANDIDATE_CENSUS_LIMIT),
+        };
+        let mut seen = entries
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if seen.contains(&identity.entry) || seen.len() >= IDENTITY_CENSUS_LIMIT {
+        if seen.contains(&key) {
             return;
         }
-        seen.push(identity.entry);
+        if seen.len() >= limit {
+            // Said once, because a saturated census is silent and silence reads as "nobody else
+            // was ever offered" -- which is the wrong answer to the only question this log is
+            // asked. Measured on 2026-09-10: a shared eight-slot budget filled mid-session and
+            // the log simply stopped naming people, with nothing to say it had.
+            note_census_full(role, limit);
+            return;
+        }
+        seen.push(key);
     }
     let team = match team_type_of(chr_ins) {
         Some(team) => team.to_string(),
         None => "unreadable".to_owned(),
     };
-    let name = identity.name.as_deref().unwrap_or("<unreadable>");
+    let session = match identity.as_ref() {
+        Some(identity) => format!(
+            "steam_id={} is_host={} is_local_player={} pre_ceremony_role={}",
+            identity.steam_id,
+            identity.is_host,
+            identity.is_local_player,
+            identity.pre_ceremony_role
+        ),
+        None => "session entry unreadable".to_owned(),
+    };
     let game_data = match game_data_identity_of(chr_ins) {
         Some(data) => format!(
             "multiplay_role={} game_data_chr_type={} invasion_item_type={} is_main_player={}",
@@ -581,17 +620,16 @@ fn note_identity(role: Role, chr_ins: usize, chr_type: i32) {
         ),
         None => "player_game_data unreadable".to_owned(),
     };
+    let name = identity
+        .as_ref()
+        .and_then(|identity| identity.name.as_deref())
+        .unwrap_or("<unreadable>");
     log_message(format_args!(
-        "census: {} \"{name}\" steam_id={} chr_type={chr_type} team_type={team} {game_data} \
-         is_host={} is_local_player={} pre_ceremony_role={}. Read for the census only -- no rule \
-         consults any of it. The Steam ID and the multiplayer role are here because `chr_type` and \
-         the three booleans beside it reported the same thing about every person in a live \
-         invasion.",
-        role.label(),
-        identity.steam_id,
-        identity.is_host,
-        identity.is_local_player,
-        identity.pre_ceremony_role
+        "census: {} \"{name}\" chr_ins={chr_ins:#x} chr_type={chr_type} team_type={team} \
+         {game_data} {session}. Read for the census only -- no rule consults any of it. The Steam \
+         ID and the multiplayer role are here because `chr_type` and the three booleans beside it \
+         reported the same thing about every person in a live invasion.",
+        role.label()
     ));
 }
 
@@ -842,6 +880,22 @@ fn note_team_pairing(seen: &AtomicU64, role: Role, chr_type: i32, chr_ins: usize
     }
     log_message(format_args!(
         "census: a {} with chr_type {chr_type} has team_type {team}",
+        role.label()
+    ));
+}
+
+/// Say once, per role, that the identity census has spent its budget.
+fn note_census_full(role: Role, limit: usize) {
+    let said = match role {
+        Role::LocalPlayer => &SAID_LOCAL_PLAYER_CENSUS_FULL,
+        Role::Candidate => &SAID_CANDIDATE_CENSUS_FULL,
+    };
+    if said.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    log_message(format_args!(
+        "census: {} identities are full at {limit}; further people are not written down. Silence \
+         below this line is a spent budget, not an empty world.",
         role.label()
     ));
 }

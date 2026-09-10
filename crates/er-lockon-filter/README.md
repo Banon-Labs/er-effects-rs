@@ -135,12 +135,19 @@ the top of this file skips a point whose owner resolves to null before it asks
 therefore never matched the `ChrType` set. That is the `chr_type` 0 case this section had
 predicted and left open, arriving as a lost invasion rather than as a census line.
 
-The multiplay-role term above is the answer, and it is not yet proven. It is derived from the
-same table the rest of the rule comes from, it cannot reach role 0, and it is pinned by five
-tests -- but no invasion has run against it. The `census: candidate "name" steam_id=...` line is
-what will say whether it worked: one row per person, carrying the Steam name, the role, the team
-byte and both `chr_type` readings, so a player who was still lockable can be matched to the row
-that let them through.
+The multiplay-role term above is the answer, and it works. Measured in run
+`br-20260910-162621-9e8e`, same character, same Seamless session, one line:
+
+```text
+hidden: a chr_type 0 multiplay_role 3 character is out of the lock-on candidate set
+        while you are chr_type 2, summon param type 0
+```
+
+`chr_type` 0 is `Local` -- what Seamless types a remote player, and what the host reads -- so the
+old rule could not have hidden that person without hiding the host too. Role 3 is
+`MultiplayProperties` row `乱入赤_A`, the Bloody Finger invasion. In the same session the host read
+role 0 and their co-op phantom read role 1, and neither was hidden. The plain statement is that an
+invader can no longer lock on to other invaders.
 
 The identity census this replaced read `isHost`, `isLocalPlayer` and `preCeremonyMultiplayRole`
 off `SessionManagerPlayerEntry`. All three offsets are right -- Ghidra's typed
