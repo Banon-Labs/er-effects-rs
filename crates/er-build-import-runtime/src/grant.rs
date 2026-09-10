@@ -290,6 +290,14 @@ pub struct GrantOutcome {
     pub pulled_from_storage: u32,
     /// Items moved into the storage box to free a pot group's capacity.
     pub deposited_to_storage: u32,
+    /// Consumables destroyed to free a pot group, because the storage box refused them.
+    ///
+    /// The only irreversible number this importer produces, kept apart from
+    /// [`GrantOutcome::deposited_to_storage`] for exactly that reason: a deposit and a discard
+    /// both read as "the item is no longer in your pockets", and only one of them can be walked
+    /// back. A report that folded them together would let the destructive case hide inside the
+    /// harmless one.
+    pub discarded_to_free_pots: u32,
     /// Whether the storage box was reachable at all this run. `false` means both storage rungs
     /// were inert, which a reader has to know before concluding anything from the two counts.
     pub storage_available: bool,
@@ -702,6 +710,7 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
                 && unsafe { storage.carried_headroom(full_id, shortfall as i32) } < shortfall as i32
             {
                 let mut deposited = 0u32;
+                let mut discarded = 0u32;
                 for other in pots.members(group) {
                     if wanted_ids.contains(other) {
                         continue;
@@ -724,23 +733,70 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
                     }
                     // Safety: as above. `deposit` asks the box what it will take, refuses an
                     // equipped entry, re-resolves the index, and passes reassignQuickSlot=false.
-                    let moved =
-                        unsafe { storage.deposit(*other, carried.min(deficit)) }.max(0) as u32;
-                    if moved == 0 {
-                        continue;
+                    let wanted_out = carried.min(deficit);
+                    let moved = unsafe { storage.deposit(*other, wanted_out) }.max(0) as u32;
+                    if moved > 0 {
+                        deposited += moved;
+                        crate::log_line(&format!(
+                            "[build-import]   TO STORAGE item 0x{other:08X}: {moved} deposited to \
+                             free pot group {group} for {:?}",
+                            grant.label
+                        ));
                     }
-                    deposited += moved;
-                    crate::log_line(&format!(
-                        "[build-import]   TO STORAGE item 0x{other:08X}: {moved} deposited to free \
-                         pot group {group} for {:?}",
-                        grant.label
-                    ));
+
+                    // Rung 3b -- destroy, and only here.
+                    //
+                    // The box is not always an escape. Its own per-item ceiling
+                    // (`EquipParamGoods.maxRepositoryNum`) is what `ChangeAmountInBox` answers
+                    // with, so a player who already has a full box of Hefty Rock Pots cannot
+                    // deposit another one -- and a pot group is shared, so those Rock Pots are
+                    // exactly what stops a Hefty Fire Pot from being carried. Every other rung has
+                    // run and the group is still full: the item the build does not want is
+                    // physically in the way and has nowhere to go.
+                    //
+                    // Discarding is what the player would do in the menu, and it is deliberately
+                    // the narrowest thing this importer is allowed to destroy. All four conditions
+                    // hold at this line and none of them is incidental: the id is not in
+                    // `wanted_ids`, so the build does not ask for it; it is a member of the pot
+                    // group being freed, so it is the specific obstruction; the deposit above has
+                    // already been refused for the amount still needed; and the count is the
+                    // group's deficit, never the stack. An equipped or quick-slotted copy needs no
+                    // special handling -- `CS::EquipGameData::RemoveItem` unequips it and clears
+                    // its quickbar reference before removing the entry.
+                    let still_out = wanted_out - moved.min(wanted_out as u32) as i32;
+                    if still_out > 0 {
+                        // Safety: as above. `discard` re-resolves the index, decrements rather
+                        // than deleting when part of a stack will do, and measures the result.
+                        let destroyed = unsafe { storage.discard(*other, still_out) }.max(0) as u32;
+                        if destroyed > 0 {
+                            discarded += destroyed;
+                            crate::log_line(&format!(
+                                "[build-import]   DISCARDED item 0x{other:08X}: {destroyed} \
+                                 DESTROYED to free pot group {group} for {:?}. The storage box \
+                                 refused them -- it is already at this item's maxRepositoryNum -- \
+                                 and the group had no other way to make room. This is the one \
+                                 thing the importer does that the player cannot undo",
+                                grant.label
+                            ));
+                        } else if !storage.can_discard() {
+                            crate::log_line(&format!(
+                                "[build-import]   STUCK item 0x{other:08X}: the box refused it and \
+                                 the discard natives have no verified mapping for this build, so \
+                                 pot group {group} cannot be freed for {:?}",
+                                grant.label
+                            ));
+                        }
+                    }
                 }
                 outcome.deposited_to_storage += deposited;
+                outcome.discarded_to_free_pots += discarded;
 
                 // The box may still hold the wanted item and there may now be room for it, so
-                // the pull is worth one more try before anything is minted.
-                if deposited > 0 && shortfall > 0 {
+                // the pull is worth one more try before anything is minted. A discard frees the
+                // group just as a deposit does, so it counts here too -- otherwise a run that had
+                // to destroy something would skip the retry and mint a copy of an item the player
+                // already owns in the box.
+                if (deposited > 0 || discarded > 0) && shortfall > 0 {
                     for candidate in std::iter::once(full_id).chain(also_known_as.iter().copied()) {
                         if shortfall == 0 {
                             break;
@@ -820,6 +876,73 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
                 held,
                 pot_group: want.pot_group,
             });
+        }
+    }
+
+    // The pot-group sweep, which runs after everything else because it is about what the character
+    // should not be carrying rather than what it should.
+    //
+    // # The case it exists for, reported 2026-09-10
+    //
+    // A pot group is one shared allowance -- `potItemsCapacity[g]` is the player's Cracked Pot
+    // count -- and every member spends from it. `Roped Fetid Pot` (row 430) and `Sleep Pot`
+    // (row 640) are both `potGroupId 1`, so a character carrying ten Sleep Pots has spent half the
+    // group on an item the build never mentions, and there is no rung above that will notice:
+    // rungs 3 and 3b only fire while something is blocking the wanted item, and ten Roped Fetid
+    // Pots fit alongside ten Sleep Pots perfectly well. The import finishes reporting complete
+    // success and the player's pot allowance is half full of the wrong pot.
+    //
+    // # What it does not fix, and cannot
+    //
+    // It does not get more than `EquipParamGoods.maxNum` of the wanted pot into the pockets. That
+    // field is 10 for every pot in the family, and it is a per-item ceiling the engine clamps in
+    // `GetMaxQuantityForItemEntry` -- so "fill the whole group with the one pot the build names"
+    // is not a thing the game permits, however much room the sweep makes. What the sweep buys is a
+    // character whose pot allowance holds only what the build asked for.
+    //
+    // # Why it is allowed to move a player's belongings at all
+    //
+    // Only inside a group the build has an opinion about. A build that names no member of group
+    // `g` leaves group `g` completely alone, which is what keeps this from being a licence to
+    // tidy someone's inventory. Within such a group, a member the build does not name is
+    // competing for a capped resource the build is trying to allocate -- and it is deposited
+    // first, with a discard only where the box refuses, exactly as rungs 3 and 3b decide.
+    if let Some(storage) = storage.as_ref() {
+        // Groups the build has an opinion about: the ones at least one granted item belongs to.
+        let mut claimed: Vec<u8> = grants.iter().filter_map(|grant| grant.pot_group).collect();
+        claimed.sort_unstable();
+        claimed.dedup();
+        for group in claimed {
+            for other in pots.members(group) {
+                if wanted_ids.contains(other) {
+                    continue;
+                }
+                // Safety: game thread, engine-owned inventory pointers.
+                let carried = unsafe { storage.carried_quantity(*other) };
+                if carried <= 0 {
+                    continue;
+                }
+                // Safety: as above.
+                let moved = unsafe { storage.deposit(*other, carried) }.max(0) as u32;
+                if moved > 0 {
+                    outcome.deposited_to_storage += moved;
+                    crate::log_line(&format!(
+                        "[build-import]   TO STORAGE item 0x{other:08X}: {moved} deposited -- the                          build claims pot group {group} and does not name this item, so it was                          spending the group's capacity on something unasked for"
+                    ));
+                }
+                let left = carried - moved as i32;
+                if left <= 0 {
+                    continue;
+                }
+                // Safety: as above.
+                let destroyed = unsafe { storage.discard(*other, left) }.max(0) as u32;
+                if destroyed > 0 {
+                    outcome.discarded_to_free_pots += destroyed;
+                    crate::log_line(&format!(
+                        "[build-import]   DISCARDED item 0x{other:08X}: {destroyed} destroyed --                          the build claims pot group {group}, does not name this item, and the                          storage box is already at its maxRepositoryNum. Irreversible"
+                    ));
+                }
+            }
         }
     }
 

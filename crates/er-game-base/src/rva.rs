@@ -313,6 +313,81 @@ pub const UPDATE_TROPHY_STATS_RVA: usize = 0x24a1a0;
 /// `if (max < amount) amount = max;`, so an add of five that delivers three returns no error and
 /// sets no result code. Asking first is what turns that into a number a caller can report.
 pub const GET_ADD_OR_REMOVE_AMOUNT_RVA: usize = 0x24c630;
+/// `CS::EquipGameData::RemoveItem(egd, int itemIdx, uint flag, bool refresh) -> bool` -- the
+/// engine's discard, and the only call that destroys an inventory entry.
+///
+/// # It unequips for you, which is why the menu's discard cap looks off by one
+///
+/// The body, in order: `GetSlotIndexByItemIndex` and, when that names a slot,
+/// `FUN_140247160(egd, slot, true)` to take it off; then three calls on `EquipItemData`
+/// (`FUN_140250060`, `FUN_140250100`, `FUN_140250030`) that clear the quickbar and pouch
+/// references to that index; then the optional equip refresh; then
+/// `EquipInventoryData::RemoveItem`. So an assigned or worn copy does not have to be unassigned
+/// first -- the native does it -- which is what the inventory menu is expressing when it offers
+/// to discard ten of eleven Hefty Pots while one sits on the quickbar.
+///
+/// # The third argument is a flag, not a count
+///
+/// It is passed straight through to `EquipInventoryData::RemoveItem` (`0x14024d1e0`), whose own
+/// third parameter is only ever tested against zero. The whole entry goes, whatever its quantity.
+/// To destroy part of a stack, decrement it with [`ADJUST_QUANTITY_BY_RVA`] instead and call this
+/// only when the entry is to disappear entirely.
+pub const EQUIP_GAME_DATA_REMOVE_ITEM_RVA: usize = 0x248ad0;
+/// `CS::EquipInventoryData::AdjustQuantityBy(inventory, uint itemIdx, int amount, BOOL *clamped)
+/// -> uint newQuantity`.
+///
+/// Adds `amount` to the entry's quantity, clamping at zero, and answers with what the entry now
+/// holds; `clamped` is set when the engine gave a different number from the one asked for. A
+/// negative `amount` is therefore a partial discard, and it is the same call
+/// `TransferItemBetweenInventoryDatas` uses to take a stack down as it moves it.
+///
+/// An entry left at zero still exists. The transfer path follows a zero return with
+/// `EquipInventoryData::RemoveItem`, and anything using this to discard should do the same --
+/// through [`EQUIP_GAME_DATA_REMOVE_ITEM_RVA`], so the quickbar and pouch references go with it.
+pub const ADJUST_QUANTITY_BY_RVA: usize = 0x24bfe0;
+
+/// `EquipInventoryData::GetInventoryItemEntryByIndex(inventory, uint itemIdx)
+/// -> InventoryItemEntry*`.
+///
+/// The one call that hands back the entry itself rather than a copy of one field of it, which is
+/// what makes [`INVENTORY_ITEM_ENTRY_SORT_ID_OFFSET`] readable. It bounds-checks `itemIdx`
+/// against `itemEntriesCount`, picks the key-item or normal-item accessor by comparing against
+/// `keyItems.capacity`, and answers null when the entry's `gaItemHandle` is null -- so a null
+/// return is "no entry there", not a fault.
+pub const GET_INVENTORY_ITEM_ENTRY_BY_INDEX_RVA: usize = 0x24e770;
+
+/// `InventoryItemEntry.sortId` -- the order-of-acquisition key, in a 24-byte entry.
+///
+/// # What stamps it, and why that makes it the acquisition order
+///
+/// `CS::EquipInventoryData::InsertItem` (`0x14024cfd0`) ends every successful insert with
+///
+/// ```text
+///   iVar1 = inventory->nextSortId;
+///   inventory->nextSortId = iVar1 + 1;
+///   InventoryItemEntry::UpdateQuantityAndSortId(entry, amount, iVar1, false);
+/// ```
+///
+/// so an entry's `sortId` is the value of the inventory's monotonic counter at the moment the
+/// item arrived. `UpdateQuantityAndSortId` (`0x140712940`) is seven instructions and re-stamps
+/// the field only when the new quantity is greater than the old one (or when its fourth argument
+/// forces it), so topping a stack up moves it and spending from it does not.
+///
+/// # The consequence a caller can use
+///
+/// An item that leaves an inventory entirely and comes back is a new insert, and therefore lands
+/// at the top of the order. That is the mechanism behind
+/// `crate::storage`-style deposit-then-retrieve reordering: it is the same thing a player does at
+/// a storage box, and it re-stamps `sortId` because the engine's own acquisition path does.
+/// Merging into a stack that is still present does not re-stamp it --
+/// `TransferItemBetweenInventoryDatas` routes a stackable whose destination already holds one
+/// through `AdjustQuantityBy` instead of `InsertItem` -- so a caller that wants the re-stamp has
+/// to move the whole stack out first.
+///
+/// Structure confirmed in the 1.16.2 dump: `InventoryItemEntry` is 24 bytes,
+/// `gaItemHandle +0x0`, `itemId +0x4`, `quantity +0x8`, `sortId +0xc`, `isNew +0x10`,
+/// `potGroupId +0x14`.
+pub const INVENTORY_ITEM_ENTRY_SORT_ID_OFFSET: usize = 0xc;
 
 // ---- the equipped loadout: read by the importer, the exporter and the HUD badge ----
 //

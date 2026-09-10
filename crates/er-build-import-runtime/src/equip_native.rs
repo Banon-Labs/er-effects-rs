@@ -35,12 +35,35 @@
 //! the ambiguous question is how this bug stayed invisible.
 
 use er_build_import_core::equip::{
-    CHR_ASM_SLOT_QUICK_BASE, EquipLedger, EquipRef, PlannedPosition, PositionKind, PositionResult,
+    CHR_ASM_SLOT_QUICK_BASE, EquipLedger, EquipRef, PlannedPosition, PlannedVacancy, PositionKind,
+    PositionResult,
 };
 use er_build_import_core::plan::ArmamentSkill;
 
 /// `EquipItemToChrAsmSlot(ChrAsmSlot slot, MenuGaitem *item)`.
 const EQUIP_ITEM_TO_CHR_ASM_SLOT_RVA: usize = 0x787c30;
+/// `UnequipItem(ChrAsmSlot slot, bool removeItem)` -- the engine's own "take this off".
+///
+/// It is what `EquipItemToChrAsmSlot` itself calls when the menu hands it a gaitem whose
+/// `itemId` is `-1`, so it is the same code path a player takes when they clear a slot in the
+/// equipment menu, not a reimplementation of one.
+///
+/// One function covers both families, which is why the vacate pass needs only this address where
+/// the equip pass needs two. `IsSlotLessThen40_` splits it: a quickbar, pouch or great-rune slot
+/// goes through `ConvertChrAsmSlotToQuickItemOrPouchSlot`, and everything else through
+/// `FUN_140247160(egd, slot, true)`, which restores the slot's own idea of empty -- the unarmed
+/// fist for a hand, `GetDefaultItemIdForEmptyProtectorSlot` for a piece of armour, a null entry
+/// for ammunition and talismans. Both branches end in `BroadCastEquipmentChange`, so the worn
+/// model and the HUD follow.
+///
+/// `removeItem` is passed `false` at every call site in this crate. Passing `true` routes through
+/// `CS::EquipGameData::RemoveItem` and destroys the item; the point of a vacancy is that the item
+/// stops being worn and stays in the inventory.
+///
+/// It reads `GLOBAL_CSMenuMan`, `GLOBAL_GameDataMan->mainPlayerGameData` and `GLOBAL_WorldChrMan`
+/// for itself, and takes the `DLPanic` path on the first and third when they are null -- which is
+/// why [`vacate_all`] proves the player is in the world before it calls this at all.
+const UNEQUIP_ITEM_RVA: usize = 0x789e60;
 // Both addresses are declared once in `er-game-base::rva`, which `er-better-refills` also
 // reads them from.
 use er_game_base::rva::{
@@ -162,6 +185,9 @@ type SetEntriesFn = unsafe extern "system" fn(usize, i32, *const u32, i32, bool,
 type RefreshFn = unsafe extern "system" fn(usize);
 type BroadcastFn = unsafe extern "system" fn(usize);
 type SetQuickFn = unsafe extern "system" fn(usize, u32, *const u32, u32);
+/// `UnequipItem(ChrAsmSlot slot, bool removeItem)`. Takes no `EquipGameData*`: it walks to it
+/// from `GLOBAL_GameDataMan` itself.
+type UnequipFn = unsafe extern "system" fn(i32, bool);
 /// `CS::EquipGameData::GetItemIdByQuickSlotIndex(egd, int *out, uint index) -> int*` --
 /// out-parameter form, like every other `Get*` here.
 type GetQuickIdFn = unsafe extern "system" fn(usize, *mut i32, u32) -> *mut i32;
@@ -436,6 +462,45 @@ struct EquipNatives {
     /// in the ledger, and this module's whole discipline is that no number is derived from a call
     /// having been made. `None` means those positions are not attempted at all.
     quick: Option<QuickNatives>,
+    /// The engine's own unequip. Used by [`vacate_all`]; the reorder pass opens its own.
+    ///
+    /// Optional for the same reason `gate` is: its absence costs one pass and leaves the rest of
+    /// the equip working. A build the address has no mapping for reports every vacancy as not
+    /// attempted rather than silently leaving the previous build's gear on the character while
+    /// the log says the import succeeded.
+    unequip: Option<SlotClearer>,
+}
+
+/// The engine's own "take this off", resolved once.
+///
+/// A type of its own because two passes need it and neither should resolve a game address twice:
+/// [`vacate_all`] clears the positions a build leaves empty, and the reorder pass clears the one
+/// slot standing between a worn item and the storage box.
+#[derive(Clone, Copy)]
+pub struct SlotClearer {
+    unequip: UnequipFn,
+}
+
+impl SlotClearer {
+    /// Resolve `UnequipItem` for the running build, or `None`.
+    pub fn open(module_base: usize) -> Option<Self> {
+        let address = crate::native::resolve(module_base, UNEQUIP_ITEM_RVA, "UnequipItem")?;
+        // Safety: resolved for the running build on the line above.
+        Some(Self {
+            unequip: unsafe { core::mem::transmute::<usize, UnequipFn>(address) },
+        })
+    }
+
+    /// Take whatever is in `slot` off, leaving it in the inventory.
+    ///
+    /// # Safety
+    ///
+    /// Game thread, and the player must be in the world: `UnequipItem` reads `GLOBAL_CSMenuMan`
+    /// and `GLOBAL_WorldChrMan` for itself and takes the `DLPanic` path on either being null.
+    pub unsafe fn clear(&self, slot: i32) {
+        // Safety: delegated to the caller's contract; `false` keeps the item in the inventory.
+        unsafe { (self.unequip)(slot, false) };
+    }
 }
 
 /// The quick/pouch/rune writer and its read-back, resolved together. See [`EquipNatives::quick`].
@@ -538,6 +603,10 @@ impl EquipNatives {
         )
         // Safety: resolved for the running build immediately above.
         .map(|address| unsafe { core::mem::transmute::<usize, GateFn>(address) });
+        // Separately again, and for the opposite reason to the gate: its absence changes exactly
+        // one pass. `equip_all` never calls it, so a build without a mapping for it must still be
+        // able to equip.
+        let unequip = SlotClearer::open(module_base);
         // Safety: every address below was resolved for the running build by `resolve_all`.
         Ok(unsafe {
             Self {
@@ -555,6 +624,7 @@ impl EquipNatives {
                 broadcast: core::mem::transmute::<usize, BroadcastFn>(broadcast),
                 gate,
                 quick,
+                unequip,
             }
         })
     }
@@ -606,6 +676,234 @@ unsafe fn read_quick_position(
         // Every other kind is a ChrAsm equipment entry, answered by GetParamIdInSlot instead.
         _ => -1,
     }
+}
+
+/// What a hand reads back as once it holds nothing: the Unarmed fist.
+///
+/// `GetDefaultUnarmedParamId` (`0x140248270`) is a three-instruction leaf whose whole body is
+/// `mov dword ptr [rcx], 0x1adb0 ; mov rax, rcx ; ret`, so the value is the function. It is
+/// written here as a constant rather than resolved as an eleventh native because an address that
+/// has to be carried across game builds to fetch a compile-time constant is a liability with no
+/// upside: clearing a hand does not put nothing in it, it puts the fist in it, and this is the id
+/// that says so.
+const UNARMED_PARAM_ID: i32 = 0x1adb0;
+
+/// What each armour slot reads back as once it holds nothing, in `ChrAsmSlot` order from
+/// [`CHR_ASM_SLOT_PROTECTOR_HEAD`]: head, chest, arms, legs.
+///
+/// `GetDefaultItemIdForEmptyProtectorSlot` (`0x140d473d0`) is a four-way constant switch
+/// returning the category-tagged item ids `0x10002710`, `0x10002774`, `0x100027d8`, `0x1000283c`.
+/// `GetParamIdInSlot` answers with the param row rather than the tagged id, so the category
+/// nibble is dropped here and the rows are what remain.
+const EMPTY_PROTECTOR_PARAM_IDS: [i32; 4] = [10000, 10100, 10200, 10300];
+
+/// The value a vacated position of this kind reads back as.
+///
+/// Two of the four families do not read back as `-1`, and that is the whole reason this exists:
+/// the engine fills a bare hand with the Unarmed fist and a bare armour slot with that slot's
+/// empty-piece row, so a vacate pass that treated `-1` as the only empty would report every
+/// successfully cleared hand and every cleared piece of armour as still occupied.
+fn empty_value(kind: PositionKind, index: usize) -> i32 {
+    match kind {
+        PositionKind::Armament => UNARMED_PARAM_ID,
+        PositionKind::Protector => EMPTY_PROTECTOR_PARAM_IDS
+            .get(index)
+            .copied()
+            // A protector index outside 0..4 is not a body part the game has, so nothing can be
+            // wearing anything there; `-1` is the answer that reads as empty for it.
+            .unwrap_or(-1),
+        _ => -1,
+    }
+}
+
+/// What one vacate pass did, measured by reading each position back rather than by counting calls.
+#[derive(Debug, Default)]
+pub struct VacateOutcome {
+    /// Positions the plan asked to be empty.
+    pub attempted: usize,
+    /// Positions that held something and hold nothing now, proved by reading them back.
+    pub cleared: usize,
+    /// Positions that were already empty, so nothing was called for them.
+    pub already_empty: usize,
+    /// `(kind, slot, the id still there)` for a position the clear did not empty.
+    pub still_occupied: Vec<(PositionKind, i32, i32)>,
+    /// `(kind, slot)` for a position that could not be read, so its clear is unproven.
+    ///
+    /// A quickbar or pouch vacancy on a build whose quick natives have no mapping lands here: the
+    /// call may well have worked, and this pass will not claim it did.
+    pub unproven: Vec<(PositionKind, i32)>,
+    /// Why nothing at all was attempted, when that is the answer.
+    pub unavailable: Option<&'static str>,
+}
+
+impl VacateOutcome {
+    /// One line for the import log.
+    pub fn summary(&self) -> String {
+        match self.unavailable {
+            Some(why) => format!(
+                "VACATE: {} position(s) the build leaves empty were not cleared -- {why}",
+                self.attempted
+            ),
+            None => format!(
+                "VACATE: {}/{} position(s) the build leaves empty are empty ({} were already,                  {} still hold something, {} could not be read back)",
+                self.cleared + self.already_empty,
+                self.attempted,
+                self.already_empty,
+                self.still_occupied.len(),
+                self.unproven.len()
+            ),
+        }
+    }
+}
+
+/// Take off everything the build does not ask the character to wear.
+///
+/// # Why an import has to do this at all
+///
+/// Equipping is not the complement of a build: it writes the positions the build fills and says
+/// nothing about the ones it leaves empty. Import build B onto a character that was wearing build
+/// A and the character ends up wearing the union of the two -- B's talisman beside A's, B's three
+/// quickbar entries beside A's other seven, A's great rune still lit. Nothing in the old log said
+/// so, because every number it printed was measured against the positions B filled.
+///
+/// This pass closes that gap from the other side. Its denominator is
+/// [`er_build_import_core::equip::EquipPlan::vacancies`], the positions the plan explicitly wants
+/// empty, and its numerator is a read-back of each one.
+///
+/// # It does not destroy anything
+///
+/// `UnequipItem`'s `removeItem` is `false`, so a vacated item goes back to being an ordinary
+/// inventory entry. Everything this pass takes off is still in the player's pockets afterwards
+/// and can be put straight back on.
+///
+/// # Ordering
+///
+/// Run it before the equip pass, never after. Two reasons, and the second is the sharp one:
+/// clearing a slot the equip is about to fill would undo the equip, and a vacated slot is a slot
+/// whose inventory entry is no longer named by `EquipGameData.equipmentItemIdxList` -- which is
+/// what lets [`crate::storage::Storage::deposit`] move it, and therefore what lets the reorder
+/// pass touch anything that was worn.
+///
+/// # Safety
+///
+/// Game thread, character in the world (`UnequipItem` reads `GLOBAL_WorldChrMan->mainPlayerIns`
+/// and `GLOBAL_CSMenuMan` for itself and takes the `DLPanic` path on a null singleton, so the
+/// caller must have proved the player is present), `egd` a live `EquipGameData*`.
+pub unsafe fn vacate_all(
+    module_base: usize,
+    egd: usize,
+    vacancies: &[PlannedVacancy],
+) -> VacateOutcome {
+    let mut outcome = VacateOutcome {
+        attempted: vacancies.len(),
+        ..VacateOutcome::default()
+    };
+    if vacancies.is_empty() {
+        return outcome;
+    }
+
+    let natives = match EquipNatives::resolve(module_base) {
+        Ok(natives) => natives,
+        Err(_) => {
+            outcome.unavailable =
+                Some("the equip natives have no verified mapping for the running build");
+            return outcome;
+        }
+    };
+    let Some(unequip) = natives.unequip else {
+        outcome.unavailable = Some("`UnequipItem` has no verified mapping for the running build");
+        return outcome;
+    };
+
+    // Checked, not assumed, and checked here rather than trusted from the caller. `UnequipItem`
+    // reads both of these for itself and takes the `DLPanic` path -- which does not return -- when
+    // either is null. The importer only runs with a character in the world, so both should hold;
+    // "should" is the reason the two lines below exist, and it is the same reason
+    // `storage::Storage::open` opens with the identical pair.
+    // Safety: game thread; the helper is fault-checked and answers false at the title screen.
+    if !unsafe { crate::grant::player_present() } {
+        outcome.unavailable =
+            Some("the player is not in the world, and `UnequipItem` dereferences `mainPlayerIns`");
+        return outcome;
+    }
+    // Safety: a fault-checked read of one pointer-sized slot in the loaded image.
+    if er_game_base::mem::read_global_ptr(
+        module_base,
+        er_game_base::rva::CS_MENU_MAN_GLOBAL_RVA,
+        "CS_MENU_MAN_GLOBAL_RVA",
+    ) == 0
+    {
+        outcome.unavailable =
+            Some("`CSMenuMan` is null, and `UnequipItem` takes the DLPanic path on that");
+        return outcome;
+    }
+
+    for vacancy in vacancies {
+        let empty = empty_value(vacancy.kind, vacancy.index);
+        // Safety: game thread, `egd` live, and the index is the plan's own position number.
+        let Some(before) =
+            (unsafe { read_position(&natives, egd, vacancy.kind, vacancy.slot, vacancy.index) })
+        else {
+            outcome.unproven.push((vacancy.kind, vacancy.slot));
+            continue;
+        };
+        if before == empty {
+            outcome.already_empty += 1;
+            continue;
+        }
+        // Safety: resolved for the running build, called on the game thread with the player in
+        // the world; the item returns to the inventory instead of being destroyed.
+        unsafe { unequip.clear(vacancy.slot) };
+        // Safety: as the read above.
+        let Some(after) =
+            (unsafe { read_position(&natives, egd, vacancy.kind, vacancy.slot, vacancy.index) })
+        else {
+            outcome.unproven.push((vacancy.kind, vacancy.slot));
+            continue;
+        };
+        if after == empty {
+            outcome.cleared += 1;
+        } else {
+            outcome
+                .still_occupied
+                .push((vacancy.kind, vacancy.slot, after));
+        }
+    }
+
+    outcome
+}
+
+/// What a position holds right now, or `None` when nothing on this build can read it.
+///
+/// The two families answer through different functions and the split is the same one
+/// [`read_quick_position`] draws, so it is drawn once here and both the vacate read-backs use it.
+///
+/// # Safety
+///
+/// Game thread, `egd` live, `natives` resolved for the running build.
+unsafe fn read_position(
+    natives: &EquipNatives,
+    egd: usize,
+    kind: PositionKind,
+    slot: i32,
+    index: usize,
+) -> Option<i32> {
+    if kind.is_quick_dispatch() {
+        let quick = natives.quick?;
+        let index = u32::try_from(index).ok()?;
+        // The dispatcher indexes the great rune at 16, not at its own kind's index 0. The
+        // quickbar and the pouch each use their own kind's index, which is what
+        // `read_quick_position` expects for both.
+        let index = if kind == PositionKind::GreatRune {
+            QUICK_DISPATCH_MAX_INDEX
+        } else {
+            index
+        };
+        // Safety: delegated to the reader that owns the three quick families.
+        return Some(unsafe { read_quick_position(quick, egd, kind, index) });
+    }
+    // Safety: resolved for the running build; a plain two-argument getter over a live struct.
+    Some(unsafe { (natives.param_in_slot)(egd, slot) })
 }
 
 /// Equip everything the ledger's plan asks for, recording each position's read-back into it.
@@ -676,6 +974,10 @@ pub unsafe fn equip_all(
         broadcast,
         gate,
         quick,
+        // `equip_all` never takes anything off deliberately: the one unequip it depends on is the
+        // one `EquipItemToChrAsmSlot` performs for itself when a position's previous occupant has
+        // to make way. Clearing a position is `vacate_all`'s job and runs before this pass.
+        unequip: _,
     } = natives;
 
     // Resolved once: BroadCastEquipmentChange wants the live PlayerIns.
@@ -1198,4 +1500,60 @@ pub unsafe fn equipped_great_rune(module_base: usize, egd: usize) -> Option<i32>
     // Safety: as above.
     unsafe { get(egd, &raw mut out, 0) };
     Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The two addresses the vacate pass adds, pinned to the static RE that established them.
+    #[test]
+    fn the_unequip_rva_matches_the_1162_static_re() {
+        assert_eq!(UNEQUIP_ITEM_RVA, 0x789e60);
+        assert_eq!(EQUIP_ITEM_TO_CHR_ASM_SLOT_RVA, 0x787c30);
+    }
+
+    /// Clearing a slot does not leave it holding nothing, and two of the four families say so.
+    ///
+    /// `FUN_140247160` fills a bare hand with the Unarmed fist and a bare armour slot with that
+    /// slot's empty-piece row. A read-back that treated `-1` as the only empty would report every
+    /// cleared hand and every cleared piece of armour as still occupied -- ten of the twenty-two
+    /// `ChrAsm` positions.
+    #[test]
+    fn a_cleared_hand_holds_the_fist_and_cleared_armour_holds_its_empty_piece() {
+        assert_eq!(empty_value(PositionKind::Armament, 0), 0x1adb0);
+        assert_eq!(empty_value(PositionKind::Protector, 0), 10000);
+        assert_eq!(empty_value(PositionKind::Protector, 1), 10100);
+        assert_eq!(empty_value(PositionKind::Protector, 2), 10200);
+        assert_eq!(empty_value(PositionKind::Protector, 3), 10300);
+    }
+
+    /// Everything else does read back as `-1`.
+    #[test]
+    fn the_other_families_are_empty_at_minus_one() {
+        for kind in [
+            PositionKind::Ammo,
+            PositionKind::Talisman,
+            PositionKind::Quickbar,
+            PositionKind::Pouch,
+            PositionKind::GreatRune,
+        ] {
+            assert_eq!(empty_value(kind, 0), -1, "{kind:?}");
+        }
+    }
+
+    /// A body part the game does not have cannot be wearing anything.
+    #[test]
+    fn a_protector_index_past_the_four_body_parts_is_empty_at_minus_one() {
+        assert_eq!(empty_value(PositionKind::Protector, 4), -1);
+    }
+
+    /// The empty-protector ids the engine returns are category-tagged; `GetParamIdInSlot` is not.
+    #[test]
+    fn the_empty_protector_rows_are_the_engines_ids_with_the_category_dropped() {
+        const TAGGED: [i32; 4] = [0x10002710, 0x10002774, 0x100027d8, 0x1000283c];
+        for (tagged, row) in TAGGED.into_iter().zip(EMPTY_PROTECTOR_PARAM_IDS) {
+            assert_eq!(tagged & 0x0fff_ffff, row);
+        }
+    }
 }

@@ -54,10 +54,12 @@
 //! deposit.
 
 use er_game_base::rva::{
-    CHANGE_AMOUNT_IN_BOX_RVA, CS_MENU_MAN_GLOBAL_RVA, GAME_DATA_MAN_GLOBAL_RVA,
-    GET_ADD_OR_REMOVE_AMOUNT_RVA, GET_ITEM_INVENTORY_IDX_RVA,
+    ADJUST_QUANTITY_BY_RVA, CHANGE_AMOUNT_IN_BOX_RVA, CS_MENU_MAN_GLOBAL_RVA,
+    EQUIP_GAME_DATA_REMOVE_ITEM_RVA, GAME_DATA_MAN_GLOBAL_RVA, GET_ADD_OR_REMOVE_AMOUNT_RVA,
+    GET_INVENTORY_ITEM_ENTRY_BY_INDEX_RVA, GET_ITEM_INVENTORY_IDX_RVA,
     GET_MAIN_PLAYER_STORAGE_BOX_INVENTORY_RVA, GET_QUANTITY_BY_ITEM_ID_RVA,
-    TRANSFER_ITEM_BETWEEN_INVENTORY_DATAS_RVA, UPDATE_TROPHY_STATS_RVA,
+    INVENTORY_ITEM_ENTRY_SORT_ID_OFFSET, TRANSFER_ITEM_BETWEEN_INVENTORY_DATAS_RVA,
+    UPDATE_TROPHY_STATS_RVA,
 };
 
 /// `GameDataMan::main_player_game_data`, read as a raw pointer rather than the typed `OwnedPtr`
@@ -94,6 +96,51 @@ type TransferFn = unsafe extern "system" fn(i32, usize, usize, i32, bool) -> boo
 type UpdateTrophyStatsFn = unsafe extern "system" fn(usize, *mut i32);
 type GetAddOrRemoveAmountFn = unsafe extern "system" fn(usize, *mut u32, i32) -> i32;
 type GetStorageInventoryFn = unsafe extern "system" fn() -> usize;
+type GetEntryFn = unsafe extern "system" fn(usize, u32) -> usize;
+type RemoveItemFn = unsafe extern "system" fn(usize, i32, u32, bool) -> bool;
+type AdjustQuantityFn = unsafe extern "system" fn(usize, u32, i32, *mut i32) -> u32;
+
+/// What one [`Storage::recycle`] did, measured by reading the entry back.
+///
+/// Every field is a measurement rather than a count of calls: `deposited` and `retrieved` are
+/// carried-quantity differences taken either side of a transfer, and the two sort ids are read
+/// out of the inventory entry itself.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Recycled {
+    /// How many were carried before any of this.
+    pub held_before: i32,
+    /// How many reached the box.
+    pub deposited: i32,
+    /// How many came back.
+    pub retrieved: i32,
+    /// The acquisition order before, when the entry could be read.
+    pub sort_id_before: Option<i32>,
+    /// The acquisition order after.
+    pub sort_id_after: Option<i32>,
+    /// Why nothing was moved, when that is the answer. `None` means the round trip was attempted.
+    pub declined: Option<&'static str>,
+}
+
+impl Recycled {
+    /// Whether the game re-acquired the item, proved by a strictly larger acquisition order.
+    ///
+    /// Not `deposited == retrieved`: an item can make the whole round trip and keep its old order
+    /// when the deposit was partial, because the retrieve then merges into the stack still in the
+    /// pockets through `AdjustQuantityBy`, which re-stamps nothing.
+    pub fn restamped(&self) -> bool {
+        matches!(
+            (self.sort_id_before, self.sort_id_after),
+            (Some(before), Some(after)) if after > before
+        )
+    }
+
+    /// Whether the player ends up holding as many as they started with.
+    ///
+    /// The one property a reorder must never break. A false here is an item left in the box.
+    pub fn count_preserved(&self) -> bool {
+        self.declined.is_some() || self.deposited == self.retrieved
+    }
+}
 
 /// The player's two inventories and the calls that move items between them.
 ///
@@ -112,9 +159,61 @@ pub struct Storage {
     transfer: TransferFn,
     update_trophy_stats: UpdateTrophyStatsFn,
     get_add_or_remove_amount: GetAddOrRemoveAmountFn,
+    /// Reads the entry itself, so [`Storage::carried_sort_id`] can prove a re-acquisition landed.
+    get_entry: GetEntryFn,
+    /// The discard pair, resolved together and `None` unless both resolved.
+    ///
+    /// One `Option` for the two because a partial discard needs both -- decrement, and then remove
+    /// the entry if it emptied -- and half a discard leaves a zero-quantity entry that the
+    /// quickbar may still name. This is the only field in this module whose calls destroy
+    /// something, which is why it is also the only one allowed to be absent without the whole
+    /// `Storage` refusing to open: everything else here degrades to "the item was not moved",
+    /// and losing the ability to destroy an item is not a degradation worth refusing over.
+    discard: Option<DiscardNatives>,
+}
+
+/// The two calls a discard needs. See [`Storage::discard`].
+#[derive(Clone, Copy)]
+struct DiscardNatives {
+    remove_item: RemoveItemFn,
+    adjust_quantity: AdjustQuantityFn,
+}
+
+/// Resolve the discard pair, or `None` if either half has no mapping for the running build.
+///
+/// Separate from `Storage::open`'s all-or-nothing group on purpose. That group is all-or-nothing
+/// because a half-finished transfer loses an item; this pair is optional because its absence
+/// costs only the ability to destroy one, which is a rung the importer can simply not climb.
+fn discard_natives(module_base: usize) -> Option<DiscardNatives> {
+    let [remove_item, adjust_quantity] = crate::native::resolve_all(
+        module_base,
+        [
+            (
+                EQUIP_GAME_DATA_REMOVE_ITEM_RVA,
+                "CS::EquipGameData::RemoveItem",
+            ),
+            (
+                ADJUST_QUANTITY_BY_RVA,
+                "CS::EquipInventoryData::AdjustQuantityBy",
+            ),
+        ],
+    )
+    .ok()?;
+    // Safety: both addresses were resolved for the running build immediately above.
+    Some(unsafe {
+        DiscardNatives {
+            remove_item: core::mem::transmute::<usize, RemoveItemFn>(remove_item),
+            adjust_quantity: core::mem::transmute::<usize, AdjustQuantityFn>(adjust_quantity),
+        }
+    })
 }
 
 impl Storage {
+    /// Whether this session can destroy an item at all. See [`Storage::discard`].
+    pub fn can_discard(&self) -> bool {
+        self.discard.is_some()
+    }
+
     /// Resolve every native and both inventory pointers, or refuse.
     ///
     /// `None` means the storage rungs are inert for this session and the caller should say so
@@ -164,6 +263,10 @@ impl Storage {
                     GET_ADD_OR_REMOVE_AMOUNT_RVA,
                     "EquipInventoryDat::GetAddOrRemoveAmount",
                 ),
+                (
+                    GET_INVENTORY_ITEM_ENTRY_BY_INDEX_RVA,
+                    "EquipInventoryData::GetInventoryItemEntryByIndex",
+                ),
             ],
         );
         let Ok(
@@ -175,6 +278,7 @@ impl Storage {
                 transfer,
                 update_trophy_stats,
                 get_add_or_remove_amount,
+                get_entry,
             ],
         ) = resolved
         else {
@@ -249,6 +353,9 @@ impl Storage {
             get_add_or_remove_amount: unsafe {
                 core::mem::transmute::<usize, GetAddOrRemoveAmountFn>(get_add_or_remove_amount)
             },
+            // Safety: as above.
+            get_entry: unsafe { core::mem::transmute::<usize, GetEntryFn>(get_entry) },
+            discard: discard_natives(module_base),
         })
     }
 
@@ -291,6 +398,88 @@ impl Storage {
         let mut id = item_id as i32;
         // Safety: engine-owned inventory pointer, read only.
         unsafe { (self.get_quantity)(self.box_inventory, &raw mut id) }.max(0)
+    }
+
+    /// Destroy up to `wanted` of `item_id`, and answer with how many really went.
+    ///
+    /// # The only thing in this module that cannot be undone
+    ///
+    /// Every other rung moves an item somewhere the player can walk to. This one deletes it, so
+    /// the caller owes three things before it may be reached, and `grant.rs` is where they are
+    /// checked rather than here: the item must be one the build does not ask for, the storage box
+    /// must have already refused it, and it must be a pot-group member whose presence is the thing
+    /// stopping the build's own pot from being carried. Outside that shape a discard is destroying
+    /// a player's belongings to satisfy a preference.
+    ///
+    /// # Why the caller does not have to unequip first
+    ///
+    /// `CS::EquipGameData::RemoveItem` starts by asking `GetSlotIndexByItemIndex` which slot names
+    /// the entry and calling the engine's own unequip on it, then clears the quickbar and pouch
+    /// references, then removes the entry. That is what the inventory menu is expressing when it
+    /// offers to discard ten of eleven Hefty Rock Pots: the eleventh is on the quickbar, and
+    /// discarding it is a two-step the menu makes the player do and the native does for itself.
+    ///
+    /// # Whole entry versus part of one
+    ///
+    /// `RemoveItem`'s third argument is a flag, not a count -- it reaches
+    /// `EquipInventoryData::RemoveItem`, which only tests it against zero -- so it always destroys
+    /// the entire entry. A partial discard is therefore `AdjustQuantityBy(-n)`, which clamps at
+    /// zero and answers with the new quantity; an entry that reaches zero is then removed properly
+    /// so no quickbar slot is left naming a zero-quantity entry.
+    ///
+    /// # Safety
+    ///
+    /// Game thread.
+    pub unsafe fn discard(&self, item_id: u32, wanted: i32) -> i32 {
+        let Some(discard) = self.discard else {
+            return 0;
+        };
+        if wanted <= 0 {
+            return 0;
+        }
+        // Safety: game thread, read only.
+        let before = unsafe { self.carried_quantity(item_id) };
+        let wanted = wanted.min(before);
+        if wanted <= 0 {
+            return 0;
+        }
+        // Re-resolved immediately before the destructive call, for the same reason every other
+        // method here re-resolves: an index is only valid until the next thing that reindexes.
+        // Safety: game thread, read only.
+        let index = unsafe { self.carried_index(item_id) };
+        if index < 0 {
+            return 0;
+        }
+
+        if wanted >= before {
+            // The whole entry, through the call that also takes it off the character and off the
+            // quickbar. `true` is the equip refresh the menu's own discard passes.
+            // Safety: game thread, `egd` live, index resolved on the line above.
+            unsafe { (discard.remove_item)(self.egd, index, 1, true) };
+        } else {
+            let mut clamped = 0i32;
+            // Safety: game thread, engine-owned inventory, index resolved above; the out-parameter
+            // is ours and outlives the call.
+            let left = unsafe {
+                (discard.adjust_quantity)(self.carried, index as u32, -wanted, &raw mut clamped)
+            };
+            if left == 0 {
+                // A zero-quantity entry still exists and the quickbar may still name it. Finish
+                // the job the way `TransferItemBetweenInventoryDatas` does when a move empties a
+                // stack -- through the `EquipGameData` call, so the references go too.
+                // Safety: as above; the index has not been invalidated by `AdjustQuantityBy`,
+                // which changes a quantity and does not reindex.
+                unsafe { (discard.remove_item)(self.egd, index, 1, true) };
+            }
+        }
+
+        let mut id = item_id as i32;
+        // Safety: keeps achievement state in step with what the inventory now holds, as every
+        // other mutation here does.
+        unsafe { (self.update_trophy_stats)(self.egd, &raw mut id) };
+        // Measured, not assumed: the answer is the difference the inventory reports.
+        // Safety: game thread, read only.
+        (before - unsafe { self.carried_quantity(item_id) }).max(0)
     }
 
     /// Take up to `wanted` of `item_id` out of the box. Returns how many actually arrived,
@@ -387,6 +576,139 @@ impl Storage {
         (before - unsafe { self.carried_quantity(item_id) }).max(0)
     }
 
+    /// The inventory index of the carried `item_id`, or a negative number when it is not held.
+    ///
+    /// The same ambiguity `EquipInventoryData::GetItemInventoryIdx` always has: several copies of
+    /// one armament differing only by their ash share an item id, and
+    /// `InsertItemIntoLookupMap` keeps the lowest index for a repeated one, so this names a copy
+    /// rather than the copy.
+    ///
+    /// # Safety
+    ///
+    /// Game thread.
+    pub unsafe fn carried_index(&self, item_id: u32) -> i32 {
+        let mut id = item_id as i32;
+        // Safety: engine-owned inventory pointer, read only.
+        unsafe { (self.get_item_idx)(self.carried, &raw mut id) }
+    }
+
+    /// The acquisition order stamped on the carried `item_id`, or `None` when it is not held.
+    ///
+    /// This is the number the equipment menu's `Order of Acquisition` sort reads, and the only
+    /// evidence that a [`Storage::recycle`] actually re-acquired something rather than merely
+    /// moving it twice. `InsertItem` stamps it from the inventory's own `nextSortId` counter and
+    /// increments, so a re-acquired entry comes back with a strictly larger one -- which is what
+    /// [`Recycled::restamped`] checks. Counting the two transfers would prove neither.
+    ///
+    /// # Safety
+    ///
+    /// Game thread.
+    pub unsafe fn carried_sort_id(&self, item_id: u32) -> Option<i32> {
+        // Safety: game thread, read only.
+        let index = unsafe { self.carried_index(item_id) };
+        let index = u32::try_from(index).ok()?;
+        // Safety: engine-owned inventory pointer and an index it bounds-checks itself; it answers
+        // null rather than faulting when nothing is filed there.
+        let entry = unsafe { (self.get_entry)(self.carried, index) };
+        if entry == 0 {
+            return None;
+        }
+        // Safety: a fault-checked read of one int at a confirmed offset inside a live entry.
+        unsafe { er_game_base::mem::safe_read_i32(entry + INVENTORY_ITEM_ENTRY_SORT_ID_OFFSET) }
+    }
+
+    /// Put the whole carried stack of `item_id` in the box and take it straight back out, so the
+    /// game re-acquires it and stamps it at the top of the acquisition order.
+    ///
+    /// # Why a round trip rather than writing the field
+    ///
+    /// `InventoryItemEntry.sortId` is four bytes at a known offset and could be assigned directly.
+    /// It is not, because what an assignment would be trying to imitate is an acquisition, and an
+    /// acquisition is more than that field: `InsertItem` also advances `nextSortId`, updates the
+    /// lookup map, pushes the recent-item index, and runs `SpecialItemUpdate`. Doing the thing
+    /// the player does at a storage box gets all of that for free and stays correct even where
+    /// this module's reading of the sort is wrong.
+    ///
+    /// # The three ways it declines, all of them reported rather than silent
+    ///
+    /// * `available` is false when the entry is worn. `EquipGameData.equipmentItemIdxList` holds
+    ///   inventory indices, so removing an entry a `ChrAsm` slot still names leaves that slot
+    ///   pointing at a freed one. The caller unequips first or does not reorder that item;
+    /// * `deposited < held_before` means the box would not take the whole stack -- it was full,
+    ///   or `CanDepositItemToStorageBox` refused the item. What is left behind stays in the
+    ///   pockets, so the retrieve merges into it through `AdjustQuantityBy` and no re-stamp
+    ///   happens. The count is restored either way, and [`Recycled::restamped`] answers false;
+    /// * `distinct_instances` is the armament case, and it declines twice. Copies of one armament
+    ///   that differ only by their ash share an item id, and every question this module can ask --
+    ///   `GetItemInventoryIdx`, the retrieve path, `GetQuantityByItemId` -- is asked by id. So
+    ///   retrieving from a box that already holds that id can hand back the box's copy and strand
+    ///   the player's, and a character holding more than one copy cannot say which copy is being
+    ///   moved. The second case would otherwise arrive disguised: `GetQuantityByItemId` counts
+    ///   matching entries for a non-stackable rather than reading a quantity, so four Misericordes
+    ///   answer `4` while each entry holds one, and a deposit of four against an entry of one is
+    ///   refused by `TransferItemBetweenInventoryDatas`'s own `quantity <= entry quantity` guard --
+    ///   reported as "the box would not take it" rather than as the ambiguity it really is.
+    ///
+    /// # Safety
+    ///
+    /// Game thread.
+    pub unsafe fn recycle(&self, item_id: u32, distinct_instances: bool) -> Recycled {
+        // Safety: game thread, all reads.
+        let held_before = unsafe { self.carried_quantity(item_id) };
+        let mut out = Recycled {
+            held_before,
+            // Safety: game thread, read only.
+            sort_id_before: unsafe { self.carried_sort_id(item_id) },
+            ..Recycled::default()
+        };
+        if held_before <= 0 {
+            out.declined = Some("not carried");
+            return out;
+        }
+        // Safety: game thread, read only.
+        let index = unsafe { self.carried_index(item_id) };
+        if index < 0 {
+            out.declined = Some("no inventory entry");
+            return out;
+        }
+        // Safety: a bounded read of 22 ints inside a live `EquipGameData`.
+        if unsafe { self.is_equipped_index(index) } {
+            out.declined = Some("worn, and an entry a ChrAsm slot names must not be removed");
+            return out;
+        }
+        // Safety: game thread, read only.
+        if distinct_instances {
+            if held_before > 1 {
+                out.declined = Some(
+                    "the character holds more than one copy of this armament, and the item id \
+                     cannot name one of them",
+                );
+                return out;
+            }
+            // Safety: game thread, read only.
+            if unsafe { self.stored_quantity(item_id) } > 0 {
+                out.declined = Some(
+                    "the box already holds this id, and copies of an armament cannot be told \
+                     apart by id",
+                );
+                return out;
+            }
+        }
+
+        // Safety: game thread; deposits the whole stack, so the entry is removed rather than
+        // decremented and the retrieve below is a fresh insert.
+        out.deposited = unsafe { self.deposit(item_id, held_before) };
+        if out.deposited <= 0 {
+            out.declined = Some("the box would not take it");
+            return out;
+        }
+        // Safety: game thread; takes back exactly what went in, never more.
+        out.retrieved = unsafe { self.pull(item_id, out.deposited) };
+        // Safety: game thread, read only.
+        out.sort_id_after = unsafe { self.carried_sort_id(item_id) };
+        out
+    }
+
     /// Whether a ChrAsm slot names this inventory index.
     ///
     /// The same scan `er-better-refills::is_equipped_item_idx` runs, and for the same reason: the
@@ -396,12 +718,31 @@ impl Storage {
     /// # Safety
     ///
     /// Game thread, `self.egd` a live `EquipGameData*`.
-    unsafe fn is_equipped_index(&self, index: i32) -> bool {
-        (0..EQUIPMENT_ITEM_IDX_LIST_LEN).any(|slot| {
+    pub unsafe fn is_equipped_index(&self, index: i32) -> bool {
+        // Safety: delegated to the scan that answers the same question with the slot number.
+        unsafe { self.equipped_slot_of_index(index) }.is_some()
+    }
+
+    /// Which `ChrAsmSlot` names this inventory index, if any.
+    ///
+    /// The scan, rather than `CS::EquipGameData::GetSlotIndexByItemIndex` (`0x140248440`), which
+    /// answers the same question and cannot express one of its answers: it returns `ChrAsmSlot`,
+    /// its not-found value is `None`, and `None` and `WeaponLeft1` are both zero -- so an item in
+    /// the left hand's first slot is indistinguishable from an item that is not worn at all. That
+    /// slot is `armament_slot(3)`, an ordinary off-hand, so the ambiguity would land on a common
+    /// case and read as "not worn", which is the answer that lets a worn entry be deposited.
+    ///
+    /// Reading `equipmentItemIdxList` directly has no such gap: the index is the slot.
+    ///
+    /// # Safety
+    ///
+    /// Game thread, `self.egd` a live `EquipGameData*`.
+    pub unsafe fn equipped_slot_of_index(&self, index: i32) -> Option<i32> {
+        (0..EQUIPMENT_ITEM_IDX_LIST_LEN).find_map(|slot| {
             let addr = self.egd + EQUIPMENT_ITEM_IDX_LIST_OFFSET + slot * size_of::<i32>();
             // Safety: a fault-checked read inside a live object; a failed read is not a match.
             let equipped = unsafe { er_game_base::mem::safe_read_i32(addr) };
-            equipped == Some(index)
+            (equipped == Some(index)).then(|| i32::try_from(slot).unwrap_or(-1))
         })
     }
 }
@@ -423,6 +764,106 @@ mod tests {
         assert_eq!(TRANSFER_ITEM_BETWEEN_INVENTORY_DATAS_RVA, 0x24db90);
         assert_eq!(UPDATE_TROPHY_STATS_RVA, 0x24a1a0);
         assert_eq!(GET_ADD_OR_REMOVE_AMOUNT_RVA, 0x24c630);
+        assert_eq!(GET_INVENTORY_ITEM_ENTRY_BY_INDEX_RVA, 0x24e770);
+        assert_eq!(EQUIP_GAME_DATA_REMOVE_ITEM_RVA, 0x248ad0);
+        assert_eq!(ADJUST_QUANTITY_BY_RVA, 0x24bfe0);
+    }
+
+    /// The discard pair is the only optional group here, and the two halves move together.
+    ///
+    /// Half a discard is a decrement with no removal, which leaves a zero-quantity entry that a
+    /// quickbar slot may still name -- so `discard_natives` returns `None` unless both resolved,
+    /// and `Storage::discard` returns 0 rather than doing half the job.
+    #[test]
+    fn the_discard_pair_is_all_or_nothing() {
+        // `resolve_all` is what enforces it, and its contract is `Err` naming every missing name
+        // rather than a partial array. The `.ok()?` in `discard_natives` turns that into `None`.
+        // Asserted here as the shape the two addresses above are wired through, so a future edit
+        // that resolves them separately fails a test instead of shipping a half discard.
+        let source = include_str!("storage.rs");
+        assert!(
+            source.contains("fn discard_natives(module_base: usize) -> Option<DiscardNatives>"),
+            "the discard pair must resolve as one Option"
+        );
+        assert!(
+            source.contains("let Some(discard) = self.discard else {"),
+            "`discard` must refuse outright when the pair is absent"
+        );
+    }
+
+    /// `InventoryItemEntry` is 24 bytes and `sortId` is the fourth int in it.
+    #[test]
+    fn sort_id_sits_where_the_1162_structure_puts_it() {
+        assert_eq!(INVENTORY_ITEM_ENTRY_SORT_ID_OFFSET, 0xc);
+    }
+
+    /// A round trip proves itself with the entry's own acquisition order, never with its own
+    /// return value.
+    #[test]
+    fn a_recycle_is_restamped_only_when_the_order_actually_moved() {
+        let moved = Recycled {
+            held_before: 3,
+            deposited: 3,
+            retrieved: 3,
+            sort_id_before: Some(12),
+            sort_id_after: Some(140),
+            declined: None,
+        };
+        assert!(moved.restamped());
+        assert!(moved.count_preserved());
+
+        // The partial deposit. Everything came back, the counts balance, and the retrieve merged
+        // into the stack still in the pockets through `AdjustQuantityBy` -- which re-stamps
+        // nothing, so the item is exactly where it was in the order.
+        let merged = Recycled {
+            sort_id_after: Some(12),
+            ..moved
+        };
+        assert!(!merged.restamped());
+        assert!(merged.count_preserved());
+    }
+
+    /// The one failure that costs the player an item rather than a sort order.
+    #[test]
+    fn an_item_left_in_the_box_is_not_a_preserved_count() {
+        let stranded = Recycled {
+            held_before: 5,
+            deposited: 5,
+            retrieved: 2,
+            sort_id_before: Some(4),
+            sort_id_after: Some(90),
+            declined: None,
+        };
+        assert!(!stranded.count_preserved());
+
+        // A decline moved nothing at all, so the count is trivially intact.
+        let declined = Recycled {
+            held_before: 5,
+            declined: Some("the box would not take it"),
+            ..Recycled::default()
+        };
+        assert!(declined.count_preserved());
+        assert!(!declined.restamped());
+    }
+
+    /// An entry that could not be read is not evidence either way.
+    #[test]
+    fn an_unreadable_sort_id_never_counts_as_a_restamp() {
+        let unread = Recycled {
+            held_before: 1,
+            deposited: 1,
+            retrieved: 1,
+            sort_id_before: None,
+            sort_id_after: Some(90),
+            declined: None,
+        };
+        assert!(!unread.restamped());
+        let unread_after = Recycled {
+            sort_id_before: Some(1),
+            sort_id_after: None,
+            ..unread
+        };
+        assert!(!unread_after.restamped());
     }
 
     /// `EquipGameData` field offsets, from the 1.16.2 dump's structure (0x4b0 bytes).

@@ -1869,3 +1869,106 @@ fn a_pot_capped_consumable_asks_for_more_than_one_and_names_its_group() {
         "the quantity reaches the ItemGib record"
     );
 }
+
+// ---------------------------------------------------- positions left empty
+
+use er_build_import_core::equip::{
+    CHR_ASM_SLOT_ACCESSORY_1, CHR_ASM_SLOT_GREAT_RUNE, CHR_ASM_SLOT_QUICK_BASE, POUCH_SLOTS,
+    armament_slot,
+};
+
+#[test]
+fn a_position_is_either_filled_or_vacated_never_both_and_never_neither() {
+    // The property the pair has to have: `positions` and `vacancies` partition every position the
+    // plan models. A position in neither is the gap this feature closed -- it is what let the
+    // previous build's talisman stay on a character importing a build that wears none.
+    let plan = equipped();
+    let filled: Vec<(PositionKind, i32)> = plan
+        .positions()
+        .into_iter()
+        .filter(|position| position.kind != PositionKind::Physick)
+        .map(|position| {
+            (
+                position.kind,
+                position.slot.expect("every non-physick has a slot"),
+            )
+        })
+        .collect();
+    let empty: Vec<(PositionKind, i32)> = plan
+        .vacancies()
+        .into_iter()
+        .map(|vacancy| (vacancy.kind, vacancy.slot))
+        .collect();
+
+    for position in &filled {
+        assert!(
+            !empty.contains(position),
+            "{position:?} is both filled and vacated"
+        );
+    }
+    let expected = plan.armaments.len()
+        + plan.ammo.len()
+        + 4
+        + plan.talismans.len()
+        + QUICKBAR_SLOTS
+        + POUCH_SLOTS
+        + 1;
+    assert_eq!(
+        filled.len() + empty.len(),
+        expected,
+        "every position the plan models has to be in exactly one of the two lists"
+    );
+}
+
+#[test]
+fn the_armament_slot_this_build_leaves_bare_is_vacated() {
+    // The fixture fills five of six armament positions; planner index 5 is empty, and its
+    // `ChrAsmSlot` is what the vacate pass has to clear.
+    let vacancies = equipped().vacancies();
+    let bare = armament_slot(5).expect("planner index 5 is a real position");
+    assert!(
+        vacancies
+            .iter()
+            .any(|vacancy| vacancy.kind == PositionKind::Armament && vacancy.slot == bare),
+        "the sixth armament position is empty in this build and is not being cleared: {vacancies:?}"
+    );
+}
+
+#[test]
+fn a_build_that_equips_nothing_vacates_every_position_it_models() {
+    let doc = model::parse("{}").expect("an empty document parses");
+    let plan = equip_plan(&doc, &fixture_catalog::catalog(), Capacity::default());
+    assert!(plan.positions().is_empty());
+    let vacancies = plan.vacancies();
+    // The great rune is one position and is not in any of the counted lists.
+    assert!(
+        vacancies
+            .iter()
+            .any(|vacancy| vacancy.slot == CHR_ASM_SLOT_GREAT_RUNE
+                && vacancy.kind == PositionKind::GreatRune)
+    );
+    // The talisman slots are contiguous from Accessory1, and the quickbar from its own base.
+    for offset in 0..plan.talismans.len() {
+        let slot = CHR_ASM_SLOT_ACCESSORY_1 + i32::try_from(offset).expect("small");
+        assert!(vacancies.iter().any(|vacancy| vacancy.slot == slot));
+    }
+    for offset in 0..QUICKBAR_SLOTS + POUCH_SLOTS {
+        let slot = CHR_ASM_SLOT_QUICK_BASE + i32::try_from(offset).expect("small");
+        assert!(vacancies.iter().any(|vacancy| vacancy.slot == slot));
+    }
+}
+
+#[test]
+fn the_physick_is_never_vacated() {
+    // Deliberate asymmetry, and the one place `vacancies` is not the complement of `positions`.
+    // A build that names no tear is far more often one authored before the planner modelled the
+    // flask than a deliberate instruction to empty it.
+    let doc = model::parse("{}").expect("an empty document parses");
+    let plan = equip_plan(&doc, &fixture_catalog::catalog(), Capacity::default());
+    assert_eq!(plan.physick.len(), PHYSICK_SLOTS);
+    assert!(
+        plan.vacancies()
+            .iter()
+            .all(|vacancy| vacancy.kind != PositionKind::Physick)
+    );
+}

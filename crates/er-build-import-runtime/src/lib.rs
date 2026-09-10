@@ -44,6 +44,7 @@ pub mod gem_mount;
 pub mod grant;
 pub mod native;
 pub mod read_character;
+pub mod reorder;
 pub mod storage;
 pub mod upload;
 
@@ -140,6 +141,17 @@ pub struct Report {
     pub name: Option<String>,
     /// Names the catalog could not resolve to an item id.
     pub unresolved: usize,
+    /// Items re-acquired into the build's order, out of those the character already held.
+    ///
+    /// Not part of [`Report::summary`]: a player reads that line to find out whether they got
+    /// their build, and the inventory sort order is not what they mean by that. It is in the
+    /// report so the log line and the telemetry have one source.
+    pub reordered: (usize, usize),
+    /// Equipment positions the build leaves empty that are empty afterwards, out of those it
+    /// leaves empty.
+    pub vacated: (usize, usize),
+    /// Consumables destroyed to free a pot group the storage box would not take.
+    pub discarded: u32,
 }
 
 impl Report {
@@ -623,6 +635,7 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
     // Safety: game thread, character loaded (checked by the caller), verified RVAs.
     let outcome = unsafe { grant::grant_all(module_base, &planned.grants) };
     report.granted = (outcome.confirmed, outcome.attempted);
+    report.discarded = outcome.discarded_to_free_pots;
     log_line(&format!(
         "[build-import] GRANTED: {}/{} confirmed AT THE REQUESTED QUANTITY ({} short, {} missing \
          entirely, {} already held and left alone)",
@@ -647,6 +660,19 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
             "[build-import] STORAGE: {} item(s) moved back out of the box instead of duplicated, \
              {} deposited into it to free pot-group capacity",
             outcome.pulled_from_storage, outcome.deposited_to_storage
+        ));
+    }
+    // On its own line, never folded into the storage counts, and printed whenever it is non-zero
+    // even though the per-item lines already said it. A deposit and a discard both read as "the
+    // item left your pockets" and only one of them can be walked back, so the irreversible one
+    // gets its own headline or it hides inside the harmless one.
+    if outcome.discarded_to_free_pots > 0 {
+        log_line(&format!(
+            "[build-import] DISCARDED: {} consumable(s) were DESTROYED, not stored. The storage \
+             box refused them -- it was already at their maxRepositoryNum -- and their pot group \
+             was what stopped the build's own pots from being carried. Nothing else this import \
+             did is irreversible; this is",
+            outcome.discarded_to_free_pots
         ));
     }
     // Short is not missing, and it is the one the old report could not say. Printed before the
@@ -712,6 +738,54 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
             "[build-import]   ASH NOT MOUNTED on {:?}: asked for gem {:?}, the instance reports no              sword-arts row",
             arm.label, arm.wanted_gem
         ));
+    }
+
+    // Between the grant and the equip, the two passes that make a RE-import mean what it says.
+    //
+    // Both answer the same complaint, from opposite ends: a build imported onto a character that
+    // already owns most of it used to change almost nothing the player could see. The grant
+    // correctly left held items alone, the equip correctly wrote only the positions the build
+    // fills, and the result was the previous build's gear still worn beside the new build's, in
+    // the previous build's inventory order.
+    //
+    // Both run before the equip, and `apply_build_order` runs first. It has to take items off to
+    // move them -- a worn entry is named by `EquipGameData.equipmentItemIdxList` and must not be
+    // removed from under that -- and it does not put them back, so the equip is what dresses the
+    // character afterwards. Running the vacate second costs nothing and means the positions the
+    // build wants bare are cleared after everything that could have disturbed them.
+    if let Some(egd) = unsafe { grant::equip_game_data() } {
+        // Safety: game thread, character in the world (the caller proved it), grants applied.
+        let reordered = unsafe { reorder::apply_build_order(module_base, egd, &planned.grants) };
+        log_line(&format!("[build-import] {}", reordered.summary()));
+        for (label, why) in reordered.declined.iter().take(12) {
+            log_line(&format!("[build-import]   NOT REORDERED {label:?}: {why}"));
+        }
+        // An item that went into the box and did not come back is the one failure in this pass
+        // that costs the player something, so it is never folded into a count.
+        for (label, deposited, retrieved) in &reordered.stranded {
+            log_line(&format!(
+                "[build-import]   STRANDED {label:?}: {deposited} went into the storage box and                  {retrieved} came back. The rest is in the box and can be collected at any grace"
+            ));
+        }
+        report.reordered = (reordered.restamped, reordered.attempted);
+
+        let vacancies = equips.vacancies();
+        // Safety: as above; the vacate pass reads every position back rather than counting calls.
+        let vacated = unsafe { equip_native::vacate_all(module_base, egd, &vacancies) };
+        log_line(&format!("[build-import] {}", vacated.summary()));
+        for (kind, slot, holding) in vacated.still_occupied.iter().take(12) {
+            log_line(&format!(
+                "[build-import]   STILL WORN {} (slot {slot}): the build leaves this position                  empty and it holds {holding}",
+                kind.label()
+            ));
+        }
+        for (kind, slot) in vacated.unproven.iter().take(12) {
+            log_line(&format!(
+                "[build-import]   VACANCY UNPROVEN {} (slot {slot}): nothing on this build can                  read the position back, so whether it is empty is unknown",
+                kind.label()
+            ));
+        }
+        report.vacated = (vacated.cleared + vacated.already_empty, vacated.attempted);
     }
 
     // What each armament slot should be holding, computed before the equip rather than after it,
