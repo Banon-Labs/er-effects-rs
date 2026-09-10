@@ -113,6 +113,37 @@ MACRO_IDENT_BUILD_RE = re.compile(r"paste\s*!|concat_idents\s*!|\[\s*<\s*\$")
 ANY_WRITE_OP_RE = re.compile(rf"\.\s*(?:{WRITE_OPS})\s*\(")
 
 
+# An inline-asm store is a write the name-based census cannot otherwise see.
+#
+# `crates/er-invasion-warp/src/lynchpin_use.rs` captures a register the game left in `r14` with a
+# naked stub -- `mov qword ptr [rip + {slot}], r14` and `slot = sym SHOW_R14` -- which is a real
+# store to a real static, written in the only place a register can be captured before the frame is
+# built. Reading that as "declared but never written" would have this gate demand the deletion of a
+# counter the feature depends on.
+#
+# The rule is narrow on purpose: the binding must be a `sym` operand and the template must use it
+# as the destination of a store. `mov r14, [rip + {slot}]` is a read and does not match, so a
+# static that is only loaded from asm is still reported.
+ASM_BLOCK_RE = re.compile(r"(?:naked_)?asm!\s*\((.*?)\)\s*;?", re.S)
+ASM_SYM_OPERAND_RE = re.compile(r"(\w+)\s*=\s*sym\s+(\w+)")
+ASM_STORE_MNEMONICS = "mov|movq|movl|xchg|add|sub|or|and|xor|inc|dec"
+
+
+def asm_written_names(text: str) -> set[str]:
+    """Every static this file stores into from an inline-asm template."""
+    written: set[str] = set()
+    for block in ASM_BLOCK_RE.findall(text):
+        for binding, name in ASM_SYM_OPERAND_RE.findall(block):
+            destination = re.compile(
+                rf"\b(?:{ASM_STORE_MNEMONICS})\s+"
+                rf"(?:(?:qword|dword|word|byte)\s+ptr\s*)?"
+                rf"\[[^\]]*\{{{re.escape(binding)}\}}[^\]]*\]\s*,"
+            )
+            if destination.search(block):
+                written.add(name)
+    return written
+
+
 def census_undecidable(text: str) -> bool:
     """True when this file could write a counter through an identifier it constructs."""
     if MACRO_SUBST_WRITE_RE.search(text):
@@ -190,6 +221,8 @@ def census(sources: dict[str, str], declared_from: str = "") -> dict:
             if name in discarded:
                 continue
             writes.setdefault(name, []).append(f)
+        for name in asm_written_names(text):
+            writes.setdefault(name, []).append(f)
         for name in READ_ANY_RE.findall(text):
             reads[name] = reads.get(name, 0) + 1
 
@@ -220,6 +253,8 @@ def selftest() -> int:
                 "pub static DEAD_NEVER_TOUCHED: AtomicUsize = AtomicUsize::new(0);",
                 "pub static DEAD_BEHIND_LOGICAL_AND: AtomicUsize = AtomicUsize::new(0);",
                 "pub static DEAD_BEHIND_DISCARD: AtomicUsize = AtomicUsize::new(0);",
+                "pub static WRITTEN_BY_ASM: AtomicUsize = AtomicUsize::new(0);",
+                "pub static DEAD_ONLY_LOADED_BY_ASM: AtomicUsize = AtomicUsize::new(0);",
             ]
         ),
         "writes.rs": (
@@ -235,6 +270,17 @@ def selftest() -> int:
             "let ok = a != 0\n    && DEAD_BEHIND_LOGICAL_AND.load(Ordering::SeqCst) == 1;\n"
             # a discard binding is not a write
             "let _ = &DEAD_BEHIND_DISCARD;\n"
+            # A naked stub capturing a register: the counter's name appears only as a `sym`
+            # operand, so a name-based search at the store site finds nothing.
+            "core::arch::naked_asm!(\n"
+            '    "mov qword ptr [rip + {slot}], r14",\n'
+            "    slot = sym WRITTEN_BY_ASM,\n"
+            ");\n"
+            # The same shape with the counter as the source is a read, and stays unwritten.
+            "core::arch::naked_asm!(\n"
+            '    "mov r14, qword ptr [rip + {slot}]",\n'
+            "    slot = sym DEAD_ONLY_LOADED_BY_ASM,\n"
+            ");\n"
         ),
         # Frozen negative. The literal `WRITTEN_FROM_MACRO` never appears at the write; the name
         # is pasted. An over-broad matcher that only searches for the literal calls it dead and a
@@ -257,6 +303,7 @@ def selftest() -> int:
         "WRITTEN_BY_RAW_REF",
         "WRITTEN_BY_XOR",
         "WRITTEN_INDEXED",
+        "WRITTEN_BY_ASM",
     ):
         if name in unwritten:
             failures.append(f"{name} was flagged but IS written")
@@ -266,6 +313,7 @@ def selftest() -> int:
         "DEAD_NEVER_TOUCHED",
         "DEAD_BEHIND_LOGICAL_AND",
         "DEAD_BEHIND_DISCARD",
+        "DEAD_ONLY_LOADED_BY_ASM",
     ):
         if name not in unwritten:
             failures.append(f"{name} was NOT flagged but has no write site")
@@ -287,9 +335,9 @@ def selftest() -> int:
             print(f"[check-counter-writers] SELFTEST FAIL: {f}")
         return 1
     print(
-        "[check-counter-writers] selftest ok (13 cases: inline, wrapped, by-ref, by-ref-qualified, "
+        "[check-counter-writers] selftest ok (15 cases: inline, wrapped, by-ref, by-ref-qualified, "
         "by-raw-ref, xor, indexed, dead-read, dead-untouched, dead-behind-&&, dead-behind-discard, "
-        "undecidable-macro-write, benign-macro-not-undecidable)"
+        "asm-store, asm-load-only, undecidable-macro-write, benign-macro-not-undecidable)"
     )
     return 0
 

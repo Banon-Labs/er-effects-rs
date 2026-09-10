@@ -108,6 +108,37 @@ DISCARD_REF_ANY_RE = re.compile(
 )
 
 
+# An inline-asm store is a write the name-based census cannot otherwise see.
+#
+# `crates/er-invasion-warp/src/lynchpin_use.rs` captures a register the game left in `r14` with a
+# naked stub -- `mov qword ptr [rip + {slot}], r14` and `slot = sym SHOW_R14` -- which is a real
+# store to a real static, written in the only place a register can be captured before the frame is
+# built. Reading that as "declared but never written" would have this gate demand the deletion of a
+# counter the feature depends on.
+#
+# The rule is narrow on purpose: the binding must be a `sym` operand and the template must use it
+# as the destination of a store. `mov r14, [rip + {slot}]` is a read and does not match, so a
+# static that is only loaded from asm is still reported.
+ASM_BLOCK_RE = re.compile(r"(?:naked_)?asm!\s*\((.*?)\)\s*;?", re.S)
+ASM_SYM_OPERAND_RE = re.compile(r"(\w+)\s*=\s*sym\s+(\w+)")
+ASM_STORE_MNEMONICS = "mov|movq|movl|xchg|add|sub|or|and|xor|inc|dec"
+
+
+def asm_written_names(text: str) -> set[str]:
+    """Every static this file stores into from an inline-asm template."""
+    written: set[str] = set()
+    for block in ASM_BLOCK_RE.findall(text):
+        for binding, name in ASM_SYM_OPERAND_RE.findall(block):
+            destination = re.compile(
+                rf"\b(?:{ASM_STORE_MNEMONICS})\s+"
+                rf"(?:(?:qword|dword|word|byte)\s+ptr\s*)?"
+                rf"\[[^\]]*\{{{re.escape(binding)}\}}[^\]]*\]\s*,"
+            )
+            if destination.search(block):
+                written.add(name)
+    return written
+
+
 def audit(sources: dict[str, str], counters_src: str = "") -> list[tuple[str, int]]:
     """Return [(name, read_count)] for counters that are read somewhere but never written."""
     names = set(DEF_RE.findall(counters_src))
@@ -134,6 +165,8 @@ def audit(sources: dict[str, str], counters_src: str = "") -> list[tuple[str, in
             if discarded.get(n):
                 discarded[n] -= 1
                 continue
+            writes[n] = writes.get(n, 0) + 1
+        for n in asm_written_names(text):
             writes[n] = writes.get(n, 0) + 1
         for n in READ_ANY_RE.findall(text):
             reads[n] = reads.get(n, 0) + 1
@@ -181,10 +214,25 @@ def selftest() -> int:
             "pub static DEAD_BEHIND_LOGICAL_AND: AtomicUsize = AtomicUsize::new(0);",
             "pub static DEAD_BEHIND_DISCARD: AtomicUsize = AtomicUsize::new(0);",
             "pub static NEVER_TOUCHED: AtomicUsize = AtomicUsize::new(0);",
+            "pub static WRITTEN_BY_ASM: AtomicUsize = AtomicUsize::new(0);",
+            "pub static ONLY_LOADED_BY_ASM: AtomicUsize = AtomicUsize::new(0);",
         ]
     )
     sources = {
         "a.rs": (
+            # A naked stub capturing a register into a static: a real store the name-based
+            # census cannot see, because the counter's name appears only as a `sym` operand.
+            "core::arch::naked_asm!(\n"
+            '    "mov qword ptr [rip + {slot}], r14",\n'
+            "    slot = sym WRITTEN_BY_ASM,\n"
+            ");\n"
+            "let z = WRITTEN_BY_ASM.load(Ordering::SeqCst);\n"
+            # The same shape with the static as the source is a read, and must stay an offender.
+            "core::arch::naked_asm!(\n"
+            '    "mov r14, qword ptr [rip + {slot}]",\n'
+            "    slot = sym ONLY_LOADED_BY_ASM,\n"
+            ");\n"
+            "let y = ONLY_LOADED_BY_ASM.load(Ordering::SeqCst);\n"
             "WRITTEN_INLINE.store(1, Ordering::SeqCst);\n"
             "let a = WRITTEN_INLINE.load(Ordering::SeqCst);\n"
             # rustfmt-wrapped write: the case a line-based scan misses
@@ -224,10 +272,16 @@ def selftest() -> int:
         "WRITTEN_BY_RAW_REF",
         "WRITTEN_BY_XOR",
         "WRITTEN_INDEXED",
+        "WRITTEN_BY_ASM",
     ):
         if name in got:
             failures.append(f"{name} was flagged but IS written")
-    for name in ("DEAD_READ_ONCE", "DEAD_BEHIND_LOGICAL_AND", "DEAD_BEHIND_DISCARD"):
+    for name in (
+        "DEAD_READ_ONCE",
+        "DEAD_BEHIND_LOGICAL_AND",
+        "DEAD_BEHIND_DISCARD",
+        "ONLY_LOADED_BY_ASM",
+    ):
         if name not in got:
             failures.append(f"{name} was NOT flagged but is read-only")
     if "NEVER_TOUCHED" in got:
@@ -237,8 +291,9 @@ def selftest() -> int:
             print(f"[check-oracle-writers] SELFTEST FAIL: {f}")
         return 1
     print(
-        "[check-oracle-writers] selftest ok (11 cases: inline, wrapped, by-ref, by-ref-qualified, "
-        "by-raw-ref, xor, indexed, dead, dead-behind-&&, dead-behind-discard, unread)"
+        "[check-oracle-writers] selftest ok (13 cases: inline, wrapped, by-ref, by-ref-qualified, "
+        "by-raw-ref, xor, indexed, asm-store, dead, dead-behind-&&, dead-behind-discard, "
+        "asm-load-only, unread)"
     )
     return 0
 

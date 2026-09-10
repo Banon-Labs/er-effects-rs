@@ -2,7 +2,7 @@
 # Disassemble a VA range from the dearxan-DEOBFUSCATED ER mapped image (repo-local, gitignored).
 # Mapped image: file offset == RVA, image base 0x140000000 -> VA = offset + 0x140000000.
 # Usage: scripts/disas-deobf.sh [--color=auto|always|never] <VA> [nbytes]
-# Image: ER_DEOBF_IMAGE or ER_DEOBF_BIN (default eldenring-deobf.bin, which is 1.16.2 and NOT the
+# Image: ER_DEOBF_IMAGE or ER_DEOBF_BIN (default eldenring-deobf.bin, which is 1.16.2 and not the
 # installed build -- pass eldenring-deobf-1.17.1.bin for that).
 # Set ER_DISAS_COLOR=always to force ANSI escapes through non-TTY capture layers.
 set -uo pipefail

@@ -714,6 +714,16 @@ python3 "$repo_root/scripts/test-detect-proc.py"
 python3 "$repo_root/scripts/test-semaphore-watchdog.py"
 python3 "$repo_root/scripts/test-input-harness-static.py"
 python3 "$repo_root/scripts/test-wall-of-text-classifier.py"
+# The other half of the challenged-convention guard. Its Rego suite pins what the policy does with
+# a facts line; this pins where the facts line comes from, which is the half that decides whether
+# the guard convicts an ordinary question about the game binary. Both directions are asserted, and
+# the yes-or-no answers a first draft read as concessions are in it as negatives.
+python3 "$repo_root/scripts/test-challenged-convention-classifier.py"
+# The other half of the narrated-action guard, for the same reason. Its negatives are the ones that
+# matter: a gerund that is the subject of an ordinary sentence, a report that opens on a participle,
+# and the launch banner AGENTS.md mandates. It also re-reads the promissory closer's own verb list
+# out of that signal and fails if the two rules ever claim the same gerund.
+python3 "$repo_root/scripts/test-narrated-action-classifier.py"
 # The SessionStart/PreCompact prime hook must stay small enough that the harness INLINES it.
 # At 2452 memories it emitted 157.4 KB, which Claude Code persisted to a file and replaced
 # with a 2 KB preview -- so the priming content never reached the agent while still costing
@@ -1459,6 +1469,13 @@ python3 "$repo_root/scripts/check-detour-rva-coverage.py"
 # cover's release predicate: the bar froze at `LOADING SAVE 7/11` and the cover had no exit.
 # Proven against the offending commit: run this gate on `git show 7a7f25b3:<that file>` and it
 # names line 595. Declared-atomic hook sets are printed on every run, never hidden.
+# An AOB signature two crates both hook is load-order-fragile, not version-fragile: whichever DLL
+# me3 loads first overwrites the prologue the second one is scanning for, and the second silently
+# switches itself off. That is what kept the announcement banner left-aligned until 2026-09-10 --
+# er-armament-icons and er-invasion-warp had independently arrived at the byte-identical 30-byte
+# GFx tag-parse signature, and the loser's refusal line said only "absent or not unique".
+python3 "$repo_root/scripts/check-shared-detour-signatures.py" --selftest
+python3 "$repo_root/scripts/check-shared-detour-signatures.py"
 python3 "$repo_root/scripts/check-hook-batch-abort.py" --selftest
 # RE-armed 2026-08-31: the two batch-abort sites this note held the line open for have landed.
 # dlstring_lookat_math.rs:595 is gone and system_quit_ownership_repro.rs:495 is now declared

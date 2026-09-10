@@ -236,3 +236,12 @@ portable	-	test-described-next-step-signal.py	drives the signal script under mkt
 portable	-	check-no-thread-suspension.py --selftest	source/AST/text analysis only
 portable	-	check-no-thread-suspension.py	source/AST/text analysis only; silent and rc 0 in both the clone and the developer tree
 partial	git-baseline	check-runtime-evidence.sh --selftest	seven fixture cases run under mktemp and say PASS; the two carry-forward cases print 'skip' on a depth-1 checkout, which does not carry the commits they diff. fetch-depth: 0 runs them.
+portable	-	er-character-type-tables.py --selftest	source/AST/text analysis only
+portable	-	test-challenged-convention-classifier.py	source/AST/text analysis only
+portable	-	test-narrated-action-classifier.py	source/AST/text analysis only
+portable	-	test-diagnosis-signal.py	source/AST/text analysis only
+portable	-	test-future-commitment-signal.py	source/AST/text analysis only
+portable	-	test-deferred-evidence-read-signal.py	source/AST/text analysis only
+portable	-	check-shared-detour-signatures.py --selftest	source/AST/text analysis only
+portable	-	check-shared-detour-signatures.py	source/AST/text analysis only
+portable	-	er-run-natives-history.py --selftest	source/AST/text analysis only
