@@ -58,8 +58,8 @@ use er_game_base::rva::{
     EQUIP_GAME_DATA_REMOVE_ITEM_RVA, GAME_DATA_MAN_GLOBAL_RVA, GET_ADD_OR_REMOVE_AMOUNT_RVA,
     GET_INVENTORY_ITEM_ENTRY_BY_INDEX_RVA, GET_ITEM_INVENTORY_IDX_RVA,
     GET_MAIN_PLAYER_STORAGE_BOX_INVENTORY_RVA, GET_QUANTITY_BY_ITEM_ID_RVA,
-    INVENTORY_ITEM_ENTRY_SORT_ID_OFFSET, TRANSFER_ITEM_BETWEEN_INVENTORY_DATAS_RVA,
-    UPDATE_TROPHY_STATS_RVA,
+    INVENTORY_ITEM_ENTRY_SORT_ID_OFFSET, REMOVE_GEM_FROM_WEAPON_RVA,
+    TRANSFER_ITEM_BETWEEN_INVENTORY_DATAS_RVA, UPDATE_TROPHY_STATS_RVA,
 };
 
 /// `GameDataMan::main_player_game_data`, read as a raw pointer rather than the typed `OwnedPtr`
@@ -86,8 +86,24 @@ const GAME_DATA_MAN_PLAYER_OFFSET: usize = 0x08;
 /// offset 8, in a 0x4b0-byte object). `er-better-refills` has shipped the same constant since its
 /// deposit-back path landed.
 const EQUIPMENT_ITEM_IDX_LIST_OFFSET: usize = 0x8;
+/// `EquipInventoryData.itemEntriesCount`, the highest index the entry walk has to reach.
+///
+/// From the same 1.16.2 structure as [`er_game_base::rva::INVENTORY_ITEM_ENTRY_SORT_ID_OFFSET`]:
+/// `itemsData` at `+0x8`, this at `+0x80`, `nextSortId` at `+0x84`. Every function that indexes
+/// the inventory bounds-checks against `count + 1`, which is why the walk is inclusive.
+const EQUIP_INVENTORY_ITEM_ENTRIES_COUNT: usize = 0x80;
 /// Length of the list above.
 const EQUIPMENT_ITEM_IDX_LIST_LEN: usize = 22;
+/// `EquipInventoryData.itemsData.normalItems.capacity`: how many ordinary entries fit.
+///
+/// From the same 1.16.2 structure: `itemsData` at `+0x8`, `normalItems` at `itemsData+0x4`, and
+/// `InventoryItemList.capacity` at its own `+0x0`.
+const INVENTORY_NORMAL_ITEMS_CAPACITY_OFFSET: usize = 0xc;
+/// `EquipInventoryData.itemsData.normalItemsAccessor.count`, which is a pointer to the count.
+///
+/// `normalItemsAccessor` at `itemsData+0x38`, and `InventoryItemListAccessor.count` is an `int*`
+/// at its own `+0x8`, so this is a pointer field and needs two reads.
+const INVENTORY_NORMAL_ITEMS_COUNT_PTR_OFFSET: usize = 0x48;
 
 type GetQuantityFn = unsafe extern "system" fn(usize, *mut i32) -> i32;
 type GetItemIdxFn = unsafe extern "system" fn(usize, *mut i32) -> i32;
@@ -99,6 +115,7 @@ type GetStorageInventoryFn = unsafe extern "system" fn() -> usize;
 type GetEntryFn = unsafe extern "system" fn(usize, u32) -> usize;
 type RemoveItemFn = unsafe extern "system" fn(usize, i32, u32, bool) -> bool;
 type AdjustQuantityFn = unsafe extern "system" fn(usize, u32, i32, *mut i32) -> u32;
+type RemoveGemFn = unsafe extern "system" fn(usize, *mut u32);
 
 /// What one [`Storage::recycle`] did, measured by reading the entry back.
 ///
@@ -142,6 +159,24 @@ impl Recycled {
     }
 }
 
+/// One live row of an inventory, as the entry walk reads it.
+///
+/// `handle` is the only field that names one specific copy. Several armaments differing only by
+/// their ash share an item id, and an index is valid only until the next transfer reindexes the
+/// inventory -- so anything that has to still mean the same copy after a deposit must carry the
+/// handle, not the index.
+#[derive(Clone, Copy, Debug)]
+pub struct InventoryEntry {
+    /// Index at the moment of the walk. Stale as soon as anything is removed.
+    pub index: i32,
+    /// `InventoryItemEntry.gaItemHandle`, the entry's first field.
+    pub handle: u32,
+    /// Category-tagged item id, with an armament's affinity and upgrade level included.
+    pub item_id: u32,
+    /// Stack size; one for anything that does not stack.
+    pub quantity: i32,
+}
+
 /// The player's two inventories and the calls that move items between them.
 ///
 /// Constructed only by [`Storage::open`], which is where the "resolve everything first" rule and
@@ -170,6 +205,13 @@ pub struct Storage {
     /// `Storage` refusing to open: everything else here degrades to "the item was not moved",
     /// and losing the ability to destroy an item is not a degradation worth refusing over.
     discard: Option<DiscardNatives>,
+    /// The remove-Ash-of-War action, `None` when it has no mapping for the running build.
+    ///
+    /// Optional for the same reason as `discard`: without it an armament is destroyed with its ash
+    /// still on it, which loses the ash. That is a worse outcome, so [`Storage::strip_ash`]
+    /// reports the absence rather than hiding it -- but it is not a reason for the whole
+    /// `Storage` to refuse to open.
+    remove_gem: Option<RemoveGemFn>,
 }
 
 /// The two calls a discard needs. See [`Storage::discard`].
@@ -356,6 +398,13 @@ impl Storage {
             // Safety: as above.
             get_entry: unsafe { core::mem::transmute::<usize, GetEntryFn>(get_entry) },
             discard: discard_natives(module_base),
+            remove_gem: crate::native::resolve(
+                module_base,
+                REMOVE_GEM_FROM_WEAPON_RVA,
+                "remove Ash of War (FUN_140249e60)",
+            )
+            // Safety: resolved for the running build on the line above.
+            .map(|address| unsafe { core::mem::transmute::<usize, RemoveGemFn>(address) }),
         })
     }
 
@@ -480,6 +529,147 @@ impl Storage {
         // Measured, not assumed: the answer is the difference the inventory reports.
         // Safety: game thread, read only.
         (before - unsafe { self.carried_quantity(item_id) }).max(0)
+    }
+
+    /// Every live entry the carried inventory holds, as `(inventory index, item id, quantity)`.
+    ///
+    /// The only way to ask "what is this character carrying that the build did not ask for". Every
+    /// other reader here starts from an item id the caller already has, which cannot answer a
+    /// question about items the caller has never heard of.
+    ///
+    /// `GetInventoryItemEntryByIndex` bounds-checks the index against `itemEntriesCount` itself
+    /// and answers null for a freed slot, so the walk is over a dense range with holes rather than
+    /// a list -- an entry removed by `RemoveItem` leaves its index on a free list and the count is
+    /// not decremented for it.
+    ///
+    /// # Safety
+    ///
+    /// Game thread.
+    pub unsafe fn carried_entries(&self) -> Vec<InventoryEntry> {
+        // Safety: delegated; `self.carried` is the inventory this `Storage` opened over.
+        unsafe { self.entries_of(self.carried) }
+    }
+
+    /// The same walk over the storage box.
+    ///
+    /// Taken once and reused, never per item: the box on a well-played character holds close to
+    /// two thousand entries and each one costs a call, so asking it a hundred and thirty times --
+    /// once per refused deposit -- is a quarter of a million calls on the game thread.
+    ///
+    /// # Safety
+    ///
+    /// Game thread.
+    pub unsafe fn box_entries(&self) -> Vec<InventoryEntry> {
+        // Safety: delegated; `self.box_inventory` was proved non-null in `open`.
+        unsafe { self.entries_of(self.box_inventory) }
+    }
+
+    /// How many entries the carried inventory holds right now.
+    ///
+    /// The measurement behind [`Storage::strip_ash`]: an ash coming off a weapon is inserted into
+    /// this inventory as its own entry, so a rise of one is the evidence that a gem actually came
+    /// back rather than an assumption that the call did something.
+    ///
+    /// # Safety
+    ///
+    /// Game thread.
+    pub unsafe fn carried_entry_count(&self) -> i32 {
+        // Safety: a fault-checked read of one int in a live inventory.
+        unsafe {
+            er_game_base::mem::safe_read_i32(self.carried + EQUIP_INVENTORY_ITEM_ENTRIES_COUNT)
+        }
+        .unwrap_or(0)
+    }
+
+    /// `(index, item id, quantity)` for every live entry of one inventory.
+    ///
+    /// # Safety
+    ///
+    /// Game thread, `inventory` a live `EquipInventoryData*`.
+    unsafe fn entries_of(&self, inventory: usize) -> Vec<InventoryEntry> {
+        // Safety: a fault-checked read of one int in a live inventory.
+        let count = unsafe {
+            er_game_base::mem::safe_read_i32(inventory + EQUIP_INVENTORY_ITEM_ENTRIES_COUNT)
+        }
+        .unwrap_or(0);
+        if count <= 0 {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for index in 0..=count {
+            let Ok(slot) = u32::try_from(index) else {
+                continue;
+            };
+            // Safety: engine-owned inventory and an index the callee bounds-checks; a freed slot
+            // answers null rather than faulting.
+            let entry = unsafe { (self.get_entry)(inventory, slot) };
+            if entry == 0 {
+                continue;
+            }
+            // Safety: three fault-checked reads at confirmed offsets in a live 24-byte entry.
+            let handle = unsafe { er_game_base::mem::safe_read_i32(entry) };
+            let item_id = unsafe { er_game_base::mem::safe_read_i32(entry + 4) };
+            let quantity = unsafe { er_game_base::mem::safe_read_i32(entry + 8) };
+            if let (Some(handle), Some(item_id), Some(quantity)) = (handle, item_id, quantity)
+                && item_id != -1
+            {
+                out.push(InventoryEntry {
+                    index,
+                    handle: handle as u32,
+                    item_id: item_id as u32,
+                    quantity,
+                });
+            }
+        }
+        out
+    }
+
+    /// Take the Ash of War off the carried entry at `index`, so destroying it does not destroy the
+    /// ash with it.
+    ///
+    /// An ash is not a property of a weapon. It is an item that was consumed into one specific
+    /// instance, and it comes back out only through the engine's own action -- which is what this
+    /// calls. Discarding a weapon with the ash still mounted destroys both, and the ash is
+    /// routinely the more valuable half.
+    ///
+    /// Answers whether a gem actually came back, measured rather than assumed: the native inserts
+    /// the gem into the carried inventory as a new entry, so the entry count rises by one. It is a
+    /// no-op on a weapon with no ash, which is why it can be called on any armament without
+    /// asking first.
+    ///
+    /// # Safety
+    ///
+    /// Game thread, `index` a live carried entry, and the player in the world -- the native reads
+    /// `GLOBAL_GameDataMan->gaitemGameData` for itself.
+    pub unsafe fn strip_ash(&self, index: i32) -> bool {
+        let Some(remove_gem) = self.remove_gem else {
+            return false;
+        };
+        let Ok(slot) = u32::try_from(index) else {
+            return false;
+        };
+        // Safety: engine-owned inventory and an index it bounds-checks; null means no entry.
+        let entry = unsafe { (self.get_entry)(self.carried, slot) };
+        if entry == 0 {
+            return false;
+        }
+        // `InventoryItemEntry.gaItemHandle` is the entry's first field -- the same layout that
+        // puts `itemId` at `+0x4` and `quantity` at `+0x8` for the walk above.
+        // Safety: a fault-checked read of one int at the start of a live 24-byte entry.
+        let Some(handle) = (unsafe { er_game_base::mem::safe_read_i32(entry) }) else {
+            return false;
+        };
+        let mut handle = handle as u32;
+        if handle == 0 {
+            return false;
+        }
+        // Safety: game thread, read only.
+        let before = unsafe { self.carried_entry_count() };
+        // Safety: game thread, `egd` live, and the handle outlives the call. The native returns
+        // immediately when the weapon has no gem, so this is safe to call unconditionally.
+        unsafe { remove_gem(self.egd, &raw mut handle) };
+        // Safety: game thread, read only.
+        (unsafe { self.carried_entry_count() }) > before
     }
 
     /// Take up to `wanted` of `item_id` out of the box. Returns how many actually arrived,
@@ -721,6 +911,44 @@ impl Storage {
     pub unsafe fn is_equipped_index(&self, index: i32) -> bool {
         // Safety: delegated to the scan that answers the same question with the slot number.
         unsafe { self.equipped_slot_of_index(index) }.is_some()
+    }
+
+    /// Whether the storage box has a free entry slot, and the two numbers behind the answer.
+    ///
+    /// The only thing that stops a piece of gear reaching the box, once it is off the character.
+    /// `GetAddOrRemoveAmount` splits on `IsStackable`, and for a non-stackable item being added it
+    /// does not consult the box's holdings of that id at all -- it answers the single boolean
+    /// `*normalItemsAccessor.count < normalItems.capacity`. So a full box and a box that refuses
+    /// the item are the same zero out of `ChangeAmountInBox`, and only this tells them apart.
+    ///
+    /// Read from the 1.16.2 decompilation of `CS::EquipInventoryDat::GetAddOrRemoveAmount`
+    /// (`0x14024c630`), whose key-item branch reads `keyItemsAccessor`/`keyItems` instead. Gear is
+    /// never a key item, so the ordinary list is the one that matters here.
+    ///
+    /// `None` when either read faults, which is not the same as a full box and must not be
+    /// reported as one.
+    ///
+    /// # Safety
+    ///
+    /// Game thread, the box inventory live.
+    pub unsafe fn box_free_slots(&self) -> Option<(i32, i32)> {
+        // Safety: fault-checked reads inside a live engine object.
+        let capacity = unsafe {
+            er_game_base::mem::safe_read_i32(
+                self.box_inventory + INVENTORY_NORMAL_ITEMS_CAPACITY_OFFSET,
+            )
+        }?;
+        let count_ptr = unsafe {
+            er_game_base::mem::safe_read_usize(
+                self.box_inventory + INVENTORY_NORMAL_ITEMS_COUNT_PTR_OFFSET,
+            )
+        }?;
+        if count_ptr == 0 {
+            return None;
+        }
+        // Safety: the engine's own count pointer, read only.
+        let count = unsafe { er_game_base::mem::safe_read_i32(count_ptr) }?;
+        Some((count, capacity))
     }
 
     /// Which `ChrAsmSlot` names this inventory index, if any.

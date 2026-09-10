@@ -1177,9 +1177,10 @@ fn ash_of_war_arts_rows() -> std::collections::BTreeSet<u32> {
         return rows;
     };
     for (_, row) in repo.rows::<EquipParamGem>() {
-        if let Ok(arts_id) = u32::try_from(row.sword_arts_param_id())
-            && arts_id != 0
-        {
+        // Row 0 stays in. It is `No Skill`, an ash the player can mount to take a weapon's own
+        // skill away, so filtering it out here made the export drop `weaponArt: "No Skill"` from
+        // every build that used it -- the same blind spot that made the import ignore it.
+        if let Ok(arts_id) = u32::try_from(row.sword_arts_param_id()) {
             rows.insert(arts_id);
         }
     }

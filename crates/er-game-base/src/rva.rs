@@ -346,6 +346,29 @@ pub const EQUIP_GAME_DATA_REMOVE_ITEM_RVA: usize = 0x248ad0;
 /// through [`EQUIP_GAME_DATA_REMOVE_ITEM_RVA`], so the quickbar and pouch references go with it.
 pub const ADJUST_QUANTITY_BY_RVA: usize = 0x24bfe0;
 
+/// `FUN_140249e60(EquipGameData*, GaItemHandle *weapon)` -- the engine's remove-Ash-of-War action.
+///
+/// Takes the mounted gem off an armament and gives it back to the player, which is the whole
+/// reason to call it before destroying an armament: the ash is not a property of the weapon, it is
+/// an item that was consumed into it, and discarding the weapon with the ash still mounted
+/// destroys both.
+///
+/// The body, in order: `GaitemLookupResult::GetGaitemWeapon` on the handle, then
+/// `GetGemGaitemHandleFromWeapon` -- and it returns immediately if that is null, so calling it on
+/// an armament with no ash is a no-op rather than an error. Otherwise it checks `CanChangeGem`,
+/// asks `CSGaitemGameData::IsItemAcquired_` whether the gem is already a known item,
+/// `EquipInventoryData::InsertItem`s the gem back into the carried inventory, detaches it from the
+/// weapon, resets the weapon's affinity row through the same `FUN_140249310` the mount path uses,
+/// and finishes with `CSGaitemGameData::UpdateItem`.
+///
+/// Its only in-game caller is `FUN_140248670`, the mount action, which calls this first to take
+/// off whatever is already there before putting the new ash on. So this is exactly the half of the
+/// Ashes of War menu that restores a weapon's default skill.
+///
+/// The argument is a `GaItemHandle*`, not an inventory index: an ash lives on one specific
+/// instance, so the id of the item cannot say which copy to strip.
+pub const REMOVE_GEM_FROM_WEAPON_RVA: usize = 0x249e60;
+
 /// `EquipInventoryData::GetInventoryItemEntryByIndex(inventory, uint itemIdx)
 /// -> InventoryItemEntry*`.
 ///

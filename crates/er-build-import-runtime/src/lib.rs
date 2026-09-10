@@ -37,6 +37,7 @@ pub mod catalog;
 pub mod character;
 pub mod chr_name;
 pub mod equip_native;
+pub mod evict;
 pub mod export;
 pub mod export_doc;
 pub mod gaitem;
@@ -152,6 +153,8 @@ pub struct Report {
     pub vacated: (usize, usize),
     /// Consumables destroyed to free a pot group the storage box would not take.
     pub discarded: u32,
+    /// Armaments, armour and talismans the build does not name that went to the storage box.
+    pub evicted: u32,
 }
 
 impl Report {
@@ -786,6 +789,48 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
             ));
         }
         report.vacated = (vacated.cleared + vacated.already_empty, vacated.attempted);
+
+        // Last of the three, and before the equip rather than after it. Every deposit shifts the
+        // inventory indices the equip resolves, so the equip has to be the final word; and gear
+        // the previous build wore in a position the new build also names is still on the
+        // character here, because the vacate above clears only the positions the build wants
+        // bare. The pass takes those off itself before depositing them.
+        //
+        // An allowance, not a list of ids. The build asks for a count of each thing -- one
+        // Serpent Crest Shield, five Crimson Seed Talismans -- and a set of ids cannot say five,
+        // so every copy of a named id survived and the sweep left 168 entries alone for a build
+        // with 24 gear positions. `evict::Keep` spends one slot per copy and sweeps the rest, and
+        // it takes `outcome.armaments` as well as the plan because the copies this import minted
+        // are named by gaitem handle: an ash lives on the instance, so the item id cannot tell
+        // the new shield from the old one it replaces.
+        let mut keep = evict::Keep::new(&planned.grants, &outcome.armaments);
+        // Safety: game thread, character in the world, and the vacate above has run.
+        let evicted = unsafe { evict::unlisted_gear(module_base, egd, &mut keep) };
+        log_line(&format!("[build-import] {}", evicted.summary()));
+        // Named one by one and never folded into the summary's count, because this is the second
+        // irreversible thing the importer does and the player is owed the list.
+        for (item, quantity, ash) in &evicted.discarded {
+            log_line(&format!(
+                "[build-import]   DESTROYED {item} x{quantity}: the storage box would not take it \
+                 and already holds two or more of the same item. {}",
+                if *ash {
+                    "Its Ash of War was taken off first and is back in the inventory"
+                } else {
+                    "It had no Ash of War to recover"
+                }
+            ));
+        }
+        for (item, why) in &evicted.refused {
+            log_line(&format!("[build-import]   NOT EVICTED {item}: {why}"));
+        }
+        // The other half of "why is this still on my character": the build asked for it. Without
+        // this line a kept item and a stuck item look identical from the outside.
+        for item in &evicted.kept_names {
+            log_line(&format!(
+                "[build-import]   KEPT {item}: the build names this item, so it stays"
+            ));
+        }
+        report.evicted = evicted.deposited_items;
     }
 
     // What each armament slot should be holding, computed before the equip rather than after it,

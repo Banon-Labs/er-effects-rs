@@ -591,9 +591,17 @@ unsafe fn insert_ashes_of_war(
         let Ok(arts_id) = u32::try_from(row.sword_arts_param_id()) else {
             continue;
         };
-        if arts_id == 0 {
-            continue;
-        }
+        // Arts 0 is `No Skill`, and it is a real Ash of War the player can buy and mount -- it
+        // is how a weapon is deliberately stripped of its innate skill. Skipping it here left it
+        // out of the catalog entirely, which is why `plan.rs` had to special-case the string and
+        // treat "No Skill" as "mount nothing". Those are opposite outcomes: mounting nothing
+        // leaves the innate skill in place. Measured 2026-09-10 on a Serpent Crest Shield the
+        // build asked to carry `No Skill`, which came out of the import reporting `arts 10`.
+        //
+        // It goes through the same canonical/icon/named tiebreak as every other skill rather
+        // than being hard-coded to a row, because the rule that picks the purchasable item over
+        // a development placeholder is the same rule here as anywhere.
+        _ = arts_id;
         // Safety: a verified getter RVA and the caller's live repository pointer.
         let named = unsafe { name_of(gem_getter, msg, gem_id) }.is_some();
         let icon = row.icon_id();
@@ -651,7 +659,30 @@ unsafe fn insert_ashes_of_war(
             ));
         }
         // Safety: as above.
-        match unsafe { name_of(arts_getter, msg, arts_id) } {
+        let named = unsafe { name_of(arts_getter, msg, arts_id) };
+        // `SwordArtsParam` row 0 is `No Skill`, and the message repository has no name for it --
+        // it is the absence of a skill, so nothing in the arts bundle describes it. Without a
+        // name it never entered the catalog, and the name `No Skill` was then claimed by gem
+        // 30900, a placeholder row carrying arts 309 that the repository does name that way. A
+        // build asking for `No Skill` got that row mounted instead, and the read-back on a
+        // Serpent Crest Shield came back `arts 10` -- its own skill, untouched.
+        //
+        // The literal is the planner's own vocabulary: the payload writes `weaponArt: "No Skill"`
+        // and `plan.rs` compared against exactly this string for as long as it special-cased it.
+        // Row 0 is reached first (`best` is keyed by arts id and iterated ascending) and
+        // `MapCatalog::insert` is first-wins, so gem 30900 becomes an alternate rather than
+        // taking the name.
+        let named = match (arts_id, named) {
+            (0, None) => Some("No Skill".to_owned()),
+            (_, named) => named,
+        };
+        if arts_id == 0 {
+            crate::log_line(&format!(
+                "[build-import]   NO SKILL ASH: arts 0 -> gem {gem_id}, catalogued as {:?}",
+                named.as_deref().unwrap_or("<nothing>")
+            ));
+        }
+        match named {
             Some(name) => {
                 catalog.insert(
                     Kind::AshOfWar,

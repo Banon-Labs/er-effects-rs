@@ -21,6 +21,20 @@ use er_build_import_core::catalog::{Entry, Kind, MapCatalog};
 /// Build the fixture catalog.
 pub fn catalog() -> MapCatalog {
     let mut c = MapCatalog::new();
+    // `No Skill` is an Ash of War like any other -- `EquipParamGem` row 10, `SwordArtsParam` row
+    // 0 -- and the one a build uses to take a weapon's innate skill away. It is in this fixture
+    // because the planner payload asks for it four times, and because leaving it out is what let
+    // the plan quietly treat it as "mount nothing" for as long as it did.
+    c.insert(
+        Kind::AshOfWar,
+        "No Skill",
+        Entry {
+            full_item_id: 0x8000_000A,
+            max_stored: None,
+            somber: false,
+            pot_group: None,
+        },
+    );
     c.insert(
         Kind::AshOfWar,
         "Bloodhound's Step",

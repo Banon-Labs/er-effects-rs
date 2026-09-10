@@ -34,6 +34,31 @@ fn parses_the_real_payload() {
     assert_eq!(doc.talismans.slots.len(), 4);
 }
 
+/// `No Skill` is mounted, not skipped.
+///
+/// It is an Ash of War in its own right -- the one that takes a weapon's innate skill away -- and
+/// the plan used to filter the string out and leave `NO_SKILL`, which means "mount nothing". Those
+/// are opposite outcomes: a Serpent Crest Shield asked to carry `No Skill` came out of a live
+/// import still reporting its own skill, `arts 10`. This payload asks for it four times.
+#[test]
+fn the_no_skill_ash_is_an_ash_and_is_mounted() {
+    let (_, result) = planned();
+    let asked = result
+        .grants
+        .iter()
+        .filter(|grant| grant.armament && grant.weapon_skill != NO_SKILL)
+        .count();
+    assert!(asked > 0, "the fixture mounts ashes at all");
+    let no_skill = GEM_ITEM_CATEGORY | 10;
+    assert!(
+        result
+            .grants
+            .iter()
+            .any(|grant| grant.weapon_skill == no_skill),
+        "at least one armament carries the No Skill gem rather than the mount-nothing sentinel"
+    );
+}
+
 #[test]
 fn every_referenced_item_resolves() {
     let (_, result) = planned();

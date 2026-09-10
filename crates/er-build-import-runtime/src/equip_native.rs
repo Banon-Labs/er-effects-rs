@@ -841,8 +841,7 @@ pub unsafe fn vacate_all(
     for vacancy in vacancies {
         let empty = empty_value(vacancy.kind, vacancy.index);
         // Safety: game thread, `egd` live, and the index is the plan's own position number.
-        let Some(before) =
-            (unsafe { read_position(&natives, egd, vacancy.kind, vacancy.slot, vacancy.index) })
+        let Some(before) = (unsafe { read_position(&natives, egd, vacancy.kind, vacancy.slot) })
         else {
             outcome.unproven.push((vacancy.kind, vacancy.slot));
             continue;
@@ -855,8 +854,7 @@ pub unsafe fn vacate_all(
         // the world; the item returns to the inventory instead of being destroyed.
         unsafe { unequip.clear(vacancy.slot) };
         // Safety: as the read above.
-        let Some(after) =
-            (unsafe { read_position(&natives, egd, vacancy.kind, vacancy.slot, vacancy.index) })
+        let Some(after) = (unsafe { read_position(&natives, egd, vacancy.kind, vacancy.slot) })
         else {
             outcome.unproven.push((vacancy.kind, vacancy.slot));
             continue;
@@ -886,19 +884,23 @@ unsafe fn read_position(
     egd: usize,
     kind: PositionKind,
     slot: i32,
-    index: usize,
 ) -> Option<i32> {
     if kind.is_quick_dispatch() {
         let quick = natives.quick?;
-        let index = u32::try_from(index).ok()?;
-        // The dispatcher indexes the great rune at 16, not at its own kind's index 0. The
-        // quickbar and the pouch each use their own kind's index, which is what
-        // `read_quick_position` expects for both.
-        let index = if kind == PositionKind::GreatRune {
-            QUICK_DISPATCH_MAX_INDEX
-        } else {
-            index
-        };
+        // `read_quick_position` wants the dispatcher index, not the kind's own index: quickbar
+        // 0..9, pouch 10..15, great rune 16. Derived from the slot the way `equip_all` derives it,
+        // rather than from `vacancy.index`, because the two disagree for exactly one family and
+        // the disagreement is invisible in the answer.
+        //
+        // Measured on the first live import that ran this pass, 2026-09-10: `VACATE: 19/20 ... 1
+        // still holds something -- pouch (slot 33) holds 1073743574`. Slot 33 is pouch 1, whose
+        // dispatcher index is 11; passing the kind index 1 read `equipmentEntries[0x16 + 1]`,
+        // which is quickbar 1. So the clear had worked and the read-back was looking at another
+        // position entirely, and reported a cleared slot as still occupied.
+        let index = u32::try_from(slot - CHR_ASM_SLOT_QUICK_BASE).ok()?;
+        if index > QUICK_DISPATCH_MAX_INDEX {
+            return None;
+        }
         // Safety: delegated to the reader that owns the three quick families.
         return Some(unsafe { read_quick_position(quick, egd, kind, index) });
     }
