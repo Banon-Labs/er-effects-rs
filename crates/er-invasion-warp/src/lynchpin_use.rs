@@ -137,6 +137,10 @@ static PIN_FRAMES_LEFT: AtomicUsize = AtomicUsize::new(0);
 /// The inventory index the current override is pinning.
 #[cfg(windows)]
 static PINNED_ITEM_IDX: AtomicUsize = AtomicUsize::new(0);
+
+/// Latched once the first non-Lynchpin menu is let through, so the line prints once.
+#[cfg(windows)]
+static FOREIGN_MENU_REPORTED: AtomicUsize = AtomicUsize::new(0);
 /// Whether the pass-through branch has said so once. It was entirely silent until 2026-09-09,
 /// which is how a log showing one skip and nothing else read as the feature working while every
 /// use after the first showed the dialog.
@@ -249,7 +253,7 @@ pub unsafe fn shorten_use_animation() -> bool {
 /// ```
 ///
 /// Two earlier builds read `r12` instead, on the reasoning that `mov r12, rcx` makes it the menu
-/// object. The register dump above is why that failed twice: at the OPENER `r12` is `0x45eae1c8`,
+/// object. The register dump above is why that failed twice: at the opener `r12` is `0x45eae1c8`,
 /// something else entirely, and at `show`'s own entry it is `0x7fde63` -- the Lynchpin's goods id,
 /// arriving from show's caller. `r12` is only the menu object between `+0x241c8` and whatever
 /// reuses it, which does not include this frame.
@@ -287,6 +291,49 @@ unsafe extern "system" fn open_choices_entry(a: usize, b: usize, c: usize, d: us
     )
 }
 
+/// The item id `CSMenuGaitemUseState` currently holds, or `None` when it cannot be read.
+///
+/// The detour this gates is on `CS::CSMenuMan::OpenConversationChoicesMenu`, a game function that
+/// knows nothing about which item opened the menu. Without this check the skip fired for any
+/// conversation-choices menu at all and drove an invasion from it.
+///
+/// Reported live 2026-09-10: "I used an item to open my world for other people to join and co-op,
+/// and it started invading". Seamless builds several menus through that one function -- menu 0 is
+/// `OPTIONSELECT_OPENWORLD`, menu 2 is the invasion menu -- and the old gate could not tell them
+/// apart, because the only thing it asked was whether the session read idle, which is true for
+/// both.
+///
+/// `CSMenuGaitemUseState+0xc` is the item id the game itself wrote for the use in flight, so it
+/// names the item without this module having to guess from the menu.
+#[cfg(windows)]
+unsafe fn item_in_use() -> Option<u32> {
+    let base = er_game_base::mem::game_module_base().ok()?;
+    let menu_man = er_game_base::mem::read_global_ptr(
+        base,
+        er_game_base::rva::CS_MENU_MAN_GLOBAL_RVA,
+        "CS_MENU_MAN_GLOBAL_RVA",
+    );
+    if menu_man == 0 {
+        return None;
+    }
+    // SAFETY: a global the engine owns, read through the fault-closed reader.
+    let menu_data = unsafe {
+        er_game_base::mem::safe_read_usize(
+            menu_man + er_game_base::rva::CS_MENU_MAN_MENU_DATA_OFFSET,
+        )
+    }?;
+    if menu_data == 0 {
+        return None;
+    }
+    // SAFETY: the same struct `shorten_use_animation` writes, read rather than written.
+    unsafe {
+        er_game_base::mem::safe_read_i32(
+            menu_data + MENU_GAITEM_USE_STATE_OFFSET + USE_ITEM_ID_OFFSET,
+        )
+    }
+    .map(|raw| raw as u32)
+}
+
 /// The detour on `OpenConversationChoicesMenu`.
 ///
 /// # Safety
@@ -301,7 +348,7 @@ unsafe extern "system" fn open_choices_hook(dialog: usize, b: usize, c: usize, d
         .load(Ordering::SeqCst)
         .wrapping_sub(SHOW_R14_INTERIOR_OFFSET);
     let adopted = crate::local_invasion_filter::menu_object::adopt_menu_object(menu_object);
-    // A hunt in flight means this menu is the player reaching for CANCEL, so it must be shown.
+    // A hunt in flight means this menu is the player reaching for cancel, so it must be shown.
     //
     // Measured complaint, run br-20260910-012230-666e: the same item both starts and cancels a
     // search, and with the auto-loop running the session reads `0x01` idle for the instant between
@@ -313,6 +360,25 @@ unsafe extern "system" fn open_choices_hook(dialog: usize, b: usize, c: usize, d
     // own menu: opening it is a deliberate act and it hands control back.
     if crate::local_invasion_filter::auto_search_armed() {
         crate::local_invasion_filter::stand_down_auto_search();
+        POPUPS_PASSED.fetch_add(1, Ordering::SeqCst);
+        let orig = ORIG_OPEN_CHOICES.load(Ordering::SeqCst);
+        if orig == 0 {
+            return 0;
+        }
+        // SAFETY: the union stored the trampoline for this exact target.
+        return unsafe { core::mem::transmute::<usize, er_hook::UnionFn>(orig)(dialog, b, c, d) };
+    }
+    // Whose menu is this? An item that is not the Lynchpin gets its dialog, always.
+    let using = unsafe { item_in_use() };
+    if using != Some(LYNCHPIN_ITEM_ID) {
+        if FOREIGN_MENU_REPORTED.swap(1, Ordering::SeqCst) == 0 {
+            crate::standalone_log(format_args!(
+                "lynchpin: a conversation-choices menu opened for item {using:#x?}, not the \
+                 Lynchpin ({LYNCHPIN_ITEM_ID:#x}) -- letting it through untouched. This detour is \
+                 on a game function that serves every such menu, and without this check it drove \
+                 an invasion out of the co-op open-your-world menu. Printed once."
+            ));
+        }
         POPUPS_PASSED.fetch_add(1, Ordering::SeqCst);
         let orig = ORIG_OPEN_CHOICES.load(Ordering::SeqCst);
         if orig == 0 {
@@ -400,14 +466,14 @@ pub unsafe fn install_popup_skip() -> bool {
             return false;
         }
     };
-    // A bare `MhHook`, deliberately NOT `register_union_hook`, and the reason is the register
+    // A bare `MhHook`, deliberately not `register_union_hook`, and the reason is the register
     // capture above.
     //
     // The union does not put `open_choices_entry` at the detour address -- it installs
     // `union_dispatch`, an ordinary Rust function that loads its head handler and calls it. That
     // prologue runs before the naked shim does, and it does not preserve `r12` for a callee: on
-    // run `br-20260910-000334-453e` the capture came back `0x1` and the log said `REFUSED an
-    // option-menu object handed in at 0x1`. A bare hook puts the shim's first instruction AT the
+    // run `br-20260910-000334-453e` the capture came back `0x1` and the log said `refused an
+    // option-menu object handed in at 0x1`. A bare hook puts the shim's first instruction at the
     // detour address, which is the only place the register is still Seamless's.
     //
     // The cost is the union's one guarantee: if another feature ever hooks this same function,

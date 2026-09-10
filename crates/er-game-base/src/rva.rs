@@ -16,6 +16,16 @@ pub const GAME_DATA_MAN_GLOBAL_RVA: usize = 0x3d5df38;
 pub const CS_MENU_MAN_GLOBAL_RVA: usize = 0x3d6b7b0;
 /// `GameMan` singleton global (save-slot owner).
 pub const GAME_MAN_SINGLETON_RVA: usize = 0x3d69918;
+/// `CS::CSNetMan` singleton global -- `0x143d6de98` on 1.16.2.
+///
+/// Reached for `BreakInManager` at `+0xa8`, which is where the host currently being negotiated
+/// with is readable before any session exists. That is the only place a rejected match can be
+/// given a name: `SetMultiplayJoinData`'s `ServerPushJoinData` carries a destination and no
+/// identity at all.
+///
+/// Carried to 1.17 by `scripts/map-data-rvas-1162-to-1170.py`: `0x3d6de98 -> 0x3d71f08`, agreed by
+/// 645 references. `.data` does not move between 1.17.0 and 1.17.1.
+pub const CS_NET_MAN_GLOBAL_RVA: usize = 0x3d6de98;
 /// `CS::CSPcKeyConfig` singleton global (Ghidra: `GLOBAL_CSPcKeyConfig`) -- the player'S own
 /// keyboard, mouse and gamepad bindings. NULL until the game initialises its key configuration.
 ///

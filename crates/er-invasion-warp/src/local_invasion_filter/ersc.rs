@@ -224,12 +224,6 @@ pub const V201_CANCEL_ACTION_RVA: usize = 0x2_58d0;
 /// `session+0x150`, unlock. Driving it is therefore driving a row the player could have clicked,
 /// which is the invariant the cancel-row refusal exists to protect.
 pub const V201_LEAVE_WORLD_ACTION_RVA: usize = 0x2_59d0;
-/// `endbr64; push rsi; push rdi; sub rsp,0x28; mov rdi,[rcx+0x58]` -- byte-read from the installed
-/// v2.0.1 module, and the `[rcx+0x58]` load is the only dereference of the argument in the whole
-/// function.
-pub const V201_LEAVE_WORLD_PROLOGUE: &[u8] = &[
-    0xf3, 0x0f, 0x1e, 0xfa, 0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x8b, 0x79, 0x58,
-];
 pub const V201_BUILD_LOBBY_KEY_RVA: usize = 0xa_d6e0;
 pub const V201_SESSION_STATE_OFFSET: usize = 0x150;
 pub const V201_SESSION_GUARD_OFFSET: usize = 0x14c;

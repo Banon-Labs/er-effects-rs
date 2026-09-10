@@ -149,7 +149,7 @@ fn the_configured_keys_render_names_a_player_would_recognise() {
 }
 
 #[test]
-fn this_module_installs_exactly_four_detours_and_all_three_seamless_ones_are_read_only() {
+fn this_module_installs_exactly_five_detours_and_all_three_seamless_ones_are_read_only() {
     // The budget, made explicit so growing it is a decision rather than a drift:
     //   ORIG_SET_JOIN_DATA    -- the game's SetMultiplayJoinData, where matches are judged.
     //   ORIG_SHOW             -- ersc's menu builder, observation only, because OSM has no
@@ -167,15 +167,26 @@ fn this_module_installs_exactly_four_detours_and_all_three_seamless_ones_are_rea
     //                            matches with zero `captured Seamless's option-menu object`
     //                            lines, so every one of them ended `NOT cancelled`. This action
     //                            is the seam that sees the object on the item path.
+    //   ORIG_JOIN_SESSION     -- the game's CSSessionManager::JoinSession, the only one of these
+    //                            that refuses rather than observes. Grown from four to five on
+    //                            2026-09-10 with a measurement behind it: after a rejection the
+    //                            engine parks its disconnect while `lobbyState` is `Joining` and
+    //                            waits out the Steam RPC, which is where the 30s came from --
+    //                            30278ms and 30201ms on the two rejections of run
+    //                            br-20260910-012622-fd23. Refusing the join before the RPC is
+    //                            issued cut that to 25-34ms across seven attempts. It is a
+    //                            one-shot latch, not a mode: `REFUSE_NEXT_JOIN` is set at a
+    //                            reject verdict and consumed by the next call.
     // The cancel action stays un-hooked: it reads `rcx` only and nothing calls it but us, so
     // calling it with `(OSM, 0, 1, 1)` needs no captured arguments and therefore no detour.
     let source = filter_module_code();
     let orig_slots = source.matches("\nstatic ORIG_").count();
-    assert_eq!(orig_slots, 4, "detour budget is four trampolines");
+    assert_eq!(orig_slots, 5, "detour budget is five trampolines");
     assert!(source.contains("\nstatic ORIG_SET_JOIN_DATA"));
     assert!(source.contains("\nstatic ORIG_SHOW"));
     assert!(source.contains("\nstatic ORIG_BUILD_LOBBY_KEY"));
     assert!(source.contains("\nstatic ORIG_INVADE_ACTION"));
+    assert!(source.contains("\nstatic ORIG_JOIN_SESSION"));
     assert!(
         !source.contains("static ORIG_CANCEL_ACTION"),
         "the cancel action must stay un-hooked -- we are its only caller, so a detour on it \
@@ -334,16 +345,26 @@ fn the_lobby_key_is_never_published_or_altered() {
 /// * the test module, because a ban list is written in code -- `["lobby_key", ...]` is a string
 ///   literal, so a guard scanning the whole file trips on the very list that defines it. Both
 ///   new guards failed exactly that way on first run.
+///
+/// Both files are read, and the stripping happens per file rather than after the join: the
+/// parent's own `#[cfg(test)]` would otherwise truncate everything concatenated behind it, which
+/// is the silent-blindness failure `filter_module_code` below already documents.
 fn product_code() -> String {
-    let source = include_str!("../local_invasion_filter.rs");
-    let shipping = source
-        .split_once("#[cfg(test)]")
-        .map_or(source, |(before, _)| before);
-    shipping
-        .lines()
-        .filter(|line| !line.trim_start().starts_with("//"))
-        .collect::<Vec<_>>()
-        .join("\n")
+    [
+        include_str!("../local_invasion_filter.rs"),
+        include_str!("actions.rs"),
+    ]
+    .map(|source| {
+        let shipping = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(before, _)| before);
+        shipping
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    })
+    .join("\n")
 }
 
 /// The session scanner's shipping code, comments and test module removed.
@@ -361,6 +382,7 @@ fn product_code() -> String {
 fn filter_module_code() -> String {
     [
         include_str!("../local_invasion_filter.rs"),
+        include_str!("actions.rs"),
         include_str!("menu_object.rs"),
         include_str!("banner.rs"),
         include_str!("menu_seams.rs"),
@@ -785,7 +807,7 @@ fn self_recovery_cannot_resume_a_search_after_a_kept_match() {
     // What separates them is that `Verdict::Keep` DISARMS the loop. That makes the disarm check
     // load-bearing rather than incidental, which is precisely the kind of thing a later tidy-up
     // reorders without noticing.
-    let source = include_str!("../local_invasion_filter.rs");
+    let source = filter_module_code();
     let recovery = source
         .split_once("fn arm_self_recovery(")
         .expect("self-recovery exists")
@@ -824,7 +846,7 @@ fn the_stall_detector_never_times_the_searching_state() {
     // search in a quiet bracket, which is the single most obvious way to get a stall detector
     // wrong. The rule lives in `stall_watchdog::is_transient`; this pins that the caller does
     // not reintroduce a timer of its own alongside it.
-    let source = include_str!("../local_invasion_filter.rs");
+    let source = filter_module_code();
     let watcher = source
         .split_once("fn watch_for_stall(")
         .expect("stall watcher exists")
@@ -866,7 +888,7 @@ fn the_auto_search_arms_on_the_invade_transition_not_on_merely_being_busy() {
     //
     // Arming now keys on the transition into searching, which is sound because the static scan
     // found `S+0x110 = 0x0d` written at exactly one site in the whole unpacked .text.
-    let source = include_str!("../local_invasion_filter.rs");
+    let source = filter_module_code();
     // Assembled, not written out: a test that scans its own file finds its own assertion text.
     // That has now bitten twice in this module, so every needle here is built at runtime.
     assert!(
@@ -913,7 +935,7 @@ fn the_auto_search_arms_on_the_invade_transition_not_on_merely_being_busy() {
 /// change or it is 6061 identical lines instead of one.
 #[test]
 fn the_recovery_loop_probes_the_invade_action_before_re_arming() {
-    let source = include_str!("../local_invasion_filter.rs");
+    let source = filter_module_code();
     let recovery = source
         .split_once("fn arm_self_recovery(")
         .expect("self-recovery exists")
@@ -1708,7 +1730,7 @@ fn the_sweeper_does_not_retire_on_a_session_with_no_owner() {
 /// when no menu object was captured, and needs only a session to put inside it.
 #[test]
 fn requesting_a_search_asks_for_a_session_not_a_hooked_menu_object() {
-    let source = include_str!("../local_invasion_filter.rs");
+    let source = filter_module_code();
     let body = source
         .split_once("pub fn request_invade() -> bool {")
         .expect("the export's backing function exists")

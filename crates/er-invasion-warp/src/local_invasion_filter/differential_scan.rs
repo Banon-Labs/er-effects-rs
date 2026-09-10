@@ -73,7 +73,7 @@ fn is_active_state(abi: &ersc::Abi, state: u32) -> bool {
 /// The addresses that have survived every narrowing so far.
 ///
 /// Handed to the sweeper so it can ask the one question this module cannot ask on the game
-/// thread: which of them is POINTED AT by another object's `+0x58`. See
+/// thread: which of them is pointed at by another object's `+0x58`. See
 /// `session_scan::owner_among`.
 #[cfg(windows)]
 pub(super) fn survivors() -> Vec<usize> {
@@ -186,7 +186,7 @@ pub(super) fn narrow_to_changed(abi: &ersc::Abi) -> Option<usize> {
     // action just wrote to.
     //
     // Kept separate from the `retain` rather than folded into it, because the wider set is what
-    // survives to narrow the NEXT join: a session already past searching when this runs would be
+    // survives to narrow the next join: a session already past searching when this runs would be
     // dropped for good by the narrower test, and the whole point of the set is that it intersects
     // across attempts. This asks the sharper question of the survivors without discarding them.
     let searching: Vec<usize> = candidates

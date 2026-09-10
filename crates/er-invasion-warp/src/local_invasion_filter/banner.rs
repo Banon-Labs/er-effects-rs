@@ -14,6 +14,24 @@ use std::sync::atomic::Ordering;
 
 use super::{NOTICE_FAILED, REJECT_NOTICE, RejectReason};
 
+/// The Steam persona name of the host this match belongs to, or `None`.
+///
+/// # Two hops, both measured in a live game
+///
+/// `super::host_steam_id` reads `session+0x1d8`, which Seamless fills at the same transition that
+/// puts the host's lobby in `+0x1d0` and clears on the way back to idle; then
+/// `crate::lobby_publish::persona_name` asks Steam for the name behind that id. Neither hop is an
+/// inference: run br-20260910-042516-3b5d caught the field being written on two separate
+/// invasions, and the two ids it held answered "Paperplane" and "energygod18" when the call was
+/// made against the running process.
+///
+/// `None` at either hop means the banner simply says where, as it did before. A name is an
+/// addition to the line, never a precondition for it.
+#[cfg(windows)]
+fn host_name() -> Option<String> {
+    crate::lobby_publish::persona_name(super::host_steam_id()?)
+}
+
 /// Host-side stub: there is no game to show a banner in, and the decision half is tested directly
 /// against [`er_invasion_warp_core::reject_notice`] rather than through this.
 #[cfg(not(windows))]
@@ -38,7 +56,8 @@ pub(super) fn announce_arrival(enabled: bool, destination: u32) {
             Err(poisoned) => poisoned.into_inner(),
         };
         let place = crate::place_name::place_name_for_block(destination);
-        guard.observe_arrival(enabled, destination, place.as_deref())
+        let host = host_name();
+        guard.observe_arrival(enabled, destination, place.as_deref(), host.as_deref())
     };
     let Some(text) = announcement else {
         return;
@@ -73,7 +92,8 @@ pub(super) fn announce_success(enabled: bool, destination: u32) {
             Err(poisoned) => poisoned.into_inner(),
         };
         let place = crate::place_name::place_name_for_block(destination);
-        guard.observe_success(enabled, destination, place.as_deref())
+        let host = host_name();
+        guard.observe_success(enabled, destination, place.as_deref(), host.as_deref())
     };
     let Some(text) = announcement else {
         return;
@@ -116,7 +136,14 @@ pub(super) fn announce_rejection(enabled: bool, destination: u32, reason: Reject
         // makes `area` mode fail closed -- the notice falls back to the block id, which is
         // unfriendly but true.
         let place = crate::place_name::place_name_for_block(destination);
-        guard.observe(enabled, destination, reason, place.as_deref())
+        let host = host_name();
+        guard.observe(
+            enabled,
+            destination,
+            reason,
+            place.as_deref(),
+            host.as_deref(),
+        )
     };
     let Some(text) = announcement else {
         return;

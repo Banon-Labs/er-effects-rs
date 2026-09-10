@@ -142,7 +142,7 @@ impl JoinProgress {
         }
         // A torn-down session, whatever the phase field says.
         //
-        // `CSSessionManagerImp::DisconnectCleanup` sets `lobbyState = None` and does NOT write
+        // `CSSessionManagerImp::DisconnectCleanup` sets `lobbyState = None` and does not write
         // `protocolState`, so a session that has been cleaned up leaves the phase reading whatever
         // it last was -- `InGame` after a real invasion. Without this the next test sees a
         // non-`None` phase and calls it progress forever.

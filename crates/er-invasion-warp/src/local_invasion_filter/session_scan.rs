@@ -3,7 +3,7 @@
 //! MinHook's five-byte patch into `ersc.dll` faults at `0x140010043` with no input given --
 //! `show` (ersc+0x241a0) at ~50s and again at 29.5s on run `br-20260909-234803-535c`, the
 //! lobby-key builder (ersc+0xad6e0) at 30.6s. That is a fact about writing bytes into a
-//! Themida-protected module, NOT about observing one: Frida's `Interceptor` sits on that same
+//! Themida-protected module, not about observing one: Frida's `Interceptor` sits on that same
 //! `ersc+0x241a0` for a whole session and hands over the menu object every time. So a detour-free
 //! route is preferred here, not mandatory, and this module is one: a walk of `ersc.dll`'s own
 //! writable sections, testing each qword against a signature strong enough to identify the
@@ -316,7 +316,7 @@ pub(super) fn adopt_proven_session(session: usize) {
 /// The two are independent evidence about the same question, and the shape scan being wrong says
 /// nothing about the snapshot -- the snapshot's whole claim is "these objects read idle a moment
 /// ago", which no later discovery about a different pointer can falsify. Worse, it cannot be
-/// rebuilt on demand: it can only be taken while the session is IDLE, so a snapshot destroyed
+/// rebuilt on demand: it can only be taken while the session is idle, so a snapshot destroyed
 /// during a join is gone for exactly the invasion that needed it. `snapshot_idle_candidates`
 /// replaces it wholesale on the next armed pass, and `narrow_to_changed` clears it itself when a
 /// join empties it, which is the one event that does prove the real session was never in it.
@@ -628,7 +628,7 @@ pub(super) fn owner_among(candidates: &[usize]) -> Option<(usize, usize)> {
             None => String::new(),
         }
     ));
-    // One session is an identification. Several holders naming the SAME session are fine -- a box
+    // One session is an identification. Several holders naming the same session are fine -- a box
     // can be referenced more than once -- so the count that has to be one is the session count.
     if sessions.len() != 1 {
         return None;
@@ -766,7 +766,7 @@ fn sweep_until_answered(base: usize, abi: &'static ersc::Abi) {
         // out of idle at that moment and an impostor does not -- a set snapshotted after the fact
         // has already lost the distinction it exists to make.
         let (held, rounds) = super::differential_scan::progress();
-        // A narrowed set is the best question available: ask which survivor is OWNED before
+        // A narrowed set is the best question available: ask which survivor is owned before
         // spending this pass on another shape scan. `owner_among` is the discriminator Frida
         // supplied through its `invade` hook and the crate never had, so it goes first once there
         // is a set small enough to cross-reference.
@@ -783,7 +783,7 @@ fn sweep_until_answered(base: usize, abi: &'static ersc::Abi) {
         // No `rounds` gate. It used to require a join first, on the reasoning that the owner scan
         // breaks a tie between survivors -- but ownership is not a tiebreak, it is the
         // identification, and the idle snapshot taken at boot is already a candidate set. So the
-        // question is asked of whatever is recorded, which lets it answer BEFORE the player has
+        // question is asked of whatever is recorded, which lets it answer before the player has
         // invaded even once. That matters more than the cost of the pass: waiting for a join made
         // the feature depend on an invasion happening first, and the first invasion is exactly the
         // one that lands in the wrong world.
@@ -827,7 +827,7 @@ fn sweep_until_answered(base: usize, abi: &'static ersc::Abi) {
             }
             // A bare session is provisional, so this thread keeps its post rather than retiring
             // on it. Returning here is what made the owner scan above dead code: the sweeper
-            // exited on the FIRST thing the shape scan latched -- routinely a look-alike, five
+            // exited on the first thing the shape scan latched -- routinely a look-alike, five
             // times running -- and never woke again, so a set narrowed by a later join had
             // nothing left to cross-reference it. Measured on run br-20260909-202153-5a46: a join
             // took 12,493 candidates to 8 and no owner scan line was ever written, because this
