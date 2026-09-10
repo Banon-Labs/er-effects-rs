@@ -1,0 +1,4 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "launch it"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "name": "Bash", "id": "t1", "input": {"command": "python3 scripts/er-run-branch.py --profile /home/banon/Elden/quicksave.me3"}}]}}
+{"type": "user", "message": {"role": "user", "content": [{"tool_use_id": "t1", "type": "tool_result", "content": [{"type": "text", "text": "launched pid 4711"}]}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Rebuilding and relaunching now; tell me what you see on the loading screen when it comes up, because the portrait oracle has no pixel semaphore for that crop yet."}]}}

@@ -14,10 +14,31 @@ use std::sync::atomic::Ordering;
 
 use super::{NOTICE_FAILED, REJECT_NOTICE, RejectReason};
 
+/// The Steam persona name of the host this match belongs to, or `None`.
+///
+/// # Two hops, both measured in a live game
+///
+/// `super::host_steam_id` reads `session+0x1d8`, which Seamless fills at the same transition that
+/// puts the host's lobby in `+0x1d0` and clears on the way back to idle; then
+/// `crate::lobby_publish::persona_name` asks Steam for the name behind that id. Neither hop is an
+/// inference: run br-20260910-042516-3b5d caught the field being written on two separate
+/// invasions, and the two ids it held answered "Paperplane" and "energygod18" when the call was
+/// made against the running process.
+///
+/// `None` at either hop means the banner simply says where, as it did before. A name is an
+/// addition to the line, never a precondition for it.
+#[cfg(windows)]
+fn host_name() -> Option<String> {
+    crate::lobby_publish::persona_name(super::host_steam_id()?)
+}
+
 /// Host-side stub: there is no game to show a banner in, and the decision half is tested directly
 /// against [`er_invasion_warp_core::reject_notice`] rather than through this.
 #[cfg(not(windows))]
 pub(super) fn announce_rejection(_enabled: bool, _destination: u32, _reason: RejectReason) {}
+
+#[cfg(not(windows))]
+pub(super) fn announce_verdict(_enabled: bool, _destination: u32, _reason: RejectReason) {}
 
 /// Host-side stub.
 #[cfg(not(windows))]
@@ -35,7 +56,8 @@ pub(super) fn announce_arrival(enabled: bool, destination: u32) {
             Err(poisoned) => poisoned.into_inner(),
         };
         let place = crate::place_name::place_name_for_block(destination);
-        guard.observe_arrival(enabled, destination, place.as_deref())
+        let host = host_name();
+        guard.observe_arrival(enabled, destination, place.as_deref(), host.as_deref())
     };
     let Some(text) = announcement else {
         return;
@@ -70,7 +92,8 @@ pub(super) fn announce_success(enabled: bool, destination: u32) {
             Err(poisoned) => poisoned.into_inner(),
         };
         let place = crate::place_name::place_name_for_block(destination);
-        guard.observe_success(enabled, destination, place.as_deref())
+        let host = host_name();
+        guard.observe_success(enabled, destination, place.as_deref(), host.as_deref())
     };
     let Some(text) = announcement else {
         return;
@@ -113,7 +136,14 @@ pub(super) fn announce_rejection(enabled: bool, destination: u32, reason: Reject
         // makes `area` mode fail closed -- the notice falls back to the block id, which is
         // unfriendly but true.
         let place = crate::place_name::place_name_for_block(destination);
-        guard.observe(enabled, destination, reason, place.as_deref())
+        let host = host_name();
+        guard.observe(
+            enabled,
+            destination,
+            reason,
+            place.as_deref(),
+            host.as_deref(),
+        )
     };
     let Some(text) = announcement else {
         return;
@@ -139,3 +169,48 @@ pub(super) fn announce_rejection(enabled: bool, destination: u32, reason: Reject
         ));
     }
 }
+
+/// Say, the moment a match is judged, that it is not one the filter wanted.
+///
+/// # Why this is separate from [`announce_rejection`]
+///
+/// Because the verdict and the enforcement are two facts and one banner cannot carry both without
+/// lying about one of them. That has now been got wrong in both directions on live sessions:
+/// announcing "Rejected" at the verdict told the player an invasion had been stopped when the
+/// cancel then failed and it proceeded (2026-09-04), and moving the banner behind a successful
+/// cancel meant an uncancellable rejection showed nothing at all, which reads exactly like the mod
+/// not being loaded (2026-09-09).
+///
+/// So this one states only what is certainly true at the instant it fires -- this match is not
+/// local -- and never claims anything was stopped. `announce_rejection` still fires from
+/// `drive_pending_cancel` when a cancel actually lands, and that one may say so.
+///
+/// Deduplicated by destination, because a rejection is judged once but the tick can revisit it.
+#[cfg(windows)]
+pub(super) fn announce_verdict(enabled: bool, destination: u32, reason: RejectReason) {
+    if !enabled {
+        return;
+    }
+    if LAST_VERDICT_BLOCK.swap(destination, Ordering::SeqCst) == destination {
+        return;
+    }
+    let place = crate::place_name::place_name_for_block(destination)
+        .unwrap_or_else(|| format!("{destination:#010x}"));
+    // Short because the announce field is 1728px wide and the first attempt at a message like this
+    // measured 1729px, so it was placed successfully and never rendered.
+    let text = format!("Not local: {place}");
+    // SAFETY: game thread, inside the join-data hook -- the context `announce_rejection` shows
+    // from, and `show` byte-checks both game functions before using them.
+    if !unsafe { crate::announce::show(&text) } {
+        if NOTICE_FAILED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        crate::standalone_log(format_args!(
+            "local-invasion: could not show the verdict banner (\"{text}\") -- reason {reason:?}"
+        ));
+    }
+}
+
+/// The last destination a verdict banner named, so a re-judged match does not repeat it.
+#[cfg(windows)]
+static LAST_VERDICT_BLOCK: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);

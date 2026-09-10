@@ -638,6 +638,15 @@ python3 "$repo_root/scripts/check-oracle-singleton-globals.py"
 # image when there is one. Only `--selftest` runs: the bare form is a report, and it exits
 # non-zero when no game is installed, which is not a repo defect.
 python3 "$repo_root/scripts/ersc_identify.py" --selftest
+# er-lockon-filter decides who is a hostile phantom from two tables in the game image --
+# `CharacterTypeProperties` and `MultiplayProperties` -- and carries the answer as constants,
+# because reading them at runtime would need two more pinned data addresses for the sake of
+# values that have not moved between builds. This is the gate that keeps the constants honest:
+# it re-reads both tables and fails if the game's own classification stops being the one they
+# were derived from. It exists because the hand-written predecessor was narrower than the game's
+# answer in a way nothing caught -- the crate required chr_type 15/16/18, the live session
+# measured 2, and the feature was silently inert. An absent image is a skip, not a pass.
+python3 "$repo_root/scripts/er-character-type-tables.py" --selftest
 # The workspace uses `../fromsoftware-rs` path dependencies, and CI clones that sibling at one
 # pinned revision while a developer's is whatever they have checked out -- often a fork carrying
 # types upstream does not have. Everything below compiles against the developer's copy, so it
@@ -705,6 +714,22 @@ python3 "$repo_root/scripts/test-detect-proc.py"
 python3 "$repo_root/scripts/test-semaphore-watchdog.py"
 python3 "$repo_root/scripts/test-input-harness-static.py"
 python3 "$repo_root/scripts/test-wall-of-text-classifier.py"
+# The other half of the challenged-convention guard. Its Rego suite pins what the policy does with
+# a facts line; this pins where the facts line comes from, which is the half that decides whether
+# the guard convicts an ordinary question about the game binary. Both directions are asserted, and
+# the yes-or-no answers a first draft read as concessions are in it as negatives.
+python3 "$repo_root/scripts/test-challenged-convention-classifier.py"
+# The other half of the narrated-action guard, for the same reason. Its negatives are the ones that
+# matter: a gerund that is the subject of an ordinary sentence, a report that opens on a participle,
+# and the launch banner AGENTS.md mandates. It also re-reads the promissory closer's own verb list
+# out of that signal and fails if the two rules ever claim the same gerund.
+python3 "$repo_root/scripts/test-narrated-action-classifier.py"
+# The other half of the admission-with-defence guard. Its negatives carry the weight: an admission
+# that simply stops, one that reports the substitute work, and one that owns the consequence of its
+# own mistake all have to pass, because a rule that charges those teaches agents to admit less. It
+# also re-reads the friction stall's own admission patterns out of that signal and fails if a
+# sentence would ever be charged by both rules.
+python3 "$repo_root/scripts/test-admission-with-defence-classifier.py"
 # The SessionStart/PreCompact prime hook must stay small enough that the harness INLINES it.
 # At 2452 memories it emitted 157.4 KB, which Claude Code persisted to a file and replaced
 # with a 2 KB preview -- so the priming content never reached the agent while still costing
@@ -804,8 +829,11 @@ python3 "$repo_root/scripts/test-idle-hold-signal.py"
 python3 "$repo_root/scripts/test-unexecuted-promise-signal.py"
 python3 "$repo_root/scripts/test-described-next-step-signal.py"
 python3 "$repo_root/scripts/test-native-ownership-vocab-signal.py"
+python3 "$repo_root/scripts/test-diagnosis-signal.py"
+python3 "$repo_root/scripts/test-future-commitment-signal.py"
 python3 "$repo_root/scripts/test-stall-on-friction-signal.py"
 python3 "$repo_root/scripts/test-wall-of-text-signal.py"
+python3 "$repo_root/scripts/test-deferred-evidence-read-signal.py"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement_reminder.rego" "$repo_root/.cupcake/tests/no_authority_agreement_test.rego" "$repo_root/.cupcake/tests/no_authority_agreement_reminder_test.rego" "$repo_root/.cupcake/policies/claude/idle_hold.rego" "$repo_root/.cupcake/policies/claude/idle_hold_reminder.rego" "$repo_root/.cupcake/tests/idle_hold_test.rego" "$repo_root/.cupcake/tests/idle_hold_reminder_test.rego" "$repo_root/.cupcake/policies/claude/native_ownership_vocab_reminder.rego" "$repo_root/.cupcake/tests/native_ownership_vocab_reminder_test.rego" "$repo_root/.cupcake/policies/claude/block_manual_pgrep.rego" "$repo_root/.cupcake/tests/block_manual_pgrep_test.rego" "$repo_root/.cupcake/policies/claude/bash_elden_ring_launch_guard.rego" "$repo_root/.cupcake/tests/bash_elden_ring_launch_guard_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion.rego" "$repo_root/.cupcake/tests/block_askuserquestion_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion_reminder.rego" "$repo_root/.cupcake/tests/block_askuserquestion_reminder_test.rego" "$repo_root/.cupcake/policies/claude/no_stall_on_friction.rego" "$repo_root/.cupcake/tests/no_stall_on_friction_test.rego" "$repo_root/.cupcake/policies/claude/no_unexecuted_promise.rego" "$repo_root/.cupcake/tests/no_unexecuted_promise_test.rego" "$repo_root/.cupcake/policies/claude/wall_of_text.rego" "$repo_root/.cupcake/tests/wall_of_text_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_push.rego" "$repo_root/.cupcake/tests/git_block_main_push_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_commit.rego" "$repo_root/.cupcake/tests/git_block_main_commit_test.rego"
@@ -1447,6 +1475,13 @@ python3 "$repo_root/scripts/check-detour-rva-coverage.py"
 # cover's release predicate: the bar froze at `LOADING SAVE 7/11` and the cover had no exit.
 # Proven against the offending commit: run this gate on `git show 7a7f25b3:<that file>` and it
 # names line 595. Declared-atomic hook sets are printed on every run, never hidden.
+# An AOB signature two crates both hook is load-order-fragile, not version-fragile: whichever DLL
+# me3 loads first overwrites the prologue the second one is scanning for, and the second silently
+# switches itself off. That is what kept the announcement banner left-aligned until 2026-09-10 --
+# er-armament-icons and er-invasion-warp had independently arrived at the byte-identical 30-byte
+# GFx tag-parse signature, and the loser's refusal line said only "absent or not unique".
+python3 "$repo_root/scripts/check-shared-detour-signatures.py" --selftest
+python3 "$repo_root/scripts/check-shared-detour-signatures.py"
 python3 "$repo_root/scripts/check-hook-batch-abort.py" --selftest
 # RE-armed 2026-08-31: the two batch-abort sites this note held the line open for have landed.
 # dlstring_lookat_math.rs:595 is gone and system_quit_ownership_repro.rs:495 is now declared
@@ -1999,6 +2034,11 @@ python3 "$repo_root/scripts/er-pick-save.py" --selftest
 python3 "$repo_root/scripts/er-gen-me3-profile.py" --selftest
 python3 "$repo_root/scripts/er-run-reaper.py" --selftest
 python3 "$repo_root/scripts/er-run-branch.py" --selftest
+# Reads the natives list out of every staged run's me3-launcher.log, so "was that DLL actually in
+# the process on the day I tested it" is answerable after the DLL's own log has been rotated away.
+# Only the selftest runs here: the bare form reports on this machine's run cache, which CI has none
+# of, and an empty report is not a repo defect.
+python3 "$repo_root/scripts/er-run-natives-history.py" --selftest
 
 # Scoring a DLL by launching it alone. Its verdict is the husk oracle -- thread count and CPU
 # burn, not a pid existing -- and its selftest drives every branch of that classification,

@@ -2,10 +2,20 @@
 # Disassemble a VA range from the dearxan-DEOBFUSCATED ER mapped image (repo-local, gitignored).
 # Mapped image: file offset == RVA, image base 0x140000000 -> VA = offset + 0x140000000.
 # Usage: scripts/disas-deobf.sh [--color=auto|always|never] <VA> [nbytes]
+# Image: ER_DEOBF_IMAGE or ER_DEOBF_BIN (default eldenring-deobf.bin, which is 1.16.2 and not the
+# installed build -- pass eldenring-deobf-1.17.1.bin for that).
 # Set ER_DISAS_COLOR=always to force ANSI escapes through non-TTY capture layers.
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-IMG="${ER_DEOBF_IMAGE:-$SCRIPT_DIR/../eldenring-deobf.bin}"
+# ER_DEOBF_BIN is the name scripts/find-deobf-bytes.py uses and the name AGENTS.md documents, so
+# it is accepted here too. It used to be ignored silently, which disassembles 1.16.2 while the
+# caller believes it is reading 1.17.1 -- and 1.16.2 has a real function at most 1.17 addresses, so
+# the output is plausible rather than empty. A relative name resolves against the repo root, not
+# the caller's directory, because that is where the images live.
+IMG="${ER_DEOBF_IMAGE:-${ER_DEOBF_BIN:-$SCRIPT_DIR/../eldenring-deobf.bin}}"
+if [[ "$IMG" != /* && ! -f "$IMG" && -f "$SCRIPT_DIR/../$IMG" ]]; then
+  IMG="$SCRIPT_DIR/../$IMG"
+fi
 if [[ ! -f "$IMG" ]] && GIT_COMMON_DIR="$(git -C "$SCRIPT_DIR/.." rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"; then
   WORKSPACE_IMAGE="$(dirname "$GIT_COMMON_DIR")/eldenring-deobf.bin"
   if [[ -f "$WORKSPACE_IMAGE" ]]; then

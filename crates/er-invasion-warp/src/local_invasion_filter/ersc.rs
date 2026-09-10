@@ -80,6 +80,8 @@ pub struct Abi {
     pub invade_action_rva: usize,
     /// The "Cancel search" option action. Reads `rcx` only.
     pub cancel_action_rva: usize,
+    /// `OPTIONSELECT_LEAVEWORLD`'s action -- see [`V201_LEAVE_WORLD_ACTION_RVA`].
+    pub leave_world_action_rva: usize,
     /// `BuildLobbyKey(ctx, std::string* out)` -- produces the `lobby_key` string.
     ///
     /// # Why this one matters more than it looks
@@ -112,6 +114,8 @@ pub struct Abi {
     /// taken on a detoured prologue measures our own patch. We are cancel's only caller, so
     /// there is nothing to observe there and no reason it will ever be hooked.
     pub cancel_prologue: &'static [u8],
+    /// Prologue for [`Abi::leave_world_action_rva`].
+    pub leave_world_prologue: &'static [u8],
     pub build_lobby_key_prologue: &'static [u8],
     /// Session state, the field every option action writes.
     pub session_state_offset: usize,
@@ -183,10 +187,12 @@ pub const SUPPORTED: &[Abi] = &[Abi {
     show_rva: V201_SHOW_RVA,
     invade_action_rva: V201_INVADE_ACTION_RVA,
     cancel_action_rva: V201_CANCEL_ACTION_RVA,
+    leave_world_action_rva: V201_LEAVE_WORLD_ACTION_RVA,
     build_lobby_key_rva: V201_BUILD_LOBBY_KEY_RVA,
     show_prologue: V201_SHOW_PROLOGUE,
     invade_prologue: V201_INVADE_PROLOGUE,
     cancel_prologue: V201_CANCEL_PROLOGUE,
+    leave_world_prologue: V201_LEAVE_WORLD_PROLOGUE,
     build_lobby_key_prologue: V201_BUILD_LOBBY_KEY_PROLOGUE,
     session_state_offset: V201_SESSION_STATE_OFFSET,
     session_guard_offset: V201_SESSION_GUARD_OFFSET,
@@ -208,6 +214,16 @@ pub const SUPPORTED: &[Abi] = &[Abi {
 pub const V201_SHOW_RVA: usize = 0x2_41a0;
 pub const V201_INVADE_ACTION_RVA: usize = 0x2_5850;
 pub const V201_CANCEL_ACTION_RVA: usize = 0x2_58d0;
+/// `OPTIONSELECT_LEAVEWORLD` -- menu 3's only row, and the escape Seamless leaves open in states
+/// where its Cancel row is withdrawn.
+///
+/// Its hide predicate is `ersc+0x26ac0`, `hide = (state == 1)`, so the row is drawn in every state
+/// but idle -- including `0x16`, where the Cancel row's predicate at `ersc+0x26b40` hides it and a
+/// player is otherwise stranded. The action is `0x64` bytes and does the same thing cancel does:
+/// take the session mutex at `session+0x100`, check the recursion count, write `0x23` to
+/// `session+0x150`, unlock. Driving it is therefore driving a row the player could have clicked,
+/// which is the invariant the cancel-row refusal exists to protect.
+pub const V201_LEAVE_WORLD_ACTION_RVA: usize = 0x2_59d0;
 pub const V201_BUILD_LOBBY_KEY_RVA: usize = 0xa_d6e0;
 pub const V201_SESSION_STATE_OFFSET: usize = 0x150;
 pub const V201_SESSION_GUARD_OFFSET: usize = 0x14c;
@@ -245,9 +261,63 @@ pub const OSM_TAG: &[u8] = b"seamless";
 /// until 2026-09-08. It is `INT_MAX`, and the comparison against it is MSVC's own
 /// `_Verify_ownership_levels`: see [`Abi::session_guard_offset`] for what the field actually is.
 ///
-/// Kept because the actions do compare against it, and a reading of it is still worth logging. It
-/// is no longer treated as a refusal on its own, because reaching it needs 2^31 nested locks.
+/// Kept because the actions do compare against it, and mirroring a callee's own bail condition is
+/// worth one read. It is not a safety net: reaching it needs 2^31 nested locks, so on a healthy
+/// session this never fires, and its never firing is not evidence that anything works. What the
+/// check actually catches is a session pointer that does not read -- see `session_guard_refuses`,
+/// which reports the two conditions separately rather than as one `bool`.
 pub const SESSION_GUARD_POISON: u32 = 0x7fff_ffff;
 /// The highest plausible session state, used to reject a pointer that is not a session at all.
 /// Comfortably above the largest code the build writes (`0x24`).
 pub const SESSION_STATE_MAX: u32 = 0xff;
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        SESSION_GUARD_POISON, V201_CANCEL_PROLOGUE, V201_SESSION_GUARD_OFFSET,
+        V201_SESSION_STATE_OFFSET,
+    };
+
+    /// Find `pattern` in `haystack` and answer the little-endian dword at `at` past its start.
+    fn dword_after(haystack: &[u8], pattern: &[u8], at: usize) -> Option<u32> {
+        haystack
+            .windows(pattern.len())
+            .position(|w| w == pattern)
+            .map(|index| {
+                let start = index + at;
+                u32::from_le_bytes([
+                    haystack[start],
+                    haystack[start + 1],
+                    haystack[start + 2],
+                    haystack[start + 3],
+                ])
+            })
+    }
+
+    /// The two offsets this module drives Seamless through are the ones the cancel action's own
+    /// pinned bytes address, and the sentinel is the one it compares.
+    ///
+    /// # Why this is a test and not a comment
+    ///
+    /// `V201_SESSION_GUARD_OFFSET`, `V201_SESSION_STATE_OFFSET` and `SESSION_GUARD_POISON` are
+    /// three numbers typed by hand beside a pin generated from the shipped `ersc.dll`. Nothing
+    /// connected them: a re-pin at the next Seamless build regenerates the bytes and leaves the
+    /// three constants describing the previous one, and the failure is silent -- an action driven
+    /// against the wrong field writes a state nobody reads.
+    ///
+    /// The pin carries `cmp dword [rdi+<guard>], 0x7fffffff` as `81 bf <off32> ff ff ff 7f` and
+    /// `mov dword [rdi+<state>], 0x23` as `c7 87 <off32> 23 00 00 00`, so both are recoverable
+    /// from the bytes themselves.
+    #[test]
+    fn the_guard_and_state_offsets_are_the_ones_the_cancel_action_addresses() {
+        let compare = dword_after(V201_CANCEL_PROLOGUE, &[0x81, 0xbf], 2)
+            .expect("the pin carries the guard comparison");
+        assert_eq!(compare as usize, V201_SESSION_GUARD_OFFSET);
+        let sentinel = dword_after(V201_CANCEL_PROLOGUE, &[0x81, 0xbf], 6)
+            .expect("the pin carries the sentinel");
+        assert_eq!(sentinel, SESSION_GUARD_POISON);
+        let write = dword_after(V201_CANCEL_PROLOGUE, &[0xc7, 0x87], 2)
+            .expect("the pin carries the state write");
+        assert_eq!(write as usize, V201_SESSION_STATE_OFFSET);
+    }
+}

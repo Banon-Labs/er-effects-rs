@@ -34,6 +34,7 @@ pub mod announce;
 pub mod drive;
 pub mod lobby_publish;
 pub mod local_invasion_filter;
+pub mod lynchpin_use;
 #[cfg(windows)]
 pub mod map_confirm;
 pub mod map_gfx;
@@ -244,6 +245,14 @@ fn spawn_catalog_task() {
                             crate::drive::game_has_focus(),
                         );
                     }
+                    // The Challenger's Lynchpin: a shorter use animation, the start-a-search popup
+                    // skipped, and any requested use held for the frames the engine needs to see
+                    // it. Every part is idempotent and fails closed, so a tick before the world
+                    // exists costs nothing.
+                    //
+                    // SAFETY: same game-task context; every read is fault-closed and the one
+                    // detour is installed on a byte-verified prologue.
+                    unsafe { crate::lynchpin_use::tick() };
                     // Advertise this host's current map on its own Steam lobby, so an invader can
                     // ask for a location instead of sampling and rejecting. Gated internally on the
                     // block having changed, so a host standing still costs one string compare.
@@ -293,6 +302,15 @@ fn spawn_catalog_task() {
                         // once the totals latch -- seconds into a run, and long before anyone
                         // hunts. Without this the file freezes at zero while the counters climb.
                         // Gated on a change, so a steady run costs four comparisons and no I/O.
+                        // The banner's own counters, for the same reason: `announce::show` logs
+                        // its first notice and nothing after, so a run with one banner and a run
+                        // with a hundred read identically. `drawn` is the one that matters -- a
+                        // notice can be placed and render nothing.
+                        let (shown, refused) = crate::announce::tally();
+                        let (drawn, empty) = crate::announce::measurement_tally();
+                        er_invasion_warp_core::oracles::publish_notice_oracles(
+                            shown, refused, drawn, empty,
+                        );
                         er_invasion_warp_core::oracles::republish_if_location_matchmaking_changed();
                     }
                     // Re-colour pins that already exist. Gated internally on the user's lists

@@ -95,6 +95,302 @@ CASES = [
         "user pushback met with an admission and a menu instead of the corrective action",
     ),
     Case(
+        "proof_without_observation.jsonl",
+        "cited nothing that observed it in the game",
+        "the turn calls a runtime feature proven off a load and an address translation -- neither is "
+        "an outcome anyone could have watched happen (the 2026-09-09 directive)",
+    ),
+    Case(
+        "proof_with_observation.jsonl",
+        None,
+        "the same claim beside the run id that observed it -- must NOT halt, or citing a run is "
+        "punished the same as citing nothing",
+    ),
+    Case(
+        "unbacked_claim.jsonl",
+        "claiming an artifact exists that you did not create",
+        "the turn claims a gate was built and wired in, and ships one `bd remember` -- the exact "
+        "2026-08-23 incident. Its signal read a Turn attribute that does not exist, so the guard was "
+        "silently inert from the day it landed until 2026-09-09 while its six opa tests stayed green",
+    ),
+    Case(
+        "backed_claim.jsonl",
+        None,
+        "the same sentence beside the Edit that backs it -- must NOT halt, or delivering the thing "
+        "and saying so is punished identically to claiming it and not delivering",
+    ),
+    Case(
+        "promissory_closer.jsonl",
+        "announcing a fix as though it were already underway",
+        "the turn closes on 'Fixing both: bypass the union ...' -- a present participle with no "
+        "subject, announcing work as if in flight, and the turn wrote nothing (the 2026-09-09 "
+        "directive). Neither sibling could see it: no first-person opener for "
+        "no_unexecuted_promise, no forward-looking prescription for no_described_next_step",
+    ),
+    Case(
+        "promissory_closer_with_edit.jsonl",
+        None,
+        "the same closing sentence beside the Edit that makes it true -- must NOT halt, or "
+        "reporting work just done is punished identically to announcing work never done",
+    ),
+    Case(
+        "promissory_gerund_mid_turn.jsonl",
+        None,
+        "'Wiring the detour entry now.' as a mid-turn preamble before the Edit, with an ordinary "
+        "closing report -- the correct shape, and the one a gerund rule must never touch",
+    ),
+    Case(
+        "unread_evidence_closer.jsonl",
+        "naming the evidence that answers your own open question",
+        "the turn closes on 'which its own log answers, so I am reading that next' -- the answer "
+        "was in a file on disk and the read was left for after the turn. The same defect as the "
+        "promissory closer in the grammar of an observation, which is how it slipped past a "
+        "pattern keyed on a work gerund or a first-person opener",
+    ),
+    Case(
+        "zero_information_stop.jsonl",
+        "nothing for the user to reply",
+        "asked what their ideal response was, the turn answered 'Nothing -- the ball is in my "
+        "court. Rebuilding and relaunching now; the one thing I'll need from you afterwards is a "
+        "single use of the item.' Both actions were its own and unblocked, and the in-game input "
+        "it asked for is one it drives itself (the 2026-09-09 directive). The trailing clause is "
+        "what disarmed no_unexecuted_promise and no_described_next_step: both exempt a turn that "
+        "hands the obligation to the user",
+    ),
+    Case(
+        "zero_information_stop_observation.jsonl",
+        None,
+        "the same 'Rechecking the log now' shape beside an observation only the user can make -- "
+        "must NOT halt, or the launch-handoff protocol becomes unspeakable",
+    ),
+    Case(
+        "zero_information_stop_delivered.jsonl",
+        None,
+        "'nothing on your side is needed' closing a turn that edited the file and reports the "
+        "green gate -- the honest end of a finished task, not a handback",
+    ),
+    Case(
+        "deferred_evidence_read.jsonl",
+        "pointing at evidence that already exists and did not open it",
+        "the turn closes on 'er-quickload-autoload-debug.log will say which' and never opens the "
+        "file (the 2026-09-09 directive). The sibling arm's own pattern cannot span the modal "
+        "between the artifact and the verb of telling, so this is the shape that reaches "
+        "ER-EFFECTS-NO-DEFERRED-EVIDENCE-READ rather than ER-EFFECTS-NO-PROMISSORY-CLOSER",
+    ),
+    Case(
+        "deferred_evidence_future.jsonl",
+        None,
+        "the same deferral pointed at a log the next run has still to write -- must NOT halt, or "
+        "deferring to evidence that does not exist yet becomes unspeakable, and this repo does it "
+        "in most turns that end on a launch",
+    ),
+    Case(
+        "deferred_evidence_consulted.jsonl",
+        None,
+        "the same sentence beside the tail that opened the log and the finding it produced -- must "
+        "NOT halt, or reading the evidence is punished identically to skipping it",
+    ),
+    Case(
+        "future_tense_commitment.jsonl",
+        "promising work you could have done in it",
+        "the turn closes on 'Next run I'll build this in and re-attach Frida to confirm zero "
+        "DISCARDING lines ...' -- the build command and the launch script were both available, so "
+        "the deadline bought a round trip worth nothing (the 2026-09-09 directive, and a repeat "
+        "offence). On the REAL turn all three neighbours stayed silent: a live game session made "
+        "`carried` true for two of them, and the third reads a deadline as a handoff",
+    ),
+    Case(
+        "future_tense_commitment_acted.jsonl",
+        None,
+        "the same grammar over work the turn actually did -- an edit-class promise beside the Edit "
+        "-- must NOT halt, or reporting what you just did is punished identically to deferring it",
+    ),
+    Case(
+        "delegation_as_completion.jsonl",
+        "describing what a subagent you just dispatched contains",
+        "the turn dispatched an agent and then listed its deliverables -- 'It has the verbatim "
+        "sentence, the exemptions ..., and the same evidence bar the others got: ...' -- before any "
+        "completion notification existed. The Agent tool's own result says the caller knows nothing "
+        "about those results until the notification arrives",
+    ),
+    Case(
+        "delegation_reported.jsonl",
+        None,
+        "the same enumeration after the completion notification landed -- must NOT halt, or "
+        "relaying what an agent actually reported is punished identically to predicting it",
+    ),
+    Case(
+        "challenged_convention.jsonl",
+        "challenged a choice you made",
+        "asked 'Do you crutch on 1.16.2 addreses for a specific reason?' the turn answered with a "
+        "table of why the convention exists and changed nothing (the 2026-09-10 directive). Every "
+        "neighbour was disarmed: no_stall_on_friction exempts a prompt that asked a question, "
+        "no_diagnosis_without_fix needs a defect named, and no_future_tense_commitment cleared the "
+        "closing promise because the class it named was a read the turn had already done",
+    ),
+    Case(
+        "challenged_convention_pivot.jsonl",
+        "challenged a choice you made",
+        "'Why on earth would I want that convention?' answered with 'You wouldn't -- and there's "
+        "no need to invent a new field, because ...' plus 160 words of rationale. One turn, both "
+        "arms: the challenge was justified rather than acted on, and the concession was argued "
+        "past",
+    ),
+    Case(
+        "challenged_convention_insist.jsonl",
+        "challenged a choice you made",
+        "the third consecutive turn, in which the user names the shape itself -- 'Why do you insist "
+        "on going My real point <em-dash> massive amount of prose that is never worth reading' -- "
+        "and the turn does it again",
+    ),
+    Case(
+        "challenged_convention_pivot_only.jsonl",
+        "concession and then argued past it",
+        "a concession opening a closer that changed nothing, with no detectable challenge in the "
+        "prompt -- the arm that reaches the shape the challenge detector cannot see",
+    ),
+    Case(
+        "challenged_convention_changed.jsonl",
+        None,
+        "the same challenge answered with the Edit that settles it -- must NOT halt, or making the "
+        "change and saying why is punished identically to only saying why",
+    ),
+    Case(
+        "challenged_convention_asked.jsonl",
+        None,
+        "'Explain why you start from 1.16.2 before we change it' -- an explicit ask, so explaining "
+        "is the deliverable and gagging it would be the worse failure",
+    ),
+    Case(
+        "challenged_convention_codebase_question.jsonl",
+        None,
+        "'Why does the engine park the disconnect until the next frame?' -- a third-person "
+        "question about the binary, which this repo must always be able to answer at length",
+    ),
+    Case(
+        "challenged_convention_short_reply.jsonl",
+        None,
+        "the same challenge answered in two words -- 'You wouldn't.' -- must NOT halt: the third "
+        "conjunct is a wall of justification, and a plain concession is not one",
+    ),
+    Case(
+        "challenged_convention_blocked.jsonl",
+        None,
+        "the same challenge beside a read that needs the game running and a daemon that needs "
+        "sudo -- dependencies the agent cannot dissolve by working harder. Its first wording said "
+        "'the guard refused the write' and ER-EFFECTS-NO-BLAME-DEFLECTION halted it correctly, "
+        "which is worth knowing: a blocker has to be stated with the agent's own hand in it",
+    ),
+    Case(
+        "narrated_action_rerun.jsonl",
+        "narrating the action instead of having taken it",
+        "the turn closes on 'Re-running it now without the cap.' -- the command was its own and "
+        "unblocked, and it stopped to say so (the 2026-09-10 directive). The present participle is "
+        "the gap: no_future_tense_commitment needs a first-person future opener, and a bare "
+        "participial clause commits nobody",
+    ),
+    Case(
+        "narrated_action_rebuild.jsonl",
+        "narrating the action instead of having taken it",
+        "'Rebuilding and relaunching now.' -- the one spelling ER-EFFECTS-NO-ZERO-INFORMATION-STOP "
+        "also reaches, so cupcake returns both halts here. Kept as a fixture because it is one of "
+        "the five verbatim closers, and the overlap is worth pinning rather than discovering",
+    ),
+    Case(
+        "narrated_action_bringing_up.jsonl",
+        "narrating the action instead of having taken it",
+        "'Bringing it up to read the pointer chain live rather than guessing another offset:' -- a "
+        "colon closing the clause, which is the announce-then-do shape with the tool call missing",
+    ),
+    Case(
+        "narrated_action_diagnosable.jsonl",
+        "narrating the action instead of having taken it",
+        "'Making the empty read diagnosable ... :' -- a code-shaped verb the promissory closer's "
+        "gerund list does not carry, in a turn that wrote nothing after it",
+    ),
+    Case(
+        "narrated_action_dispatch.jsonl",
+        "narrating the action instead of having taken it",
+        "'Dispatching a subagent to enumerate the menu builder's rows properly, and unblocking you "
+        "now ...:' -- the dispatch is one tool call away and the turn ended instead",
+    ),
+    Case(
+        "narrated_action_reported.jsonl",
+        None,
+        "the same participle carrying what came back -- 'Re-running it now - exit 0, 26 rows.' -- "
+        "must NOT halt, or reporting an outcome in the present participle is punished identically "
+        "to announcing one that does not exist",
+    ),
+    Case(
+        "narrated_action_banner.jsonl",
+        None,
+        "the loud teardown/launch banner AGENTS.md mandates, closing on 'Bringing the new build up "
+        "on the same character now.' -- must NOT halt. The banner is a required form: the user "
+        "stops what they are doing and turns to a screen because of it, and a rule that made it "
+        "unspeakable would take a safety announcement away to save a round trip",
+    ),
+    Case(
+        "narrated_action_blocked.jsonl",
+        None,
+        "the same narration ending on a dependency the agent cannot dissolve -- no run is up and "
+        "reading the chain needs the game running -- must NOT halt",
+    ),
+    Case(
+        "narrated_action_mid_turn.jsonl",
+        None,
+        "'Making the empty read diagnosable ...:' as a mid-turn preamble before the Edit, with an "
+        "ordinary closing report -- the correct shape, and the one this rule must never touch. "
+        "wall_of_text.rego draws the same line in its own correction text",
+    ),
+    Case(
+        "admission_with_defence.jsonl",
+        "took the admission back in the same message",
+        "the verbatim 2026-09-10 turn: 'I never drove an invasion myself all session' followed by "
+        "'it is not firing right now because ...' and a table closing 'So that run did announce'. "
+        "Measured on the real transcript slice, every one of the fifteen neighbouring signals was "
+        "silent on it -- stall_on_friction saw the accusation but matched no admission of its own "
+        "and its `acted` fact was true anyway, because the turn had run six Bash calls",
+    ),
+    Case(
+        "admission_with_defence_rebuttal.jsonl",
+        "did not ask you to check",
+        "the rebuttal arm on its own: an accusation of not measuring, answered with an admission "
+        "and then the ledger's counters. The user asserted a premise rather than asking, so the "
+        "correction is uninvited",
+    ),
+    Case(
+        "admission_only.jsonl",
+        None,
+        "the same admission with nothing after it -- must NOT halt. The admission is the part the "
+        "directive says to reward, and a rule that charged it would teach agents to admit less",
+    ),
+    Case(
+        "admission_with_substitute_work.jsonl",
+        None,
+        "the same admission followed by what the turn did instead -- must NOT halt, or reporting "
+        "the substitute work is punished identically to excusing the omission",
+    ),
+    Case(
+        "admission_correction_solicited.jsonl",
+        None,
+        "the same correction, asked for: 'Did that run announce at all? check the ledger'. Must "
+        "NOT halt -- a factual answer someone requested is the deliverable, and gagging it would "
+        "be the worse failure",
+    ),
+    Case(
+        "admission_with_defence_blocked.jsonl",
+        None,
+        "the same shape where the reason is a dependency the agent cannot dissolve -- starting the "
+        "daemon needs sudo -- must NOT halt, or AGENTS.md's own instruction to name the external "
+        "blocker in one line becomes unspeakable",
+    ),
+    Case(
+        "admission_with_defence_mid_turn.jsonl",
+        None,
+        "the admission and its excuse as a mid-turn preamble before the Edit, with an ordinary "
+        "closing report -- the correct shape, and the one this rule must never touch",
+    ),
+    Case(
         "clean.jsonl",
         None,
         "substantive work, no banned prose -- must NOT halt, or every turn wedges",

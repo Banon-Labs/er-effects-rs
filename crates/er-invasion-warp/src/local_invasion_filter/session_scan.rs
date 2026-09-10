@@ -1,11 +1,13 @@
 //! Finding Seamless's session object without detouring anything inside `ersc.dll`.
 //!
-//! Hooking `ersc.dll` at all is what kills the game: both detours this DLL placed there fault at
-//! `0x140010043` with no input given -- `show` (ersc+0x241a0) at ~50s, the lobby-key builder
-//! (ersc+0xad6e0) at 30.6s -- while a build with neither armed cleared the same window twice. So
-//! the session has to be recognised rather than handed over, and this module is that recognition:
-//! a walk of `ersc.dll`'s own writable sections, testing each qword against a signature strong
-//! enough to identify the object.
+//! MinHook's five-byte patch into `ersc.dll` faults at `0x140010043` with no input given --
+//! `show` (ersc+0x241a0) at ~50s and again at 29.5s on run `br-20260909-234803-535c`, the
+//! lobby-key builder (ersc+0xad6e0) at 30.6s. That is a fact about writing bytes into a
+//! Themida-protected module, not about observing one: Frida's `Interceptor` sits on that same
+//! `ersc+0x241a0` for a whole session and hands over the menu object every time. So a detour-free
+//! route is preferred here, not mandatory, and this module is one: a walk of `ersc.dll`'s own
+//! writable sections, testing each qword against a signature strong enough to identify the
+//! object.
 //!
 //! # Every narrowing here was bought by a live failure
 //!
@@ -84,12 +86,11 @@ const SESSION_SCAN_CHUNK_BYTES: usize = 0x1000;
 
 /// Find Seamless's session object without detouring anything in `ersc.dll`.
 ///
-/// Why this exists. Hooking `ersc.dll` at all is what kills the game. Both detours this DLL placed
-/// there fault at `0x140010043` with no input given -- `show` (ersc+0x241a0) at ~50s, the lobby-key
-/// builder (ersc+0xad6e0) at 30.6s -- while a build with neither armed cleared the same window
-/// twice. So the answer cannot be "detour a different function", and the obvious replacement of
-/// reading the pointer from the call site is unavailable too: neither function has a direct caller
-/// in `.text`, both being dispatched indirectly.
+/// Why this exists. Writing MinHook's five bytes into `ersc.dll` faults at `0x140010043` with no
+/// input given -- `show` (ersc+0x241a0) at ~50s, the lobby-key builder (ersc+0xad6e0) at 30.6s.
+/// Reading the module is fine; patching it is not, which is what a protected module does. Neither
+/// function has a direct caller in `.text` either, both being dispatched indirectly, so the
+/// pointer cannot simply be read off a call site.
 ///
 /// What is left is that the session identifies itself. `read_session_state` returns `Some` only for
 /// a known state code at a known offset of a known build, which is a strong enough signature to
@@ -301,9 +302,26 @@ pub(super) fn adopt_proven_session(session: usize) {
     SWEEP_BUDGET.store(0, Ordering::SeqCst);
 }
 
+/// # The differential snapshot is deliberately not cleared here
+///
+/// It used to be, on the first line of this function, and that one line is why run
+/// br-20260909-194041-6558 could not cancel. The order it produced: the sweeper armed the
+/// differential scan with 12,129 idle objects; the shape scan then latched `0xce40038`; the
+/// liveness check discarded it, correctly, because its state read `0x1` across four samples in
+/// which the engine's join advanced -- and that discard came through here and deleted all 12,129.
+/// The player invaded seconds later, `narrow_to_changed` found an empty list and returned `None`
+/// without a word, and the rejection was reported `MenuNeverOpened` while the invasion landed in
+/// the wrong block.
+///
+/// The two are independent evidence about the same question, and the shape scan being wrong says
+/// nothing about the snapshot -- the snapshot's whole claim is "these objects read idle a moment
+/// ago", which no later discovery about a different pointer can falsify. Worse, it cannot be
+/// rebuilt on demand: it can only be taken while the session is idle, so a snapshot destroyed
+/// during a join is gone for exactly the invasion that needed it. `snapshot_idle_candidates`
+/// replaces it wholesale on the next armed pass, and `narrow_to_changed` clears it itself when a
+/// join empties it, which is the one event that does prove the real session was never in it.
 #[cfg(windows)]
 pub(super) fn invalidate_cached_session() {
-    super::differential_scan::reset();
     CACHED_SESSION.store(0, Ordering::SeqCst);
     CACHED_OWNER.store(0, Ordering::SeqCst);
     CACHED_SLOT.store(0, Ordering::SeqCst);
@@ -491,6 +509,133 @@ fn scan_address_space_for_active_session(abi: &ersc::Abi) -> Option<usize> {
     }
 }
 
+/// Which of `candidates` is owned -- that is, which one some other object holds at its `+0x58`.
+///
+/// # The discriminator the crate was missing, taken from what Frida actually did
+///
+/// Both driven ERSC actions read `rcx` exactly once, as `mov rdi, [rcx + 0x58]`, so the object
+/// they are called with is a box holding the session at that offset. The session therefore has a
+/// holder somewhere in memory, and a look-alike -- a heap qword that merely reads like a session
+/// -- generally does not. That is a fact about the object graph, not about its bytes, which is
+/// what makes it able to separate candidates that every value check calls identical.
+///
+/// This is the half `scripts/frida/ersc-handoff.js` implemented as `ownerOf` and the crate did
+/// not. Every previous run resolved a session with `owner 0x0` and then declined every action;
+/// the sessions Frida drove were the ones its `invade` hook handed over as `rcx`, which is why
+/// cancel worked under Frida on 2026-09-09 and has never worked without it.
+///
+/// One pass over committed private memory, testing every aligned qword against the candidate set,
+/// and it returns `(session, owner)` only when exactly one candidate has a holder -- several is
+/// not an identification, and this module drives ERSC with the answer.
+///
+/// Runs on the sweeper thread. A pass is hundreds of thousands of reads and must never touch the
+/// game thread; see the note on `walk_private_memory`.
+#[cfg(windows)]
+pub(super) fn owner_among(candidates: &[usize]) -> Option<(usize, usize)> {
+    const MEM_COMMIT: u32 = 0x1000;
+    const MEM_PRIVATE: u32 = 0x2_0000;
+    const MBI_SIZE: usize = 48;
+    const MAX_REGIONS: usize = 1 << 16;
+    const MAX_REGION_BYTES: usize = 64 << 20;
+    const CHUNK: usize = 64 * 1024;
+
+    unsafe extern "system" {
+        fn VirtualQuery(
+            address: *const core::ffi::c_void,
+            buffer: *mut core::ffi::c_void,
+            length: usize,
+        ) -> usize;
+    }
+
+    if candidates.is_empty() {
+        return None;
+    }
+    let wanted: std::collections::HashSet<usize> = candidates.iter().copied().collect();
+    let mut hits: Vec<(usize, usize)> = Vec::new();
+    let mut info = [0u8; MBI_SIZE];
+    let mut buffer = vec![0u8; CHUNK];
+    let mut address: usize = 0x1_0000;
+    for _ in 0..MAX_REGIONS {
+        let wrote = unsafe {
+            VirtualQuery(
+                address as *const core::ffi::c_void,
+                info.as_mut_ptr().cast(),
+                MBI_SIZE,
+            )
+        };
+        if wrote == 0 {
+            break;
+        }
+        let field = |at: usize, width: usize| -> usize {
+            let mut value = 0usize;
+            for index in 0..width {
+                value |= (info[at + index] as usize) << (index * 8);
+            }
+            value
+        };
+        let base = field(0x00, 8);
+        let size = field(0x18, 8);
+        let state = field(0x20, 4) as u32;
+        let kind = field(0x28, 4) as u32;
+        if size == 0 {
+            break;
+        }
+        if state == MEM_COMMIT && kind == MEM_PRIVATE && size <= MAX_REGION_BYTES {
+            let end = base + size;
+            let mut cursor = base;
+            while cursor < end {
+                let span = CHUNK.min(end - cursor);
+                let window = &mut buffer[..span];
+                if unsafe { er_game_base::mem::read_bytes(cursor, window) } {
+                    let mut offset = 0usize;
+                    while offset + 8 <= span {
+                        let value = usize::from_le_bytes(
+                            window[offset..offset + 8].try_into().expect("eight bytes"),
+                        );
+                        // The holder is the address `0x58` below the qword that carries the
+                        // session, and it must itself be a plausible heap object -- otherwise the
+                        // hit is a stray copy of the pointer rather than the box ERSC is called
+                        // with.
+                        if wanted.contains(&value) {
+                            let at = cursor + offset;
+                            if at >= ersc::NEXT_OBJECT_OFFSET {
+                                let owner = at - ersc::NEXT_OBJECT_OFFSET;
+                                if unsafe { er_game_base::mem::is_heap_aligned_ptr(owner) } {
+                                    hits.push((value, owner));
+                                }
+                            }
+                        }
+                        offset += 8;
+                    }
+                }
+                cursor += span.saturating_sub(8).max(8);
+            }
+        }
+        let Some(next) = base.checked_add(size) else {
+            break;
+        };
+        address = next;
+    }
+    let sessions: std::collections::HashSet<usize> = hits.iter().map(|(s, _)| *s).collect();
+    crate::standalone_log(format_args!(
+        "local-invasion: owner scan over {} survivor(s) found {} holder(s) naming {} distinct \
+         session(s){}",
+        candidates.len(),
+        hits.len(),
+        sessions.len(),
+        match hits.first() {
+            Some((session, owner)) => format!(", first session {session:#x} owner {owner:#x}"),
+            None => String::new(),
+        }
+    ));
+    // One session is an identification. Several holders naming the same session are fine -- a box
+    // can be referenced more than once -- so the count that has to be one is the session count.
+    if sessions.len() != 1 {
+        return None;
+    }
+    hits.first().copied()
+}
+
 /// Read the session state field at `address`, or `None` if it is not readable.
 ///
 /// One dword, so the differential scan can re-test thousands of recorded addresses without paying
@@ -621,6 +766,10 @@ fn sweep_until_answered(base: usize, abi: &'static ersc::Abi) {
         // out of idle at that moment and an impostor does not -- a set snapshotted after the fact
         // has already lost the distinction it exists to make.
         let (held, rounds) = super::differential_scan::progress();
+        // A narrowed set is the best question available: ask which survivor is owned before
+        // spending this pass on another shape scan. `owner_among` is the discriminator Frida
+        // supplied through its `invade` hook and the crate never had, so it goes first once there
+        // is a set small enough to cross-reference.
         if rounds == 0 {
             let recorded = super::differential_scan::snapshot_idle_candidates(abi);
             if recorded != held {
@@ -630,6 +779,34 @@ fn sweep_until_answered(base: usize, abi: &'static ersc::Abi) {
                      is eliminated."
                 ));
             }
+        }
+        // No `rounds` gate. It used to require a join first, on the reasoning that the owner scan
+        // breaks a tie between survivors -- but ownership is not a tiebreak, it is the
+        // identification, and the idle snapshot taken at boot is already a candidate set. So the
+        // question is asked of whatever is recorded, which lets it answer before the player has
+        // invaded even once. That matters more than the cost of the pass: waiting for a join made
+        // the feature depend on an invasion happening first, and the first invasion is exactly the
+        // one that lands in the wrong world.
+        let recorded_now = super::differential_scan::survivors();
+        if recorded_now.len() > OWNER_SCAN_MAX_CANDIDATES {
+            if !OWNER_SCAN_TOO_WIDE_SAID.swap(true, Ordering::SeqCst) {
+                crate::standalone_log(format_args!(
+                    "local-invasion: owner scan declined -- {} candidates is past the                      {OWNER_SCAN_MAX_CANDIDATES} it can answer at. Being pointed at is common:                      measured on run br-20260909-211819-87a5, 13,221 of 13,223 idle-shaped objects                      had a holder, so the test says nothing until a join has narrowed the set.",
+                    recorded_now.len()
+                ));
+            }
+        } else if !recorded_now.is_empty()
+            && let Some((session, owner)) = owner_among(&recorded_now)
+        {
+            crate::standalone_log(format_args!(
+                "local-invasion: session {session:#x} identified by OWNERSHIP -- it is the one                  differential survivor that another object holds at +{:#x}, and its holder                  {owner:#x} is the `this` ERSC's own actions are called with. Adopting both.",
+                ersc::NEXT_OBJECT_OFFSET
+            ));
+            CACHED_SLOT.store(0, Ordering::SeqCst);
+            CACHED_OWNER.store(owner, Ordering::SeqCst);
+            CACHED_SESSION.store(session, Ordering::SeqCst);
+            SWEEP_BUDGET.store(0, Ordering::SeqCst);
+            return;
         }
         // The cheap search first: a pointer parked in Seamless's own data. When that finds
         // nothing -- which seven runs say is the normal case -- ask the harder question instead.
@@ -648,14 +825,20 @@ fn sweep_until_answered(base: usize, abi: &'static ersc::Abi) {
             if owner != 0 {
                 return;
             }
-            // A session with no owner used to send this thread searching the whole address
-            // space for Seamless's menu object. It no longer does, and the reason is worth
-            // keeping: reading `ersc+0x258d0` and `ersc+0x25850` end to end -- 0x64 and 0x75
-            // bytes -- shows `rcx` is read exactly once, at `+0x58`, so the object is only a box
-            // holding the session and `local_invasion_filter::synthesized_owner` supplies one.
-            // The search found 15 candidates across 659 MB and could not tell them apart; the
-            // disassembly made the question unnecessary. See er-effects-rs-9i0g.
-            return;
+            // A bare session is provisional, so this thread keeps its post rather than retiring
+            // on it. Returning here is what made the owner scan above dead code: the sweeper
+            // exited on the first thing the shape scan latched -- routinely a look-alike, five
+            // times running -- and never woke again, so a set narrowed by a later join had
+            // nothing left to cross-reference it. Measured on run br-20260909-202153-5a46: a join
+            // took 12,493 candidates to 8 and no owner scan line was ever written, because this
+            // thread had been gone since boot.
+            //
+            // The synthesized owner still stands (`rcx` is read exactly once, at `+0x58`, so a box
+            // of our own serves for driving), and it is why a bare session is usable at all. What
+            // it cannot do is tell a real session from a look-alike, which is what the owner scan
+            // is for -- and that needs this loop alive.
+            await_sweep_request(&mut seen, Pacing::AtMostOnePassPerInterval);
+            continue;
         }
         await_sweep_request(&mut seen, Pacing::AtMostOnePassPerInterval);
     }
@@ -679,6 +862,23 @@ pub(super) fn cached_scan_for_session(
 ) -> Option<(usize, usize, usize)> {
     scan_for_session(base, abi)
 }
+
+/// How narrow the candidate set has to be before the owner scan is worth running.
+///
+/// Ownership identifies the session only among candidates that are already few. The boot-time
+/// attempt was measured on run br-20260909-211819-87a5 and refuted outright: 13,223 objects read
+/// idle with a session-shaped mutex, and 2,100,436 holders named 13,221 distinct sessions among
+/// them -- 99.98% of the set is pointed at by something, so "is it owned" separates nothing.
+///
+/// After a join the differential scan leaves 8 to 27, which is where the question becomes worth
+/// asking. The ceiling is set well above the largest of those and far below the idle set, so it
+/// runs exactly where it can answer and nowhere else.
+#[cfg(windows)]
+const OWNER_SCAN_MAX_CANDIDATES: usize = 64;
+
+/// One line when the set is too wide, not one per pass.
+#[cfg(windows)]
+static OWNER_SCAN_TOO_WIDE_SAID: AtomicBool = AtomicBool::new(false);
 
 #[cfg(windows)]
 static CACHED_SLOT: AtomicUsize = AtomicUsize::new(0);

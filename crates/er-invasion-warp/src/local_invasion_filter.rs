@@ -112,6 +112,10 @@ pub use hotkeys::{MarkKeys, warp_keys_in_force};
 
 mod ersc;
 
+// Driving Seamless's own option actions -- cancel, invade, and the stall recovery around them.
+// Its own file because this one is at the size limit; the docs are on it.
+mod actions;
+
 // The reading taken immediately before any ERSC action is driven: who owns the `std::mutex` that
 // action locks first. Its own file because this one is at the size limit; the docs are on it.
 pub(crate) mod banner;
@@ -125,6 +129,13 @@ pub(crate) mod differential_scan;
 pub(crate) mod lock_report;
 pub(crate) mod session_scan;
 
+use actions::{
+    arm_self_recovery, cancel_match, cancel_stalled_attempt_inner, drive_pending_reinvade,
+    log_refusal_once, watch_for_stall,
+};
+/// Called from outside this DLL and from `lynchpin_use`, so the names stay where their
+/// callers already look for them.
+pub use actions::{drive_invade_inline, drive_invade_with_owner, request_invade};
 use lock_report::{
     HANDLER_ERSC_LOBBY_KEY, HANDLER_ERSC_SHOW, HANDLER_GAME_TASK, HANDLER_JOIN_DATA,
     cancel_row_refusal, enter_ersc_callback, enter_handler, inside_ersc_callback,
@@ -193,6 +204,21 @@ static PENDING_REINVADE: AtomicBool = AtomicBool::new(false);
 /// Attempts that ended without us cancelling them, and were restarted anyway. Counted separately
 /// from `REINVADES` so "Seamless dropped it" is distinguishable from "we rejected it" in a log.
 static SELF_RECOVERIES: AtomicUsize = AtomicUsize::new(0);
+/// Set once the invade action has been found uncallable, and cleared the moment it is callable
+/// again. The latch that stops the recovery loop re-arming against something that cannot fire.
+///
+/// Without it, `arm_self_recovery` sets `PENDING_REINVADE` every tick, `drive_pending_reinvade`
+/// clears it again on an `ersc_action` that returns `None`, and the next tick sees an ended
+/// attempt and repeats -- once per tick, forever, with a log line each time and the counter that
+/// records a real restart never moving. Measured twice: 6056 lines with `rearmed=0` on
+/// 2026-09-08, and 7523 on 2026-09-09.
+///
+/// The trigger both times was a Frida `Interceptor` on `ersc+0x25850` writing a trampoline over
+/// the bytes this module byte-checks before calling. That is a debugging artefact, but the shape
+/// is not: any Seamless build whose invade prologue differs from the measured one produces the
+/// identical spin, on a user's machine, with no debugger in sight. So the fix belongs here and
+/// not in the agent that happened to expose it.
+static INVADE_ACTION_UNCALLABLE: AtomicBool = AtomicBool::new(false);
 /// Attempts cancelled because a handshake step stopped progressing.
 static STALL_RECOVERIES: AtomicUsize = AtomicUsize::new(0);
 /// Stall detection state. Behind a mutex rather than atomics because the decision reads and writes
@@ -261,6 +287,24 @@ static CONFIG: Mutex<Option<HotConfig>> = Mutex::new(None);
 /// game, not on Seamless.
 static ORIG_SET_JOIN_DATA: AtomicUsize = AtomicUsize::new(0);
 
+/// Trampoline to the original `CS::CSSessionManager::JoinSession`.
+static ORIG_JOIN_SESSION: AtomicUsize = AtomicUsize::new(0);
+
+/// Install-once latch for the join refusal.
+static JOIN_SESSION_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+
+/// Set by a `Verdict::Reject` and consumed by the very next `JoinSession`, which the game makes 87
+/// bytes later in the same caller.
+///
+/// It is a one-shot rather than a mode: `SosSignMan::JoinSession` calls `SetMultiplayJoinData` and
+/// then `CSSessionManager::JoinSession` with nothing between them that can fail, so a latch set at
+/// the judgement is consumed by the join it was set for. Anything that reaches the join without
+/// passing the judgement -- a co-op sign, a summon, the player's own quickmatch -- finds it clear.
+static REFUSE_NEXT_JOIN: AtomicBool = AtomicBool::new(false);
+
+/// How many joins have been refused before the RPC was sent.
+static JOINS_REFUSED: AtomicUsize = AtomicUsize::new(0);
+
 /// Install-once latch. The installer runs from the recurring game task rather than `DllMain`
 /// because MinHook must not run under the loader lock.
 static JOIN_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
@@ -327,7 +371,7 @@ fn refresh_config() {
                 outcome.config.reject_notice,
                 outcome.config.map_pins,
                 // The four ersc_* switches are the ones that decide whether this DLL DETOURS
-                // Seamless at all, and detouring it is what killed the game at 0x140010043. They
+                // Seamless at all, and MinHook's patch into it faulted at 0x140010043. They
                 // default off and the filter now resolves the session by scanning ersc's writable
                 // data instead, so a run that has them on is a different program from the one the
                 // 600s clean window was measured on -- which makes them the single most important
@@ -652,9 +696,17 @@ enum NoSession {
     ErscAbsent,
     /// Loaded, but not the build these offsets were measured against.
     ErscUnrecognised,
-    /// Nothing has handed over the option-menu object yet: neither Seamless's menu builder nor
-    /// the invade action has run this session, and the scan found nothing either.
-    MenuNeverOpened,
+    /// No session has been identified. Neither the shape scan nor the differential scan has a
+    /// single answer, so there is nothing to drive an action through.
+    ///
+    /// This variant was called `MenuNeverOpened` until 2026-09-09, and the name was a lie that
+    /// cost a live session. The message it printed told the player to open Seamless's menu, on the
+    /// reasoning that the menu builder is where the object is learned -- but the `show` observer
+    /// that would learn it has been disabled since MinHook's patch into `ersc.dll` was measured to
+    /// fault at `0x140010043`, so opening the menu could not possibly help and the instruction sent
+    /// the reader to do something with no path to working. What is actually true is narrower and
+    /// actionable: the scans have not converged, and each invasion narrows them.
+    SessionNotIdentified,
     /// OSM is held but `+0x58` does not lead to a session-shaped object -- a stale pointer.
     SessionUnreadable,
 }
@@ -675,10 +727,39 @@ impl NoSession {
         match self {
             Self::ErscAbsent => "<absent>",
             Self::ErscUnrecognised => "<unmeasured-build>",
-            Self::MenuNeverOpened => "<menu-never-opened>",
+            Self::SessionNotIdentified => "<session-not-identified>",
             Self::SessionUnreadable => "<session-unreadable>",
         }
     }
+}
+
+/// What to say after "cannot cancel -- SessionNotIdentified", built from the scan's live state.
+///
+/// Not an instruction to the player. The one thing that narrows the differential scan is another
+/// invasion, and the numbers say how close it is, so the line reports progress and leaves it at
+/// that. Returns a `&'static str` because the refusal is latched and logged once; the counts are
+/// rendered into a leaked string only on the pass that actually prints.
+#[cfg(windows)]
+fn not_identified_detail() -> &'static str {
+    let (held, rounds) = differential_scan::progress();
+    if held == 0 {
+        return ". No candidates are recorded, so the sweeper has not managed an idle pass yet -- \
+                nothing to narrow.";
+    }
+    Box::leak(
+        format!(
+            ". The differential scan is down to {held} candidate(s) after {rounds} join(s); it \
+             adopts one only when a single candidate is left, and each invasion narrows it \
+             further. Opening Seamless's menu does NOT help -- the observer that would learn the \
+             object from it is disabled because detouring ersc.dll faults the game."
+        )
+        .into_boxed_str(),
+    )
+}
+
+#[cfg(not(windows))]
+fn not_identified_detail() -> &'static str {
+    ""
 }
 
 /// Resolve the option-menu object and its session, validating structurally.
@@ -723,23 +804,17 @@ fn resolve_session() -> Result<SeamlessSession, NoSession> {
     if osm == 0 {
         // No detour supplied it, so go and find the session instead of giving up.
         //
-        // `OSM` is only ever set by the `show` detour, and detouring `ersc.dll` at all is what
-        // kills the game -- both hooks this DLL placed there fault at 0x140010043 with no input
-        // given, one at ~50s and one at 30.6s, while a build with neither cleared the window
-        // twice. Returning `MenuNeverOpened` here would mean the local-invasion filter can only
-        // work in a configuration that crashes, which is the same as deleting the feature.
-        //
         // `scan_for_session` recognises the object by its own state field rather than being handed
         // a pointer to it, so the filter keeps working with nothing hooked inside Seamless.
         let Some((slot, session, owner)) = cached_scan_for_session(base, abi) else {
-            return Err(NoSession::MenuNeverOpened);
+            return Err(NoSession::SessionNotIdentified);
         };
         if OSM_REPORTED.swap(1, Ordering::SeqCst) == 0 {
             crate::standalone_log(format_args!(
                 "local-invasion: session resolved WITHOUT hooking Seamless -- found at \
                  0x{session:x} via a pointer in ersc's own writable data at 0x{slot:x}, owner \
                  0x{owner:x}. This is the path that keeps the filter alive now that detouring \
-                 ersc.dll is known to crash the game at 0x140010043. An owner of 0 means the \
+                 ersc.dll with MinHook's five bytes faults at 0x140010043. An owner of 0 means the \
                  pointer WAS the session and nothing implies an owner -- the filter then judges \
                  and logs but declines to drive cancel/invade, because passing 0 as their first \
                  argument dereferences null inside ersc.dll."
@@ -840,7 +915,7 @@ unsafe extern "system" fn build_lobby_key_observer(
     // Can this detour replace the `show` one? That is the whole question keeping the
     // local-invasion filter alive, so it is asked here rather than argued about.
     //
-    // `show` is the only thing this DLL hooks that kills the game -- armed alone it faults at
+    // `show` is the only thing this DLL patches that faults -- armed alone it dies at
     // 0x140010043 in ~25s, while this detour armed alone ran clean. But `show` is currently the
     // only source of `OSM`, and `resolve_session` needs `OSM` solely to reach
     // `[OSM + NEXT_OBJECT_OFFSET]`, the session. The session is self-identifying: `read_session_state`
@@ -1090,6 +1165,19 @@ fn identifies_a_session(abi: &ersc::Abi, session: usize, discovering: bool) -> b
             if discovering && JOIN_IN_FLIGHT.load(Ordering::SeqCst) && state == abi.state_idle {
                 return false;
             }
+            // The mirror of the rule above, and it closes the other half of the same hole. With no
+            // join in flight there is nothing for a session to be doing, so a real one reads idle;
+            // an object that reads `cancelling` or `searching` while the player is standing still
+            // is holding a constant, not a state.
+            //
+            // Measured on run br-20260909-213454-2c38: the scan resolved `0x11500038` out of ERSC's
+            // own writable data, and it read `0x23 cancelling` with no search anywhere in the
+            // session. The crate then declined every drive through it -- correctly, since the
+            // invade action only runs from idle -- so the pointer was useless and still occupied
+            // the cache. Refusing it at discovery sends the sweeper back out instead.
+            if discovering && !JOIN_IN_FLIGHT.load(Ordering::SeqCst) && state != abi.state_idle {
+                return false;
+            }
             state == abi.state_idle
                 || state == abi.state_searching
                 || state == abi.state_cancelling
@@ -1176,11 +1264,32 @@ fn plausible_session_pointer(candidate: usize) -> bool {
     addressable_session_pointer(candidate) && !inside_a_loaded_module(candidate)
 }
 
-/// True when the session is in the state every option action refuses to proceed past. They take a
-/// fatal-error branch on it; this refuses instead.
-fn session_guard_poisoned(abi: &ersc::Abi, session: usize) -> bool {
-    unsafe { er_game_base::mem::safe_read_i32(session + abi.session_guard_offset) }
-        .is_none_or(|raw| raw as u32 == ersc::SESSION_GUARD_POISON)
+/// Why the session's own guard says not to drive an action through it, or `None`.
+///
+/// # Two conditions, and only one of them is the sentinel
+///
+/// Every Seamless option action opens the same way: take the mutex at `session+0x100`, then
+/// `cmp dword [rdi+0x14c], 0x7fffffff` and bail on equal. This mirrors that comparison, so we
+/// never call an action in a state where it would silently do nothing.
+///
+/// The sentinel is `INT_MAX` and the field is MSVC's recursion count, so reaching it needs 2^31
+/// nested locks and it will not happen. That is expected: this arm is parity with the callee, not
+/// a safety net, and its never firing is not evidence that anything works.
+///
+/// The arm that does fire is the other one. A session pointer that cannot be read at all is a real
+/// refusal and a good one -- and it used to be folded into the same `bool` as the sentinel under
+/// the name `session_guard_poisoned`, so a refusal reported a poisoned mutex when what had actually
+/// happened was that the pointer was stale. Each condition now names itself, and the caller prints
+/// what it was told. Tracked as bd er-effects-rs-s1v4.
+fn session_guard_refuses(abi: &ersc::Abi, session: usize) -> Option<&'static str> {
+    match unsafe { er_game_base::mem::safe_read_i32(session + abi.session_guard_offset) } {
+        None => Some("the session pointer did not read, so it is stale or was never a session"),
+        Some(raw) if raw as u32 == ersc::SESSION_GUARD_POISON => Some(
+            "the lock-recursion field holds the sentinel ERSC's own actions bail on, so calling \
+             one would do nothing",
+        ),
+        Some(_) => None,
+    }
 }
 
 /// Log every session-state transition, and arm the auto re-search when the user starts one.
@@ -1309,6 +1418,41 @@ static JOIN_DATA_AT_MS: AtomicU64 = AtomicU64::new(0);
 static JOIN_PROGRESS_LAST: AtomicU64 = AtomicU64::new(u64::MAX);
 /// Frames sampled where the engine had nothing in flight while ERSC still claimed an attempt.
 static JOIN_PROGRESS_IDLE_SAMPLES: AtomicUsize = AtomicUsize::new(0);
+
+/// When the engine first reported a dead join while Seamless still claimed a match, in [`now_ms`].
+/// `0` = not currently reporting one.
+static DEAD_JOIN_SINCE_MS: AtomicU64 = AtomicU64::new(0);
+
+/// A match this filter kept whose join has not yet landed or died.
+///
+/// Set at the accept, cleared the moment the engine reaches `lobbyState::CLIENT` -- the same
+/// instant `INVASION_ACTUALLY_HAPPENED` latches, because that is when the invasion is real. If the
+/// join dies while this is still set, the player never got the invasion they accepted, and the
+/// hunt is re-armed rather than left stood down.
+static KEPT_JOIN_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// How many hunts were resumed because an accepted join died before it landed.
+static KEPT_JOIN_FAILURES: AtomicUsize = AtomicUsize::new(0);
+
+/// How many stranded matches have been dropped without the player reaching for the item.
+static DEAD_JOIN_RECOVERIES: AtomicUsize = AtomicUsize::new(0);
+
+/// How long the engine must keep saying the join is dead before the match is dropped.
+///
+/// The reading is a fact rather than a timer -- `lobbyState` is `CreateFailed` or `JoinFailed`, so
+/// the engine has already been out to Steam and been told no -- but a single frame sampled across
+/// a state change is not worth acting on. Two thirds of a second is several frames at any rate the
+/// game runs at and is still far below the point where the player would reach for the item.
+const DEAD_JOIN_GRACE_MS: u64 = 650;
+
+/// The same, for a session the engine has torn down rather than failed.
+///
+/// Longer because this reading is also what the normal rejection path passes through for a moment:
+/// our refusal leaves `lobbyState` at `None` while Seamless takes about 1.3s to walk its own state
+/// down, and a cancel driven into that window is a second cancel racing the first. Eight seconds
+/// clears that flow by a wide margin and is still nothing against the 2029 seconds measured on run
+/// br-20260910-021456-38bc.
+const TORN_DOWN_GRACE_MS: u64 = 8_000;
 
 /// Monotonic milliseconds since the first call.
 ///
@@ -1604,6 +1748,15 @@ pub fn judge_incoming_match(join_data: usize) {
         // Nothing was judged, so there is no verdict to report -- just the destination, stated as
         // the server's choice rather than as anything the mod approved.
         banner::announce_arrival(config.reject_notice, destination);
+        // Named here as well as on a rejection. With `enabled = false` nothing is judged, so the
+        // reject path never runs, and this is the only place the host read gets exercised.
+        // A `None` needs no line here: `host_steam_id` already logged which read failed.
+        if let Some(id) = host_steam_id() {
+            crate::standalone_log(format_args!(
+                "local-invasion: the host of this match is Steam id {id} ({id:#018x}), read from \
+                 the Seamless session"
+            ));
+        }
         return;
     }
 
@@ -1642,6 +1795,14 @@ pub fn judge_incoming_match(join_data: usize) {
         Verdict::Keep(reason) => {
             KEEPS.fetch_add(1, Ordering::SeqCst);
             // The search that just landed is over; nothing to re-arm.
+            //
+            // Unless the join then dies, which is what `KEPT_JOIN_PENDING` is for. Reported live
+            // 2026-09-10: "attempt, stall, wait 30 seconds, failed to invade, and invasion loop
+            // canceled". Measured on run br-20260910-022619-1fa2 -- `KEEP 0x0f000000 (ExactBlock)`
+            // at line 1193, `lobby=4 proto=6 rpc=5 -> Progressing` at 1194, and 30830ms later
+            // everything zero. The hunt disarmed on the accept and nothing armed it again, so a
+            // join the player never got to play ended their session's hunting outright.
+            KEPT_JOIN_PENDING.store(true, Ordering::SeqCst);
             AUTO_SEARCH_ARMED.store(false, Ordering::SeqCst);
             PENDING_REINVADE.store(false, Ordering::SeqCst);
             crate::standalone_log(format_args!(
@@ -1667,13 +1828,100 @@ pub fn judge_incoming_match(join_data: usize) {
                 config.mode.as_str()
             ));
             explain_missing_names(reason, config.mode, destination);
-            // Announce only what actually happened. The banner used to fire here unconditionally,
-            // before the cancel was even attempted, so every path that declined to cancel still
-            // told the player "rejected" and then let the invasion proceed. Reported from a live
-            // session on 2026-09-04: "the popup tells me I'm rejecting a location to invade but it
-            // still invades it". A notice that can be wrong is worse than no notice -- it is the
-            // one signal the player has that the filter is working.
+            // The host, named. Logged before it is put on a banner, because the read is new and a
+            // wrong id printed to the player is worse than no id at all. `None` here is the honest
+            // answer for a target list the engine has already emptied.
+            if let Some(id) = host_steam_id() {
+                crate::standalone_log(format_args!(
+                    "local-invasion: the host of that match is Steam id {id} ({id:#018x}), read \
+                     from the Seamless session while the negotiation is still open"
+                ));
+            }
+            // The banner fires on the verdict, and the wording is what makes that honest.
+            //
+            // It used to fire here saying "Rejected", before the cancel was attempted, so a path
+            // that then declined to cancel had already told the player the invasion was stopped --
+            // reported live 2026-09-04: "the popup tells me I'm rejecting a location to invade but
+            // it still invades it". The fix at the time was to move the banner behind a successful
+            // cancel, and that traded one wrong answer for a worse one: a rejection that could not
+            // be cancelled showed nothing, which is indistinguishable from the mod not being
+            // loaded, and is how the whole evening of 2026-09-09 was spent.
+            //
+            // Both failures come from one banner trying to say two things. The verdict and the
+            // enforcement are separate facts, and the player is owed the first one every single
+            // time: this match is not local. Whether Seamless could be driven to drop it is the
+            // second fact, and `drive_pending_cancel` still owns it.
+            banner::announce_verdict(config.reject_notice, destination, reason);
+            // Refuse the join itself rather than cancel it afterwards. `SosSignMan::JoinSession`
+            // calls this seam and then `CSSessionManager::JoinSession`; once that second call has
+            // run, `lobbyState` is `Joining` and the engine parks any disconnect request until the
+            // Steam RPC resolves on its own -- 30.2s and 30.3s on the two rejections of run
+            // br-20260910-012622-fd23 whose RPC never came back. See `CS_SESSION_MANAGER_JOIN_SESSION`.
+            REFUSE_NEXT_JOIN.store(true, Ordering::SeqCst);
             arm_pending_cancel(destination, reason, config.reject_notice);
+        }
+    }
+}
+
+/// `SeamlessSession +0x1d8` -- the Steam id of the host this attempt is negotiating with.
+///
+/// # How this offset was established
+///
+/// Not by reading a struct definition. The DLL's own session field-change telemetry caught the
+/// write twice in run br-20260910-042516-3b5d, at the same transition both times: entering state
+/// `0x16` writes `+0x1d0` and `+0x1d8` in one step, and the return to idle zeroes both. `+0x1d0`
+/// takes the same value `+0x1a8` held one state earlier, which is the lobby; `+0x1d8` takes a
+/// value whose high 32 bits are `0x01100001`, which is what every SteamID64 for an individual
+/// account begins with. The two invasions in that run gave two different ids
+/// (`0x011000013cfa853f` and `0x0110000109940bbb`) against two different lobbies, so the field
+/// carries an identity rather than a constant.
+///
+/// The timing is what makes it usable for a verdict: `SetMultiplayJoinData` fires after that
+/// transition, not before -- in the log the announce line sits three lines below the `0x16` field
+/// change -- so the id is already present when a match is judged, on the accept path and the
+/// reject path alike.
+#[cfg(windows)]
+const SESSION_HOST_STEAM_ID_OFFSET: usize = 0x1d8;
+
+/// The Steam id of the host this attempt is negotiating with, or `None`.
+///
+/// # Why the route through `CSNetMan` is gone rather than corrected
+///
+/// It walked `CSNetMan -> BreakInManager -> targets`, and `[netMan+0xa8]` read 0 on a real
+/// invasion. That was not a drifted offset: an RTTI sweep of the live process -- every type
+/// descriptor in the image, matched by name -- found no `CSBreakInManager` class in this build at
+/// all. The break-in state belongs to `FNBreakInImpl@FromNet`, reached through the `FNClientImpl`
+/// at `CSNetMan+0x00`, so no correction to `0xa8` could have worked. Seamless already holds the
+/// answer one dereference away, so the game-side walk buys nothing.
+/// Host-side stub: there is no Seamless session off the game, so no match has a host.
+#[cfg(not(windows))]
+fn host_steam_id() -> Option<u64> {
+    None
+}
+
+#[cfg(windows)]
+fn host_steam_id() -> Option<u64> {
+    let session = match resolve_session() {
+        Ok(session) => session,
+        Err(cause) => {
+            crate::standalone_log(format_args!(
+                "local-invasion: the host cannot be named -- no Seamless session ({cause:?})"
+            ));
+            return None;
+        }
+    };
+    // SAFETY: the fault-closed reader returns None rather than faulting on a bad address.
+    let raw = unsafe {
+        er_game_base::mem::safe_read_usize(session.session + SESSION_HOST_STEAM_ID_OFFSET)
+    };
+    match raw {
+        Some(id) if id != 0 => Some(id as u64),
+        other => {
+            crate::standalone_log(format_args!(
+                "local-invasion: the host cannot be named -- session={:#x}                  +{SESSION_HOST_STEAM_ID_OFFSET:#x} read {other:?}, so the engine has not written                  the host yet or this is not the session that holds it",
+                session.session
+            ));
+            None
         }
     }
 }
@@ -1768,7 +2016,7 @@ fn drive_pending_cancel() {
     //
     // Bounded, because a rejection that can never be driven must still end as an honest
     // unenforced count rather than sitting armed forever and silently replacing the next one.
-    if matches!(resolve_session(), Err(NoSession::MenuNeverOpened)) {
+    if matches!(resolve_session(), Err(NoSession::SessionNotIdentified)) {
         let waited = CANCEL_RETRIES.fetch_add(1, Ordering::SeqCst) + 1;
         if waited <= CANCEL_RETRY_TICKS {
             let mut guard = match PENDING_CANCEL.lock() {
@@ -1783,587 +2031,12 @@ fn drive_pending_cancel() {
     UNENFORCED_REJECTS.fetch_add(1, Ordering::SeqCst);
     crate::standalone_log(format_args!(
         "local-invasion: NOT cancelled {:#010x} ({:?}) -- the match was judged a rejection but \
-         Seamless was not driven, so the invasion PROCEEDS. No banner is shown, because the player \
-         would read it as a rejection that happened. The reason is logged immediately above this \
-         line.",
+         Seamless was not driven, so the invasion PROCEEDS. No banner is shown: a notice saying \
+         the filter could not act is the failure dressed as a feature, and it was rejected on \
+         sight -- \"you literally added feature text encapsulating in short 'I am useless'\". The \
+         reason is logged immediately above this line.",
         armed.destination, armed.reason
     ));
-}
-
-/// Refuse to invoke a Seamless action with a null `this`, and say why.
-///
-/// This is the guard for a crash that actually happened, twice, on 2026-09-04. Every ersc action
-/// here is called as `action(session.osm, ..)`, so `osm` lands in RCX as the object the callee
-/// dereferences immediately. `scan_for_session` resolves the session without hooking Seamless, but
-/// it has no `osm` to hand -- only the `show` detour ever supplied one -- so it returns `osm: 0`,
-/// and `cancel(0, 0, 1, 1)` walked straight into a null dereference inside `ersc.dll`.
-///
-/// The measured chain, from the crash records of two runs with the 19-DLL profile:
-///   ersc.dll+0x258da  (cancel + 0xa, `context_rcx=0x0`, 0xc0000005)
-///   er_invasion_warp.dll+0x9a6b / +0x9025   <- this filter
-///   ersc.dll+0x2820a / +0x636e75 / +0x28a85e
-/// followed by 23 x `0xc0000026` STATUS_INVALID_UNWIND_TARGET at `ntdll.dll+0x669a8` -- the unwind
-/// out of the fault could not cross our detoured frames, because MinHook registers no unwind info
-/// for its trampolines. So the process died with no fatal record and no DllMain detach, leaving a
-/// zombie leader with ~128 lingering threads: the "hard kill" signature this investigation kept
-/// meeting and could not explain.
-///
-/// A declined action costs one unfiltered match. A null `this` costs the session.
-///
-/// Not `cfg`-gated: its callers are not either, and the host build exercises their state machine.
-fn ersc_owner_or_refuse(session: &SeamlessSession, what: &str) -> Option<usize> {
-    // The identification, not just a guard on the call. `resolve_session` accepts a candidate on
-    // `plausible_session_pointer` -- at least 0x10000 and 8-aligned -- plus a state field holding one
-    // of four codes, tested across up to 2^18 candidate qwords, and it has already false-positived
-    // live once (0x3dfadb, 2026-09-06, see the note on `identifies_a_session`). Four small integers
-    // at known offsets is a weak signature over that many candidates.
-    //
-    // A live `_Mtx_internal_imp_t` at `session+0x100` is a much stronger one, and it is free: the
-    // action's own first act is to lock it, so an object that fails this check is an object the
-    // action would have thrown on. Measured on run br-20260908-185557-aa9c, where five invasions
-    // produced two rejections and both refused here: `_Type` was not a shape MSVC's mutex
-    // constructors write, and `osm_tag_matches` reported the `seamless` tag absent on the same
-    // owner. That is the pointer being wrong, not the lock being held.
-    if let Some((module, offset)) = module_backing(session.session) {
-        log_refusal_once(
-            &OWNER_REFUSAL_SAID,
-            format_args!(
-                "local-invasion: refusing to drive ERSC's {what} -- the session resolved to \
-                 {:#x}, which is {module}+{offset:#x}, inside a loaded module. A session is \
-                 allocated; it is never static image data. Handing this to Seamless is what wedged \
-                 the game on 2026-09-08: ersc+0x25871 locked a mutex that was really \
-                 eldenring.exe+0x3c0cdc0, nothing unlocks a static global, and the main thread \
-                 waited until the 30-second stall watchdog fired.",
-                session.session
-            ),
-        );
-        return None;
-    }
-    if let Some(refusal) = lock_shape_refusal(session) {
-        log_refusal_once(
-            &OWNER_REFUSAL_SAID,
-            format_args!(
-                "local-invasion: refusing to drive ERSC's {what} -- {refusal}. This is the session \
-                 identification failing, not the action: `resolve_session` handed back an address \
-                 whose {SESSION_MUTEX_OFFSET:#x} is not a live mutex, so driving anything with it \
-                 would call into ersc.dll on an object that is not a session. See open issue \
-                 er-effects-rs-9i0g."
-            ),
-        );
-        return None;
-    }
-    if session.osm != 0 {
-        return Some(session.osm);
-    }
-    // No OSM was found, and one is not needed. See `synthesized_owner`.
-    Some(synthesized_owner(session.session))
-}
-
-/// A `this` of our own for ERSC's option actions, holding the session where they read it.
-///
-/// # Why this replaces the search that could not finish
-///
-/// Both driven actions were read end to end out of the installed `ersc.dll` (v2.0.1,
-/// `scripts/disas-ersc.py --whole`), and they are 0x64 and 0x75 bytes:
-///
-/// ```text
-/// cancel  ersc+0x258d0                     invade  ersc+0x25850
-///   mov  rdi, [rcx + 0x58]                   mov  rdi, [rcx + 0x58]
-///   lea  rsi, [rdi + 0x100]                  cmp  dword [rdi + 0x150], 1
-///   ...  everything else via rdi             ...  everything else via rdi
-/// ```
-///
-/// `rcx` is read exactly once, at `+0x58`, and never referenced again -- every later access is
-/// `rdi`-relative, and `rdi` is the session. So the object ERSC calls `this` is, to these two
-/// functions, nothing but a box with a session pointer at `+0x58`. Whose box it is has no bearing
-/// on what they do.
-///
-/// That dissolves open issue er-effects-rs-9i0g rather than solving it. Finding Seamless's own
-/// menu object was never the requirement; it was an assumption, and it cost four false-positive
-/// identifications, a wedged main thread, two killed processes, a sweep of the whole address space
-/// that turned up fifteen candidates, and a discriminator that then found none of the fifteen was
-/// referenced by `ersc.dll` at all. None of that had to happen. The function was 0x64 bytes and
-/// reading it settles the question in one look -- which is the argument for reading the binary
-/// first, made at our own expense.
-///
-/// The shim is strictly safer than the object it replaces: it is ours, it lives for the process,
-/// its lifetime cannot end under a call, and it cannot be a misidentification. The session pointer
-/// written into it is still the one every check upstream has already agreed on -- this changes who
-/// holds the session, never which session is held.
-///
-/// Allocated once and leaked on purpose: ERSC reads it during a call this thread is inside, so it
-/// must outlive any borrow, and a process-lifetime allocation of 0x60 bytes is the cheapest way to
-/// promise that.
-fn synthesized_owner(session: usize) -> usize {
-    /// Big enough to contain the one field ERSC reads, and aligned the way MSVC's `operator new`
-    /// would align a real one.
-    #[repr(C, align(16))]
-    struct OwnerShim([u8; 0x60]);
-
-    let shim = SYNTHESIZED_OWNER.load(Ordering::Acquire);
-    let shim = if shim == 0 {
-        let fresh = Box::into_raw(Box::new(OwnerShim([0u8; 0x60]))) as usize;
-        match SYNTHESIZED_OWNER.compare_exchange(0, fresh, Ordering::AcqRel, Ordering::Acquire) {
-            Ok(_) => fresh,
-            Err(winner) => {
-                // Another thread won. Reclaim ours rather than leaking two.
-                drop(unsafe { Box::from_raw(fresh as *mut OwnerShim) });
-                winner
-            }
-        }
-    } else {
-        shim
-    };
-    // Rewritten before every use rather than once: the session is a heap object whose address
-    // changes between matches, and a stale pointer here would hand ERSC a freed session -- the
-    // one way this shim could be more dangerous than the search it replaces.
-    // SAFETY: `shim` is our own 0x60-byte allocation, live for the process, and
-    // `ersc::NEXT_OBJECT_OFFSET + 8` is 0x60.
-    unsafe {
-        std::ptr::write_unaligned((shim + ersc::NEXT_OBJECT_OFFSET) as *mut usize, session);
-    }
-    if !SYNTHESIZED_OWNER_SAID.swap(true, Ordering::SeqCst) {
-        crate::standalone_log(format_args!(
-            "local-invasion: driving ERSC through a synthesized owner at {shim:#x} carrying the \
-             session at +{:#x}. Both actions read `rcx` exactly once, at that offset, and work \
-             through the session for everything after -- read end to end out of ersc+0x258d0 \
-             (0x64 bytes) and ersc+0x25850 (0x75 bytes). Seamless's own menu object is not \
-             required and is no longer looked for (er-effects-rs-9i0g).",
-            ersc::NEXT_OBJECT_OFFSET
-        ));
-    }
-    shim
-}
-
-/// The process-lifetime shim allocation, or 0 before it is made.
-static SYNTHESIZED_OWNER: AtomicUsize = AtomicUsize::new(0);
-/// Said once, not per rejected match.
-static SYNTHESIZED_OWNER_SAID: AtomicBool = AtomicBool::new(false);
-
-/// Latch for the identification refusal above, so a wrong pointer says so once rather than per frame.
-static OWNER_REFUSAL_SAID: Mutex<Option<String>> = Mutex::new(None);
-
-/// Where the session's `std::mutex` starts, named here because the refusal message quotes it.
-/// Derived from the guard offset rather than written twice: `guard == mutex + _Count`, and `_Count`
-/// is at `+0x4c` of an `_Mtx_internal_imp_t`.
-const SESSION_MUTEX_OFFSET: usize = 0x100;
-
-/// One line per distinct refusal, not one per frame.
-///
-/// `drive_pending_reinvade` runs on the game task, so an unchanged refusal was being written every
-/// frame -- 22735 identical lines in the run that first exercised this. Keyed on the reason, so a
-/// session whose shape changes still gets a fresh line, and the counters below stay honest about
-/// how often the refusal actually fired.
-fn log_refusal_once(latch: &Mutex<Option<String>>, message: std::fmt::Arguments<'_>) {
-    let text = format!("{message}");
-    let mut guard = match latch.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    if guard.as_deref() == Some(text.as_str()) {
-        return;
-    }
-    crate::standalone_log(format_args!("{text}"));
-    *guard = Some(text);
-}
-
-/// Per-site latches for [`log_refusal_once`]. Separate so a cancel refusal cannot silence an invade
-/// one that happens to read the same.
-static CANCEL_REFUSAL_SAID: Mutex<Option<String>> = Mutex::new(None);
-static INVADE_REFUSAL_SAID: Mutex<Option<String>> = Mutex::new(None);
-static STALLED_REFUSAL_SAID: Mutex<Option<String>> = Mutex::new(None);
-
-/// Drive ERSC's own "Cancel search" for a rejected match.
-///
-/// This calls the exact option callback the user's click calls, with `(OSM, 0, 1, 1)`. The zero is
-/// not a guess: the cancel action reads `rcx` and nothing else -- so no
-/// captured argument is required and none is invented. Everything past this point -- tearing the
-/// match down, returning the session to idle -- is Seamless's own code doing what it always does.
-///
-/// Returns whether Seamless was actually driven. `false` means the match stands: the caller must
-/// not tell the player it was rejected.
-fn cancel_match(reason: RejectReason) -> bool {
-    let session = match resolve_session() {
-        Ok(session) => session,
-        Err(cause) => {
-            // Latched. The patient retry re-arms this every tick while the session is merely not
-            // ready yet, and an unlatched line here wrote 431 identical entries in one run.
-            log_refusal_once(
-                &CANCEL_REFUSAL_SAID,
-                format_args!(
-                    "local-invasion: cannot cancel ({reason:?}) -- {cause:?}, so the match is LEFT \
-                 ALONE and will land wherever the server sent it{}",
-                    match cause {
-                        NoSession::MenuNeverOpened =>
-                            ". Open Seamless's menu once (that is where the object is learned) and the \
-                         next rejection will cancel.",
-                        _ => "",
-                    }
-                ),
-            );
-            return false;
-        }
-    };
-    if session_guard_poisoned(session.abi, session.session) {
-        crate::standalone_log(format_args!(
-            "local-invasion: cannot cancel ({reason:?}) -- the session is in the state ERSC's own \
-             actions refuse to proceed past; leaving it alone rather than tripping its abort path"
-        ));
-        return false;
-    }
-    let Some(cancel) = ersc_action(
-        session.abi,
-        session.abi.cancel_action_rva,
-        session.abi.cancel_prologue,
-    ) else {
-        return false;
-    };
-    let Some(owner) = ersc_owner_or_refuse(&session, "cancel") else {
-        return false;
-    };
-    report_lock_preconditions(&session, owner, "cancel");
-    if let Some(refusal) = lock_shape_refusal(&session) {
-        log_refusal_once(
-            &CANCEL_REFUSAL_SAID,
-            format_args!(
-                "local-invasion: cannot cancel ({reason:?}) -- {refusal}. The match is LEFT ALONE. \
-                 The reading this refused on is in the line immediately above."
-            ),
-        );
-        return false;
-    }
-    // Reported, never obeyed. The set behind this reading is ERSC's hide-PREDICATE at
-    // `ersc+0x26b40` -- when Seamless draws its Cancel row -- and the cancel action at
-    // `ersc+0x258d0` has no state precondition at all: read end to end it locks the mutex at
-    // `session+0x100`, compares `[session+0x14c]` against `0x7fffffff`, and writes `0x23`. Nothing
-    // there consults `+0x150`.
-    //
-    // Treating a UI rule as a safety rule cost the whole feature. Measured 2026-09-08 in one
-    // evening: a Frida-driven cancel succeeded eight times from `state_before 22` (`0x16`), every
-    // one landing on `state_after 35` (`0x23`), with no crash -- and on the very next run this
-    // same reading refused `state 0x16` and the rejected invasion proceeded. The guard that does
-    // matter is `session_guard_poisoned`, checked above and left in force.
-    if let Some(note) = cancel_row_refusal(&session) {
-        log_refusal_once(
-            &CANCEL_REFUSAL_SAID,
-            format_args!(
-                "local-invasion: cancelling ({reason:?}) from a state Seamless would not have \
-                 drawn its own Cancel row in -- {note}. Driving it anyway: the action itself has \
-                 no state precondition, and this state is measured to cancel cleanly."
-            ),
-        );
-    }
-    // The one state reading that still refuses, because it is not about the row: an idle session
-    // while a join is in flight cannot be the real session -- the player is mid-search, so the
-    // real one reads `state_searching`. Keeping a pointer proven wrong means every later rejection
-    // refuses on the same reading, which is exactly what run br-20260909-000018-d691 did.
-    //
-    // Dropping the cache here rather than at the verdict is deliberate: `drive_pending_cancel`
-    // re-arms this rejection for `CANCEL_RETRY_TICKS`, so the sweeper gets its seconds while the
-    // rejection is still live. Invalidating at the verdict deleted the session at the moment it
-    // was needed, which is the mistake this replaces.
-    if read_session_state(session.abi, session.session) == Some(session.abi.state_idle)
-        && JOIN_IN_FLIGHT.load(Ordering::SeqCst)
-    {
-        crate::standalone_log(format_args!(
-            "local-invasion: dropping the cached session at {:#x} -- it reads idle while a join \
-             is in flight, which the real session cannot do. The sweeper looks again; the \
-             rejection stays armed meanwhile.",
-            session.session
-        ));
-        // Windows-only: the scan it invalidates does not exist on the host, where these tests run.
-        #[cfg(windows)]
-        session_scan::invalidate_cached_session();
-        return false;
-    }
-    let _call = OurCall::enter();
-    unsafe { cancel(owner, 0, 1, 1) };
-    drop(_call);
-    note_state_after_our_action(session, "cancel");
-    let fired = CANCELS.fetch_add(1, Ordering::SeqCst) + 1;
-    // Search again once the session settles. Armed here, fired from the tick -- ERSC's own tick
-    // does not run while the session is idle, which is why the frida attempt to re-invade from
-    // inside an ERSC callback never fired.
-    if AUTO_SEARCH_ARMED.load(Ordering::SeqCst) {
-        PENDING_REINVADE.store(true, Ordering::SeqCst);
-    }
-    crate::standalone_log(format_args!(
-        "local-invasion: cancelled rejected match (#{fired}) -- session returns to idle{}",
-        if AUTO_SEARCH_ARMED.load(Ordering::SeqCst) {
-            " and the search restarts automatically"
-        } else {
-            "; auto re-search is disarmed, so this stops here"
-        }
-    ));
-    true
-}
-
-/// Arm a search for the next game tick, from outside this DLL.
-///
-/// Backs `er_invasion_warp_request_invade`; see that export for why the caller may not simply call
-/// the invade action itself. Both flags are needed: `PENDING_REINVADE` is what
-/// `drive_pending_reinvade` drains, and `AUTO_SEARCH_ARMED` is what it checks first -- setting
-/// only one arms a request that is refused on the same tick it is made.
-#[cfg(windows)]
-pub fn request_invade() -> bool {
-    if OSM.load(Ordering::SeqCst) == 0 {
-        crate::standalone_log(format_args!(
-            "local-invasion: a search was requested from outside this DLL, but no option-menu \
-             object has been handed over yet -- nothing to drive. Call \
-             er_invasion_warp_adopt_menu_object first."
-        ));
-        return false;
-    }
-    AUTO_SEARCH_ARMED.store(true, Ordering::SeqCst);
-    PENDING_REINVADE.store(true, Ordering::SeqCst);
-    crate::standalone_log(format_args!(
-        "local-invasion: a search was requested from outside this DLL -- armed for the next game \
-         tick, where the invade action runs on the thread that owns it."
-    ));
-    true
-}
-
-/// Host-side stub.
-#[cfg(not(windows))]
-pub fn request_invade() -> bool {
-    false
-}
-
-/// Fire the queued re-invade once the session is genuinely idle.
-///
-/// Disarms before calling, so a session that fails to leave idle costs one extra invade at most
-/// rather than one per frame.
-fn drive_pending_reinvade(session: SeamlessSession) {
-    if !PENDING_REINVADE.load(Ordering::SeqCst) || !AUTO_SEARCH_ARMED.load(Ordering::SeqCst) {
-        return;
-    }
-    // `invade` returns immediately unless the session is idle, so this is the same precondition
-    // ERSC itself enforces -- checked here so a no-op call is not counted as a restart.
-    if read_session_state(session.abi, session.session) != Some(session.abi.state_idle) {
-        return;
-    }
-    if session_guard_poisoned(session.abi, session.session) {
-        PENDING_REINVADE.store(false, Ordering::SeqCst);
-        return;
-    }
-    let Some(invade) = ersc_action(
-        session.abi,
-        session.abi.invade_action_rva,
-        session.abi.invade_prologue,
-    ) else {
-        PENDING_REINVADE.store(false, Ordering::SeqCst);
-        return;
-    };
-    PENDING_REINVADE.store(false, Ordering::SeqCst);
-    let Some(owner) = ersc_owner_or_refuse(&session, "invade") else {
-        return;
-    };
-    report_lock_preconditions(&session, owner, "invade");
-    if let Some(refusal) = lock_shape_refusal(&session) {
-        log_refusal_once(
-            &INVADE_REFUSAL_SAID,
-            format_args!(
-                "local-invasion: not restarting the search -- {refusal}. The reading this refused \
-                 on is in the line immediately above."
-            ),
-        );
-        return;
-    }
-    let _call = OurCall::enter();
-    unsafe { invade(owner, 0, 1, 1) };
-    drop(_call);
-    // Claim the searching state we just caused, before the tracer can read it as the user pressing
-    // the option and arm a loop that is already armed.
-    note_state_after_our_action(session, "restart search");
-    let count = REINVADES.fetch_add(1, Ordering::SeqCst) + 1;
-    crate::standalone_log(format_args!(
-        "local-invasion: search restarted automatically (#{count}) -- press Cancel search yourself \
-         to stop"
-    ));
-}
-
-/// Re-arm the search when an attempt died without us cancelling it.
-///
-/// # The gap this closes
-///
-/// [`drive_pending_reinvade`] only ever fired for a match we rejected, because `PENDING_REINVADE`
-/// is set in [`cancel_match`] and nowhere else. Every other way an attempt can end -- a host that
-/// vanished, a connection that never completed, a refusal from the far side -- left the session
-/// sitting at idle with the loop still armed and nothing to restart it, so the player had to reach
-/// for the finger again. Measured 2026-08-06: of ten `0x15 -> 0x22` unwinds in one session, only
-/// four were ours; the other six ended the hunt silently.
-///
-/// The standing instruction is that the loop runs until the player uses the lynchpin again, so
-/// "the session went idle on its own while we are still hunting" is a restart, not a stop.
-///
-/// # Why this cannot resume a search after a successful invasion
-///
-/// A successful join looks identical in session state -- `KEEP` was followed by the same
-/// `0x15 -> 0x22 -> 0x23 -> 0x00` unwind a rejection produces, so idle alone cannot tell them
-/// apart. It does not have to: [`Verdict::Keep`] clears `AUTO_SEARCH_ARMED`, so a kept match
-/// leaves the loop disarmed and this function returns immediately. The same is true of the
-/// player's own cancel and of opening Seamless's menu, both of which disarm.
-fn arm_self_recovery(session: SeamlessSession) {
-    if !AUTO_SEARCH_ARMED.load(Ordering::SeqCst) || PENDING_REINVADE.load(Ordering::SeqCst) {
-        return;
-    }
-    if read_session_state(session.abi, session.session) != Some(session.abi.state_idle) {
-        return;
-    }
-    // An invasion that happened is not an attempt that died.
-    //
-    // The doc above assumed `Verdict::Keep` would have disarmed the loop first. Measured
-    // 2026-08-17, it does not: that session logged zero keeps and eleven rejects (`mode=area` with
-    // no named locations rejects everything it judges), so the loop stayed armed through three real
-    // invasions -- and this function restarted the hunt while the player was still on the loading
-    // screen back to their own world. They arrived home coloured as an invader with a Seamless name
-    // popup reading `[Unknown]`, because a fresh invasion was already in flight.
-    //
-    // So the disarm is taken from what the engine did rather than from what our filter decided.
-    if INVASION_ACTUALLY_HAPPENED.swap(false, Ordering::SeqCst) {
-        // Disarm as a kept match would have: the hunt is over until the player asks for another.
-        AUTO_SEARCH_ARMED.store(false, Ordering::SeqCst);
-        if let Ok(mut backoff) = RESTART_BACKOFF.lock() {
-            backoff.stand_down();
-        }
-        crate::standalone_log(format_args!(
-            "local-invasion: that attempt became a real invasion (the session reached \
-             LobbyState::Client) -- NOT restarting the hunt. Use the lynchpin again when you want \
-             another one"
-        ));
-        return;
-    }
-    // How badly did the last attempt go? Restarting instantly is right when Seamless actually
-    // searched -- its own ~15s retry paces the loop and nothing here is felt. It is wrong when
-    // Seamless refused instantly: measured 2026-08-06, eleven restarts in 38.9s during an area
-    // transition, four times the normal query rate, because idle alone cannot tell a 15-second
-    // search from a 33-millisecond refusal.
-    {
-        let now = now_ms();
-        let Ok(mut backoff) = RESTART_BACKOFF.lock() else {
-            return;
-        };
-        let delay = backoff.attempt_ended(now);
-        if !backoff.may_restart(now) {
-            // Held. Return without arming. The next tick re-enters, finds no recorded start (the
-            // attempt was already consumed), scores that as a normal attempt costing nothing, and
-            // simply re-checks the hold -- so the delay elapses without accumulating further
-            // penalty, and the restart fires on the first tick after it expires.
-            if delay > 0 {
-                crate::standalone_log(format_args!(
-                    "local-invasion: that attempt was refused in under a second (#{} in a row) -- \
-                     waiting {delay}ms before searching again, so a passing refusal does not turn \
-                     into a query storm. The hunt is still on.",
-                    backoff.consecutive()
-                ));
-            }
-            return;
-        }
-    }
-    PENDING_REINVADE.store(true, Ordering::SeqCst);
-    let count = SELF_RECOVERIES.fetch_add(1, Ordering::SeqCst) + 1;
-    crate::standalone_log(format_args!(
-        "local-invasion: the attempt ended without us cancelling it (#{count}) -- restarting the \
-         search, because you have not stopped hunting. Press Cancel search yourself to stop"
-    ));
-}
-
-/// Cancel an attempt that has stopped progressing, so the loop can recover from a Seamless stall.
-///
-/// Seamless does not auto-cancel its own connection in these edge cases, which is why a hung
-/// handshake otherwise sits forever. The action driven here is the same "Cancel search" the player
-/// could press, and the restart afterwards is the ordinary one -- nothing here ends the hunt.
-fn cancel_stalled_attempt(session: SeamlessSession, state: u32, held_ms: u64) {
-    if session_guard_poisoned(session.abi, session.session) {
-        return;
-    }
-    let Some(cancel) = ersc_action(
-        session.abi,
-        session.abi.cancel_action_rva,
-        session.abi.cancel_prologue,
-    ) else {
-        return;
-    };
-    let Some(owner) = ersc_owner_or_refuse(&session, "cancel") else {
-        return;
-    };
-    report_lock_preconditions(&session, owner, "cancel (stalled attempt)");
-    if let Some(refusal) = lock_shape_refusal(&session) {
-        log_refusal_once(
-            &STALLED_REFUSAL_SAID,
-            format_args!(
-                "local-invasion: not cancelling the stalled attempt -- {refusal}. The reading this \
-                 refused on is in the line immediately above."
-            ),
-        );
-        return;
-    }
-    if let Some(refusal) = cancel_row_refusal(&session) {
-        log_refusal_once(
-            &STALLED_REFUSAL_SAID,
-            format_args!("local-invasion: not cancelling the stalled attempt -- {refusal}"),
-        );
-        return;
-    }
-    let _call = OurCall::enter();
-    unsafe { cancel(owner, 0, 1, 1) };
-    drop(_call);
-    note_state_after_our_action(session, "cancel stalled attempt");
-    if AUTO_SEARCH_ARMED.load(Ordering::SeqCst) {
-        PENDING_REINVADE.store(true, Ordering::SeqCst);
-    }
-    let count = STALL_RECOVERIES.fetch_add(1, Ordering::SeqCst) + 1;
-    crate::standalone_log(format_args!(
-        "local-invasion: connection stalled at state {state:#04x} for {held_ms}ms (#{count}) -- \
-         cancelled it. Seamless does not auto-cancel these, and a healthy handshake takes under \
-         two seconds"
-    ));
-}
-
-/// Feed the session state to the stall detector and act on what it says.
-///
-/// Deliberately state-driven rather than time-capped: `SEARCHING` means "nobody has matched yet"
-/// and is unbounded by nature, so it is never timed. Only the brief handshake steps are.
-fn watch_for_stall(session: SeamlessSession) {
-    // Only recover while actually hunting. If the loop is not armed there is nothing to recover,
-    // and running anyway is how this cancelled a successful invasion five seconds after accepting
-    // it (2026-08-06): `Verdict::Keep` fired, the session sat in 0x15 loading the host's world,
-    // and the watchdog called that a stalled handshake. From the player's seat the invasion
-    // appeared and dismissed itself at once.
-    //
-    // Note this cannot be fixed by choosing better states to time: a successful join walks 0x22
-    // and 0x23 exactly like a cancel does. Whether we are still hunting is the only thing that
-    // separates "this handshake is stuck" from "this invasion is under way", and `Verdict::Keep`
-    // already clears the armed flag, as do the player's own cancel and opening Seamless's menu.
-    if !AUTO_SEARCH_ARMED.load(Ordering::SeqCst) {
-        if let Ok(mut guard) = STALL_WATCHDOG.lock() {
-            guard.stand_down();
-        }
-        // The backoff stands down here too, on the same condition and in the same place, rather
-        // than at each of the sites that disarm. There are three of those today -- a kept match,
-        // the player's own cancel, opening Seamless's menu -- and a fourth added later would
-        // silently miss a per-site call. This branch already runs every tick the loop is not
-        // armed, so it cannot be forgotten. Without it, a hunt stopped mid-backoff would hand its
-        // penalty to the next one the player starts.
-        if let Ok(mut backoff) = RESTART_BACKOFF.lock() {
-            backoff.stand_down();
-        }
-        return;
-    }
-    let Some(state) = read_session_state(session.abi, session.session) else {
-        return;
-    };
-    let now_ms = now_ms();
-    let action = {
-        let mut guard = match STALL_WATCHDOG.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        guard.observe(state, now_ms)
-    };
-    if action == Some(crate::stall_watchdog::StallAction::CancelAndResearch) {
-        cancel_stalled_attempt(session, state, crate::stall_watchdog::STALL_THRESHOLD_MS);
-    }
 }
 
 /// Publish whether an invasion attempt is in flight, for the warp gate and the map's icon choice.
@@ -2394,6 +2067,126 @@ fn publish_invasion_attempt_state(session: SeamlessSession) {
     let in_flight = read_session_state(session.abi, session.session)
         .is_some_and(|state| state != 0 && state != session.abi.state_idle);
     er_invasion_warp_core::warp::set_invasion_attempt_in_flight(in_flight);
+}
+
+/// The gate the popup skip uses: the state of the session reached from the option-menu object
+/// Seamless itself handed over, with no scan, no cache and no discard anywhere in the path.
+///
+/// # Why this is not [`session_is_idle`]
+///
+/// Measured on run `br-20260909-233549-72f5`. `session_is_idle` goes through `resolve_session`,
+/// which -- with `OSM` unset -- falls back to `cached_scan_for_session`, a heuristic that
+/// recognises a session by the shape of its state field. In that run the scan picked a look-alike,
+/// one invade was driven on it, and four samples later the same pointer was discarded with "this
+/// pointer is not one". From that moment `session_is_idle` answered false forever, so the popup
+/// skip fired exactly once and every later use of the item silently took the pass-through branch
+/// and showed the dialog. The Frida prototype never had that failure because it read the session
+/// from the object `show` was called with, which is what this reads.
+///
+/// `false` when the menu object has not been seen yet: refusing to skip shows the dialog, which is
+/// the harmless direction. Guessing idle from an unknown pointer would swallow the prompt that
+/// leaves an invasion.
+#[cfg(windows)]
+#[must_use]
+pub fn menu_object_session_is_idle() -> bool {
+    let osm = OSM.load(Ordering::SeqCst);
+    if osm == 0 {
+        return false;
+    }
+    let Some(abi) = resolve_ersc_abi() else {
+        return false;
+    };
+    // SAFETY: fault-closed read of the hop `show`'s own argument leads through.
+    let Some(session) =
+        (unsafe { er_game_base::mem::safe_read_usize(osm + ersc::NEXT_OBJECT_OFFSET) })
+    else {
+        return false;
+    };
+    read_session_state(abi, session).is_some_and(|state| state == abi.state_idle)
+}
+
+/// Whether the auto re-search loop is running.
+///
+/// The popup skip asks, because a player opening the invasion item while a hunt is in flight is
+/// reaching for Cancel, not for another search.
+#[must_use]
+pub fn auto_search_armed() -> bool {
+    AUTO_SEARCH_ARMED.load(Ordering::SeqCst)
+}
+
+/// Stand the auto re-search loop down, because the player asked for the menu.
+pub fn stand_down_auto_search() {
+    if AUTO_SEARCH_ARMED.swap(false, Ordering::SeqCst) {
+        PENDING_REINVADE.store(false, Ordering::SeqCst);
+        crate::standalone_log(format_args!(
+            "local-invasion: you opened the invasion item's own menu -- auto re-search stood down, \
+             so the row in front of you is Seamless's and nothing here will act while you decide"
+        ));
+    }
+}
+
+/// The gate the popup skip actually calls: the menu object's own session when Seamless has handed
+/// one over, and otherwise the filter's non-detour resolution.
+///
+/// # Why there is a fallback at all
+///
+/// Without one the feature is dead rather than cautious. `OSM` is set only by a detour inside
+/// `ersc.dll`, and installing the `show` detour to get it killed the game 29.5s into run
+/// `br-20260909-234159-0a54` -- a fault inside the fault handler, so the loading screen never
+/// finished. With that detour correctly gone, `menu_object_session_is_idle` can only ever answer
+/// false, so every dialog is let through and the skip never fires once.
+///
+/// [`session_is_idle`] is the weaker source -- it can ride a scanned look-alike that is later
+/// discarded, which is how the skip fired exactly once on run `br-20260909-233549-72f5` -- but
+/// weaker is not useless: that same route drove the first use of that run correctly, and it needs
+/// no detour. So it is consulted second, never first, and the caller says which source answered.
+#[cfg(windows)]
+#[must_use]
+pub fn popup_skip_gate_is_idle() -> (bool, &'static str) {
+    if OSM.load(Ordering::SeqCst) != 0 {
+        return (
+            menu_object_session_is_idle(),
+            "the menu object Seamless handed over",
+        );
+    }
+    // A discard that happened before the menu object arrived says nothing about the object that
+    // arrived after it. The latch exists to distrust a scanned pointer once the scan has been
+    // wrong; `OSM` is not a scan result -- `capture_osm` only stores a pointer whose `+0x58` leads
+    // to an object carrying a live session state, handed over by Seamless calling its own action.
+    //
+    // Without this the latch is a run-long death sentence for the popup skip: the scan is running
+    // from boot and discards long before the player first opens the item, so by the time the real
+    // object is adopted the fallback is already disabled and `popup_skip_gate_is_idle` answers
+    // "nothing trustworthy" for the rest of the session. That is a bug this module introduced on
+    // 2026-09-09 in the same change that added the latch.
+    if OSM.load(Ordering::SeqCst) != 0 {
+        SESSION_EVER_DISCARDED.store(0, Ordering::SeqCst);
+    }
+    if SESSION_EVER_DISCARDED.load(Ordering::SeqCst) != 0 {
+        return (
+            false,
+            "nothing trustworthy -- no menu object, and the filter has already discarded a scanned \
+             session as \"not one\", so its later answers may not suppress a dialog",
+        );
+    }
+    (
+        session_is_idle(),
+        "the filter's own session (no menu object seen -- weaker, but not yet discarded)",
+    )
+}
+
+/// Host-side stub: there is no Seamless to read a session out of.
+#[cfg(not(windows))]
+#[must_use]
+pub fn menu_object_session_is_idle() -> bool {
+    false
+}
+
+/// Host-side stub, as [`menu_object_session_is_idle`].
+#[cfg(not(windows))]
+#[must_use]
+pub fn popup_skip_gate_is_idle() -> (bool, &'static str) {
+    (false, "not windows")
 }
 
 /// True once the session has settled back to idle after a cancel.
@@ -2434,6 +2227,39 @@ fn ersc_module_base() -> Option<usize> {
 /// through the action's state write. Five different functions share the first fourteen
 /// bytes, so a short check would prove only that some option action is at this address -- and
 /// calling the wrong one cancels other players' invasions.
+/// Action rvas whose byte check has already been reported as failing.
+///
+/// # Why this is latched
+///
+/// The refusal below is a property of the loaded `ersc.dll`, not of the moment: once a build's
+/// bytes do not match, they do not match on the next tick either. It was logged unconditionally
+/// from a per-tick caller, and run br-20260909-005147-56c1 came back with 6061 identical copies of
+/// it -- half of a 12826-line log. A message that repeats six thousand times is not a diagnostic,
+/// it is what buries one. Tracked as bd er-effects-rs-m86t.
+///
+/// Keyed by rva so a second action refusing for a different reason still gets its own line, and
+/// cleared when the bytes read correctly again so a recovery is reported once too.
+static REFUSED_ACTION_RVAS: std::sync::Mutex<std::collections::BTreeSet<usize>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+/// Record that `rva` refuses, and answer whether this is the first time since it last worked.
+fn first_refusal_of(rva: usize) -> bool {
+    match REFUSED_ACTION_RVAS.lock() {
+        Ok(mut refused) => refused.insert(rva),
+        // A poisoned latch must not silence the refusal: saying it twice is recoverable, saying it
+        // never is the bug this exists to fix.
+        Err(poisoned) => poisoned.into_inner().insert(rva),
+    }
+}
+
+/// Forget a refusal, and answer whether one was standing.
+fn clear_refusal_of(rva: usize) -> bool {
+    match REFUSED_ACTION_RVAS.lock() {
+        Ok(mut refused) => refused.remove(&rva),
+        Err(poisoned) => poisoned.into_inner().remove(&rva),
+    }
+}
+
 fn ersc_action(abi: &ersc::Abi, rva: usize, prologue: &[u8]) -> Option<ErscActionFn> {
     if inside_ersc_callback() {
         crate::standalone_log(format_args!(
@@ -2452,14 +2278,23 @@ fn ersc_action(abi: &ersc::Abi, rva: usize, prologue: &[u8]) -> Option<ErscActio
     })?;
     let address = base + rva;
     if !prologue_matches(address, prologue) {
-        crate::standalone_log(format_args!(
-            "local-invasion: ersc+{rva:#x} does not hold the {} bytes this module measured for {} \
-             -- refusing to call it. The filter is disarmed until the RVAs are re-read against \
-             this ersc.dll: uv run --with capstone python3 scripts/locate-ersc-entry-points.py",
-            prologue.len(),
-            abi.version,
-        ));
+        if first_refusal_of(rva) {
+            crate::standalone_log(format_args!(
+                "local-invasion: ersc+{rva:#x} does not hold the {} bytes this module measured for \
+                 {} -- refusing to call it. The filter is disarmed until the RVAs are re-read \
+                 against this ersc.dll: uv run --with capstone python3 \
+                 scripts/locate-ersc-entry-points.py. This line is printed once per change, not \
+                 once per tick.",
+                prologue.len(),
+                abi.version,
+            ));
+        }
         return None;
+    }
+    if clear_refusal_of(rva) {
+        crate::standalone_log(format_args!(
+            "local-invasion: ersc+{rva:#x} reads as itself again -- the action is callable"
+        ));
     }
     Some(unsafe { core::mem::transmute::<usize, ErscActionFn>(address) })
 }
@@ -2473,6 +2308,76 @@ fn prologue_matches(address: usize, expected: &[u8]) -> bool {
 // ---------------------------------------------------------------------------------------------
 // Installation
 // ---------------------------------------------------------------------------------------------
+
+/// `CS::CSSessionManager::JoinSession(this, MultiplayType, FnVector<byte>* lobbyIds, int limit)`.
+///
+/// Returns `false` without issuing the Steam join RPC when the match was just rejected, and calls
+/// the original otherwise. Refusing here is what makes a rejection instant: after the original has
+/// run there is no path back that does not wait out the RPC.
+#[cfg(windows)]
+unsafe extern "system" fn join_session_hook(a: usize, b: usize, c: usize, d: usize) -> usize {
+    if REFUSE_NEXT_JOIN.swap(false, Ordering::SeqCst) {
+        let refused = JOINS_REFUSED.fetch_add(1, Ordering::SeqCst) + 1;
+        crate::standalone_log(format_args!(
+            "local-invasion: refused the join before the RPC was sent (#{refused}) -- the engine \
+             stays at its current lobby state with nothing outstanding, so the search resumes \
+             without the 30s the parked disconnect would have cost"
+        ));
+        return 0;
+    }
+    let orig = ORIG_JOIN_SESSION.load(Ordering::SeqCst);
+    if orig == 0 {
+        return 0;
+    }
+    // SAFETY: the union stored the trampoline for this exact target.
+    unsafe { core::mem::transmute::<usize, er_hook::UnionFn>(orig)(a, b, c, d) }
+}
+
+/// Hook `CS::CSSessionManager::JoinSession`. Idempotent; returns 1 on success.
+///
+/// Its absence is not fatal the way `install_join_hook`'s is: without it a rejection still cancels
+/// through Seamless, it just costs the player the engine's own 30s wait.
+#[cfg(windows)]
+fn install_join_session_hook() -> usize {
+    if JOIN_SESSION_HOOK_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
+        return 0;
+    }
+    let seam = crate::map_seams::CS_SESSION_MANAGER_JOIN_SESSION;
+    let address = match unsafe { crate::map_seams::verify_seam(&seam) } {
+        Ok(address) => address,
+        Err(error) => {
+            crate::standalone_log(format_args!(
+                "local-invasion: {error} -- rejections will still cancel, but each one costs the \
+                 engine's own 30s join wait"
+            ));
+            return 0;
+        }
+    };
+    match unsafe {
+        er_hook::register_union_hook(
+            address,
+            join_session_hook as er_hook::UnionFn,
+            &ORIG_JOIN_SESSION,
+        )
+    } {
+        Ok(()) => {
+            crate::standalone_log(format_args!(
+                "local-invasion: refusing rejected joins at {} @0x{address:x} (the seam's own \
+                 address; the HOOK TRANSLATED line above names where the detour went)",
+                seam.name
+            ));
+            1
+        }
+        Err(status) => {
+            crate::standalone_log(format_args!(
+                "local-invasion: union registration for {} failed: {status:?} -- rejections fall \
+                 back to cancelling after the join, which costs 30s when the RPC does not resolve",
+                seam.name
+            ));
+            0
+        }
+    }
+}
 
 /// Hook `CS::SosSignMan::SetMultiplayJoinData`. Idempotent; returns 1 on success.
 ///
@@ -2553,6 +2458,10 @@ pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
     // resolvable still reflects the frames that actually passed.
     TICKS.fetch_add(1, Ordering::SeqCst);
     install_join_hook();
+    install_join_session_hook();
+    // One line, once, saying whether a host can be named at all. See its own docs for why it asks
+    // about the local player rather than about a host.
+    crate::lobby_publish::report_persona_plumbing_once();
     // The two detours this DLL places inside `ersc.dll`, both withheld by one key. Read once per
     // tick rather than cached at attach, because the config is re-read when a match arrives and a
     // player mid-A/B should not have to restart the game to move the switch.
@@ -2687,6 +2596,23 @@ fn note_session_liveness(ersc_state: Option<u32>, lobby: u32, protocol: u32) {
         LIVENESS_STALE_SAMPLES.store(0, Ordering::SeqCst);
         return;
     };
+    // A session Seamless handed over is never judged by this heuristic. `OSM` is only ever set by
+    // `capture_osm`, which requires `+0x58` to lead to an object carrying a live session state --
+    // so the pointer came from Seamless calling its own action, not from a scan guessing. The
+    // heuristic exists to disown a guess, and applying it to a handed-over pointer disowns the
+    // real thing.
+    //
+    // Measured on run `br-20260910-003946-b9b0`, which adopted the real object at
+    // `OSM=0x466ad518 session=0x466ac930`: the session sat at state `0x16` while the engine's
+    // lobby/protocol advanced, this heuristic called it "not a session" four times, and the log
+    // recorded `0x16 -> 0x23 CANCELLING -- held 5995 ticks / 181264ms` and again `8873 ticks /
+    // 215212ms`. `0x16` is a state the real session genuinely holds for the length of an invasion
+    // -- Frida saw the same session enter the `0x24` writer with `state_on_entry=0x16` -- so a
+    // multi-minute stay there is a player fighting, not a dead pointer.
+    if OSM.load(Ordering::SeqCst) != 0 {
+        LIVENESS_STALE_SAMPLES.store(0, Ordering::SeqCst);
+        return;
+    }
     let engine = ((lobby as usize) << 16) | (protocol as usize);
     let previous_engine = LIVENESS_LAST_ENGINE.swap(engine, Ordering::SeqCst);
     let previous_state = LIVENESS_LAST_STATE.swap(state as usize, Ordering::SeqCst);
@@ -2717,7 +2643,27 @@ fn note_session_liveness(ersc_state: Option<u32>, lobby: u32, protocol: u32) {
     );
     #[cfg(windows)]
     session_scan::invalidate_cached_session();
+    // The popup skip's fallback stops here, permanently for this session. A discard is the filter
+    // saying this pointer was never a session; re-scanning may hand back another look-alike, and
+    // the skip is the one consumer that cannot survive a wrong answer -- a false idle swallows the
+    // dialog that leaves an invasion, which trapped a player on 2026-09-09
+    // (bd auto-dismiss-must-be-scoped-not-every-dialog-2026-09-09). Judging and logging may go on
+    // guessing; suppressing a dialog may not.
+    SESSION_EVER_DISCARDED.store(1, Ordering::SeqCst);
 }
+
+/// Whether any cached session has ever been discarded as "not a session" this run. Latched, never
+/// cleared: once the scan has been wrong once, its later answers are not trustworthy enough to
+/// suppress a dialog on.
+static SESSION_EVER_DISCARDED: AtomicUsize = AtomicUsize::new(0);
+
+/// `session+0x238` -- an f64 in the upper half of the qword, advancing once per frame while the
+/// session sits in a state. Measured climbing 0.386s -> 14.1s across one stuck `0x23` on run
+/// br-20260910-012230-666e.
+const SESSION_COOLDOWN_OFFSET: usize = 0x238;
+/// The last whole second reported for that clock, so it is logged once a second rather than once
+/// a frame.
+static COOLDOWN_LAST_WHOLE_SECOND: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 /// Engine samples with an unchanged session state before the cache is discarded. The measured
 /// runs showed nine in a row, so four is decisive without being twitchy.
@@ -2727,6 +2673,114 @@ static LIVENESS_LAST_ENGINE: AtomicUsize = AtomicUsize::new(usize::MAX);
 static LIVENESS_LAST_STATE: AtomicUsize = AtomicUsize::new(usize::MAX);
 static LIVENESS_REFUSAL_SAID: Mutex<Option<String>> = Mutex::new(None);
 
+/// Re-arm the hunt when a join this filter accepted dies before it lands.
+///
+/// Accepting a match stands the hunt down, which is right while the invasion is coming. It is wrong
+/// once the join has failed: the player accepted an invasion, never got it, and was left with no
+/// search running and no indication why.
+///
+/// The clearing rule is what keeps this from fighting the deliberate disarm. `KEPT_JOIN_PENDING`
+/// is cleared at `lobbyState::CLIENT`, the same instant `INVASION_ACTUALLY_HAPPENED` latches, so a
+/// join that lands is never re-armed here -- the disarm at the end of a real invasion is taken from
+/// what the engine did and stays that way.
+#[cfg(windows)]
+fn resume_the_hunt_if_an_accepted_join_died(
+    progress: &er_invasion_warp_core::join_progress::JoinProgress,
+) {
+    if !progress.is_finished() || !KEPT_JOIN_PENDING.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    let count = KEPT_JOIN_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
+    AUTO_SEARCH_ARMED.store(true, Ordering::SeqCst);
+    PENDING_REINVADE.store(true, Ordering::SeqCst);
+    crate::standalone_log(format_args!(
+        "local-invasion: the match this filter accepted never landed (#{count}) -- {progress}. \
+         Accepting stands the hunt down, so without this the player is left with no search running \
+         after an invasion they never got to play."
+    ));
+}
+
+/// Drop a match the engine has already failed, without waiting for the player.
+///
+/// # The complaint
+///
+/// Reported live 2026-09-10: "Seamless claiming a live match means I have to use the item to leave
+/// before I can invade again". That is the state this clears. Seamless keeps its session at an
+/// active value after the engine's join has died, and nothing in the game takes it back down, so
+/// the player is holding a match that cannot become an invasion and the only way out is to spend
+/// the item on a cancel.
+///
+/// # Why this can act where the stall watchdog cannot
+///
+/// `crate::stall_watchdog` returns before it reads anything unless `AUTO_SEARCH_ARMED`, because it
+/// is part of the hunt loop -- a search the player started themselves, or one whose loop has stood
+/// down, gets no watchdog at all. And its trigger is a dwell: five seconds in a timed state, which
+/// is a guess that something is wrong.
+///
+/// This is not a guess and not a dwell. `Verdict::Failed` means `lobbyState` is `CreateFailed` or
+/// `JoinFailed` -- the engine went out to Steam and was told no -- so the attempt is over as a
+/// matter of fact, whoever started it. Until the `Failed` verdict existed this reading was
+/// `Verdict::Idle`, which also means "the engine never started", and the two cannot be told apart:
+/// acting on `Idle` would have cancelled attempts that had not begun yet.
+///
+/// The grace window exists only so a frame sampled across a transition cannot fire it.
+#[cfg(windows)]
+fn drop_a_match_the_engine_has_already_failed(
+    progress: &er_invasion_warp_core::join_progress::JoinProgress,
+    ersc_claims_attempt: bool,
+) {
+    use er_invasion_warp_core::join_progress::Verdict;
+    // `Failed` is the engine saying Steam told it no. `Idle` here is narrower than it sounds: the
+    // verdict only reads `Idle` with `lobbyState == None`, no outstanding RPC and both phase timers
+    // clear, which is `DisconnectCleanup` having run. Either way the engine has no session, and
+    // Seamless is holding a match against one.
+    let engine_has_no_session =
+        progress.lobby_state == er_invasion_warp_core::join_progress::lobby_state::NONE;
+    let grace = match progress.verdict() {
+        Verdict::Failed => DEAD_JOIN_GRACE_MS,
+        Verdict::Idle => TORN_DOWN_GRACE_MS,
+        Verdict::Progressing | Verdict::Committed => {
+            DEAD_JOIN_SINCE_MS.store(0, Ordering::SeqCst);
+            return;
+        }
+    };
+    if !ersc_claims_attempt {
+        DEAD_JOIN_SINCE_MS.store(0, Ordering::SeqCst);
+        return;
+    }
+    let now = now_ms();
+    let since =
+        match DEAD_JOIN_SINCE_MS.compare_exchange(0, now, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => now,
+            Err(first) => first,
+        };
+    let held = now.saturating_sub(since);
+    if held < grace {
+        return;
+    }
+    let Ok(session) = resolve_session() else {
+        return;
+    };
+    let Some(state) = read_session_state(session.abi, session.session) else {
+        return;
+    };
+    if state == session.abi.state_idle {
+        DEAD_JOIN_SINCE_MS.store(0, Ordering::SeqCst);
+        return;
+    }
+    // Cleared before the cancel rather than after it, so a cancel that is refused -- a poisoned
+    // guard, a lock the wrong shape -- re-arms the window instead of latching this off forever.
+    DEAD_JOIN_SINCE_MS.store(0, Ordering::SeqCst);
+    let count = DEAD_JOIN_RECOVERIES.fetch_add(1, Ordering::SeqCst) + 1;
+    crate::standalone_log(format_args!(
+        "local-invasion: dropping a match the engine has no session for (#{count}) -- {progress}, \
+         held {held}ms while Seamless still read {state:#04x}. Nothing in the game takes that back \
+         down, so without this the player has to spend the invasion item to leave before invading \
+         again."
+    ));
+    cancel_stalled_attempt_inner(session, state, held, engine_has_no_session);
+}
+
 #[cfg(windows)]
 fn trace_join_progress(session: Result<(u32, u32), &'static str>) {
     let ersc_state = session.ok().map(|(state, _)| state);
@@ -2734,7 +2788,6 @@ fn trace_join_progress(session: Result<(u32, u32), &'static str>) {
     let Some(progress) = read_join_progress() else {
         return;
     };
-    let verdict = progress.verdict();
     note_session_liveness(
         ersc_state,
         progress.lobby_state as u32,
@@ -2746,7 +2799,10 @@ fn trace_join_progress(session: Result<(u32, u32), &'static str>) {
     if progress.lobby_state == er_invasion_warp_core::join_progress::lobby_state::CLIENT {
         // The join landed, so the session is allowed to read idle again.
         JOIN_IN_FLIGHT.store(false, Ordering::SeqCst);
+        // And the accept is settled: from here `INVASION_ACTUALLY_HAPPENED` owns the disarm.
+        KEPT_JOIN_PENDING.store(false, Ordering::SeqCst);
     }
+    resume_the_hunt_if_an_accepted_join_died(&progress);
     if progress.lobby_state == er_invasion_warp_core::join_progress::lobby_state::CLIENT
         && !INVASION_ACTUALLY_HAPPENED.swap(true, Ordering::SeqCst)
     {
@@ -2768,9 +2824,10 @@ fn trace_join_progress(session: Result<(u32, u32), &'static str>) {
     // Only an attempt ERSC actually claims can be a stalled one. An unresolvable session is not
     // evidence of anything, so it never counts.
     let ersc_claims_attempt = ersc_state.is_some_and(|state| state != idle_state);
-    if verdict == er_invasion_warp_core::join_progress::Verdict::Idle && ersc_claims_attempt {
+    if progress.is_finished() && ersc_claims_attempt {
         JOIN_PROGRESS_IDLE_SAMPLES.fetch_add(1, Ordering::Relaxed);
     }
+    drop_a_match_the_engine_has_already_failed(&progress, ersc_claims_attempt);
     if JOIN_PROGRESS_LAST.swap(packed, Ordering::SeqCst) == packed {
         return;
     }
@@ -2941,6 +2998,36 @@ fn trace_session_field_writes(seamless: SeamlessSession) {
     let state =
         unsafe { er_game_base::mem::safe_read_i32(session + seamless.abi.session_state_offset) }
             .unwrap_or(-1);
+    // `+0x238` alone is not a field change worth a line: it is a clock, and it ticks once a frame.
+    //
+    // Measured on run br-20260910-012230-666e, where the second cancel stuck at 0x23 and this
+    // logger wrote one line per tick for the whole wait. The upper half of the qword decodes as an
+    // f64 running 0.386 -> 0.443 -> ... -> 14.1 seconds and still climbing, one step per tick, so
+    // the "change" is a cooldown advancing normally rather than anything a reader needs told 500
+    // times. Reporting it as a cooldown once a second says strictly more in 1/40th the lines.
+    if changed.len() == 1 && changed[0].0 == SESSION_COOLDOWN_OFFSET {
+        let seconds = f64::from_bits(changed[0].2 & 0xffff_ffff_0000_0000);
+        let whole = seconds as usize;
+        if COOLDOWN_LAST_WHOLE_SECOND.swap(whole, Ordering::SeqCst) != whole {
+            // The meaning is per-state and must not be asserted across all of them. This line
+            // first fired at state 0x16 saying "this is the wait the player sees after a cancel",
+            // which is false there -- 0x16 is being in an invasion, and its clock is how long the
+            // player has been fighting.
+            let meaning = if state == seamless.abi.state_cancelling as i32 {
+                "an armed re-invade waits for idle, so this clock is the wait after a cancel"
+            } else if state == seamless.abi.state_searching as i32 {
+                "this clock is how long the search has been running"
+            } else {
+                "what this clock measures in this state has not been established"
+            };
+            crate::standalone_log(format_args!(
+                "local-invasion: the session has been in state {state:#04x} for {whole}s -- \
+                 `session+0x{SESSION_COOLDOWN_OFFSET:x}` is a clock, not a field change, and it \
+                 advances once a frame. {meaning}."
+            ));
+        }
+        return;
+    }
     let line = SESSION_FIELD_LINES.fetch_add(1, Ordering::SeqCst) + 1;
     crate::standalone_log(format_args!(
         "local-invasion: session fields changed at state {state:#04x} -- {changed:x?} \

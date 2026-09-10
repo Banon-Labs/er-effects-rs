@@ -1,0 +1,2 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Why on earth would I want that convention?"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "You wouldn't."}]}}

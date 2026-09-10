@@ -143,6 +143,32 @@ pub const USER_GET_STEAM_ID_SLOT: usize = 2;
 /// exports; a miss returns `None` and publishing refuses rather than assuming we are the owner.
 pub const USER_ACCESSOR: &str = "SteamAPI_SteamUser_v021\0";
 
+/// `ISteamFriends* SteamAPI_SteamFriends_v017(void)`.
+pub const FRIENDS_ACCESSOR: &str = "SteamAPI_SteamFriends_v017\0";
+/// `const char *SteamAPI_ISteamFriends_GetFriendPersonaName(ISteamFriends*, CSteamID)`.
+///
+/// The flat export rather than a vtable slot, unlike the matchmaking calls above. A slot index is
+/// a property of one interface version and silently addresses a different method when that
+/// version moves; this name is the ABI Valve maintains. Verified against the live process: both
+/// exports are present in `steam_api64.dll`, `SteamAPI_SteamFriends_v017()` returned a non-null
+/// interface, and the call answered "Paperplane" and "energygod18" for the two hosts this
+/// session's telemetry had already caught in `session+0x1d8`.
+pub const FRIENDS_PERSONA_NAME: &str = "SteamAPI_ISteamFriends_GetFriendPersonaName\0";
+/// `bool RequestUserInformation(ISteamFriends*, CSteamID, bool nameOnly)`.
+///
+/// Returns true when Steam had to go and ask, which means the name is not available yet. Measured
+/// false for both hosts, because joining their lobby is exactly the event that makes Steam fetch
+/// them -- so the ordinary case needs no round trip and no callback.
+pub const FRIENDS_REQUEST_USER_INFORMATION: &str =
+    "SteamAPI_ISteamFriends_RequestUserInformation\0";
+/// `const char *SteamAPI_ISteamFriends_GetPersonaName(ISteamFriends*)` -- the local user's name.
+///
+/// Not used to name a host. It exists so the export chain behind [`FRIENDS_PERSONA_NAME`] can be
+/// exercised without an invasion: this call takes no id, so if it answers, the module handle, both
+/// `GetProcAddress` lookups and the interface pointer are all good, and the only thing an
+/// unanswered host name could then be blamed on is the id itself.
+pub const FRIENDS_LOCAL_PERSONA_NAME: &str = "SteamAPI_ISteamFriends_GetPersonaName\0";
+
 /// The key whose presence proves a lobby is the one invaders query.
 ///
 /// Seamless filters its lobby list on `lobby_type == yknx3_seamless_master_lobby`, so by definition
@@ -295,9 +321,10 @@ pub fn hunt_refusal(
 mod live {
     use super::{
         ADD_STRING_FILTER_SLOT, ADVERTISEMENT_MARKER_KEY, ADVERTISEMENT_MARKER_VALUE,
-        GET_LOBBY_DATA_SLOT, GET_LOBBY_OWNER_SLOT, LOBBY_MAP_KEY, MATCHMAKING_ACCESSOR,
-        REQUEST_LOBBY_LIST_SLOT, SET_LOBBY_DATA_SLOT, USER_ACCESSOR, USER_GET_STEAM_ID_SLOT,
-        hunt_filter_value, hunt_refusal, pending_publish,
+        FRIENDS_ACCESSOR, FRIENDS_LOCAL_PERSONA_NAME, FRIENDS_PERSONA_NAME,
+        FRIENDS_REQUEST_USER_INFORMATION, GET_LOBBY_DATA_SLOT, GET_LOBBY_OWNER_SLOT, LOBBY_MAP_KEY,
+        MATCHMAKING_ACCESSOR, REQUEST_LOBBY_LIST_SLOT, SET_LOBBY_DATA_SLOT, USER_ACCESSOR,
+        USER_GET_STEAM_ID_SLOT, hunt_filter_value, hunt_refusal, pending_publish,
     };
     use er_invasion_warp_core::invasion_warp::BlockKey;
     use std::sync::Mutex;
@@ -324,6 +351,39 @@ mod live {
     type GetLobbyOwnerFn = unsafe extern "system" fn(usize, *mut u64, u64) -> usize;
     /// `CSteamID GetSteamID(this)` on `ISteamUser` -- same sret convention.
     type GetSteamIdFn = unsafe extern "system" fn(usize, *mut u64) -> usize;
+    /// `const char *GetFriendPersonaName(ISteamFriends*, CSteamID)`, the flat export.
+    ///
+    /// No sret here: the return is a pointer, which comes back in `rax` like any other.
+    type GetFriendPersonaNameFn = unsafe extern "system" fn(usize, u64) -> *const u8;
+    /// `bool RequestUserInformation(ISteamFriends*, CSteamID, bool nameOnly)`, the flat export.
+    type RequestUserInformationFn = unsafe extern "system" fn(usize, u64, bool) -> bool;
+    /// `const char *GetPersonaName(ISteamFriends*)` -- the local user, so no id argument.
+    type GetLocalPersonaNameFn = unsafe extern "system" fn(usize) -> *const u8;
+
+    /// Whether [`report_persona_plumbing_once`] has already spoken.
+    static PERSONA_PLUMBING_SAID: AtomicBool = AtomicBool::new(false);
+
+    /// Copy a NUL-terminated string Steam owns, bounded.
+    ///
+    /// Steam reuses these buffers, so the bytes are taken immediately. The cap is the documented
+    /// maximum persona length with room to spare; a string longer than that is a pointer that is
+    /// not what it claims to be.
+    fn read_c_string(at: usize) -> Option<String> {
+        if at == 0 {
+            return None;
+        }
+        let mut bytes = Vec::with_capacity(64);
+        for index in 0..128_usize {
+            let byte = unsafe { er_game_base::mem::safe_read_u8(at + index) }?;
+            if byte == 0 {
+                break;
+            }
+            bytes.push(byte);
+        }
+        String::from_utf8(bytes)
+            .ok()
+            .filter(|name| !name.is_empty())
+    }
     /// `const char *GetLobbyData(this, CSteamID lobby, const char *key)` -- Read only.
     type GetLobbyDataFn = unsafe extern "system" fn(usize, u64, *const u8) -> *const i8;
 
@@ -429,6 +489,108 @@ mod live {
         let mut out: u64 = 0;
         unsafe { get(user, &raw mut out) };
         (out != 0).then_some(out)
+    }
+
+    /// Said once: whether the Steam name lookup is wired up at all.
+    ///
+    /// # Why a line about the local player is worth printing
+    ///
+    /// The host's name needs two things to be true -- the export chain resolves, and the id read
+    /// out of `session+0x1d8` is a real account. Only the second needs an invasion. Asking Steam
+    /// for the local persona takes no id, so it separates the two: a run whose log carries this
+    /// line and then fails to name a host has an id problem, and a run missing this line has a
+    /// plumbing problem. Without it both look identical from the log, which is how the previous
+    /// attempt at this feature spent two live invasions learning nothing.
+    pub fn report_persona_plumbing_once() {
+        if PERSONA_PLUMBING_SAID.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let module = unsafe { GetModuleHandleA(c"steam_api64.dll".as_ptr().cast()) };
+        if module == 0 {
+            crate::standalone_log(format_args!(
+                "local-invasion: steam_api64.dll is not loaded, so no invasion can be attributed \
+                 to a Steam name"
+            ));
+            return;
+        }
+        let accessor = unsafe { GetProcAddress(module, FRIENDS_ACCESSOR.as_ptr()) };
+        let by_id = unsafe { GetProcAddress(module, FRIENDS_PERSONA_NAME.as_ptr()) };
+        let local = unsafe { GetProcAddress(module, FRIENDS_LOCAL_PERSONA_NAME.as_ptr()) };
+        if accessor == 0 || by_id == 0 || local == 0 {
+            crate::standalone_log(format_args!(
+                "local-invasion: steam_api64.dll is loaded but the name exports are not all there \
+                 (accessor={accessor:#x} by_id={by_id:#x} local={local:#x}) -- hosts will be \
+                 announced without a name"
+            ));
+            return;
+        }
+        let friends = unsafe { core::mem::transmute::<usize, MatchmakingAccessor>(accessor)() };
+        if friends == 0 {
+            crate::standalone_log(format_args!(
+                "local-invasion: `SteamAPI_SteamFriends_v017` returned null -- the Steam API is \
+                 not initialised in this process, so no host can be named"
+            ));
+            return;
+        }
+        let get = unsafe { core::mem::transmute::<usize, GetLocalPersonaNameFn>(local) };
+        let text = unsafe { get(friends) };
+        let name = read_c_string(text as usize).unwrap_or_else(|| "<unreadable>".to_owned());
+        crate::standalone_log(format_args!(
+            "local-invasion: the Steam name lookup is wired up -- this client is \"{name}\". A \
+             host that still goes unnamed after this line is an id that did not read, not a \
+             missing export."
+        ));
+    }
+
+    /// The Steam persona name behind a `CSteamID`, or `None`.
+    ///
+    /// # Why this can answer for a stranger
+    ///
+    /// `GetFriendPersonaName` reads a local cache, and Steam populates that cache for anyone the
+    /// client has been told about -- lobby members included, which is precisely what a host is by
+    /// the time a match is being negotiated. It does not require friendship and it does not block.
+    /// `RequestUserInformation` is asked first anyway, because it is the one call that reports
+    /// whether the cache is cold: it answers true when Steam had to go and fetch, and in that case
+    /// the name arrives later through a callback this DLL does not pump, so the honest answer for
+    /// this banner is `None` rather than Steam's `[unknown]` placeholder.
+    ///
+    /// Both exports and this exact call were exercised against the live process before any of it
+    /// was written down; see [`FRIENDS_PERSONA_NAME`].
+    pub fn persona_name(id: u64) -> Option<String> {
+        if id == 0 {
+            return None;
+        }
+        let module = unsafe { GetModuleHandleA(c"steam_api64.dll".as_ptr().cast()) };
+        if module == 0 {
+            return None;
+        }
+        let accessor = unsafe { GetProcAddress(module, FRIENDS_ACCESSOR.as_ptr()) };
+        let get_name = unsafe { GetProcAddress(module, FRIENDS_PERSONA_NAME.as_ptr()) };
+        if accessor == 0 || get_name == 0 {
+            return None;
+        }
+        let friends = unsafe { core::mem::transmute::<usize, MatchmakingAccessor>(accessor)() };
+        if friends == 0 {
+            return None;
+        }
+        let request = unsafe { GetProcAddress(module, FRIENDS_REQUEST_USER_INFORMATION.as_ptr()) };
+        if request != 0 {
+            let ask = unsafe { core::mem::transmute::<usize, RequestUserInformationFn>(request) };
+            // True means Steam did not have them and is fetching now, so there is no name to read
+            // this frame. Saying nothing beats printing `[unknown]` at the player.
+            if unsafe { ask(friends, id, true) } {
+                return None;
+            }
+        }
+        let get = unsafe { core::mem::transmute::<usize, GetFriendPersonaNameFn>(get_name) };
+        let text = unsafe { get(friends, id) };
+        if text.is_null() {
+            return None;
+        }
+        let name = read_c_string(text as usize)?;
+        // `[unknown]` is Steam's own placeholder for an id it cannot name, and putting it on a
+        // banner would read as a player called that.
+        (!name.is_empty() && name != "[unknown]").then_some(name)
     }
 
     /// Read our key back off the lobby, so a publish is only counted when the value is there.
@@ -1105,7 +1267,8 @@ mod live {
 #[cfg(windows)]
 pub use live::{
     advertisement_lobby, hunt_tally, install_advertisement_observer, install_hunt_hook,
-    install_pool_filter_hook, publish_current_map, reapply_pool_if_toggled, tally,
+    install_pool_filter_hook, persona_name, publish_current_map, reapply_pool_if_toggled,
+    report_persona_plumbing_once, tally,
 };
 
 #[cfg(test)]

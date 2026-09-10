@@ -47,6 +47,12 @@ ARTIFACT_ENV: dict[str, str] = {
     "ER_QUICKLOAD_INVASION_WARP_LOG_PATH": "er-invasion-warp.log",
     "ER_QUICKLOAD_INVASION_WARP_TELEMETRY_PATH": "er-invasion-warp-telemetry.json",
     "ER_QUICKLOAD_INVASION_WARP_RUN_PATH": "er-invasion-warp-run.json",
+    # er-lockon-filter had no knob at all until 2026-09-09, which is a different failure from the
+    # five above: they were unredirected, this one was invisible. `er-artifact-redirect-audit.py`
+    # discovers knobs by reading the Rust for `ER_QUICKLOAD_*_PATH`, so a DLL that never asks for a
+    # redirect is a DLL the audit has nothing to say about. Reconstructed from the launcher logs,
+    # 43 runs had loaded that shell and 41 of their logs were destroyed by the next launch.
+    "ER_QUICKLOAD_LOCKON_FILTER_LOG_PATH": "er-lockon-filter.log",
 
     "ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH": "er-input-harness-phases.jsonl",
     "ER_QUICKLOAD_DIAG_HARNESS_PATH": "er-diag-harness.log",

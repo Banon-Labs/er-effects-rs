@@ -585,6 +585,89 @@ fn cstr_walk(
     None
 }
 
+/// The module an address belongs to and its offset within it, or `None` for heap and other
+/// non-image memory.
+///
+/// Exists so a refusal can name `eldenring.exe+0x3c0cdc0` rather than call an address
+/// `implausible`. On 2026-09-08 a session scan accepted that exact address -- the game's own
+/// `.data` -- because it was above the minimum, 8-aligned, and happened to hold plausible bytes at
+/// the two offsets anything checked. Seamless then locked a `std::mutex` that was really static
+/// game data, nothing unlocks a static global, and the main thread waited until the stall watchdog
+/// fired. Where a pointer lives is the property that separates a real object from data that merely
+/// reads like one.
+///
+/// A `VirtualQuery` that does not land reports `Some(("unqueryable", 0))`: an address whose region
+/// cannot be described should be refused the same way one inside an image is.
+///
+/// Declared through a raw `kernel32` extern rather than the `windows` crate, because this crate's
+/// tier A is deliberately zero-dependency -- see its `Cargo.toml`.
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Default)]
+struct MemoryBasicInformation {
+    base_address: usize,
+    allocation_base: usize,
+    allocation_protect: u32,
+    partition_id: u16,
+    _pad: u16,
+    region_size: usize,
+    state: u32,
+    protect: u32,
+    kind: u32,
+    _tail: u32,
+}
+
+#[cfg(windows)]
+unsafe extern "system" {
+    fn VirtualQuery(
+        address: *const core::ffi::c_void,
+        buffer: *mut MemoryBasicInformation,
+        length: usize,
+    ) -> usize;
+}
+
+/// `MEM_IMAGE`: the region is backed by a mapped executable image.
+#[cfg(windows)]
+const MEM_IMAGE: u32 = 0x0100_0000;
+
+/// See the documentation above the `MemoryBasicInformation` declaration.
+#[cfg(windows)]
+#[must_use]
+pub fn module_backing(candidate: usize) -> Option<(String, usize)> {
+    let mut info = MemoryBasicInformation::default();
+    // SAFETY: `info` is a live out-param for the duration of the call and the length passed is its
+    // own size. `candidate` is only read as a numeric address, never dereferenced.
+    let wrote = unsafe {
+        VirtualQuery(
+            candidate as *const core::ffi::c_void,
+            &raw mut info,
+            core::mem::size_of::<MemoryBasicInformation>(),
+        )
+    };
+    if wrote == 0 {
+        return Some(("unqueryable".to_owned(), 0));
+    }
+    if info.kind != MEM_IMAGE {
+        return None;
+    }
+    let base = info.allocation_base;
+    let name = crate::build_id::module_file_name(base)
+        .and_then(|path| {
+            path.rsplit(['\\', '/'])
+                .next()
+                .map(std::borrow::ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| format!("module@{base:#x}"));
+    Some((name, candidate.saturating_sub(base)))
+}
+
+/// Host stub: no loaded modules to be inside.
+#[cfg(not(windows))]
+#[must_use]
+pub fn module_backing(_candidate: usize) -> Option<(String, usize)> {
+    None
+}
+
 #[cfg(test)]
 mod cstr_tests {
     use super::{PAGE_SIZE, cstr_walk};
@@ -674,87 +757,4 @@ mod cstr_tests {
             Some(&b"lobby_key"[..])
         );
     }
-}
-
-/// The module an address belongs to and its offset within it, or `None` for heap and other
-/// non-image memory.
-///
-/// Exists so a refusal can name `eldenring.exe+0x3c0cdc0` rather than call an address
-/// `implausible`. On 2026-09-08 a session scan accepted that exact address -- the game's own
-/// `.data` -- because it was above the minimum, 8-aligned, and happened to hold plausible bytes at
-/// the two offsets anything checked. Seamless then locked a `std::mutex` that was really static
-/// game data, nothing unlocks a static global, and the main thread waited until the stall watchdog
-/// fired. Where a pointer lives is the property that separates a real object from data that merely
-/// reads like one.
-///
-/// A `VirtualQuery` that does not land reports `Some(("unqueryable", 0))`: an address whose region
-/// cannot be described should be refused the same way one inside an image is.
-///
-/// Declared through a raw `kernel32` extern rather than the `windows` crate, because this crate's
-/// tier A is deliberately zero-dependency -- see its `Cargo.toml`.
-#[cfg(windows)]
-#[repr(C)]
-#[derive(Default)]
-struct MemoryBasicInformation {
-    base_address: usize,
-    allocation_base: usize,
-    allocation_protect: u32,
-    partition_id: u16,
-    _pad: u16,
-    region_size: usize,
-    state: u32,
-    protect: u32,
-    kind: u32,
-    _tail: u32,
-}
-
-#[cfg(windows)]
-unsafe extern "system" {
-    fn VirtualQuery(
-        address: *const core::ffi::c_void,
-        buffer: *mut MemoryBasicInformation,
-        length: usize,
-    ) -> usize;
-}
-
-/// `MEM_IMAGE`: the region is backed by a mapped executable image.
-#[cfg(windows)]
-const MEM_IMAGE: u32 = 0x0100_0000;
-
-/// See the documentation above the `MemoryBasicInformation` declaration.
-#[cfg(windows)]
-#[must_use]
-pub fn module_backing(candidate: usize) -> Option<(String, usize)> {
-    let mut info = MemoryBasicInformation::default();
-    // SAFETY: `info` is a live out-param for the duration of the call and the length passed is its
-    // own size. `candidate` is only read as a numeric address, never dereferenced.
-    let wrote = unsafe {
-        VirtualQuery(
-            candidate as *const core::ffi::c_void,
-            &raw mut info,
-            core::mem::size_of::<MemoryBasicInformation>(),
-        )
-    };
-    if wrote == 0 {
-        return Some(("unqueryable".to_owned(), 0));
-    }
-    if info.kind != MEM_IMAGE {
-        return None;
-    }
-    let base = info.allocation_base;
-    let name = crate::build_id::module_file_name(base)
-        .and_then(|path| {
-            path.rsplit(['\\', '/'])
-                .next()
-                .map(std::borrow::ToOwned::to_owned)
-        })
-        .unwrap_or_else(|| format!("module@{base:#x}"));
-    Some((name, candidate.saturating_sub(base)))
-}
-
-/// Host stub: no loaded modules to be inside.
-#[cfg(not(windows))]
-#[must_use]
-pub fn module_backing(_candidate: usize) -> Option<(String, usize)> {
-    None
 }

@@ -113,6 +113,37 @@ pub const SET_MULTIPLAY_JOIN_DATA: MapSeam = MapSeam {
     arg_count: 2,
 };
 
+/// `CS::CSSessionManager::JoinSession` -- `0x140cae640`. The call that issues the Steam join RPC,
+/// and the last instant at which a rejected match is still free.
+///
+/// `SosSignMan::JoinSession` calls `SetMultiplayJoinData` and then this, 87 bytes later in the same
+/// function, so the seam the filter already judges at runs immediately before the join is sent.
+///
+/// # Why a rejection has to be refused here rather than cancelled afterwards
+///
+/// Once this has run, `lobbyState` is `Joining` and the engine will not unwind:
+/// `CSSessionManager::LeaveSession` (`0x140cae730`) sets `disconnectRequested` and returns without
+/// tearing anything down while the state is `Creating` or `Joining`, and `CSSessionManagerImp::
+/// Update` (`0x140cafd10` in 1.16.2) only acts on that request under
+/// `lobbyState != Creating && lobbyState != Joining`. So the disconnect is parked until the join
+/// RPC resolves on its own.
+///
+/// Measured on run `br-20260910-012622-fd23`, four rejections: the two whose RPC resolved reached
+/// `lobbyState == Closing` and were done in ~1.6s; the two whose RPC did not resolve sat at
+/// `Joining` for 30.2s and 30.3s. That is the delay the player feels as the invasion item timing
+/// out, and no cancel driven into Seamless can shorten it, because Seamless is not what is waiting.
+///
+/// Returning `false` from here without calling the original leaves the engine exactly as it was:
+/// the caller only reaches this line when `lobbyState` is already one of `None`, `CreateFailed` or
+/// `JoinFailed` (its `(0x25 >> lobbyState) & 1` guard), and no RPC has been issued yet, so there is
+/// nothing outstanding to unwind.
+pub const CS_SESSION_MANAGER_JOIN_SESSION: MapSeam = MapSeam {
+    name: "CS::CSSessionManager::JoinSession",
+    rva: 0x0ca_e640,
+    prologue: &[0x88, 0x54, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x40],
+    arg_count: 4,
+};
+
 /// Offset of the destination block id within `ServerPushJoinData`.
 pub const JOIN_DATA_DESTINATION_BLOCK_OFFSET: usize = 0x00;
 

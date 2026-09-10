@@ -121,6 +121,15 @@ pub enum Verdict {
     /// believes an attempt is live while this holds, the attempt is dead in ERSC's own transport
     /// and no amount of waiting will produce a loading screen.
     Idle,
+    /// The engine tried and the attempt died: `lobbyState` is `CreateFailed` or `JoinFailed`.
+    ///
+    /// Separated from `Idle` because the two are opposite diagnoses that used to print the same
+    /// word. `Idle` means the engine never started, and points at ERSC's transport. `Failed` means
+    /// the engine started, went out to Steam, and got an answer it could not use -- which is what a
+    /// join to a host who cannot be reached looks like from here, a Steam block among the reasons.
+    /// Reported live 2026-09-10: an invasion involving a blocked player "bugs out or times out",
+    /// and this reading was the one that would have said so.
+    Failed,
 }
 
 impl JoinProgress {
@@ -130,6 +139,27 @@ impl JoinProgress {
         // cancelled a successful invasion before.
         if self.call_for_warp || self.protocol_state == protocol_state::WAIT_REENTRY_TO_MAP {
             return Verdict::Committed;
+        }
+        // A torn-down session, whatever the phase field says.
+        //
+        // `CSSessionManagerImp::DisconnectCleanup` sets `lobbyState = None` and does not write
+        // `protocolState`, so a session that has been cleaned up leaves the phase reading whatever
+        // it last was -- `InGame` after a real invasion. Without this the next test sees a
+        // non-`None` phase and calls it progress forever.
+        //
+        // Measured live on run br-20260910-021456-38bc: `lobby=0 proto=6 rpc=0 joinCheck=0.0
+        // waitInit=0.0` held while Seamless still read `0x16`, and the session clock ran to 2029
+        // seconds. The player had to spend the invasion item to get out of a session the engine
+        // had already destroyed.
+        //
+        // The three companion fields are required to be clear as well, so this cannot fire on a
+        // frame sampled before `lobbyState` has been set for a join that is genuinely starting.
+        if self.lobby_state == lobby_state::NONE
+            && self.join_request_handle == 0
+            && self.join_check_remain <= TIMER_EXPIRED
+            && self.wait_init_remain <= TIMER_EXPIRED
+        {
+            return Verdict::Idle;
         }
         // A live P2P session, or any protocol phase past None, is the engine working.
         if self.lobby_state == lobby_state::CLIENT
@@ -148,7 +178,22 @@ impl JoinProgress {
         ) {
             return Verdict::Progressing;
         }
+        if self.lobby_state == lobby_state::CREATE_FAILED
+            || self.lobby_state == lobby_state::JOIN_FAILED
+        {
+            return Verdict::Failed;
+        }
         Verdict::Idle
+    }
+
+    /// Whether this reading is a dead attempt: the engine has nothing in flight, whether because it
+    /// never started or because what it started failed.
+    ///
+    /// The stall counter wants both and the log line wants them apart, so the distinction lives in
+    /// the verdict and the union lives here rather than at each call site.
+    #[must_use]
+    pub fn is_finished(&self) -> bool {
+        matches!(self.verdict(), Verdict::Idle | Verdict::Failed)
     }
 }
 
@@ -174,7 +219,7 @@ mod tests {
 
     /// The reading measured live on 2026-08-16 while the player stood in their own world with
     /// Seamless loaded and no invasion under way: `lobbyState` moving 4 -> 5, `protocolState` 0.
-    fn idle_seamless() -> JoinProgress {
+    fn dead_reading() -> JoinProgress {
         JoinProgress {
             lobby_state: lobby_state::JOIN_FAILED,
             protocol_state: protocol_state::NONE,
@@ -187,11 +232,11 @@ mod tests {
 
     #[test]
     fn a_committed_warp_is_never_interfered_with() {
-        let mut sample = idle_seamless();
+        let mut sample = dead_reading();
         sample.call_for_warp = true;
         assert_eq!(sample.verdict(), Verdict::Committed);
 
-        let mut ordered = idle_seamless();
+        let mut ordered = dead_reading();
         ordered.protocol_state = protocol_state::WAIT_REENTRY_TO_MAP;
         assert_eq!(
             ordered.verdict(),
@@ -206,19 +251,19 @@ mod tests {
             JoinProgress {
                 lobby_state: lobby_state::JOINING,
                 join_request_handle: 7,
-                ..idle_seamless()
+                ..dead_reading()
             },
             JoinProgress {
                 lobby_state: lobby_state::CLIENT,
                 protocol_state: protocol_state::JOIN_CHECK,
                 join_check_remain: 29.5,
-                ..idle_seamless()
+                ..dead_reading()
             },
             JoinProgress {
                 lobby_state: lobby_state::CLIENT,
                 protocol_state: protocol_state::WAIT_INIT_DATA,
                 wait_init_remain: 12.0,
-                ..idle_seamless()
+                ..dead_reading()
             },
         ] {
             assert_eq!(sample.verdict(), Verdict::Progressing, "{sample}");
@@ -226,24 +271,30 @@ mod tests {
     }
 
     #[test]
-    fn the_measured_dead_reading_is_idle() {
+    fn the_measured_dead_reading_is_a_failed_join() {
         // This is the whole point: this exact reading, held while ERSC still claims a match, is
         // the signature of the stall that costs 53-213 seconds.
-        assert_eq!(idle_seamless().verdict(), Verdict::Idle);
+        //
+        // Its `lobbyState` is `JoinFailed`, so the engine had already been out to Steam and been
+        // told no. For two years of this module's life that read as `Idle` -- "the engine never
+        // started" -- which is the opposite diagnosis and sent every investigation at ERSC's
+        // transport instead of at the join.
+        assert_eq!(dead_reading().verdict(), Verdict::Failed);
+        assert!(dead_reading().is_finished());
     }
 
     #[test]
     fn a_running_phase_timer_alone_is_enough_to_be_progressing() {
         // The timers are zeroed every frame outside their phases, so a positive value cannot be
         // stale -- it is proof the engine ticked the handshake this frame.
-        let mut sample = idle_seamless();
+        let mut sample = dead_reading();
         sample.join_check_remain = 0.1;
         assert_eq!(sample.verdict(), Verdict::Progressing);
 
         sample.join_check_remain = TIMER_EXPIRED;
         assert_eq!(
             sample.verdict(),
-            Verdict::Idle,
+            Verdict::Failed,
             "an expired timer is not progress"
         );
     }
@@ -259,30 +310,66 @@ mod tests {
         ] {
             let sample = JoinProgress {
                 lobby_state: state,
-                ..idle_seamless()
+                ..dead_reading()
             };
             assert_eq!(sample.verdict(), Verdict::Progressing, "lobbyState {state}");
         }
     }
 
     #[test]
-    fn only_the_settled_failure_states_read_as_idle() {
-        for state in [
-            lobby_state::NONE,
-            lobby_state::CREATE_FAILED,
-            lobby_state::JOIN_FAILED,
-        ] {
+    fn a_cleaned_up_session_is_idle_however_stale_the_phase_field_reads() {
+        // The exact reading from run br-20260910-021456-38bc, held for 2029 seconds of session
+        // clock while Seamless claimed a match.
+        let sample = JoinProgress {
+            lobby_state: lobby_state::NONE,
+            protocol_state: protocol_state::IN_GAME,
+            join_request_handle: 0,
+            join_check_remain: 0.0,
+            wait_init_remain: 0.0,
+            call_for_warp: false,
+        };
+        assert_eq!(sample.verdict(), Verdict::Idle, "{sample}");
+        assert!(sample.is_finished());
+
+        // A join that is genuinely starting still wins: the companion fields are not clear.
+        let starting = JoinProgress {
+            join_request_handle: 4,
+            ..sample
+        };
+        assert_eq!(starting.verdict(), Verdict::Progressing, "{starting}");
+
+        // And a committed warp is never touched, whatever `lobbyState` reads.
+        let committed = JoinProgress {
+            call_for_warp: true,
+            ..sample
+        };
+        assert_eq!(committed.verdict(), Verdict::Committed, "{committed}");
+    }
+
+    #[test]
+    fn nothing_started_reads_as_idle_and_a_dead_attempt_does_not() {
+        let sample = JoinProgress {
+            lobby_state: lobby_state::NONE,
+            ..dead_reading()
+        };
+        assert_eq!(sample.verdict(), Verdict::Idle);
+        assert!(sample.is_finished());
+        // `CreateFailed` and `JoinFailed` are the engine reporting that it tried and could not.
+        // Reading them as `Idle` said the opposite -- that it never went out to Steam at all --
+        // and it is the reading a join to an unreachable host produces.
+        for state in [lobby_state::CREATE_FAILED, lobby_state::JOIN_FAILED] {
             let sample = JoinProgress {
                 lobby_state: state,
-                ..idle_seamless()
+                ..dead_reading()
             };
-            assert_eq!(sample.verdict(), Verdict::Idle, "lobbyState {state}");
+            assert_eq!(sample.verdict(), Verdict::Failed, "lobbyState {state}");
+            assert!(sample.is_finished(), "lobbyState {state}");
         }
     }
 
     #[test]
     fn the_display_line_carries_every_field_a_diagnosis_needs() {
-        let text = idle_seamless().to_string();
+        let text = dead_reading().to_string();
         for needle in [
             "lobby=",
             "proto=",
@@ -290,7 +377,7 @@ mod tests {
             "joinCheck=",
             "waitInit=",
             "warp=",
-            "Idle",
+            "Failed",
         ] {
             assert!(text.contains(needle), "{needle} missing from {text}");
         }

@@ -63,6 +63,7 @@ const PLACE_NAME_LOOKUP_VA: u64 = 0x140d10b60;
 const ERSC201_SHOW_VA: u64 = 0x1800241a0;
 const ERSC201_INVADE_ACTION_VA: u64 = 0x180025850;
 const ERSC201_CANCEL_ACTION_VA: u64 = 0x1800258d0;
+const ERSC201_LEAVE_WORLD_ACTION_VA: u64 = 0x1800259d0;
 const ERSC201_BUILD_LOBBY_KEY_VA: u64 = 0x1800ad6e0;
 const ERSC201_SESSION_LOCK_VA: u64 = 0x1800f9828;
 
@@ -329,6 +330,29 @@ fn main() {
                     ],
                 },
                 (|asm| ersc_cancel_action(asm, &ERSC201_CANCEL)) as prologue_build::Assemble,
+            ),
+            (
+                PrologueSpec {
+                    name: "V201_LEAVE_WORLD_PROLOGUE",
+                    doc: "`OPTIONSELECT_LEAVEWORLD` at `0x259d0`: the shared option-action\n\
+                          opening, and nothing more. Deliberately short, because these fourteen\n\
+                          bytes are BYTE-IDENTICAL to the invade action\'s opening -- every\n\
+                          option action starts this way. The pin is a drift guard on an address\n\
+                          the module already identified by reading the function; it is not an\n\
+                          identification, and lengthening it to make it one would pin body bytes\n\
+                          that a Seamless update rewrites for reasons that have nothing to do\n\
+                          with this row.",
+                    visibility: "pub",
+                    shape: Shape::Slice,
+                    image: Image::Ersc201,
+                    va: ERSC201_LEAVE_WORLD_ACTION_VA,
+                    take: 0,
+                    pin: &[
+                        0xf3, 0x0f, 0x1e, 0xfa, 0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x8b,
+                        0x79, 0x58,
+                    ],
+                },
+                (|asm| ersc_option_action_opening(asm)) as prologue_build::Assemble,
             ),
             (
                 PrologueSpec {

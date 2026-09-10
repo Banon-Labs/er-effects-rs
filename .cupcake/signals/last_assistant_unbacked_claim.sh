@@ -34,7 +34,12 @@
 #     write", "nothing was created" suppress the hit outright -- an honest confession of absence
 #     is the behaviour being asked for, and must never be punished;
 #   * a claim about the game, a run, or an external thing ("the DLL loaded", "the import granted
-#     129 items") is not a repo-artifact claim and is not matched.
+#     129 items") is not a repo-artifact claim and is not matched;
+#   * the pronoun must open its clause. "the gate I wrote", "the function I hooked", "an importer I
+#     built" are relative clauses that presuppose the artifact and then say something else about it,
+#     which is ordinary reporting prose rather than a claim of creation. Measured over 2,370 real
+#     turns the first time this signal could fire at all: ten hits, nine of them that shape. See
+#     `_opens_a_clause` in scripts/cupcake_unbacked_claim.py.
 #
 # What it deliberately does not catch, stated so nobody mistakes its silence for proof: an
 # imperative recommendation that reads as delivered ("Build a conformance gate.") has no first-
@@ -42,6 +47,16 @@
 # recommendation, which would make the guard noise. That gap is real and is not closed here.
 #
 # Emitted as  UNBACKED:<the offending clause>  ; empty when the turn is clean. Fail-open on error.
+#
+# Silently inert from the day it landed until 2026-09-09. The call below read `turn.events`, and a
+# `scripts/cupcake_turn_scan.Turn` has no such attribute -- it carries `blocks`, an ordered stream of
+# ("text", str) and ("tool", block) pairs. Every invocation raised AttributeError, the `2>/dev/null
+# || true` on the interpreter swallowed it, the signal printed nothing, and the policy read that as a
+# clean turn. Its six opa tests were green throughout, because they feed the policy a signal string
+# directly and never run this file. Same class as the `sprintf` defect in bd
+# cupcake-wasm-has-no-sprintf-so-the-rule-silently-never-fires-2026-09-09: a guard can be tested at
+# every layer except the one that decides whether it fires at all. The end-to-end proof that it now
+# halts is `scripts/test-cupcake-stop-guards.py`, which drives the real hook over a fixture.
 set -uo pipefail
 CUPCAKE_SIGNAL_REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")/../.." && pwd)"
 export CUPCAKE_SIGNAL_REPO_ROOT
@@ -61,7 +76,18 @@ if not path:
 turn = scan.last_text_turn(scan.split_turns(scan.load_events(path)))
 if turn is None:
     sys.exit(0)
-hit = claim.offending_claim(scan.assistant_text(turn.events[-1]) if turn.events else "", turn.events)
+# The closing prose is the last contiguous text run -- consecutive text blocks with no tool call
+# between them -- which is what "only the final prose block is scanned" means for a turn whose prose
+# arrives in several blocks. The classifier's other argument wants raw transcript events, because
+# `turn_wrote_a_file` walks message.content looking for tool_use blocks; a Turn keeps those blocks
+# without their carrier events, so hand it one synthetic carrier holding the turn's whole tool
+# stream. Reconstructing the shape here keeps `Turn` free of an `events` field that the four other
+# signals importing cupcake_turn_scan would have to carry for no reason.
+runs = turn.text_runs
+if not runs:
+    sys.exit(0)
+events = [{"message": {"content": [block for kind, block in turn.blocks if kind == "tool"]}}]
+hit = claim.offending_claim(runs[-1], events)
 if hit:
     print("UNBACKED:" + hit)
 PY

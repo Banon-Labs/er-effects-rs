@@ -32,7 +32,7 @@
 //! 3.5 seconds every 11 when it ran on the game thread.
 
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use super::ersc;
 
@@ -42,6 +42,8 @@ static CANDIDATES: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 /// How many joins have been used to narrow the set. Reported so a survivor found after one join is
 /// not mistaken for one that survived several.
 static NARROWING_ROUNDS: AtomicUsize = AtomicUsize::new(0);
+/// One line per run of empty narrowings, not one per join.
+static SAID_NOTHING_TO_NARROW: AtomicBool = AtomicBool::new(false);
 
 /// Ceiling on recorded candidates. A full pass over the game's committed private memory finds
 /// tens of thousands of shape matches, and every one costs 8 bytes here plus one read per join.
@@ -54,7 +56,7 @@ const MAX_CANDIDATES: usize = 1 << 21;
 /// Measured 2026-09-08, run br-20260908-220803-8a62: one invasion took 179,476 candidates to 2. At
 /// that size the addresses themselves are the finding, and printing them costs two lines rather
 /// than another invasion.
-const SURVIVORS_WORTH_NAMING: usize = 8;
+const SURVIVORS_WORTH_NAMING: usize = 64;
 
 /// The states this build's actions write once an attempt is under way, from `ersc::Abi` plus the
 /// three the cancel row is drawn for that the ABI does not name individually (read out of ERSC's
@@ -68,18 +70,20 @@ fn is_active_state(abi: &ersc::Abi, state: u32) -> bool {
         || state == 0x12
 }
 
+/// The addresses that have survived every narrowing so far.
+///
+/// Handed to the sweeper so it can ask the one question this module cannot ask on the game
+/// thread: which of them is pointed at by another object's `+0x58`. See
+/// `session_scan::owner_among`.
+#[cfg(windows)]
+pub(super) fn survivors() -> Vec<usize> {
+    CANDIDATES.lock().map(|c| c.clone()).unwrap_or_default()
+}
+
 /// How many candidates are currently held, and how many joins have narrowed them.
 pub(super) fn progress() -> (usize, usize) {
     let held = CANDIDATES.lock().map(|c| c.len()).unwrap_or(0);
     (held, NARROWING_ROUNDS.load(Ordering::SeqCst))
-}
-
-/// Forget everything. Used when the set empties, which means the real session was never in it.
-pub(super) fn reset() {
-    if let Ok(mut candidates) = CANDIDATES.lock() {
-        candidates.clear();
-    }
-    NARROWING_ROUNDS.store(0, Ordering::SeqCst);
 }
 
 #[cfg(windows)]
@@ -114,8 +118,20 @@ pub(super) fn narrow_to_changed(abi: &ersc::Abi) -> Option<usize> {
         return None;
     };
     if candidates.is_empty() {
+        // Said out loud, because the silent version of this line hid a real failure for a whole
+        // run. On br-20260909-194041-6558 the snapshot had been armed with 12,129 objects and then
+        // deleted by `invalidate_cached_session`; this returned `None` without a word, and the
+        // rejection that followed was reported as `MenuNeverOpened` -- a message about a menu,
+        // for a fault that was nothing to do with one. A scan that has nothing to narrow must say
+        // so at the moment it is asked, which is the moment someone is reading the log.
+        if !SAID_NOTHING_TO_NARROW.swap(true, Ordering::SeqCst) {
+            crate::standalone_log(format_args!(
+                "local-invasion: differential scan had NOTHING recorded when this join started, so                  it could not narrow anything. The snapshot is taken by the sweeper while the                  session is idle; if this keeps appearing, the sweeper is not getting an armed                  pass before the player invades."
+            ));
+        }
         return None;
     }
+    SAID_NOTHING_TO_NARROW.store(false, Ordering::SeqCst);
     let before = candidates.len();
     candidates.retain(|address| {
         super::session_scan::read_state_at(abi, *address)
@@ -160,7 +176,34 @@ pub(super) fn narrow_to_changed(abi: &ersc::Abi) -> Option<usize> {
             previous = Some(*address);
         }
     }
-    (after == 1).then(|| candidates[0])
+    if after == 1 {
+        return Some(candidates[0]);
+    }
+    // Several survivors, and one more discriminator is free before spending another invasion on
+    // them: the invade action writes `state_searching` specifically, at `ersc+0x25850`, while
+    // `is_active_state` above accepts every value the cancel row is drawn for. So a survivor
+    // reading exactly what the invade action writes, alone among the set, is the object that
+    // action just wrote to.
+    //
+    // Kept separate from the `retain` rather than folded into it, because the wider set is what
+    // survives to narrow the next join: a session already past searching when this runs would be
+    // dropped for good by the narrower test, and the whole point of the set is that it intersects
+    // across attempts. This asks the sharper question of the survivors without discarding them.
+    let searching: Vec<usize> = candidates
+        .iter()
+        .copied()
+        .filter(|address| {
+            super::session_scan::read_state_at(abi, *address) == Some(abi.state_searching)
+        })
+        .collect();
+    if searching.len() == 1 {
+        crate::standalone_log(format_args!(
+            "local-invasion: differential scan resolved {} survivor(s) to one: {:#x} is the only              one reading state_searching ({:#04x}), which is the value `ersc+0x25850` writes. The              rest moved out of idle for their own reasons and are kept for the next join.",
+            after, searching[0], abi.state_searching
+        ));
+        return Some(searching[0]);
+    }
+    None
 }
 
 #[cfg(not(windows))]

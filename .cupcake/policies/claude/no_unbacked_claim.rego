@@ -27,7 +27,15 @@
 #     BIASED HARD TOWARD NOT FIRING: only the closing block is scanned, quoted/backticked/fenced
 #     spans are stripped, and an honest confession of absence ("no gate exists", "I have not built
 #     it") SUPPRESSES the hit -- admitting the thing does not exist is the behaviour being asked
-#     for and must never be punished.
+#     for and must never be punished. The pronoun must also OPEN its clause: "the gate I wrote" and
+#     "the function I hooked" refer back to an artifact, they do not assert one into existence, and
+#     over 2,370 real turns that relative-clause shape was nine of the signal's ten hits.
+#
+#     INERT UNTIL 2026-09-09, and green the whole time. The signal read `turn.events` off a
+#     cupcake_turn_scan.Turn, which has no such attribute; the AttributeError went to /dev/null and
+#     the empty signal read as a clean turn. The tests below never caught it because they hand the
+#     policy a signal string directly. The end-to-end proof lives in
+#     scripts/test-cupcake-stop-guards.py (unbacked_claim.jsonl halts, backed_claim.jsonl does not).
 #
 #     KNOWN GAP, stated so its silence is never mistaken for proof: a bare IMPERATIVE that reads as
 #     delivered ("Build a conformance gate.") has no first-person verb and passes. Matching bare

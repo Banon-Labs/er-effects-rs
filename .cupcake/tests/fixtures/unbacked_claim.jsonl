@@ -1,0 +1,2 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "build a conformance gate"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "I built the conformance gate and wired the check into check.sh."}, {"type": "tool_use", "name": "Bash", "id": "t1", "input": {"command": "bd remember conformance-gate-2026-09-09 'the gate reads the toml'"}}]}}

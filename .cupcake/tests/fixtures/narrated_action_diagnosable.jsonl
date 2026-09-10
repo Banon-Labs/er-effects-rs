@@ -1,0 +1,4 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "the read comes back empty every time"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "name": "Bash", "id": "t1", "input": {"command": "sed -n '200,260p' crates/er-invasion-warp/src/local_invasion_filter.rs"}}]}}
+{"type": "user", "message": {"role": "user", "content": [{"tool_use_id": "t1", "type": "tool_result", "content": [{"type": "text", "text": "let session = read_ptr(base + 0x18)?;"}]}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Making the empty read diagnosable \u2014 logging each of the three hops so the next invasion says *which* one returned zero instead of just that one did:"}]}}

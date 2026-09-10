@@ -1,0 +1,4 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "read the pointer chain out of the live process"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "name": "Bash", "id": "t1", "input": {"command": "python3 scripts/er-teardown.py --status"}}]}}
+{"type": "user", "message": {"role": "user", "content": [{"tool_use_id": "t1", "type": "tool_result", "content": [{"type": "text", "text": "no run is live"}]}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "The pointer chain can only be read out of a live process and there is no run up, so reading it needs the game running. Tell me when you want the session back and it goes first."}]}}

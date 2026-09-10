@@ -21,6 +21,36 @@ use core::fmt::Write as _;
 use crate::invasion_warp::BlockKey;
 use crate::local_invasion::RejectReason;
 
+/// The longest host name the banner will carry.
+///
+/// A Steam persona can be 32 characters, and the announce surface truncates rather than wraps, so
+/// a maximal name plus a place name would push the place off the end -- and the place is the half
+/// the player cannot get anywhere else. Cut the name instead, visibly.
+pub const HOST_NAME_MAX_CHARS: usize = 20;
+
+/// Append ` -- <host>` when the host is known.
+///
+/// Separate from the three builders so all of them read the same, and so the truncation rule lives
+/// in one place. A `None` host leaves the line exactly as it was before this existed, which is what
+/// every test written before the host was reachable still asserts.
+fn append_host(text: &mut String, host: Option<&str>) {
+    let Some(host) = host else {
+        return;
+    };
+    let host = host.trim();
+    if host.is_empty() {
+        return;
+    }
+    let _ = write!(text, " -- ");
+    for (index, character) in host.chars().enumerate() {
+        if index == HOST_NAME_MAX_CHARS {
+            text.push('\u{2026}');
+            break;
+        }
+        text.push(character);
+    }
+}
+
 /// A few words naming why a destination was refused, for the banner.
 ///
 /// The player can already see where from the block name; what they cannot see is whether the mod
@@ -40,17 +70,17 @@ pub const fn reason_phrase(reason: RejectReason) -> &'static str {
         // contradicts what the player can see: reported live 2026-09-08, standing in The First
         // Step, the banner read `Rejected The First Step (elsewhere)`. The place was right; the
         // world was not, and that is what the phrase has to say.
-        // The action, not the geography. Both of these are matches the mod cancelled, and that is
-        // the question the player actually had: read live on 2026-09-08, "Rejected The First Step
-        // (elsewhere)" named the ground under their feet and then called it somewhere else, and
-        // they asked "do we mean we cancelled?" -- which is exactly what it meant.
+        // The world, not the action. "cancelled" was tried here and is worse than what it
+        // replaced: the banner already opens with `Rejected`, so the second word repeated the
+        // action and left the one fact the player cannot see -- which world -- unsaid. Reported
+        // live 2026-09-09 as unreadable, from a session where it fired eight times.
         //
         // A wrong block is routinely the same place in another player's world, so no wording built
         // on geography can be both short and unconfusing here; "another world" and "not this one"
         // were each tried and each needed explaining. The other reasons below stay distinct
         // because they lead to different actions -- move, un-exclude, open the map -- while these
         // two lead to the same one: keep hunting.
-        RejectReason::WrongBlock | RejectReason::WrongPlaceName => "cancelled",
+        RejectReason::WrongBlock | RejectReason::WrongPlaceName => "another world",
         RejectReason::NotNamed => "not on your list",
         // Actionable in a way the others are not: the map has not been opened, so no destination
         // has a name and everything fails closed. Saying "unnamed" would read as the game's fault.
@@ -107,6 +137,7 @@ impl RejectNotice {
         block: u32,
         reason: RejectReason,
         place: Option<&str>,
+        host: Option<&str>,
     ) -> Option<String> {
         let repeat = self.last_announced == Some(Announced::Rejected(block, reason));
         self.last_announced = Some(Announced::Rejected(block, reason));
@@ -142,6 +173,7 @@ impl RejectNotice {
                 );
             }
         }
+        append_host(&mut text, host);
         Some(text)
     }
 
@@ -160,6 +192,7 @@ impl RejectNotice {
         enabled: bool,
         block: u32,
         place: Option<&str>,
+        host: Option<&str>,
     ) -> Option<String> {
         let repeat = self.last_announced == Some(Announced::Succeeded(block));
         self.last_announced = Some(Announced::Succeeded(block));
@@ -181,6 +214,7 @@ impl RejectNotice {
                 let _ = write!(text, "Invasion successful: {}", BlockKey::from_raw(block));
             }
         }
+        append_host(&mut text, host);
         Some(text)
     }
 
@@ -198,6 +232,7 @@ impl RejectNotice {
         enabled: bool,
         block: u32,
         place: Option<&str>,
+        host: Option<&str>,
     ) -> Option<String> {
         let repeat = self.last_announced == Some(Announced::Arrived(block));
         self.last_announced = Some(Announced::Arrived(block));
@@ -214,6 +249,7 @@ impl RejectNotice {
                 let _ = write!(text, "Invading {}", BlockKey::from_raw(block));
             }
         }
+        append_host(&mut text, host);
         Some(text)
     }
 
@@ -238,6 +274,75 @@ mod tests {
     use super::*;
 
     const LIMGRAVE: u32 = 0x3c2a_2400; // m60_42_36_00
+
+    /// The host is an addition to the line, never a replacement for the place.
+    ///
+    /// The place is the only thing the player cannot get from anywhere else; a persona name is a
+    /// courtesy. So the assertion is on both halves being present and in that order, not on the
+    /// whole string, which is what would break the next time the wording moves.
+    #[test]
+    fn a_known_host_is_named_after_the_place_on_all_three_lines() {
+        for text in [
+            RejectNotice::default()
+                .observe(
+                    true,
+                    LIMGRAVE,
+                    RejectReason::WrongPlaceName,
+                    Some("Limgrave"),
+                    Some("energygod18"),
+                )
+                .expect("a first rejection speaks"),
+            RejectNotice::default()
+                .observe_success(true, LIMGRAVE, Some("Limgrave"), Some("energygod18"))
+                .expect("a first success speaks"),
+            RejectNotice::default()
+                .observe_arrival(true, LIMGRAVE, Some("Limgrave"), Some("energygod18"))
+                .expect("a first arrival speaks"),
+        ] {
+            let place = text.find("Limgrave").expect("the place survives: {text}");
+            let host = text.find("energygod18").expect("the host is named: {text}");
+            assert!(place < host, "place first, host second: {text}");
+        }
+    }
+
+    /// An unknown host leaves the line byte-identical to what it was before hosts were reachable.
+    #[test]
+    fn an_unknown_host_changes_nothing() {
+        assert_eq!(
+            RejectNotice::default().observe_arrival(true, LIMGRAVE, Some("Limgrave"), None),
+            Some("Invading Limgrave".to_owned())
+        );
+        assert_eq!(
+            RejectNotice::default().observe_arrival(true, LIMGRAVE, Some("Limgrave"), Some("  ")),
+            Some("Invading Limgrave".to_owned()),
+            "a blank name is not a name"
+        );
+    }
+
+    /// A maximal persona name must not push the place off a surface that truncates rather than
+    /// wraps.
+    #[test]
+    fn a_long_host_name_is_cut_and_the_place_survives() {
+        let text = RejectNotice::default()
+            .observe_arrival(
+                true,
+                LIMGRAVE,
+                Some("Limgrave"),
+                Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            )
+            .expect("a first arrival speaks");
+        assert!(text.starts_with("Invading Limgrave -- "), "{text}");
+        assert!(text.ends_with('\u{2026}'), "the cut is visible: {text}");
+        let name = text
+            .split_once(" -- ")
+            .expect("the separator is there: {text}")
+            .1;
+        assert_eq!(
+            name.chars().filter(|c| *c == 'a').count(),
+            HOST_NAME_MAX_CHARS,
+            "{text}"
+        );
+    }
     const ELSEWHERE: u32 = 0x1501_0000; // m21_01_00_00
 
     /// A different block is routinely the same place in another player's world, and the banner has
@@ -246,10 +351,12 @@ mod tests {
     /// then calling it somewhere else.
     #[test]
     fn a_wrong_block_is_reported_as_another_world_not_as_elsewhere() {
-        // Both say what the mod did. That is the half the player asked for out loud, and the half
-        // no amount of geography was supplying.
+        // The name of this test is the contract, and for a while the assertion under it read
+        // "cancelled" while the name promised "another world" -- a test that could never fail and
+        // never tell the truth. The banner already opens with `Rejected`, so a second word for the
+        // same action says nothing; the fact the player cannot see is which world it was.
         for reason in [RejectReason::WrongBlock, RejectReason::WrongPlaceName] {
-            assert_eq!(reason_phrase(reason), "cancelled");
+            assert_eq!(reason_phrase(reason), "another world");
         }
         // The reasons that lead somewhere else must stay distinguishable, or this has traded one
         // confusion for a worse one: these three each ask the player to do a different thing.
@@ -268,7 +375,7 @@ mod tests {
     fn the_first_rejection_at_a_place_is_announced() {
         let mut notice = RejectNotice::new();
         let text = notice
-            .observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None)
+            .observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None, None)
             .expect("announced");
         assert!(text.contains("m60_42_36_00"), "names the place: {text}");
         assert!(text.starts_with("Rejected"), "says what happened: {text}");
@@ -283,6 +390,7 @@ mod tests {
                 LIMGRAVE,
                 RejectReason::WrongPlaceName,
                 Some("Limgrave"),
+                None,
             )
             .expect("announced");
         assert!(text.contains("Limgrave"), "names the area: {text}");
@@ -292,7 +400,7 @@ mod tests {
              and the id is the part a player cannot read: {text}"
         );
         assert!(
-            text.contains("cancelled"),
+            text.contains("another world"),
             "still says what happened: {text}"
         );
     }
@@ -304,7 +412,13 @@ mod tests {
         // unfriendly one, so the id stays as the fallback rather than being dropped.
         let mut notice = RejectNotice::new();
         let text = notice
-            .observe(true, LIMGRAVE, RejectReason::NothingToMatchAgainst, None)
+            .observe(
+                true,
+                LIMGRAVE,
+                RejectReason::NothingToMatchAgainst,
+                None,
+                None,
+            )
             .expect("announced");
         assert!(text.contains("m60_42_36_00"), "{text}");
         assert!(text.contains("open your map"), "{text}");
@@ -316,7 +430,7 @@ mod tests {
         // reads as a bug in the mod rather than as a rejection.
         let mut notice = RejectNotice::new();
         let text = notice
-            .observe(true, LIMGRAVE, RejectReason::WrongPlaceName, Some(""))
+            .observe(true, LIMGRAVE, RejectReason::WrongPlaceName, Some(""), None)
             .expect("announced");
         assert!(text.contains("m60_42_36_00"), "{text}");
     }
@@ -328,12 +442,12 @@ mod tests {
         let mut notice = RejectNotice::new();
         assert!(
             notice
-                .observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None)
+                .observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None, None)
                 .is_some()
         );
         for _ in 0..20 {
             assert_eq!(
-                notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None),
+                notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None, None),
                 None
             );
         }
@@ -343,9 +457,9 @@ mod tests {
     #[test]
     fn a_different_place_is_new_information_and_is_announced() {
         let mut notice = RejectNotice::new();
-        notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None);
+        notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None, None);
         let text = notice
-            .observe(true, ELSEWHERE, RejectReason::WrongPlaceName, None)
+            .observe(true, ELSEWHERE, RejectReason::WrongPlaceName, None, None)
             .expect("announced");
         assert!(text.contains("m21_01_00_00"), "{text}");
         assert_eq!(
@@ -360,11 +474,11 @@ mod tests {
     #[test]
     fn returning_to_an_earlier_place_announces_again() {
         let mut notice = RejectNotice::new();
-        notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None);
-        notice.observe(true, ELSEWHERE, RejectReason::WrongPlaceName, None);
+        notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None, None);
+        notice.observe(true, ELSEWHERE, RejectReason::WrongPlaceName, None, None);
         assert!(
             notice
-                .observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None)
+                .observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None, None)
                 .is_some()
         );
     }
@@ -375,18 +489,18 @@ mod tests {
     fn disabled_stays_silent_but_still_tracks_where_we_are() {
         let mut notice = RejectNotice::new();
         assert_eq!(
-            notice.observe(false, LIMGRAVE, RejectReason::WrongPlaceName, None),
+            notice.observe(false, LIMGRAVE, RejectReason::WrongPlaceName, None, None),
             None
         );
         // Same place, now enabled: still silent, because we already know we are being sent there.
         assert_eq!(
-            notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None),
+            notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None, None),
             None
         );
         // Somewhere new, though, is genuinely new.
         assert!(
             notice
-                .observe(true, ELSEWHERE, RejectReason::WrongPlaceName, None)
+                .observe(true, ELSEWHERE, RejectReason::WrongPlaceName, None, None)
                 .is_some()
         );
     }
@@ -395,15 +509,15 @@ mod tests {
     #[test]
     fn a_reset_makes_the_next_rejection_speak_up() {
         let mut notice = RejectNotice::new();
-        notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None);
+        notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None, None);
         assert_eq!(
-            notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None),
+            notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None, None),
             None
         );
         notice.reset();
         assert!(
             notice
-                .observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None)
+                .observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None, None)
                 .is_some()
         );
         assert_eq!(notice.suppressed(), 0);
@@ -425,7 +539,7 @@ mod tests {
         ] {
             let mut notice = RejectNotice::new();
             let text = notice
-                .observe(true, LIMGRAVE, reason, None)
+                .observe(true, LIMGRAVE, reason, None, None)
                 .expect("announced");
             assert!(
                 text.chars().count() <= 40,
@@ -445,12 +559,12 @@ mod tests {
     fn the_message_names_why_not_just_where() {
         let mut notice = RejectNotice::new();
         let excluded = notice
-            .observe(true, LIMGRAVE, RejectReason::ExcludedByUser, None)
+            .observe(true, LIMGRAVE, RejectReason::ExcludedByUser, None, None)
             .expect("announced");
         assert!(excluded.contains("excluded"), "{excluded}");
         let mut notice = RejectNotice::new();
         let elsewhere = notice
-            .observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None)
+            .observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None, None)
             .expect("announced");
         assert_ne!(
             excluded, elsewhere,
@@ -465,12 +579,12 @@ mod tests {
         let mut notice = RejectNotice::new();
         assert!(
             notice
-                .observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None)
+                .observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None, None)
                 .is_some()
         );
         assert!(
             notice
-                .observe(true, LIMGRAVE, RejectReason::ExcludedByUser, None)
+                .observe(true, LIMGRAVE, RejectReason::ExcludedByUser, None, None)
                 .is_some()
         );
     }
@@ -479,7 +593,7 @@ mod tests {
     fn a_success_is_announced_with_the_place_name() {
         let mut notice = RejectNotice::new();
         let text = notice
-            .observe_success(true, LIMGRAVE, Some("Limgrave"))
+            .observe_success(true, LIMGRAVE, Some("Limgrave"), None)
             .expect("announced");
         assert!(
             text.starts_with("Invasion successful"),
@@ -492,11 +606,11 @@ mod tests {
     fn a_success_falls_back_to_the_block_id_like_a_rejection_does() {
         let mut notice = RejectNotice::new();
         let text = notice
-            .observe_success(true, LIMGRAVE, None)
+            .observe_success(true, LIMGRAVE, None, None)
             .expect("announced");
         assert!(text.contains("m60_42_36_00"), "{text}");
         let empty = RejectNotice::new()
-            .observe_success(true, LIMGRAVE, Some(""))
+            .observe_success(true, LIMGRAVE, Some(""), None)
             .expect("announced");
         assert!(
             empty.contains("m60_42_36_00"),
@@ -511,13 +625,17 @@ mod tests {
         let mut notice = RejectNotice::new();
         assert!(
             notice
-                .observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None)
+                .observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None, None)
                 .is_some()
         );
-        assert!(notice.observe_success(true, ELSEWHERE, None).is_some());
         assert!(
             notice
-                .observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None)
+                .observe_success(true, ELSEWHERE, None, None)
+                .is_some()
+        );
+        assert!(
+            notice
+                .observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None, None)
                 .is_some(),
             "a rejection after a success is new information, not a repeat"
         );
@@ -527,11 +645,11 @@ mod tests {
     fn a_success_after_rejections_is_always_announced() {
         let mut notice = RejectNotice::new();
         for _ in 0..5 {
-            notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None);
+            notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None, None);
         }
         assert!(
             notice
-                .observe_success(true, LIMGRAVE, Some("Limgrave"))
+                .observe_success(true, LIMGRAVE, Some("Limgrave"), None)
                 .is_some(),
             "arriving where you were previously rejected is the whole point of the hunt"
         );
@@ -540,9 +658,9 @@ mod tests {
     #[test]
     fn the_same_success_twice_stays_quiet() {
         let mut notice = RejectNotice::new();
-        assert!(notice.observe_success(true, LIMGRAVE, None).is_some());
+        assert!(notice.observe_success(true, LIMGRAVE, None, None).is_some());
         assert!(
-            notice.observe_success(true, LIMGRAVE, None).is_none(),
+            notice.observe_success(true, LIMGRAVE, None, None).is_none(),
             "one arrival, one banner"
         );
     }
@@ -550,10 +668,10 @@ mod tests {
     #[test]
     fn a_success_clears_the_suppressed_run_it_ended() {
         let mut notice = RejectNotice::new();
-        notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None);
-        notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None);
+        notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None, None);
+        notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None, None);
         assert_eq!(notice.suppressed(), 1);
-        notice.observe_success(true, LIMGRAVE, None);
+        notice.observe_success(true, LIMGRAVE, None, None);
         assert_eq!(notice.suppressed(), 0, "the run of rejections is over");
     }
 
@@ -561,9 +679,13 @@ mod tests {
     fn a_disabled_notice_still_advances_on_success() {
         // Turning the option on mid-session must not replay an arrival from minutes ago.
         let mut notice = RejectNotice::new();
-        assert!(notice.observe_success(false, LIMGRAVE, None).is_none());
         assert!(
-            notice.observe_success(true, LIMGRAVE, None).is_none(),
+            notice
+                .observe_success(false, LIMGRAVE, None, None)
+                .is_none()
+        );
+        assert!(
+            notice.observe_success(true, LIMGRAVE, None, None).is_none(),
             "the state advanced while silent, so this is still the same arrival"
         );
     }
@@ -572,7 +694,7 @@ mod tests {
     fn an_arrival_is_announced_when_the_filter_is_switched_off() {
         let mut notice = RejectNotice::new();
         let text = notice
-            .observe_arrival(true, LIMGRAVE, Some("Limgrave"))
+            .observe_arrival(true, LIMGRAVE, Some("Limgrave"), None)
             .expect("announced");
         assert!(text.contains("Limgrave"), "names the place: {text}");
         assert!(
@@ -585,7 +707,7 @@ mod tests {
     fn an_arrival_falls_back_to_the_block_id_like_the_others() {
         let mut notice = RejectNotice::new();
         let text = notice
-            .observe_arrival(true, LIMGRAVE, None)
+            .observe_arrival(true, LIMGRAVE, None, None)
             .expect("announced");
         assert!(text.contains("m60_42_36_00"), "{text}");
     }
@@ -593,24 +715,28 @@ mod tests {
     #[test]
     fn the_same_arrival_twice_stays_quiet_but_a_new_one_speaks() {
         let mut notice = RejectNotice::new();
-        assert!(notice.observe_arrival(true, LIMGRAVE, None).is_some());
-        assert!(notice.observe_arrival(true, LIMGRAVE, None).is_none());
-        assert!(notice.observe_arrival(true, ELSEWHERE, None).is_some());
+        assert!(notice.observe_arrival(true, LIMGRAVE, None, None).is_some());
+        assert!(notice.observe_arrival(true, LIMGRAVE, None, None).is_none());
+        assert!(
+            notice
+                .observe_arrival(true, ELSEWHERE, None, None)
+                .is_some()
+        );
     }
 
     #[test]
     fn an_arrival_and_a_verdict_do_not_suppress_each_other() {
         // The three kinds share one latch, so each must count as news after either other kind.
         let mut notice = RejectNotice::new();
-        assert!(notice.observe_arrival(true, LIMGRAVE, None).is_some());
+        assert!(notice.observe_arrival(true, LIMGRAVE, None, None).is_some());
         assert!(
             notice
-                .observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None)
+                .observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None, None)
                 .is_some(),
             "a rejection after an arrival at the same block is a different statement"
         );
         assert!(
-            notice.observe_success(true, LIMGRAVE, None).is_some(),
+            notice.observe_success(true, LIMGRAVE, None, None).is_some(),
             "and so is an arrival that became a real invasion"
         );
     }
@@ -618,9 +744,13 @@ mod tests {
     #[test]
     fn a_disabled_notice_still_advances_on_arrival() {
         let mut notice = RejectNotice::new();
-        assert!(notice.observe_arrival(false, LIMGRAVE, None).is_none());
         assert!(
-            notice.observe_arrival(true, LIMGRAVE, None).is_none(),
+            notice
+                .observe_arrival(false, LIMGRAVE, None, None)
+                .is_none()
+        );
+        assert!(
+            notice.observe_arrival(true, LIMGRAVE, None, None).is_none(),
             "turning the notice on must not replay an arrival from minutes ago"
         );
     }
