@@ -1463,6 +1463,7 @@ def main() -> int:
             "probe",
             "equip",
             "inv",
+            "buildimport",
         ),
         help=(
             "arm er-input-harness to drive the MENU with real key events instead of standing down. "
@@ -1473,7 +1474,11 @@ def main() -> int:
             "log. Use it whenever a run has to reproduce something through the menu: a switch armed by "
             "a load armed without the menu proves nothing about a menu bug -- and since 2026-09-05 "
             "there is no such arm left, so loads 2..N happen HERE or not at all. `menureload` "
-            "drives one; `menuchain` drives three, which is what a load-3 defect needs."
+            "drives one; `menuchain` drives three, which is what a load-3 defect needs. "
+            "`buildimport` presses the third cloned row -- Load Build from URL -- and then holds "
+            "until the carried inventory's acquisition counter stops moving, which is the import "
+            "having finished; it needs a `build_url` in the game-directory er-quickload.toml, "
+            "because the row reads the link from there and does nothing without one."
         ),
     )
     parser.add_argument(
