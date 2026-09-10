@@ -2438,6 +2438,9 @@ pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
     TICKS.fetch_add(1, Ordering::SeqCst);
     install_join_hook();
     install_join_session_hook();
+    // One line, once, saying whether a host can be named at all. See its own docs for why it asks
+    // about the local player rather than about a host.
+    crate::lobby_publish::report_persona_plumbing_once();
     // The two detours this DLL places inside `ersc.dll`, both withheld by one key. Read once per
     // tick rather than cached at attach, because the config is re-read when a match arrives and a
     // player mid-A/B should not have to restart the game to move the switch.
