@@ -25,9 +25,11 @@
 //! the storage box was at `1920 of 1920` entries, so 68 pieces of gear were refused for no reason
 //! to do with the gear at all, and a Frenzied Flame Seal and three shields stayed in the pockets.
 //!
-//! So, by user directive the same day: when the box will not take an entry **and** the box
-//! already holds [`REDUNDANT_COPIES`] or more of the same item, the carried copy is destroyed
-//! instead. Same item means same item *by name* -- [`shelf_identity`] strips the affinity and the
+//! So, by user directive the same day: when the box will not take an entry **and** the character
+//! would still own [`REDUNDANT_COPIES`] or more of the same item without it, the carried copy is
+//! destroyed instead. That count is the shelf's holding kept live as this pass deposits into it,
+//! plus the copies this pass keeps in the inventory -- see [`is_redundant`] for the two measured
+//! cases that each half exists for. Same item means same item *by name* -- [`shelf_identity`] strips the affinity and the
 //! upgrade level off an armament id, so an Occult Longsword +25 counts against two plain
 //! Longswords on the shelf.
 //!
@@ -96,6 +98,22 @@ const EMPTY_SLOT_PLACEHOLDERS: [u32; 5] = [
 /// box has no room for is redundant, and carrying it defeats the whole point of the sweep. One
 /// would be too thin -- an item held once is the only one there is.
 const REDUNDANT_COPIES: i64 = 2;
+
+/// Whether a copy the box will not take can be destroyed, given how many the character keeps.
+///
+/// `owned_elsewhere` is the shelf's holding plus what this pass keeps in the inventory, because
+/// the question is what the character still owns once this copy is gone -- and a copy on the
+/// character counts exactly as much as one on the shelf. Both halves were learned from a single
+/// measurement on 2026-09-10, and each spared an item the player wanted gone:
+///
+/// * the shelf count was a snapshot taken before the pass, so a character carrying two Spiralhorn
+///   Shields deposited the first into the last free slot and then spared the second against a
+///   count of one, while the box already held two;
+/// * a Serpent Crest Shield in Magic that the build kept sat beside its Standard twin with one on
+///   the shelf, and the twin survived on a count of one rather than the two it really came to.
+fn is_redundant(owned_elsewhere: i64) -> bool {
+    owned_elsewhere >= REDUNDANT_COPIES
+}
 
 /// Whether an item id is an armament, which is the only category with an ash of war on it.
 fn is_armament(item_id: u32) -> bool {
@@ -330,7 +348,7 @@ pub struct EvictOutcome {
     /// Names of the kept entries, capped like the rest.
     pub kept_names: Vec<String>,
     /// `(item, why)` for gear the box would not take, sampled per category for the log.
-    pub refused: Vec<(String, &'static str)>,
+    pub refused: Vec<(String, String)>,
     /// How many were refused in total, which is not the same as `refused.len()`.
     ///
     /// The list is capped so a character with a full box does not write a thousand lines, and
@@ -349,6 +367,12 @@ pub struct EvictOutcome {
     pub refused_kind: usize,
     /// Refused because the box itself had no free entry left, which is not about the item at all.
     pub refused_box_no_room: usize,
+    /// Judged redundant, and the destroy did nothing anyway.
+    ///
+    /// Always zero in a healthy run. A number here means the discard was asked to destroy an item
+    /// the inventory does not hold under that id, which is how a copy survives while every count
+    /// says it should not.
+    pub destroy_failed: usize,
     /// Entries destroyed because the box would not take them and the shelf already had a pair.
     pub discarded_entries: usize,
     /// How many items that came to.
@@ -391,8 +415,15 @@ impl EvictOutcome {
                         format!(". The storage box holds {used} of {capacity} entries"),
                     None => String::new(),
                 },
-                if self.discarded_entries == 0 {
+                if self.discarded_entries == 0 && self.destroy_failed == 0 {
                     String::new()
+                } else if self.destroy_failed > 0 {
+                    format!(
+                        ". {} entr(ies) ({} item(s)) were DESTROYED instead; {} more were judged \
+                         redundant and the destroy did nothing at all, which should never happen \
+                         and is named one by one above",
+                        self.discarded_entries, self.discarded_items, self.destroy_failed
+                    )
                 } else {
                     format!(
                         ". {} entr(ies) ({} item(s)) were DESTROYED instead, because the box \
@@ -475,7 +506,13 @@ pub unsafe fn unlisted_gear(module_base: usize, egd: usize, keep: &mut Keep) -> 
     // toward keeping an item rather than destroying one, the right direction for the only thing
     // in this pass that cannot be undone.
     // Safety: game thread, read only.
-    let shelf = shelf_counts(unsafe { storage.box_entries() });
+    let mut shelf = shelf_counts(unsafe { storage.box_entries() });
+    // What this pass keeps in the inventory, per item. It counts toward the same total as the
+    // shelf: the question the threshold asks is how many of this item the character still owns
+    // once the surplus copy is gone, and a copy kept on the character is owned exactly as much
+    // as one on the shelf. Measured 2026-09-10: a Serpent Crest Shield the build kept in Magic
+    // sat beside its Standard twin, the box held one, and the twin survived on a count of 1.
+    let mut kept_here: BTreeMap<u32, i64> = BTreeMap::new();
 
     // Resolved once. Absent only before the params stream in, which cannot be the case here --
     // the pass runs on a character in the world -- so the hex fallback is a belt, not a plan.
@@ -501,6 +538,7 @@ pub unsafe fn unlisted_gear(module_base: usize, egd: usize, keep: &mut Keep) -> 
         let allowed = keep.take(item_id);
         if minted || allowed {
             outcome.kept += 1;
+            *kept_here.entry(shelf_identity(item_id)).or_default() += i64::from(quantity.max(1));
             if outcome.kept_names.len() < KEPT_NAMED {
                 // Safety: game thread, `msg` live.
                 outcome
@@ -544,6 +582,12 @@ pub unsafe fn unlisted_gear(module_base: usize, egd: usize, keep: &mut Keep) -> 
         if moved > 0 {
             outcome.deposited_entries += 1;
             outcome.deposited_items += moved;
+            // The shelf now holds one more, and the next copy of this item has to be judged
+            // against that rather than against the count taken before the pass began. Measured
+            // 2026-09-10: a character carrying two Spiralhorn Shields deposited the first into
+            // the last free slot and then spared the second on a stale count of one, while the
+            // box it was being compared against already held two.
+            *shelf.entry(shelf_identity(item_id)).or_default() += i64::from(moved);
             continue;
         }
         // Safety: a bounded read of 22 ints inside a live `EquipGameData`.
@@ -574,18 +618,36 @@ pub unsafe fn unlisted_gear(module_base: usize, egd: usize, keep: &mut Keep) -> 
         // item -- this copy is redundant and is destroyed instead of being carried around
         // forever. See the module header for why the threshold is two and why the ash comes off
         // first.
-        if why.is_the_box_being_full()
-            && shelf.get(&shelf_identity(item_id)).copied().unwrap_or(0) >= REDUNDANT_COPIES
-            && storage.can_discard()
-        {
+        let identity = shelf_identity(item_id);
+        let owned_elsewhere = shelf.get(&identity).copied().unwrap_or(0)
+            + kept_here.get(&identity).copied().unwrap_or(0);
+        let mut destroy_failed_here = false;
+        if why.is_the_box_being_full() && is_redundant(owned_elsewhere) && storage.can_discard() {
             // The ash first, and on the index `discard` will actually take -- `carried_index`
             // names the lowest copy of the id and both calls ask it the same question, so they
             // agree about which copy is being destroyed.
             // Safety: game thread, player in the world, `index` a live carried entry.
             let ash_recovered = is_armament(item_id) && unsafe { storage.strip_ash(index) };
+            // The id again, because the strip may have changed it. Taking an ash off resets the
+            // armament's affinity and the affinity is part of the item id, so a Magic Spiralhorn
+            // Shield comes back as the Standard one -- and `discard`, which resolves by id, then
+            // looks up a row the inventory no longer holds, destroys nothing and reports nothing.
+            // Measured 2026-09-10: `NOT EVICTED Spiralhorn Shield (0x01CCACE9)` in the log, with
+            // `0x01CCA9C9` sitting in the inventory afterwards. The index survives the strip; the
+            // id does not.
+            // Safety: game thread, read only.
+            let doomed = unsafe { storage.carried_item_id_at(index) }.unwrap_or(item_id);
             // Safety: game thread; `discard` re-resolves the index immediately before the
             // destructive call and refuses when the pair has no mapping for this build.
-            let destroyed = unsafe { storage.discard(item_id, quantity) }.max(0) as u32;
+            let destroyed = unsafe { storage.discard(doomed, quantity) }.max(0) as u32;
+            if destroyed == 0 {
+                // Judged redundant, and nothing happened. That is a different failure from the
+                // box being full and it must not print as one: it read as an ordinary box-full
+                // refusal for a whole round trip while the real cause was `strip_ash` changing
+                // the item id out from under `discard`.
+                outcome.destroy_failed += 1;
+                destroy_failed_here = true;
+            }
             if destroyed > 0 {
                 outcome.discarded_entries += 1;
                 outcome.discarded_items += destroyed;
@@ -612,7 +674,27 @@ pub unsafe fn unlisted_gear(module_base: usize, egd: usize, keep: &mut Keep) -> 
             refused_shown[category] += 1;
             // Safety: game thread, `msg` live.
             let label = unsafe { label_for(msg, module_base, item_id) };
-            outcome.refused.push((label, why.explain()));
+            // How many the shelf holds, spelled out. A refusal that says only "the box is full"
+            // does not say whether the copy was spared by the threshold or was never eligible,
+            // and those are the two different things a reader has to tell apart before deciding
+            // whether the threshold is the thing to change.
+            let held = owned_elsewhere;
+            let why = match why {
+                _ if destroy_failed_here => format!(
+                    "it was judged redundant ({held} owned elsewhere) and the destroy did \
+                     nothing -- the inventory holds no entry under that item id"
+                ),
+                Refusal::BoxHasNoRoom | Refusal::StackAtMaximum if held < REDUNDANT_COPIES => {
+                    format!(
+                        "{}, and the character would still own only {held} of this item -- \
+                         fewer than the {REDUNDANT_COPIES} needed before a copy is destroyed \
+                         instead",
+                        why.explain()
+                    )
+                }
+                why => why.explain().to_owned(),
+            };
+            outcome.refused.push((label, why));
         }
     }
 
@@ -656,6 +738,7 @@ mod tests {
             discarded_items: 0,
             ashes_recovered: 0,
             discarded: Vec::new(),
+            destroy_failed: 0,
             kept: 4,
             kept_names: Vec::new(),
             refused: Vec::new(),
@@ -793,6 +876,20 @@ mod tests {
         assert_eq!(counts.get(&1_070_000), Some(&2));
         assert_eq!(counts.get(&0x1001_86A0), Some(&1));
         assert_eq!(counts.get(&0x0300_20A0), Some(&30));
+    }
+
+    /// The threshold counts everything the character still owns, not just the shelf.
+    #[test]
+    fn a_copy_is_redundant_only_when_two_survive_it() {
+        // The Spiralhorn case: one on the shelf at the start of the pass, one deposited into the
+        // last free slot during it. The live count is two and the third copy goes.
+        assert!(is_redundant(1 + 1));
+        // The Serpent Crest case: one on the shelf, one kept on the character because the build
+        // names it. Also two.
+        assert!(is_redundant(2));
+        // One anywhere is not a spare, and neither is none.
+        assert!(!is_redundant(1));
+        assert!(!is_redundant(0));
     }
 
     /// Only a box that is out of space justifies destroying a copy.

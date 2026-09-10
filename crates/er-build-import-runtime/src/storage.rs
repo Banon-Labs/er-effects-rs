@@ -624,6 +624,27 @@ impl Storage {
         out
     }
 
+    /// The item id filed at one carried index, or `None` when nothing is there.
+    ///
+    /// Needed because an item id is not stable across [`Storage::strip_ash`]: taking the ash off
+    /// an infused armament resets its affinity, and the affinity is part of the id. An index
+    /// survives that; the id does not.
+    ///
+    /// # Safety
+    ///
+    /// Game thread.
+    pub unsafe fn carried_item_id_at(&self, index: i32) -> Option<u32> {
+        let slot = u32::try_from(index).ok()?;
+        // Safety: engine-owned inventory and an index it bounds-checks; null means no entry.
+        let entry = unsafe { (self.get_entry)(self.carried, slot) };
+        if entry == 0 {
+            return None;
+        }
+        // Safety: a fault-checked read at a confirmed offset in a live 24-byte entry.
+        let item_id = unsafe { er_game_base::mem::safe_read_i32(entry + 4) }?;
+        (item_id != -1).then_some(item_id as u32)
+    }
+
     /// Take the Ash of War off the carried entry at `index`, so destroying it does not destroy the
     /// ash with it.
     ///
@@ -663,13 +684,24 @@ impl Storage {
         if handle == 0 {
             return false;
         }
+        // Measured by what the entry becomes, not by the inventory growing. The returned gem can
+        // merge into a stack the player already owns, so an entry count that does not rise proves
+        // nothing -- it read `0 Ash(es) of War` on a run that demonstrably stripped one. The
+        // armament's own id is the direct observation: `FUN_140249310` resets the affinity as
+        // part of the removal, and the affinity is part of the id, so a Magic armament comes back
+        // as the Standard one.
         // Safety: game thread, read only.
-        let before = unsafe { self.carried_entry_count() };
+        let before_id = unsafe { self.carried_item_id_at(index) };
+        // Safety: game thread, read only.
+        let before_count = unsafe { self.carried_entry_count() };
         // Safety: game thread, `egd` live, and the handle outlives the call. The native returns
         // immediately when the weapon has no gem, so this is safe to call unconditionally.
         unsafe { remove_gem(self.egd, &raw mut handle) };
         // Safety: game thread, read only.
-        (unsafe { self.carried_entry_count() }) > before
+        let after_id = unsafe { self.carried_item_id_at(index) };
+        // Safety: game thread, read only.
+        let after_count = unsafe { self.carried_entry_count() };
+        before_id != after_id || after_count > before_count
     }
 
     /// Take up to `wanted` of `item_id` out of the box. Returns how many actually arrived,
