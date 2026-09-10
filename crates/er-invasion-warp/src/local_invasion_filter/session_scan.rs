@@ -295,12 +295,41 @@ pub(super) fn cached_scan_for_session(
 /// The differential scan answers "this object moved out of idle when the player invaded", which is
 /// causal rather than descriptive, so its answer wins outright and stops the sweeper spending
 /// further passes.
+///
+/// # It does not stop the sweeper any more
+///
+/// It used to: `CACHED_OWNER` to 0 and `SWEEP_BUDGET` to 0 on the next two lines, which settled
+/// the session and abandoned the owner in the same breath. An owner of 0 is what
+/// `ersc_owner_or_refuse` declines every cancel on, so proving the session by change ended with
+/// the filter still unable to drive ERSC -- measured on run br-20260910-171939-d923, which
+/// adopted `0x868728b8` six times and never once looked for what holds it.
+///
+/// A proven session makes that search EASIER, not unnecessary. [`owner_among`] asks which of a
+/// candidate set some other object holds at `+ NEXT_OBJECT_OFFSET`, and its weakness is a wide
+/// set: 13,221 of 13,223 idle-shaped objects had a holder on run br-20260909-211819-87a5, so the
+/// test says nothing when asked of everything. Asked of ONE proven address it has no such
+/// weakness -- the answer is a holder or nothing.
 #[cfg(windows)]
 pub(super) fn adopt_proven_session(session: usize) {
     CACHED_SESSION.store(session, Ordering::SeqCst);
     CACHED_OWNER.store(0, Ordering::SeqCst);
-    SWEEP_BUDGET.store(0, Ordering::SeqCst);
+    // Hand the search to the sweeper rather than running it here: `adopt_proven_session` is
+    // called from the game thread as a join starts, and `owner_among` is a walk of every
+    // committed private region.
+    PROVEN_SESSION_WANTING_OWNER.store(session, Ordering::SeqCst);
+    SWEEP_BUDGET.store(SESSION_SCAN_MAX_SWEEPS, Ordering::SeqCst);
+    raise_sweep_request();
 }
+
+/// A session proved by change whose holder has not been found yet, or 0.
+///
+/// Written by [`adopt_proven_session`] on the game thread, read and cleared by the sweeper.
+#[cfg(windows)]
+static PROVEN_SESSION_WANTING_OWNER: AtomicUsize = AtomicUsize::new(0);
+
+/// Said-once latch for the miss above, so a pending owner costs one line rather than one a pass.
+#[cfg(windows)]
+static PROVEN_OWNER_MISS_SAID: AtomicBool = AtomicBool::new(false);
 
 /// # The differential snapshot is deliberately not cleared here
 ///
@@ -761,6 +790,42 @@ fn sweep_until_answered(base: usize, abi: &'static ersc::Abi) {
         // newer than what the wait below is comparing against and ends that wait immediately.
         seen = sweep_requests_raised();
         SWEEP_BUDGET.fetch_sub(1, Ordering::SeqCst);
+        // A session proved by change is the narrowest question this thread can be asked, so it
+        // is asked first. `owner_among` over one address either names the holder or says nothing;
+        // there is no wide-set ambiguity to weigh, and until it answers the filter can judge a
+        // rejection but not cancel it.
+        let proven = PROVEN_SESSION_WANTING_OWNER.load(Ordering::SeqCst);
+        if proven != 0 {
+            match owner_among(&[proven]) {
+                Some((session, owner)) => {
+                    crate::standalone_log(format_args!(
+                        "local-invasion: owner {owner:#x} found for the change-proven session \
+                         {session:#x} -- it is the object holding it at +{:#x}, which is the \
+                         `this` ERSC's own actions take. Cancel can be driven now.",
+                        ersc::NEXT_OBJECT_OFFSET
+                    ));
+                    CACHED_SLOT.store(0, Ordering::SeqCst);
+                    CACHED_OWNER.store(owner, Ordering::SeqCst);
+                    CACHED_SESSION.store(session, Ordering::SeqCst);
+                    PROVEN_SESSION_WANTING_OWNER.store(0, Ordering::SeqCst);
+                    SWEEP_BUDGET.store(0, Ordering::SeqCst);
+                    return;
+                }
+                // Nothing holds it yet, or the holder is in a region this pass could not read.
+                // The address stays pending: the budget above bounds how many passes it costs,
+                // and a session with no holder is the state this whole module exists to leave.
+                None => {
+                    if !PROVEN_OWNER_MISS_SAID.swap(true, Ordering::SeqCst) {
+                        crate::standalone_log(format_args!(
+                            "local-invasion: no object in committed private memory holds the \
+                             change-proven session {proven:#x} at +{:#x}. Retrying while passes \
+                             are owed; until one is found the filter judges but cannot cancel.",
+                            ersc::NEXT_OBJECT_OFFSET
+                        ));
+                    }
+                }
+            }
+        }
         // Record what reads idle right now, so the next invasion can disprove it. This has to
         // happen before the player invades, because the whole test is that the real session moves
         // out of idle at that moment and an impostor does not -- a set snapshotted after the fact

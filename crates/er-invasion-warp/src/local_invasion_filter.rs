@@ -311,6 +311,14 @@ static JOIN_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 /// Logged-once latch for a successful OSM resolve, so the log records the address the run used
 /// without repeating it every frame.
 static OSM_REPORTED: AtomicUsize = AtomicUsize::new(0);
+/// Logged-once latch for the menu-seam report, kept apart from [`OSM_REPORTED`] on purpose.
+///
+/// It shared that latch until run br-20260910-171939-d923, where the shape scan resolved the
+/// session with `owner 0x0`. That resolve is worth its one line, so it set the latch -- and the
+/// seam report, which needs an owner and had none, was then locked out for the rest of the run
+/// even after the sweeper found one. A latch that records "the address was logged" cannot also
+/// record "the seams were read": the second event can happen later than the first, or never.
+static MENU_SEAMS_REPORTED: AtomicUsize = AtomicUsize::new(0);
 
 /// Where the config lives: in the game directory, next to every other `er-*.toml`, so a user
 /// editing it does not have to hunt for it.
@@ -819,17 +827,14 @@ fn resolve_session() -> Result<SeamlessSession, NoSession> {
                  and logs but declines to drive cancel/invade, because passing 0 as their first \
                  argument dereferences null inside ersc.dll."
             ));
-            // The seam report used to be reachable only from the `show` detour, and that detour
-            // killed the game 29.5s into run `br-20260909-234159-0a54`. This owner passed the same
-            // tag-and-session test `capture_osm` applies to the detour's argument, so the report
-            // can run from here with nothing written into Seamless. What it is wanted for now is
-            // `OSM+0x88`: the seam Seamless calls to show its own notices, and the last hop
-            // between the static work on "Failed to invade session: No sessions found" and a hook
-            // that can refuse it.
-            #[cfg(windows)]
-            if owner != 0 {
-                menu_seams::report_menu_seams(owner);
-            }
+        }
+        // Reported outside the latch above, and gated on an owner rather than on a resolve. Every
+        // offset the report reads is OSM-relative, so a bare-shape answer -- session found, owner
+        // 0 -- has nothing for it to read, and the owner behind that session can arrive many
+        // seconds later from the sweeper.
+        #[cfg(windows)]
+        if owner != 0 && MENU_SEAMS_REPORTED.swap(1, Ordering::SeqCst) == 0 {
+            menu_seams::report_menu_seams(owner);
         }
         return Ok(SeamlessSession {
             osm: owner,
@@ -845,6 +850,12 @@ fn resolve_session() -> Result<SeamlessSession, NoSession> {
         crate::standalone_log(format_args!(
             "local-invasion: Seamless session resolved -- OSM=0x{osm:x} session=0x{session:x}"
         ));
+    }
+    // This half always has an owner -- `osm` is what a detour handed over -- so the only question
+    // is whether the scan half already answered it.
+    #[cfg(windows)]
+    if MENU_SEAMS_REPORTED.swap(1, Ordering::SeqCst) == 0 {
+        menu_seams::report_menu_seams(osm);
     }
     Ok(SeamlessSession { osm, session, abi })
 }
