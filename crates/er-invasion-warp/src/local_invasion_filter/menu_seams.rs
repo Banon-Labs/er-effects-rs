@@ -108,9 +108,14 @@ pub(super) fn report_menu_seams(osm: usize) {
     let repository =
         unsafe { er_game_base::mem::safe_read_usize(osm + ersc::MOD_MESSAGE_REPOSITORY_OFFSET) }
             .map_or_else(|| "<unreadable>".to_owned(), |value| format!("0x{value:x}"));
+    // The owner leads the line because run br-20260910-174502-9a38 printed every field
+    // `<unreadable>` and named no address, so the report said the pointer was bad without saying
+    // which pointer. A whole-line miss is itself the answer -- this object is not the OSM -- and
+    // that answer is only actionable with the address in it.
     crate::standalone_log(format_args!(
-        "local-invasion: menu seams -- {} | visible options: {visible} | message repository \
-         @+{:#x}={repository} | the notice to refuse is id {:#x} (YKNX3_BREAKINFAILED)",
+        "local-invasion: menu seams of 0x{osm:x} -- {} | visible options: {visible} | message \
+         repository @+{:#x}={repository} | the notice to refuse is id {:#x} \
+         (YKNX3_BREAKINFAILED)",
         parts.join(" "),
         ersc::MOD_MESSAGE_REPOSITORY_OFFSET,
         ersc::YKNX3_BREAKIN_FAILED_MESSAGE_ID,
