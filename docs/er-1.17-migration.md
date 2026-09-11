@@ -125,9 +125,16 @@ Measured over every `.pdata` entry of three regions, one address at a time
 | `0x87xxxx` | 67/278 (24.1%) | 271/278 (97.5%) | four anchor rows added; the region had none |
 | `0x92xxxx` | 37/501 (7.4%) | 355/501 (70.9%) | four anchor rows added; the region had none |
 | `0x9axxxx` | 24/342 (7.0%) | 265/342 (77.5%) | no new rows -- six were already there, unread |
+| `0x964000-0x969000` | 7/102 (6.9%) | 82/102 (80.4%) | 2026-09-10, one anchor `0x1409650a0 -> 0x140966240`; the region had none |
+| `0x999000-0x99e000` | 51/115 (44.3%) | 87/115 (75.7%) | 2026-09-10, one anchor `0x140999070 -> 0x14099a210`; the region had none of its own, only 0x9axxxx rows reaching in |
+
+The last two rows were added carrying the Quit-panel portrait pair, and the greedy search is why
+each is a single row: `--suggest` named one anchor per region that resolved 75 and 36 further
+entries respectively, and no second one resolved anything. Both are unique masked-signature matches
+needing no anchor themselves, and both agree at `+0x11a0` with the pair they were cut for.
 
 The residue is not short of anchors, and a greedy search over every address the matcher resolves
-alone confirms it: in all three regions, no further anchor resolves even one more entry. 227 of the
+alone confirms it: in the first three regions, no further anchor resolves even one more entry. 227 of the
 230 remaining addresses produce a masked signature matching the `CANDIDATE_CEILING` of 2048 places
 -- compiler-generated unwind funclets and vtable stubs, whose shape is the compiler's rather than
 the function's. The mapper refuses those outright. It could resolve them from the region delta

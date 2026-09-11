@@ -84,6 +84,35 @@ import rva_usage  # noqa: E402
 BUILD_RS = ROOT / "crates/er-game-base/build.rs"
 RECON = ROOT / "docs/recon"
 
+
+def _pinned_ledger_in_main_worktree(base):
+    """Where a gitignored pinned ledger lives when this checkout is a linked worktree.
+
+    One of the two `LEDGERS_NOT_BUILD_INPUTS` entries, `rva-map-1162-to-1170.functions.tsv`, is a
+    2.4 MB generated table that `.gitignore` covers, and a gitignored file is never copied into a
+    `git worktree`. This gate then raised `VocabularyError` -- exit 2, the loudest verdict it has
+    -- at an agent who had done nothing but branch, and told them to find out where the ledger
+    went. It is one directory away. Only the pinned names take this path, so a tracked ledger
+    still has to be present in the checkout being gated.
+    """
+    try:
+        import subprocess
+
+        common = subprocess.run(
+            ["git", "-C", str(ROOT), "rev-parse", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if common.returncode != 0:
+            return None
+        main_root = (ROOT / common.stdout.strip()).resolve().parent
+        candidate = (main_root / "docs/recon" / base).resolve()
+        return candidate if candidate.is_file() else None
+    except Exception:
+        return None
+
 # A ledger is something that points at `docs/recon/*.tsv`, not something with `MAP` in its name.
 # See the module docstring: the previous `const (\w*MAP\w*)` filter could not see `QUARANTINE`,
 # which is the one ledger whose rows are SUBTRACTED, so a withdrawn address read as covered.
@@ -208,6 +237,8 @@ def assert_ledgers_accounted(ledgers: dict) -> None:
     exempt = {}
     for base, why in LEDGERS_NOT_BUILD_INPUTS.items():
         path = (RECON / base).resolve()
+        if not path.is_file():
+            path = _pinned_ledger_in_main_worktree(base) or path
         if not path.is_file():
             raise VocabularyError(
                 f"{base} is pinned in LEDGERS_NOT_BUILD_INPUTS as deliberately not a build input "
@@ -690,7 +721,12 @@ def selftest() -> int:
     # Every pinned exemption must still describe a file that exists; a pin over a deleted ledger
     # reads as current while covering nothing.
     for base in LEDGERS_NOT_BUILD_INPUTS:
-        check(f"the pinned non-input {base} still exists", (RECON / base).is_file(), True)
+        # Resolved the way the gate resolves it, not as `RECON / base`. One pinned ledger is
+        # gitignored, so in a linked worktree the second spelling is False for a file that is
+        # present and readable one directory away -- and this control would then be red about a
+        # pin that is perfectly current.
+        found = (RECON / base).is_file() or bool(_pinned_ledger_in_main_worktree(base))
+        check(f"the pinned non-input {base} still exists", found, True)
 
     # And the vocabulary must fail loudly rather than default.
     saved = globals()["BUILD_RS"]
