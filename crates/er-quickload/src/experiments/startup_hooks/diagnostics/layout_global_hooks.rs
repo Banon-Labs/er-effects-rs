@@ -66,60 +66,52 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     {
         return;
     }
-    match unsafe { MH_Initialize() } {
-        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
-        status => {
-            append_autoload_debug(format_args!(
-                "system-quit-dup: MH_Initialize failed: {status:?}"
-            ));
-            return;
-        }
-    }
+    // Unresolved on purpose: `register_union_hook5` owns the single 1.16.2 -> 1.17 resolve, the
+    // same contract `MhHook::new` had here before. `game_rva_for_hook` deliberately does not
+    // resolve, so there is no second translation for `check-double-resolved-hook-targets.py` to
+    // find.
     let Ok(addr) = game_rva_for_hook(SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-dup: failed to resolve AddCancelButton rva 0x{SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA:x}"
         ));
         return;
     };
+    // The union, not a bare `MhHook` (2026-09-10). `AddCancelButton` takes five arguments, and
+    // until `er_hook::UnionFn5` existed there was no union signature that could carry the fifth,
+    // so this prologue was the one row-building hook holding MinHook's single slot by itself. Any
+    // second ME3 DLL detouring it -- a standalone shell for these same Quit rows, most obviously --
+    // would have installed a second MinHook instance over this one and corrupted both trampolines,
+    // with nothing logged. `register_union_hook5` enables the detour itself, so the queue_enable /
+    // `MH_ApplyQueued` / `leak_installed_hook` sequence this used to run is gone, and so is the
+    // explicit `MH_Initialize` -- the registrar does that too and reports its failure in the
+    // `Err` arm below.
     match unsafe {
-        MhHook::new(
-            addr as *mut c_void,
-            system_quit_duplicate_add_cancel_button_hook as *mut c_void,
+        crate::mh::register_union_hook5(
+            addr,
+            system_quit_duplicate_add_cancel_button_hook,
+            &SYSTEM_QUIT_DUPLICATE_ORIG,
         )
     } {
-        Ok(hook) => {
-            SYSTEM_QUIT_DUPLICATE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            if let Err(status) = unsafe { hook.queue_enable() } {
-                append_autoload_debug(format_args!(
-                    "system-quit-dup: queue_enable AddCancelButton failed: {status:?}"
-                ));
-                return;
-            }
-            match unsafe { MH_ApplyQueued() } {
-                MH_STATUS::MH_OK => {
-                    crate::mh::leak_installed_hook(hook);
-                    SYSTEM_QUIT_DUPLICATE_INSTALLED
-                        .store(SYSTEM_QUIT_DUPLICATE_INSTALLED_YES, Ordering::SeqCst);
-                    append_autoload_debug(format_args!(
-                        // Print the return address this build will actually compare against, not
-                        // the 1.16.2 constant. The old line printed 0x958a20 on every build --
-                        // including the ones where nothing was ever going to match it, which made
-                        // the log read like the feature was armed when it was inert.
-                        "system-quit-dup: hooked AddCancelButton 0x{addr:x}; will clone the Quit Game row as Load Character / Load Character from File / Load Build from URL at caller rva {}",
-                        match er_title_flow::system_quit_row_return_rvas() {
-                            Some((first, second)) =>
-                                format!("0x{first:x} (second row 0x{second:x})"),
-                            None => "UNRESOLVED on this build -- no rows will be cloned".to_owned(),
-                        }
-                    ));
+        Ok(()) => {
+            SYSTEM_QUIT_DUPLICATE_INSTALLED
+                .store(SYSTEM_QUIT_DUPLICATE_INSTALLED_YES, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                // Print the return address this build will actually compare against, not
+                // the 1.16.2 constant. The old line printed 0x958a20 on every build --
+                // including the ones where nothing was ever going to match it, which made
+                // the log read like the feature was armed when it was inert.
+                "system-quit-dup: registered AddCancelButton 0x{addr:x} on the 5-argument union; will clone the Quit Game row as Load Character / Load Character from File / Load Build from URL at caller rva {}",
+                match er_title_flow::system_quit_row_return_rvas() {
+                    Some((first, second)) => format!("0x{first:x} (second row 0x{second:x})"),
+                    None => "UNRESOLVED on this build -- no rows will be cloned".to_owned(),
                 }
-                status => append_autoload_debug(format_args!(
-                    "system-quit-dup: MH_ApplyQueued failed: {status:?}"
-                )),
-            }
+            ));
         }
+        // The flag is only raised on success, so a failure leaves it at
+        // `SYSTEM_QUIT_DUPLICATE_NOT_INSTALLED` and a later call retries -- unchanged from the
+        // bare-`MhHook` version.
         Err(status) => append_autoload_debug(format_args!(
-            "system-quit-dup: MhHook::new AddCancelButton failed: {status:?}"
+            "system-quit-dup: register_union_hook5 AddCancelButton failed: {status:?} -- no rows will be cloned"
         )),
     }
 }

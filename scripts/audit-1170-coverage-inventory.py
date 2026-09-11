@@ -84,7 +84,9 @@ ADDR_EXPR = re.compile(r"\b(?:base|image_base|module_base|game_base)\s*\+\s*")
 
 # ---------------------------------------------------------------- use-site shapes
 GATED = re.compile(r"\b(?:game_rva|game_rva_named|game_data_addr|read_game_global|resolve_game_address|resolve_detour_address|game_ptr)\s*\(")
-HOOKPRIM = re.compile(r"\bMhHook::new\b|\bregister_union_hook\b|\bresolve_detour_address\b|\bMH_CreateHook\b")
+# `register_union_hook5?` rather than `register_union_hook`: the trailing `\b` fails before the
+# `5` of the five-argument registrar, so the inventory would undercount every site using it.
+HOOKPRIM = re.compile(r"\bMhHook::new\b|\bregister_union_hook5?\b|\bresolve_detour_address\b|\bMH_CreateHook\b")
 EXEC_USE = re.compile(r"(?:transmute|as\s+\*const\s+fn|as\s+extern)\s*[(<]?\s*$")
 RAW_WRITE = re.compile(r"write_code_byte|write_code_bytes|\*\s*target\s*=|\*\s*(?:addr|address|slot)\s*=|as\s*\*mut\s+[\w:]+\s*\)\s*=")
 DETOUR_FIELD = re.compile(r"\bdetour\s*:")
