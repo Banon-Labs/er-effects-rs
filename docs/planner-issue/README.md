@@ -1,16 +1,25 @@
-# Draft: ER Build Planner feature request
+# Planner bug report -- one file per field
 
-One file per field of `er_build_planner_feature_request.yml` in
-`sovietspaceship/souls-bug-reports`. Nothing here has been filed; paste the files
-into the form by hand when it is time.
+Filed by hand at the URL below, which preselects the template, the labels, the
+assignee and the title:
 
-| file | form field |
-| --- | --- |
-| `title.md` | issue title (the template prefills `[Elden Ring Build & Inventory Planner] PLEASE_INSERT_ISSUE_TITLE_HERE`) |
-| `problem.md` | Is your feature request related to a problem? Please describe. |
-| `solution.md` | Describe the solution you'd like |
-| `alternatives.md` | Describe alternatives you've considered |
-| `additional-context.md` | Additional context |
+https://github.com/sovietspaceship/souls-bug-reports/issues/new?assignees=sovietspaceship&labels=er%20build%20planner%2Cbug&template=er_build_planner_bug_report.yml
 
-The template also sets `labels: er build planner, enhancement` and assigns
-`sovietspaceship` on its own. Nothing to fill in for those.
+Paste each file into the field its number names. The order matches the form.
+
+| file | field |
+|---|---|
+| `title.md` | the issue title |
+| `01-describe-the-bug.md` | Describe the bug |
+| `02-to-reproduce.md` | To Reproduce |
+| `03-expected-behavior.md` | Expected behavior |
+| `04-build-or-workspace-url.md` | Build or workspace URL |
+| `05-screenshots.md` | Screenshots |
+| `06-device.md` | Device (dropdown: Desktop) |
+| `07-browser.md` | Browser |
+| `08-additional-context.md` | Additional context |
+
+This was first drafted against `er_build_planner_feature_request.yml`, which was
+the wrong form: the Cosmetics tab has had Cheat Engine AOB import and export
+since v2.19 (2024-03-01), so there is no feature to request. What is broken is
+the merge on load, and that is a bug.
