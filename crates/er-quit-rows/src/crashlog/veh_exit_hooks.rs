@@ -2,6 +2,7 @@ use std::{
     ffi::c_void,
     fs,
     path::PathBuf,
+    sync::OnceLock,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -93,6 +94,10 @@ const RUN_OUTCOME_RUNNING: &str = "outcome=running api=- code=-\n";
 /// Set once the unhandled-exception filter has stamped the outcome, so the exit hook that follows
 /// it a few microseconds later cannot overwrite a real diagnosis with an uninterpretable code.
 static FATAL_OUTCOME_STAMPED: AtomicUsize = AtomicUsize::new(0);
+/// The crash record that was already on disk when this process started, captured before anything
+/// this run could write one. `None` means there was no readable record; the `OnceLock` being unset
+/// means nothing captured it at all, which is a different thing -- see [`crash_record_says_fatal`].
+static CRASH_RECORD_AT_START: OnceLock<Option<String>> = OnceLock::new();
 /// Whatever unhandled-exception filter was registered before ours, so it still gets its turn.
 static PREVIOUS_UNHANDLED_FILTER: AtomicUsize = AtomicUsize::new(0);
 /// `EXCEPTION_CONTINUE_SEARCH` as returned from a top-level filter.
@@ -105,6 +110,7 @@ unsafe extern "system" {
 /// Register [`fatal_exception_filter`]. Idempotent: the first registration wins, and the previous
 /// filter is remembered so the chain is preserved.
 pub(crate) fn install_fatal_exception_filter() {
+    remember_crash_record_at_start();
     let previous = unsafe { SetUnhandledExceptionFilter(fatal_exception_filter as *const () as usize) };
     let _ = PREVIOUS_UNHANDLED_FILTER.compare_exchange(
         0,
@@ -128,6 +134,7 @@ fn classify_exit_code(code: u32) -> &'static str {
 /// Stamp `outcome=running` as soon as the exit hooks are armed, so a later absence of any exit
 /// record is readable as "no exit path ran" rather than "nothing was watching".
 pub(crate) fn mark_run_started() {
+    remember_crash_record_at_start();
     let Some(directory) = er_game_base::log::game_directory_path() else {
         return;
     };
@@ -141,18 +148,67 @@ fn stamp_outcome(line: &str) {
     }
 }
 
-/// Whether the crash log's newest record says an exception reached a top-level filter.
+/// The newest crash record's identity, or `None` when there is no readable record.
+///
+/// `record_index` and `utc` together are enough: the logger bumps the index per record and stamps
+/// a fresh timestamp, so two records are never spelled the same. Nothing else in the file is read
+/// -- the register dump underneath changes for reasons that have nothing to do with which run
+/// wrote it.
+fn crash_record_identity() -> Option<String> {
+    let directory = er_game_base::log::game_directory_path()?;
+    let text = std::fs::read_to_string(directory.join(CRASH_LATEST_FILE_NAME)).ok()?;
+    let identity: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("record_index=") || line.starts_with("utc="))
+        .collect();
+    (!identity.is_empty()).then(|| identity.join("|"))
+}
+
+/// Remember which crash record already existed when this process started, so a later read can tell
+/// this run's crash from somebody else's.
+///
+/// Armed from both attach-time entry points, whichever reaches it first.
+fn remember_crash_record_at_start() {
+    let _ = CRASH_RECORD_AT_START.set(crash_record_identity());
+}
+
+/// Whether the crash log's newest record says an exception reached a top-level filter **in this
+/// run**.
 ///
 /// `er-crash-logging-core` writes `fatal=true` from its own `SetUnhandledExceptionFilter` handler
 /// and nowhere else, so the flag means exactly what this instrument wants to know, independently of
 /// which DLL's filter ended up owning the top-level slot.
+///
+/// The flag alone was not enough, and the failure is worse than the one this reader was added to
+/// close. `er-crash-latest.txt` is the newest record on disk, not this run's, and nothing rotates it
+/// between launches -- so one crash marked every later exit fatal for as long as the file survived.
+/// Measured 2026-09-11: a record stamped `utc=2026-09-11T19:51:06Z` was still on disk when a run
+/// three and a half hours later quit deliberately through the mod's own Return-to-Desktop row
+/// (`INSTANT ExitProcess(0)`), and `er-teardown.py --status` reported
+/// `outcome=fatal-exception api=crash-record`. The instrument built to answer "did it crash" had
+/// been answering "yes" since lunchtime.
+///
+/// So the record must also be new. An identity captured at attach is compared with the one on disk
+/// at exit: equal means the file has not been written since this process started, whatever it says.
+/// A run that genuinely crashes writes a new record first, so the true case still reads true.
 fn crash_record_says_fatal() -> bool {
     let Some(directory) = er_game_base::log::game_directory_path() else {
         return false;
     };
-    std::fs::read_to_string(directory.join(CRASH_LATEST_FILE_NAME))
-        .map(|text| text.lines().any(|line| line.trim() == "fatal=true"))
-        .unwrap_or(false)
+    let Ok(text) = std::fs::read_to_string(directory.join(CRASH_LATEST_FILE_NAME)) else {
+        return false;
+    };
+    if !text.lines().any(|line| line.trim() == "fatal=true") {
+        return false;
+    }
+    // An absent baseline means nothing armed this instrument, so there is no evidence either way
+    // and the record is read as it was before -- the identity check can only subtract a false
+    // positive, never add one.
+    match CRASH_RECORD_AT_START.get() {
+        Some(at_start) => at_start.as_deref() != crash_record_identity().as_deref(),
+        None => true,
+    }
 }
 
 fn write_run_outcome(api: &str, code: u32) {
