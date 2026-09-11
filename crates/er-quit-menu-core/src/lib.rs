@@ -89,8 +89,14 @@ pub mod profile_load_dialog;
 pub mod profile_table_guard;
 #[cfg(windows)]
 pub mod row_cloner;
+/// The snapshot that restores the game's records after the picker borrows them for browse rows.
+#[cfg(windows)]
+pub mod row_staging;
 #[cfg(windows)]
 pub mod save_dest_commit_runtime;
+/// The in-game save-file picker rendered through `05_010_ProfileSelect`.
+#[cfg(windows)]
+pub mod save_picker_menu;
 #[cfg(windows)]
 pub mod scaleform_proxy;
 #[cfg(windows)]

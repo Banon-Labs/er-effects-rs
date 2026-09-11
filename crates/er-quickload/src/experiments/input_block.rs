@@ -109,12 +109,6 @@ static SAVE_PICKER_USER_NAV_LATCH: AtomicUsize = AtomicUsize::new(0);
 static SAVE_PICKER_XINPUT_NAV_DOWN_MASK: AtomicUsize = AtomicUsize::new(0);
 static SAVE_PICKER_DINPUT_ARROW_DOWN_MASK: AtomicUsize = AtomicUsize::new(0);
 
-/// Drain every pending nav edge. Used on the paths that discard input wholesale (picker not live,
-/// native text editor owns the screen) so a press made elsewhere cannot replay later.
-pub(crate) fn save_picker_take_user_nav_edges() -> usize {
-    SAVE_PICKER_USER_NAV_LATCH.swap(0, Ordering::SeqCst) & SAVE_PICKER_NAV_ALL_MASK
-}
-
 /// Directions currently held on a real device, without consuming anything.
 ///
 /// Distinct from the edge latch on purpose. Elden Ring's menus auto-repeat while a direction is

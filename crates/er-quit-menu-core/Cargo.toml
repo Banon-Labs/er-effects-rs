@@ -67,6 +67,9 @@ fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 er-hook = { path = "../er-hook" }
 # Fault-safe RAM readers, game base/rva resolution, typed game bindings.
 er-game-base = { path = "../er-game-base", features = ["game-types"] }
+# The save picker stages ProfileSummary records as browse rows, and the preview hash it compares
+# against is the one the profile-summary crate already derives.
+er-profile-summary-core = { path = "../er-profile-summary-core" }
 # The game-side importer/exporter, shared with the standalone er-build-import DLL. The
 # System>Quit "Load Build from URL" and "Generate Build Link" rows are the product entry
 # points into it.

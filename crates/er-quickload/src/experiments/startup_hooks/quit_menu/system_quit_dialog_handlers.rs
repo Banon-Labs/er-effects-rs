@@ -12,9 +12,7 @@ pub(crate) use er_quit_menu_core::row_text::*;
 // `QuitMenuHost` field. Both product callers -- the Load Character row action and the save flow's
 // destination browser, which opens from a captured dialog and has no row action object -- keep the
 // names they always used.
-pub(crate) use er_quit_menu_core::profile_load_dialog::{
-    system_quit_open_profile_load_dialog, system_quit_open_profile_load_dialog_on,
-};
+pub(crate) use er_quit_menu_core::profile_load_dialog::system_quit_open_profile_load_dialog;
 
 pub(crate) unsafe extern "system" fn system_quit_menu_window_list_push_hook(
     list: usize,

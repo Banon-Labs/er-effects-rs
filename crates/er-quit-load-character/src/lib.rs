@@ -91,18 +91,23 @@ fn standalone_log(args: std::fmt::Arguments<'_>) {
     append_log(&log_dir(), args);
 }
 
-/// The one row this shell arms. Spelled out rather than reached for as a named constant, because
+/// The two rows this shell arms. Spelled out rather than reached for as a named constant, because
 /// the set and the action table below have to agree field for field: a row here with no flow beside
 /// it is a row that appears and does nothing.
+///
+/// **Load Character from File** joined it once the picker moved into `er-quit-menu-core`
+/// (2026-09-11). Until then the browse surface, the row staging and the ingest were all
+/// `pub(crate)` inside `er-quickload`, so a shell could name the row and had nothing to open.
 #[cfg(windows)]
-const LOAD_CHARACTER_ONLY: er_quit_menu_core::row_cloner::RowSet =
+const CHARACTER_ROWS: er_quit_menu_core::row_cloner::RowSet =
     er_quit_menu_core::row_cloner::RowSet {
         load_character: true,
+        load_character_from_file: true,
         ..er_quit_menu_core::row_cloner::RowSet::NONE
     };
 
 /// What a press on each row reaches. Exactly one entry is filled, and it is the one row
-/// [`LOAD_CHARACTER_ONLY`] arms; the rest are flows no press can reach rather than flows this shell
+/// [`CHARACTER_ROWS`] arms; the rest are flows no press can reach rather than flows this shell
 /// is missing.
 #[cfg(windows)]
 fn row_actions() -> er_quit_menu_core::row_cloner::QuitRowActions {
@@ -110,17 +115,35 @@ fn row_actions() -> er_quit_menu_core::row_cloner::QuitRowActions {
         open_profile_load_dialog: Some(
             er_quit_menu_core::profile_load_dialog::system_quit_open_profile_load_dialog,
         ),
+        open_save_picker_menu: Some(open_save_picker_for_row),
         ..er_quit_menu_core::row_cloner::QuitRowActions::default()
     }
 }
 
-/// Arm the Load Character row. Runs on its own thread because the game-task registration waits for
+/// Open the browse picker for a **Load Character from File** press.
+///
+/// The row router answers in booleans; the picker answers in outcomes, and the two disagree about
+/// one case on purpose. `Dismissed` means a picker ran and the user backed out of it -- the press
+/// was carried out, so the row must not re-arm -- while the router only needs to know whether the
+/// press was taken. Collapsing them here rather than widening the router keeps that distinction
+/// where the picker made it.
+///
+/// # Safety
+///
+/// Menu-thread press context, with `action_obj` the row's live action object.
+#[cfg(windows)]
+unsafe fn open_save_picker_for_row(action_obj: usize) -> bool {
+    unsafe { er_quit_menu_core::save_picker_menu::system_quit_open_save_picker_menu(action_obj) }
+        .request_discharged()
+}
+
+/// Arm both character rows. Runs on its own thread because the game-task registration waits for
 /// the game's task manager to exist, and waiting inside the loader lock deadlocks the process.
 #[cfg(windows)]
 fn arm_load_character_row() {
     // Safety: a bootstrap thread, once per process (`START` gates the spawn), before the Quit tab
     // has built a dialog.
-    let arm = unsafe { er_quit_menu_core::arm::arm_standalone(LOAD_CHARACTER_ONLY, row_actions()) };
+    let arm = unsafe { er_quit_menu_core::arm::arm_standalone(CHARACTER_ROWS, row_actions()) };
     if !arm.is_complete() {
         append_log(
             &log_dir(),
@@ -197,7 +220,7 @@ mod tests {
     /// the thing the other is supposed to catch.
     #[test]
     fn every_armed_row_has_a_flow_and_no_unarmed_row_carries_one() {
-        let rows = LOAD_CHARACTER_ONLY;
+        let rows = CHARACTER_ROWS;
         let actions = row_actions();
         assert_eq!(
             actions.open_profile_load_dialog.is_some(),
@@ -222,7 +245,7 @@ mod tests {
     /// conflict table exists to refuse, written into one DLL instead.
     #[test]
     fn this_shell_arms_the_character_switch_and_neither_build_row() {
-        let rows = LOAD_CHARACTER_ONLY;
+        let rows = CHARACTER_ROWS;
         let armed: Vec<&str> = [
             ("Load Character", rows.load_character),
             ("Load Character from File", rows.load_character_from_file),

@@ -5,8 +5,8 @@ use super::*;
 // and System>Quit state staging.
 
 pub(crate) use er_save_picker_core::{
-    DestRoute, PickerOpenOutcome, PickerOpenRequest, PickerSurface, SaveDestOrigin,
-    open_taken_over_outcome, picker_surface_for, save_dest_route_picked_target,
+    PickerOpenOutcome, PickerOpenRequest, PickerSurface, SaveDestOrigin, open_taken_over_outcome,
+    picker_surface_for,
 };
 
 /// True when this session's picker surface is the OS dialog.

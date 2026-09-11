@@ -1488,6 +1488,22 @@ pub const OPTIONSETTING_DIALOG_PANE_PROXY_OFFSET: usize = 0x1200;
 pub const OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA: u32 = 0x0093b760;
 /// CSMenuMan flag bit meaning "menu actively shown/drawn this frame" (per-frame updater sets `|=0x4`).
 pub const OPTIONSETTING_FLAG_ACTIVELY_SHOWN_BIT: u8 = 0x4;
+
+/// Native `CS::ProfileLoadDialog` in-place list rebuild `FUN_1409a5020`. `fn(rcx = dialog)`. The
+/// game's own records-changed refresh, used by the delete-save flow: it re-runs the item-list
+/// builder against a fresh `GetProfileSummary()` read, copies the new list into `dialog+0x1260`,
+/// and rebinds -- rewriting the row count at `+0xb08`, re-selecting a valid cursor and
+/// re-decorating every visible row. This is the sanctioned way to change row text while the
+/// `05_010` window stays open: the decorate pass reads per-row snapshots, so a bare record write
+/// is invisible without it. RE 2026-07-07, adversarially verified.
+pub const PROFILE_LOAD_DIALOG_LIST_REBUILD_RVA: u32 = 0x9a4ed0;
+/// Native ProfileSelect item-list builder `FUN_140875590` (1.16.2 dump VA == deobf/live VA, shift
+/// 0; entry bytes `48 8b c4 56 57 41 56 48 81 ec d0 0b 00 00` byte-verified in
+/// `eldenring-deobf.bin`). `fn(rcx = out BasicViewItemList<MenuSaveDataSummary,10>*) -> out`.
+/// Builds the visible 10-row list straight from the live ProfileSummary. Every point where records
+/// become visible rows funnels through this one function -- the dialog ctor/bind paths and the
+/// delete-flow rebuild above -- so a re-stage hook at its entry covers every build site.
+pub const PROFILE_SELECT_LIST_BUILDER_RVA: u32 = 0x875590;
 /// OptionSettingTopDialog (menu_id 0x25) -> embedded `CS::CompositeOptionSettingDialog`.
 pub const OPTIONSETTING_COMPOSITE_OFFSET: usize = 0x1768;
 /// Composite -> current pane dialog ptr (`+0xb8`) and the 10-entry per-tab pane-dialog cache (`+0x68`).
