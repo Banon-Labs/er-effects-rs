@@ -600,6 +600,142 @@ pub fn apply(entries: &[Held], plan: &SweepPlan) -> Vec<Held> {
     out
 }
 
+/// What the caller is able to do with a surplus entry the storage box will not take.
+///
+/// The sweep decides *what* has to leave the character; this says what the runtime can actually
+/// do about it, so the arithmetic lives here and the capability question stays with the code that
+/// resolves game functions. The three values are not equally good and the order says so.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Overflow {
+    /// Put it on the ground, where the player can pick it back up.
+    ///
+    /// The preferred answer, and the one that makes the storage box's capacity stop mattering:
+    /// the ground has no limit. It also keeps the item whole -- the engine's drop carries the
+    /// upgrade level and the mounted Ash of War with it -- which is the difference between a
+    /// tidy-up the player can undo and one they cannot.
+    Ground,
+    /// Destroy it. Nothing survives, the upgrade material included.
+    ///
+    /// The fallback for a build the drop has no verified mapping on. Irreversible, so a caller
+    /// choosing this owes the player a named line per item.
+    Destroy,
+    /// Neither is available, so it stays on the character and is reported.
+    ///
+    /// Not a route at all -- it is the absence of one, and it is the state that left five
+    /// armaments in a player's pockets on 2026-09-11 with a storage box at `1920 of 1920`. It
+    /// exists as a value so a caller that cannot act can still be held to reporting it, and so
+    /// the invariant test can show what it costs.
+    Keep,
+}
+
+/// Where one surplus entry actually goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Route {
+    /// Into the storage box, which the player can walk to at any grace.
+    StorageBox,
+    /// Onto the ground, whole.
+    Ground,
+    /// Destroyed.
+    Destroyed,
+    /// Nowhere: it stays on the character. The pass owes a named line saying so.
+    Stuck,
+}
+
+impl Route {
+    /// Whether the entry actually leaves the character by this route.
+    #[must_use]
+    pub fn leaves(self) -> bool {
+        !matches!(self, Self::Stuck)
+    }
+
+    /// Whether the player can get the item back afterwards.
+    #[must_use]
+    pub fn is_reversible(self) -> bool {
+        matches!(self, Self::StorageBox | Self::Ground)
+    }
+
+    /// The sentence for a log line.
+    #[must_use]
+    pub fn explain(self) -> &'static str {
+        match self {
+            Self::StorageBox => "into the storage box, collectable at any grace",
+            Self::Ground => "onto the ground, keeping its upgrade level and its Ash of War",
+            Self::Destroyed => "destroyed -- nothing about it survives",
+            Self::Stuck => "nowhere: it is still on the character",
+        }
+    }
+}
+
+/// Decide where each surplus entry goes, given what the box will hold and what the caller can do.
+///
+/// Returns one answer per entry, parallel to `entries`; `None` for anything that is not surplus.
+///
+/// The storage box comes first for every entry it will take, because it is the only destination
+/// the player does not have to be standing next to. `box_free_entries` is the count read off the
+/// box before the pass, decremented as this hands entries to it -- the box refuses a non-stackable
+/// on a plain `count < capacity` boolean, so free entries is the whole of what it will answer.
+///
+/// Everything past that goes to `overflow`. That is the decision the storage box being full used
+/// to have no answer for.
+#[must_use]
+pub fn route_surplus(
+    entries: &[Held],
+    plan: &SweepPlan,
+    box_free_entries: i32,
+    overflow: Overflow,
+) -> Vec<Option<Route>> {
+    let mut free = box_free_entries.max(0);
+    let mut out = vec![None; entries.len()];
+    for (index, _) in entries.iter().enumerate() {
+        if !plan
+            .disposition(index)
+            .is_some_and(|disposition| disposition.is_surplus())
+        {
+            continue;
+        }
+        out[index] = Some(if free > 0 {
+            free -= 1;
+            Route::StorageBox
+        } else {
+            match overflow {
+                Overflow::Ground => Route::Ground,
+                Overflow::Destroy => Route::Destroyed,
+                Overflow::Keep => Route::Stuck,
+            }
+        });
+    }
+    out
+}
+
+/// The entries a set of routes leaves on the character, as the game would have them afterwards.
+///
+/// [`apply`] is the ideal case -- every move lands. This is the same thing told what actually
+/// happened, so a `Stuck` entry stays and the invariant can be checked against the real outcome
+/// rather than the intended one.
+#[must_use]
+pub fn apply_routes(entries: &[Held], plan: &SweepPlan, routes: &[Option<Route>]) -> Vec<Held> {
+    let mut out = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.iter().enumerate() {
+        let left = routes
+            .get(index)
+            .copied()
+            .flatten()
+            .is_some_and(Route::leaves);
+        match plan.disposition(index) {
+            Some(Disposition::Surplus { keep, .. }) if left => {
+                if keep > 0 {
+                    out.push(Held {
+                        quantity: keep,
+                        ..*entry
+                    });
+                }
+            }
+            _ => out.push(*entry),
+        }
+    }
+    out
+}
+
 /// How many items of each identity a set of entries holds, gear only.
 ///
 /// The other direction of the same question, for a report that has to say "the build asks for one
@@ -868,6 +1004,83 @@ mod tests {
         let plan = plan_sweep(&entries, &allowance);
         let after = apply(&entries, &plan);
         assert!(survivors(&after, &allowance).is_empty());
+    }
+
+    /// The box takes what it can and the overflow goes where the caller says.
+    #[test]
+    fn the_box_is_filled_first_and_the_rest_overflows() {
+        let shield = 0x2000_0BB8;
+        let entries = [
+            Held::one(1, shield),
+            Held::one(2, shield),
+            Held::one(3, shield),
+        ];
+        let allowance = Allowance::default();
+        let plan = plan_sweep(&entries, &allowance);
+        let routes = route_surplus(&entries, &plan, 1, Overflow::Ground);
+        assert_eq!(
+            routes,
+            vec![
+                Some(Route::StorageBox),
+                Some(Route::Ground),
+                Some(Route::Ground)
+            ]
+        );
+    }
+
+    /// A full box is not a reason for anything to stay, once there is a ground to put it on.
+    ///
+    /// The 2026-09-11 case exactly: a box at capacity and singletons the character owns one of.
+    #[test]
+    fn a_full_box_leaves_nothing_behind_when_the_overflow_is_the_ground() {
+        let entries = [
+            Held::one(1, 0x0035_8EFA),
+            Held::one(2, 0x0122_D52A),
+            Held::one(3, 0x00AA_22BA),
+            Held::one(4, 0x0026_E8FA),
+            Held::one(5, 0x01DD_C0C9),
+        ];
+        let allowance = Allowance::default();
+        let plan = plan_sweep(&entries, &allowance);
+        for overflow in [Overflow::Ground, Overflow::Destroy] {
+            let routes = route_surplus(&entries, &plan, 0, overflow);
+            assert!(routes.iter().flatten().all(|route| route.leaves()));
+            let after = apply_routes(&entries, &plan, &routes);
+            assert!(
+                survivors(&after, &allowance).is_empty(),
+                "{overflow:?} left something on the character"
+            );
+        }
+        // And the state the five items were actually in: no route at all.
+        let routes = route_surplus(&entries, &plan, 0, Overflow::Keep);
+        let after = apply_routes(&entries, &plan, &routes);
+        assert_eq!(
+            survivors(&after, &allowance).len(),
+            5,
+            "with nowhere to put them, all five stay -- which is what the run reported"
+        );
+    }
+
+    /// The ground keeps the item; destruction does not. The report has to be able to tell a
+    /// player which happened.
+    #[test]
+    fn only_the_destroy_route_is_irreversible() {
+        assert!(Route::StorageBox.is_reversible());
+        assert!(Route::Ground.is_reversible());
+        assert!(!Route::Destroyed.is_reversible());
+        assert!(Route::Destroyed.leaves());
+        assert!(!Route::Stuck.leaves());
+    }
+
+    /// Nothing the build keeps is ever given a route.
+    #[test]
+    fn a_kept_entry_is_never_routed_anywhere() {
+        let shield = 0x2000_0BB8;
+        let entries = [Held::one(1, shield), Held::one(2, shield)];
+        let allowance = Allowance::new(&[grant_of(shield, 1, &[])], []);
+        let plan = plan_sweep(&entries, &allowance);
+        let routes = route_surplus(&entries, &plan, 9, Overflow::Ground);
+        assert_eq!(routes.iter().filter(|route| route.is_some()).count(), 1);
     }
 
     /// The report has to be able to say which line of the build an entry was kept against.

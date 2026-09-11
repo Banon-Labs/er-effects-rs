@@ -49,13 +49,62 @@
 //! An entry whose store fails is reported by name rather than counted, and nothing else can go
 //! wrong: there is no transfer to be half-completed and no copy to be confused with another.
 
+use std::collections::BTreeMap;
+
 use er_build_import_core::plan::Grant;
+use er_build_import_core::sweep::identity;
 use er_game_base::rva::GET_EQUIP_INVENTORY_DATA_RVA;
 
 use crate::storage::Storage;
 
 /// `CS::EquipGameData::GetEquipInventoryData(egd) -> EquipInventoryData*`.
 type GetInventoryFn = unsafe extern "system" fn(usize) -> usize;
+
+/// The inventory index holding each item the build names, keyed by [`identity`].
+///
+/// # Why this is not `Storage::carried_index(grant.item_id)`
+///
+/// Because that question is asked in the wrong vocabulary, and the wrong answer is silent.
+/// `Grant::item_id` for an armament is the base row plus its affinity and nothing else: the
+/// upgrade level is not in it, because the grant pass computes the level separately and mints at
+/// `armament_item_id(grant.item_id, level)`. So a character holding a Bone Bow at +25 holds item
+/// `40500025` while the grant that names it says `40500000`, and an inventory lookup for the
+/// grant's id finds nothing at all.
+///
+/// The old loop answered that with `continue` -- not counted as attempted, not counted as
+/// declined, and skipped again by the order check, so the pass reported `160/160 ... in the
+/// build's order` over the subset that happened to resolve. Reported 2026-09-11: of 45 armaments
+/// in one build, 44 came out in the build's order and the Bone Bow sat at the very front of the
+/// inventory, below items the pass had never touched. It was the one the lookup missed.
+///
+/// [`identity`] is the rule the sweep already uses for "these two are the same item to a player",
+/// so folding the affinity and the level away here makes both passes agree about what they are
+/// looking at. One walk of the inventory also replaces one native call per item.
+fn entries_by_identity(storage: &Storage) -> BTreeMap<u32, i32> {
+    let mut out: BTreeMap<u32, i32> = BTreeMap::new();
+    // Safety: game thread, read only -- the caller's contract covers the walk.
+    for entry in unsafe { storage.carried_entries() } {
+        if entry.quantity <= 0 {
+            continue;
+        }
+        // The lowest index wins, which is the copy `GetItemInventoryIdx` would have named, so a
+        // build naming one of several copies still reorders the one every other pass acts on.
+        out.entry(identity(entry.item_id))
+            .and_modify(|index| *index = (*index).min(entry.index))
+            .or_insert(entry.index);
+    }
+    out
+}
+
+/// The inventory index of the entry satisfying `grant`, under any id the game files it as.
+///
+/// The grant's own id first, then its alternates, because a name resolving to several rows is the
+/// other way the character can hold the item under a number the plan does not mention.
+fn index_for(held: &BTreeMap<u32, i32>, grant: &Grant) -> Option<i32> {
+    std::iter::once(grant.item_id)
+        .chain(grant.also_known_as.iter().copied())
+        .find_map(|id| held.get(&identity(id)).copied())
+}
 
 /// What one reorder pass did.
 #[derive(Debug, Default)]
@@ -68,6 +117,13 @@ pub struct ReorderOutcome {
     pub unequipped: usize,
     /// `(label, why)` for each item that was not moved.
     pub declined: Vec<(String, &'static str)>,
+    /// Items the build names that no inventory entry could be found for, by label.
+    ///
+    /// Distinct from [`Self::declined`], which is "tried and failed". This is "never tried", and
+    /// it used to be a bare `continue`: not attempted, not declined, and skipped again by the
+    /// order check, so the pass scored itself over the items it happened to resolve and printed
+    /// `160/160 ... in the build's order` while one of them sat at the front of the inventory.
+    pub not_held: Vec<String>,
     /// `(label, deposited, retrieved)` for any item that did not come all the way back.
     ///
     /// Always empty in a healthy run, and the one failure here that costs the player something
@@ -106,13 +162,22 @@ impl ReorderOutcome {
         }
         format!(
             "REORDER: {}/{} item(s) re-acquired into the build's order ({} had to be taken off \
-             first, {} declined, {} stranded in the box); the {} item(s) that could be read back \
-             are {}",
+             first, {} declined, {} stranded in the box, {} the character does not hold under any \
+             id{}); the {} item(s) that could be read back are {}",
             self.restamped,
             self.attempted,
             self.unequipped,
             self.declined.len(),
             self.stranded.len(),
+            self.not_held.len(),
+            if self.not_held.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " -- those are NOT in the count above and keep whatever order they had: {}",
+                    self.not_held.join(", ")
+                )
+            },
             self.order_checked,
             if self.in_order {
                 "in the build's order"
@@ -205,15 +270,21 @@ pub unsafe fn apply_build_order(
         return outcome;
     };
 
+    // One walk, and every lookup below comes out of it. See `entries_by_identity` for why asking
+    // the inventory about `grant.item_id` is the wrong question.
+    let held = entries_by_identity(&storage);
+
     for grant in &ordered {
-        // Safety: game thread, read only.
-        if unsafe { storage.carried_quantity(grant.item_id) } <= 0 {
+        let Some(index) = index_for(&held, grant) else {
+            // The build names it and the character does not hold it, under any id it could be
+            // filed as. Counted and named rather than skipped: an item that leaves the loop
+            // without an outcome is one the order check will skip too, and the pass then prints a
+            // perfect score over the items it happened to find.
+            outcome.not_held.push(grant.label.clone());
             continue;
-        }
+        };
         outcome.attempted += 1;
 
-        // Safety: game thread, read only.
-        let index = unsafe { storage.carried_index(grant.item_id) };
         // Safety: game thread; a store of one int into a live entry, fault-checked.
         if unsafe { storage.restamp(index, next) } {
             outcome.restamped += 1;
@@ -247,12 +318,19 @@ pub unsafe fn apply_build_order(
 ///
 /// Game thread.
 unsafe fn verify_order(storage: &Storage, ordered: &[&Grant]) -> (bool, usize) {
+    let held = entries_by_identity(storage);
     let mut previous: Option<i32> = None;
     let mut checked = 0usize;
     let mut in_order = true;
     for grant in ordered {
+        // The same resolution the stamping loop uses. When these two disagreed, the loop skipped
+        // an item and so did this, and the pass reported the order of what was left as the order
+        // of the whole build.
+        let Some(index) = index_for(&held, grant) else {
+            continue;
+        };
         // Safety: game thread, read only.
-        let Some(sort_id) = (unsafe { storage.carried_sort_id(grant.item_id) }) else {
+        let Some(sort_id) = (unsafe { storage.sort_id_at(index) }) else {
             continue;
         };
         checked += 1;
@@ -264,4 +342,96 @@ unsafe fn verify_order(storage: &Storage, ordered: &[&Grant]) -> (bool, usize) {
         previous = Some(sort_id);
     }
     (in_order, checked)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use er_build_import_core::plan::NO_SKILL;
+
+    fn grant_of(item_id: u32, label: &str, also: &[u32]) -> Grant {
+        Grant {
+            item_id,
+            also_known_as: also.to_vec(),
+            quantity: 1,
+            reinforce_lv: 0,
+            upgrade_is_character_default: true,
+            weapon_skill: NO_SKILL,
+            label: label.to_owned(),
+            pot_group: None,
+            armament: true,
+        }
+    }
+
+    /// The Bone Bow, measured 2026-09-11.
+    ///
+    /// The grant names `40500000` -- base row, no affinity, no level, because the grant pass
+    /// computes the level separately. The character held `40500025`. An inventory lookup for the
+    /// grant's own id finds nothing, and the pass skipped it in silence while reporting every
+    /// other armament in the build as correctly ordered.
+    #[test]
+    fn an_armament_is_found_at_the_level_the_character_holds_it() {
+        let bone_bow_base = 40_500_000;
+        let held: BTreeMap<u32, i32> = [(identity(40_500_025), 2256)].into_iter().collect();
+        let grant = grant_of(bone_bow_base, "Bone Bow", &[]);
+        assert_eq!(index_for(&held, &grant), Some(2256));
+        // Why the old pass missed it. It asked the game, whose `GetItemIndex` matches an exact
+        // item id, and the two ids are not equal -- the character's entry is filed under
+        // `40500025` and the grant says `40500000`. Folding them through `identity` is the whole
+        // of the fix, and these two lines are the before and after of that fold.
+        assert_ne!(40_500_025, bone_bow_base);
+        assert_eq!(identity(40_500_025), bone_bow_base);
+    }
+
+    /// An affinity is folded away too, for the same reason and by the same rule.
+    #[test]
+    fn an_infused_armament_is_the_same_item_as_the_plain_one() {
+        let longsword = 1_010_000;
+        let occult_25 = longsword + 1_200 + 25;
+        let held: BTreeMap<u32, i32> = [(identity(occult_25), 7)].into_iter().collect();
+        assert_eq!(
+            index_for(&held, &grant_of(longsword, "Longsword", &[])),
+            Some(7)
+        );
+    }
+
+    /// A name that resolves to several rows is the other way the character holds an item under a
+    /// number the plan does not name.
+    #[test]
+    fn an_alternate_row_satisfies_the_grant_that_names_it() {
+        let named = 0x2000_0BB8;
+        let alternate = 0x2000_0BB9;
+        let held: BTreeMap<u32, i32> = [(identity(alternate), 11)].into_iter().collect();
+        assert_eq!(
+            index_for(&held, &grant_of(named, "Talisman", &[alternate])),
+            Some(11)
+        );
+        assert_eq!(index_for(&held, &grant_of(named, "Talisman", &[])), None);
+    }
+
+    /// An item the character genuinely does not hold is reported, not skipped.
+    #[test]
+    fn an_item_the_character_does_not_hold_has_no_index() {
+        let held: BTreeMap<u32, i32> = BTreeMap::new();
+        assert_eq!(
+            index_for(&held, &grant_of(1_010_000, "Longsword", &[])),
+            None
+        );
+    }
+
+    /// The summary names what it could not find, and says those are outside its own score.
+    #[test]
+    fn the_summary_names_what_it_never_tried() {
+        let outcome = ReorderOutcome {
+            attempted: 159,
+            restamped: 159,
+            order_checked: 159,
+            in_order: true,
+            not_held: vec!["Bone Bow".to_owned()],
+            ..ReorderOutcome::default()
+        };
+        let summary = outcome.summary();
+        assert!(summary.contains("Bone Bow"), "{summary}");
+        assert!(summary.contains("NOT in the count above"), "{summary}");
+    }
 }

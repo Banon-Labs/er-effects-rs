@@ -30,8 +30,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use er_build_import_core::plan::{Grant, NO_SKILL};
 use er_build_import_core::sweep::{
-    Allowance, Category, Disposition, EMPTY_PROTECTOR_ITEM_IDS, Held, Kept, UNARMED_ITEM_ID,
-    Untouchable, apply, identity, is_engine_placeholder, plan_sweep, survivors,
+    Allowance, Category, Disposition, EMPTY_PROTECTOR_ITEM_IDS, Held, Kept, Overflow, Route,
+    UNARMED_ITEM_ID, Untouchable, apply, apply_routes, identity, is_engine_placeholder, plan_sweep,
+    route_surplus, survivors,
 };
 
 /// How many generated pairs each family runs.
@@ -510,6 +511,90 @@ fn no_identity_outlives_its_allowance() {
                 entry.identity()
             );
         }
+    }
+}
+
+/// Family five: the storage box is full, which is the case that had no answer.
+///
+/// Every generated inventory is swept against a box with between zero and a handful of free
+/// entries, and the invariant is asserted on what the routes actually achieved rather than on what
+/// the plan intended. With somewhere for the overflow to go, a full box must leave nothing behind;
+/// with nowhere, every surplus entry must stay and be visible as a survivor, because a pass that
+/// cannot act still has to be able to say so.
+#[test]
+fn a_full_storage_box_leaves_nothing_behind_when_the_overflow_has_somewhere_to_go() {
+    let universe = Universe::new();
+    for case in 0..CASES {
+        let mut rng = Rng::new(case ^ 0xB0);
+        let grants = grants(&mut rng, &universe, false);
+        let mut entries = inventory(&mut rng, &universe, false);
+        let pinned = mint(&mut rng, &grants, &mut entries);
+        let allowance = Allowance::new(&grants, pinned);
+        let plan = plan_sweep(&entries, &allowance);
+        // Zero most of the time, because a box at capacity is the case under test.
+        let free = match rng.below(4) {
+            0 => rng.below(6) as i32,
+            _ => 0,
+        };
+
+        for overflow in [Overflow::Ground, Overflow::Destroy] {
+            let routes = route_surplus(&entries, &plan, free, overflow);
+            // Every surplus entry has a route, and no route is `Stuck`.
+            for (index, route) in routes.iter().enumerate() {
+                let surplus = plan.disposition(index).expect("classified").is_surplus();
+                assert_eq!(
+                    route.is_some(),
+                    surplus,
+                    "case {case}: entry {index} has a route it should not, or lacks one it should"
+                );
+                if let Some(route) = route {
+                    assert!(
+                        route.leaves(),
+                        "case {case}: {overflow:?} left entry {index} with nowhere to go"
+                    );
+                }
+            }
+            // Nothing the build keeps was routed anywhere.
+            for (index, route) in routes.iter().enumerate() {
+                if matches!(plan.disposition(index), Some(Disposition::Kept(_))) {
+                    assert!(route.is_none(), "case {case}: a kept entry was routed away");
+                }
+            }
+            // The box is never asked to take more than it said it would.
+            let to_box = routes
+                .iter()
+                .flatten()
+                .filter(|route| **route == Route::StorageBox)
+                .count();
+            assert!(
+                i32::try_from(to_box).unwrap_or(i32::MAX) <= free,
+                "case {case}: {to_box} entr(ies) sent to a box with {free} free"
+            );
+            // And the invariant, on the outcome rather than the intention.
+            let after = apply_routes(&entries, &plan, &routes);
+            let left = survivors(&after, &allowance);
+            assert!(
+                left.is_empty(),
+                "case {case}: {overflow:?} with {free} free box entr(ies) left {} behind",
+                left.len()
+            );
+        }
+
+        // With nowhere to put it, everything surplus stays -- and stays visible. This is the
+        // state the 2026-09-11 run was in, and the assertion says what it costs rather than
+        // pretending the pass had a choice.
+        let stuck = route_surplus(&entries, &plan, free, Overflow::Keep);
+        let after = apply_routes(&entries, &plan, &stuck);
+        let expected = stuck
+            .iter()
+            .flatten()
+            .filter(|route| **route == Route::Stuck)
+            .count();
+        assert_eq!(
+            survivors(&after, &allowance).len(),
+            expected,
+            "case {case}: every entry with no route has to show up as a survivor"
+        );
     }
 }
 

@@ -886,6 +886,21 @@ impl Storage {
     pub unsafe fn carried_sort_id(&self, item_id: u32) -> Option<i32> {
         // Safety: game thread, read only.
         let index = unsafe { self.carried_index(item_id) };
+        // Safety: delegated; the index came from the inventory on the line above.
+        unsafe { self.sort_id_at(index) }
+    }
+
+    /// The acquisition order stamped on one inventory entry, by index.
+    ///
+    /// The half of [`Storage::carried_sort_id`] that does not have to ask an item id question
+    /// first. A caller that already knows which entry it means -- because it walked
+    /// [`Storage::carried_entries`] -- must not go back through the id, which names the lowest
+    /// copy of a repeated id and for an armament cannot express an upgrade level at all.
+    ///
+    /// # Safety
+    ///
+    /// Game thread.
+    pub unsafe fn sort_id_at(&self, index: i32) -> Option<i32> {
         let index = u32::try_from(index).ok()?;
         // Safety: engine-owned inventory pointer and an index it bounds-checks itself; it answers
         // null rather than faulting when nothing is filed there.
