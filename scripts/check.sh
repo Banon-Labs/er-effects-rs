@@ -638,14 +638,15 @@ python3 "$repo_root/scripts/check-oracle-singleton-globals.py"
 # image when there is one. Only `--selftest` runs: the bare form is a report, and it exits
 # non-zero when no game is installed, which is not a repo defect.
 python3 "$repo_root/scripts/ersc_identify.py" --selftest
-# er-lockon-filter decides who is a hostile phantom from two tables in the game image --
-# `CharacterTypeProperties` and `MultiplayProperties` -- and carries the answer as constants,
-# because reading them at runtime would need two more pinned data addresses for the sake of
-# values that have not moved between builds. This is the gate that keeps the constants honest:
-# it re-reads both tables and fails if the game's own classification stops being the one they
-# were derived from. It exists because the hand-written predecessor was narrower than the game's
-# answer in a way nothing caught -- the crate required chr_type 15/16/18, the live session
-# measured 2, and the feature was silently inert. An absent image is a skip, not a pass.
+# Who the game itself calls a hostile phantom, read from two tables in the game image --
+# `CharacterTypeProperties` and `MultiplayProperties`. This gate re-reads both and fails if the
+# classification stops being the one the recorded sets were derived from. It exists because a
+# hand-written predecessor was narrower than the game's answer in a way nothing caught: it
+# required chr_type 15/16/18, a live session measured 2, and the feature built on it was
+# silently inert. The consumer, er-lockon-filter, was deleted on 2026-09-11 by user directive
+# (findings in docs/recon/lockon-filter-findings.md); the measurement is kept because the
+# tables are the durable half and re-deriving them costs a session. An absent image is a skip,
+# not a pass.
 python3 "$repo_root/scripts/er-character-type-tables.py" --selftest
 # The workspace uses `../fromsoftware-rs` path dependencies, and CI clones that sibling at one
 # pinned revision while a developer's is whatever they have checked out -- often a fork carrying
@@ -1751,13 +1752,6 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-seamless-bugfixes --lib
 # the config parser. Host-testable because none of it needs a game -- the addresses are
 # data and the byte arithmetic is pure.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-convenient-deaths --lib
-
-# er-lockon-filter's rule. The crate is one detour plus one predicate over two integers, and the
-# predicate is the whole feature: which character kinds stop being lock-on targets, and which kinds
-# you have to be for that to happen. It cannot be exercised offline any other way -- the live check
-# needs two players invading one world -- and both of its failure modes are silent, so the host run
-# is the only thing standing between a wrong constant and an invasion spent locking the wrong red.
-cargo test --manifest-path "$repo_root/Cargo.toml" -p er-lockon-filter --lib
 
 # er-hook's raw code-patch primitives. This crate is linked into 15 of the 23 cdylibs, the shipped
 # er_quickload.dll among them, so a defect in a byte-patch primitive here is a defect in all of
