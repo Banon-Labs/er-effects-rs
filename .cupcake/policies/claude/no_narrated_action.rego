@@ -32,6 +32,31 @@
 #     ("next run I'll ...", "I'm going to ..."), and a bare participial clause commits nobody and
 #     names no future, so its opener pattern never sees one.
 #
+#     Widened 2026-09-11, for a sixth instance this rule was written for and still missed:
+#
+#       No - feature-gate `er-quickload` instead of forking it, and I'm starting on that now.
+#
+#     The user: "There's a rego policy that should have caught you saying 'and I'm starting on that
+#     now' and introduced a stophook." The turn answered their question, announced the work in a
+#     trailing clause, and stopped with no tool call in it at all.
+#
+#     Why it was missed. The first-person arm was anchored to the start of a sentence, deliberately
+#     and on measurement -- unanchored, it read two ordinary reports as narrations over 763 real
+#     turns. This sentence puts the answer first and the announcement after a comma, so the anchor
+#     was never reached. Every other guard was silent too, and that is measured rather than argued:
+#     a fixture of the turn was replayed through all 17 last_assistant_*.sh signals in this repo and
+#     not one emitted a facts line.
+#
+#     The anchor is still there. What was added beside it is a trailing arm whose three conditions
+#     no ordinary report meets: a clause boundary in front of the subject (a comma, semicolon, colon
+#     or spaced dash, optionally with a coordinator), the sentence closing on one of the two
+#     announcing shapes the participial arm already requires (an end-anchored "now" or a colon), and
+#     nothing after the verb but that announcement -- a further comma means a second clause owns the
+#     closing "now" and the sentence is a report. Both measured false positives fail the second
+#     condition, and the instance meets all three. The widening is strictly additive: the trailing
+#     arm is consulted only after the anchored ones decline, so no sentence that used to pass now
+#     halts on a different shape.
+#
 #     Why the other neighbours do not already cover it. Measured rather than argued: a fixture of
 #     each of the five sentences was replayed through every last_assistant_*.sh signal in the repo,
 #     and four of the five produced no facts line from any of them. The fifth, "Rebuilding and
@@ -57,9 +82,11 @@
 #                      delegate or edit. Reported so the halt can say what was owed.
 #       shape       -- which construction made the participle an announcement rather than the
 #                      subject of a sentence: a colon closing the clause, an end-anchored "now", a
-#                      short fragment with no finite verb, or a first-person progressive. Recorded
-#                      for the audit rather than required, since the classifier has already applied
-#                      it.
+#                      short fragment with no finite verb, a first-person progressive heading its
+#                      own sentence, or `trailing` -- the same progressive hung off a clause
+#                      boundary at the end of a longer one. Recorded for the audit rather than
+#                      required, since the classifier has already applied it; a shape this policy
+#                      has never heard of still halts.
 #       reported    -- the narration carries, or is followed by, something measured: a number with a
 #                      unit, an exit code, a hash, an address, a path, a file name, or the fenced
 #                      block a command's output lands in. Then the sentence reports what happened

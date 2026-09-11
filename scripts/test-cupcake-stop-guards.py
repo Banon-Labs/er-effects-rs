@@ -315,6 +315,15 @@ CASES = [
         "now ...:' -- the dispatch is one tool call away and the turn ended instead",
     ),
     Case(
+        "narrated_action_trailing.jsonl",
+        "narrating the action instead of having taken it",
+        "the 2026-09-11 instance, verbatim: 'No - feature-gate er-quickload instead of forking it, "
+        "and I'm starting on that now.' -- the announcement rides in after a comma instead of "
+        "heading its own sentence, which is why the anchored first-person arm could not see it. "
+        "Measured before it was widened: a fixture of that turn replayed through all 17 "
+        "last_assistant_*.sh signals left every one of them silent",
+    ),
+    Case(
         "narrated_action_reported.jsonl",
         None,
         "the same participle carrying what came back -- 'Re-running it now - exit 0, 26 rows.' -- "
