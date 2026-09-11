@@ -1005,6 +1005,18 @@ pub static BUILD_URL_PORTRAIT_REBUILD_VERDICT: AtomicUsize = AtomicUsize::new(0)
 /// stale, 3 rebuilt unchanged, 4 the input was wrong. Only 1 is a pass, and reaching it requires
 /// the model-object evidence that `_equip_verdict` alone cannot supply.
 pub static BUILD_URL_PORTRAIT_RENDER_VERDICT: AtomicUsize = AtomicUsize::new(0);
+/// Bitmask of `FD4StepTemplateBase` step indices seen at `renderer+0x40` while the window was open.
+/// A data-change rebuild walks 6 -> 7 -> 8 -> 1 -> 2 -> 3 -> 4 -> 5 -> 6, so a mask holding only bit
+/// 6 is a renderer that never moved, and bits 2 and 4 are the setup steps that promote the inbox
+/// into the staged stage and the staged stage into live. Published as a diagnostic beside the
+/// verdict rather than folded into it: the sampling cadence can miss a step the machine really did
+/// pass through, and a headline that failed on that would be reporting its own sample rate.
+pub static BUILD_URL_PORTRAIT_STEPS_SEEN: AtomicUsize = AtomicUsize::new(0);
+/// The draw chain at the last sample: bit 0 the per-frame part-draw task is registered, bit 1 the
+/// offscreen scene is registered with the render system, bit 2 the model's parts are attached to a
+/// scene. All three are required for the headline verdict to pass, because a correct model that
+/// nothing submits is still the previous picture.
+pub static BUILD_URL_PORTRAIT_DRAW_BITS: AtomicUsize = AtomicUsize::new(0);
 // ---- the Generate Build Link row: the inverse of everything above -----------------------------
 // That row takes a link and rewrites the character; this one takes the character and writes a link.
 // It touches no game state at all, so it has no "applied" counter -- what it has instead is a

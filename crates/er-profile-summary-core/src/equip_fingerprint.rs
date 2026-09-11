@@ -305,6 +305,10 @@ pub enum PortraitRenderVerdict {
     RebuiltUnchanged,
     /// The renderer was not even given the right gear.
     InputWrong,
+    /// The model was rebuilt with different parts, and the chain that would draw it is not live --
+    /// no per-frame submission task, an unregistered offscreen scene, or parts attached to no scene.
+    /// A correct model nothing submits is still the previous picture.
+    RebuiltButNotDrawn,
 }
 
 impl PortraitRenderVerdict {
@@ -318,6 +322,7 @@ impl PortraitRenderVerdict {
             Self::InputOnlyImageStale => 2,
             Self::RebuiltUnchanged => 3,
             Self::InputWrong => 4,
+            Self::RebuiltButNotDrawn => 5,
         }
     }
 
@@ -330,16 +335,32 @@ impl PortraitRenderVerdict {
             Self::InputOnlyImageStale => "input-only-image-stale",
             Self::RebuiltUnchanged => "rebuilt-unchanged",
             Self::InputWrong => "input-wrong",
+            Self::RebuiltButNotDrawn => "rebuilt-but-not-drawn",
         }
     }
 }
 
-/// Fold the input comparison and the model-object observation into the one field a run is judged
-/// on.
+/// Fold everything observed into the one field a run is judged on.
+///
+/// Three independent conditions have to hold before this says the portrait re-rendered, and each one
+/// is a distinct way the previous version of this oracle could have lied:
+///
+/// * the renderer was handed the record's gear (`equipment`);
+/// * the model object was torn down and rebuilt with different parts (`rebuild`), which is what run
+///   `br-20260911-002901-a7e0` lacked while the first two-term version reported a pass;
+/// * the chain that draws it is live (`draw_bits`) -- a per-frame submission task, a registered
+///   offscreen scene, and parts attached to that scene. A correct model nothing submits is still the
+///   old picture, and `STEP_Finish_Play` frees the draw task and unregisters the scene on its way
+///   through, so this is genuinely able to be false at the wrong moment.
+///
+/// `steps_seen` is not a term in the verdict. The step walk is published beside it as the diagnostic
+/// that says where a failure stopped, and folding it in would make the headline fail whenever the
+/// sampling cadence missed a step the machine really did pass through.
 #[must_use]
 pub const fn portrait_render_verdict(
     equipment: PortraitEquipmentVerdict,
     rebuild: PortraitRebuildVerdict,
+    draw_bits: usize,
 ) -> PortraitRenderVerdict {
     match equipment {
         PortraitEquipmentVerdict::Unmeasured => PortraitRenderVerdict::Unproven,
@@ -348,7 +369,13 @@ pub const fn portrait_render_verdict(
             PortraitRebuildVerdict::NotMeasured => PortraitRenderVerdict::Unproven,
             PortraitRebuildVerdict::NeverRebuilt => PortraitRenderVerdict::InputOnlyImageStale,
             PortraitRebuildVerdict::RebuiltSameParts => PortraitRenderVerdict::RebuiltUnchanged,
-            PortraitRebuildVerdict::Rebuilt => PortraitRenderVerdict::Proven,
+            PortraitRebuildVerdict::Rebuilt => {
+                if portrait_draw_ready(draw_bits) {
+                    PortraitRenderVerdict::Proven
+                } else {
+                    PortraitRenderVerdict::RebuiltButNotDrawn
+                }
+            }
         },
     }
 }
@@ -362,6 +389,49 @@ pub fn parts_fingerprint(nodes: &[usize]) -> u64 {
         hash = fnv1a64_mix(hash, *node as u64);
     }
     hash
+}
+
+/// The per-frame part-draw task is registered, so something is submitting this model every frame.
+pub const PORTRAIT_DRAW_TASK_LIVE: usize = 1 << 0;
+/// The offscreen's `GXSgScene` is registered with the render system, so the target is being drawn
+/// into at all.
+pub const PORTRAIT_OFFSCREEN_REGISTERED: usize = 1 << 1;
+/// The model's parts were registered into a scene, so they are reachable by that draw.
+pub const PORTRAIT_PARTS_IN_SCENE: usize = 1 << 2;
+/// All three, which is the strongest statement RAM supports about a portrait being drawn.
+pub const PORTRAIT_DRAW_READY: usize =
+    PORTRAIT_DRAW_TASK_LIVE | PORTRAIT_OFFSCREEN_REGISTERED | PORTRAIT_PARTS_IN_SCENE;
+
+/// Is the whole draw chain live?
+///
+/// None of the three is a rasterize counter -- nothing on the renderer, the model or the offscreen
+/// is one -- but together they say the new parts exist, are in a scene, and have a task submitting
+/// them every frame. That is the last thing observable in memory before the rasterizer, and a
+/// portrait missing any one of them cannot be the picture on screen.
+#[must_use]
+pub const fn portrait_draw_ready(bits: usize) -> bool {
+    bits & PORTRAIT_DRAW_READY == PORTRAIT_DRAW_READY
+}
+
+/// Bit for one step index in the observed-steps mask.
+#[must_use]
+pub const fn portrait_step_bit(step: usize) -> usize {
+    1usize << step
+}
+
+/// The steps a full data-change rebuild has to pass through, as a mask.
+///
+/// `STEP_Wait_Play` routes a `+0x755` request to `STEP_Finish_Play` (7), whose teardown ends in
+/// `STEP_Finish` (8), which sees the still-armed `+0x754` and sets `STEP_Wait_Request` (1), which
+/// consumes it and walks setup 2, 3, 4 and play 5 back to 6. Observing 2 and 4 is what distinguishes
+/// a real rebuild from a machine that merely twitched: 2 promotes the inbox into the staged stage and
+/// 4 promotes staged into live and re-registers the draw.
+pub const PORTRAIT_REBUILD_STEPS: usize = portrait_step_bit(2) | portrait_step_bit(4);
+
+/// Did the step machine actually walk a rebuild?
+#[must_use]
+pub const fn portrait_walked_rebuild(steps_seen: usize) -> bool {
+    steps_seen & PORTRAIT_REBUILD_STEPS == PORTRAIT_REBUILD_STEPS
 }
 
 #[cfg(test)]
@@ -563,7 +633,8 @@ mod tests {
         assert_eq!(
             portrait_render_verdict(
                 PortraitEquipmentVerdict::Matches,
-                portrait_rebuild_verdict(observed)
+                portrait_rebuild_verdict(observed),
+                PORTRAIT_DRAW_READY
             ),
             PortraitRenderVerdict::InputOnlyImageStale,
             "the input matching is exactly what the old oracle called success"
@@ -588,7 +659,8 @@ mod tests {
         assert_eq!(
             portrait_render_verdict(
                 PortraitEquipmentVerdict::Matches,
-                portrait_rebuild_verdict(observed)
+                portrait_rebuild_verdict(observed),
+                PORTRAIT_DRAW_READY
             ),
             PortraitRenderVerdict::Proven
         );
@@ -631,7 +703,8 @@ mod tests {
         assert_eq!(
             portrait_render_verdict(
                 PortraitEquipmentVerdict::Matches,
-                portrait_rebuild_verdict(observed)
+                portrait_rebuild_verdict(observed),
+                PORTRAIT_DRAW_READY
             ),
             PortraitRenderVerdict::RebuiltUnchanged
         );
@@ -649,7 +722,8 @@ mod tests {
         assert_eq!(
             portrait_render_verdict(
                 PortraitEquipmentVerdict::Matches,
-                PortraitRebuildVerdict::NotMeasured
+                PortraitRebuildVerdict::NotMeasured,
+                PORTRAIT_DRAW_READY
             ),
             PortraitRenderVerdict::Unproven
         );
@@ -666,7 +740,11 @@ mod tests {
             PortraitRebuildVerdict::NotMeasured,
         ] {
             assert_eq!(
-                portrait_render_verdict(PortraitEquipmentVerdict::Differs, rebuild),
+                portrait_render_verdict(
+                    PortraitEquipmentVerdict::Differs,
+                    rebuild,
+                    PORTRAIT_DRAW_READY
+                ),
                 PortraitRenderVerdict::InputWrong
             );
         }
@@ -681,6 +759,7 @@ mod tests {
             PortraitRenderVerdict::InputOnlyImageStale,
             PortraitRenderVerdict::RebuiltUnchanged,
             PortraitRenderVerdict::InputWrong,
+            PortraitRenderVerdict::RebuiltButNotDrawn,
         ];
         let passes = all
             .iter()
@@ -693,6 +772,62 @@ mod tests {
                 assert_ne!(verdict.tag(), other.tag());
             }
         }
+    }
+
+    /// A model that was rebuilt correctly and that nothing draws is still the old picture. Each of
+    /// the three terms goes missing on a real path through the machine -- `STEP_Finish_Play` frees
+    /// the draw task and unregisters the offscreen scene on its way past -- so a window that samples
+    /// at the wrong moment must not call that a pass.
+    #[test]
+    fn a_rebuilt_model_nothing_draws_is_not_a_pass() {
+        let rebuilt = PortraitRebuildVerdict::Rebuilt;
+        for missing in [
+            PORTRAIT_DRAW_TASK_LIVE,
+            PORTRAIT_OFFSCREEN_REGISTERED,
+            PORTRAIT_PARTS_IN_SCENE,
+        ] {
+            let bits = PORTRAIT_DRAW_READY & !missing;
+            assert!(!portrait_draw_ready(bits));
+            assert_eq!(
+                portrait_render_verdict(PortraitEquipmentVerdict::Matches, rebuilt, bits),
+                PortraitRenderVerdict::RebuiltButNotDrawn,
+                "missing bit {missing:#x} must not pass"
+            );
+        }
+        assert!(portrait_draw_ready(PORTRAIT_DRAW_READY));
+        assert_eq!(
+            portrait_render_verdict(
+                PortraitEquipmentVerdict::Matches,
+                rebuilt,
+                PORTRAIT_DRAW_READY
+            ),
+            PortraitRenderVerdict::Proven
+        );
+    }
+
+    /// The step walk distinguishes a machine that did the work from one that twitched. Step 2
+    /// promotes the inbox into the staged stage and step 4 promotes staged into live and
+    /// re-registers the draw, so a rebuild that skipped either did not happen.
+    #[test]
+    fn the_rebuild_walk_requires_both_setup_steps() {
+        let full = portrait_step_bit(6)
+            | portrait_step_bit(7)
+            | portrait_step_bit(8)
+            | portrait_step_bit(1)
+            | portrait_step_bit(2)
+            | portrait_step_bit(3)
+            | portrait_step_bit(4)
+            | portrait_step_bit(5);
+        assert!(portrait_walked_rebuild(full));
+        assert!(
+            !portrait_walked_rebuild(portrait_step_bit(6)),
+            "a renderer parked in the live step did nothing"
+        );
+        assert!(
+            !portrait_walked_rebuild(full & !portrait_step_bit(4)),
+            "without the step that promotes staged into live, nothing reached the model"
+        );
+        assert!(!portrait_walked_rebuild(full & !portrait_step_bit(2)));
     }
 
     /// A piece of armour appearing or disappearing changes the part array, so the fingerprint has

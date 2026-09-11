@@ -14,11 +14,31 @@
 //! build import writes no save, so nothing re-derives the record and the portrait keeps the
 //! pre-import loadout.
 //!
-//! The rebuild is gated as well. Each renderer carries two request latches -- `+0x754` (a build is
-//! requested) and `+0x755` (tear the current model down first) -- and the refresh skips any slot
-//! where either is set. They are raised at dialog construction and consumed as the build runs, so a
-//! settled portrait reads both as zero and a rebuild can be asked for. That is exactly what closing
-//! and reopening the menu does by hand today.
+//! The rebuild is gated as well, by a step machine. `CSMenuAsmModelRend` derives from
+//! `FD4StepTemplateBase`, its step table is filled by `FUN_1400a75c0`, and its current step index
+//! lives at `renderer+0x40`. A settled portrait sits in step 6, `STEP_Wait_Play`, which reads three
+//! request bytes in strict priority:
+//!
+//! ```text
+//! +0x756 -> SetNextStep(7) and run it this frame     // hard teardown
+//! +0x755 -> SetNextStep(7)                           // teardown next frame
+//! +0x754 -> SetNextStep(1)                           // re-promote the stages, no teardown
+//! none   -> the live per-frame block
+//! ```
+//!
+//! Arming both is what produces a real rebuild, and the walk closes only because of one function:
+//! `STEP_Finish_Play` clears `+0x755` and `+0x756` together (`*(u16*)(renderer+0x755) = 0`) and
+//! leaves `+0x754` alone, so step 8 `STEP_Finish` finds it still set and sends the machine back to
+//! step 1. The whole cycle is `6 -> 7 -> 8 -> 1 -> 2 -> 3 -> 4 -> 5 -> 6`, and step 4
+//! `STEP_Finish_Setup` is the one that matters: it promotes the staged `ChrAsm` into the live one at
+//! `+0x130`, allocates the model, registers its parts into the offscreen's layer holder
+//! (`FUN_1409e9790`) and registers the per-frame submit task at group 100.
+//!
+//! Two arming mistakes are worth naming because each looks plausible. `+0x755` alone parks the
+//! machine at step 8 forever and the portrait goes permanently blank. `+0x754` alone walks
+//! `1 -> 2 -> 3 -> 4 -> 5 -> 6` with no teardown, and the builder `FUN_140bbb3b0` is null-guarded on
+//! every allocation, so it is a complete no-op: the stages are re-promoted and the model is not
+//! rebuilt at all. Only the pair does the work.
 //!
 //! # So the repair is two steps, in this order
 //!
@@ -74,11 +94,15 @@ use core::sync::atomic::Ordering;
 use er_game_base::mem::{game_data_addr, game_module_base, safe_read_usize};
 use er_loading_portrait_core::{
     CHR_ASM_MODEL_INS_PARTS_NODE_COUNT, CHR_ASM_MODEL_INS_PARTS_NODE_OFFSET,
-    PROFILE_RENDERER_CHR_ASM_LIVE_OFFSET, PROFILE_RENDERER_MODEL_INS_OFFSET,
+    CHR_ASM_MODEL_INS_SCENE_OFFSET, PROFILE_OFFSCREEN_SCENE_REGISTERED_OFFSET,
+    PROFILE_RENDERER_CHR_ASM_LIVE_OFFSET, PROFILE_RENDERER_DRAW_TASK_PROXY_OFFSET,
+    PROFILE_RENDERER_MODEL_INS_OFFSET, PROFILE_RENDERER_STEP_INDEX_OFFSET,
+    PROFILE_RENDERER_STEP_MAX, TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET,
     TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA, portrait_renderer_table_entry,
 };
 use er_telemetry_core::counters::{
-    BUILD_URL_PORTRAIT_EQUIP_VERDICT, BUILD_URL_PORTRAIT_KICK_REFUSALS, BUILD_URL_PORTRAIT_KICKS,
+    BUILD_URL_PORTRAIT_DRAW_BITS, BUILD_URL_PORTRAIT_EQUIP_VERDICT,
+    BUILD_URL_PORTRAIT_KICK_REFUSALS, BUILD_URL_PORTRAIT_KICKS,
     BUILD_URL_PORTRAIT_MODEL_ABSENT_SEEN, BUILD_URL_PORTRAIT_MODEL_INS_AFTER,
     BUILD_URL_PORTRAIT_MODEL_INS_BEFORE, BUILD_URL_PORTRAIT_PARTS_AFTER,
     BUILD_URL_PORTRAIT_PARTS_BEFORE, BUILD_URL_PORTRAIT_REBUILD_VERDICT,
@@ -86,13 +110,14 @@ use er_telemetry_core::counters::{
     BUILD_URL_PORTRAIT_RECORD_SLOT_PLUS1, BUILD_URL_PORTRAIT_RECORD_SYNC_STATE,
     BUILD_URL_PORTRAIT_RECORD_SYNCS, BUILD_URL_PORTRAIT_REFRESH_ATTEMPTS,
     BUILD_URL_PORTRAIT_RENDER_VERDICT, BUILD_URL_PORTRAIT_RENDERER_FINGERPRINT,
-    BUILD_URL_PORTRAIT_VERIFY_TICKS,
+    BUILD_URL_PORTRAIT_STEPS_SEEN, BUILD_URL_PORTRAIT_VERIFY_TICKS,
 };
 
 use crate::equip_fingerprint::{
-    LiveSync, PortraitEquipmentVerdict, PortraitRenderVerdict, RebuildObservation,
-    parts_fingerprint, portrait_equipment_verdict, portrait_rebuild_verdict,
-    portrait_render_verdict,
+    LiveSync, PORTRAIT_DRAW_TASK_LIVE, PORTRAIT_OFFSCREEN_REGISTERED, PORTRAIT_PARTS_IN_SCENE,
+    PortraitEquipmentVerdict, PortraitRenderVerdict, RebuildObservation, parts_fingerprint,
+    portrait_equipment_verdict, portrait_rebuild_verdict, portrait_render_verdict,
+    portrait_step_bit, portrait_walked_rebuild,
 };
 use crate::host::append_autoload_debug;
 use crate::live_player_sync::{chr_asm_equipment_fingerprint, sync_record_from_live_player};
@@ -236,6 +261,69 @@ unsafe fn read_model_and_parts(renderer: usize) -> (usize, u64) {
     (model, parts_fingerprint(&nodes))
 }
 
+/// The three things that have to be true for anything to be drawing this portrait, as a bitmask.
+///
+/// None of them is a rasterize counter -- the renderer, the model and the offscreen carry no frame
+/// or generation number for the render target, so no such value exists to read. Together they are
+/// the last thing observable in memory before the rasterizer: the parts exist and are attached to a
+/// scene, that scene is registered with the render system, and a task submits it every frame.
+///
+/// # Safety
+///
+/// Game task thread, `renderer` a live `CSMenuAsmModelRend`. Every read is fault-guarded.
+unsafe fn read_draw_bits(renderer: usize) -> usize {
+    let mut bits = 0usize;
+    if unsafe { safe_read_usize(renderer + PROFILE_RENDERER_DRAW_TASK_PROXY_OFFSET) }
+        .is_some_and(|proxy| proxy != 0)
+    {
+        bits |= PORTRAIT_DRAW_TASK_LIVE;
+    }
+    let offscreen = unsafe {
+        safe_read_usize(renderer + TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET)
+    }
+    .unwrap_or(0);
+    if offscreen != 0
+        && unsafe {
+            er_game_base::mem::safe_read_u8(offscreen + PROFILE_OFFSCREEN_SCENE_REGISTERED_OFFSET)
+        }
+        .is_some_and(|registered| registered != 0)
+    {
+        bits |= PORTRAIT_OFFSCREEN_REGISTERED;
+    }
+    let model =
+        unsafe { safe_read_usize(renderer + PROFILE_RENDERER_MODEL_INS_OFFSET) }.unwrap_or(0);
+    if model != 0
+        && unsafe { safe_read_usize(model + CHR_ASM_MODEL_INS_SCENE_OFFSET) }
+            .is_some_and(|scene| scene != 0)
+    {
+        bits |= PORTRAIT_PARTS_IN_SCENE;
+    }
+    bits
+}
+
+/// Fold this tick's step index into the mask of steps the window has seen.
+///
+/// # Safety
+///
+/// Game task thread, `renderer` a live `CSMenuAsmModelRend`. Fault-guarded.
+unsafe fn note_step(renderer: usize) {
+    // Parenthesised because a `let ... else` initializer may not end in a block-like expression.
+    let Some(step) = (unsafe {
+        er_game_base::mem::safe_read_i32(renderer + PROFILE_RENDERER_STEP_INDEX_OFFSET)
+    }) else {
+        return;
+    };
+    // An index outside the table is a read of something that is not this step machine, so it is
+    // dropped rather than shifted into a bit nobody can interpret.
+    let Ok(step) = usize::try_from(step) else {
+        return;
+    };
+    if step > PROFILE_RENDERER_STEP_MAX {
+        return;
+    }
+    BUILD_URL_PORTRAIT_STEPS_SEEN.fetch_or(portrait_step_bit(step), Ordering::SeqCst);
+}
+
 /// Step two, part two: record whether the rebuild was actually taken, and open the verify window.
 ///
 /// The kick itself stays with the caller: it is the per-slot replica of the engine's own
@@ -259,6 +347,8 @@ pub fn note_portrait_rebuild(slot: i32, renderer: usize, fired: bool) {
     BUILD_URL_PORTRAIT_REBUILD_VERDICT.store(0, Ordering::SeqCst);
     BUILD_URL_PORTRAIT_RENDER_VERDICT
         .store(PortraitRenderVerdict::Unproven.code(), Ordering::SeqCst);
+    BUILD_URL_PORTRAIT_STEPS_SEEN.store(0, Ordering::SeqCst);
+    BUILD_URL_PORTRAIT_DRAW_BITS.store(0, Ordering::SeqCst);
     BUILD_URL_PORTRAIT_VERIFY_TICKS.store(PORTRAIT_VERIFY_WINDOW_TICKS, Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "profile-portrait: asked slot {slot} to rebuild from the re-derived record (renderer=0x{renderer:x}); the verdict lands in oracle_build_url_portrait_equip_verdict once the async build completes"
@@ -327,6 +417,11 @@ pub unsafe fn portrait_verify_tick() {
     };
     let rebuild = portrait_rebuild_verdict(observed);
     BUILD_URL_PORTRAIT_REBUILD_VERDICT.store(rebuild.code(), Ordering::SeqCst);
+    // Where the step machine is, and whether anything would draw the result. Safety: fault-guarded
+    // reads of the renderer, its offscreen and its model.
+    unsafe { note_step(renderer) };
+    let draw_bits = unsafe { read_draw_bits(renderer) };
+    BUILD_URL_PORTRAIT_DRAW_BITS.store(draw_bits, Ordering::SeqCst);
 
     // The input. A model that is mid-teardown has no readable stage to compare, which is not a
     // mismatch -- so an unreadable stage leaves the previous equipment verdict standing.
@@ -345,7 +440,7 @@ pub unsafe fn portrait_verify_tick() {
         }
     };
 
-    let render = portrait_render_verdict(equipment, rebuild);
+    let render = portrait_render_verdict(equipment, rebuild, draw_bits);
     BUILD_URL_PORTRAIT_RENDER_VERDICT.store(render.code(), Ordering::SeqCst);
     if render == PortraitRenderVerdict::Proven {
         BUILD_URL_PORTRAIT_VERIFY_TICKS.store(0, Ordering::SeqCst);
@@ -368,6 +463,16 @@ pub unsafe fn portrait_verify_tick() {
             observed.saw_model_absent,
             observed.parts_before,
             observed.parts_after,
+        ));
+        let steps = BUILD_URL_PORTRAIT_STEPS_SEEN.load(Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "profile-portrait: slot {slot} step machine walked mask 0x{steps:x} (a rebuild has to pass through 2 and 4), draw chain 0x{draw_bits:x} (bit0 submit task, bit1 offscreen scene, bit2 parts in scene), rebuild verdict {}{}",
+            rebuild.tag(),
+            if portrait_walked_rebuild(steps) {
+                ""
+            } else {
+                " -- the machine never re-entered setup, so nothing was rebuilt to draw"
+            }
         ));
     }
 }
