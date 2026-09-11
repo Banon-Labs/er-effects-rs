@@ -219,7 +219,15 @@ fn active_latch_is_stale(dialog: usize) -> bool {
     if latched != 0 && latched != dialog {
         return true;
     }
-    !build_url_keyboard_active() && EDITOR_WINDOW.load(Ordering::SeqCst) == 0
+    if !build_url_keyboard_active() && EDITOR_WINDOW.load(Ordering::SeqCst) == 0 {
+        return true;
+    }
+    // The player pressing the row is itself a reason to re-ask the abandonment question rather
+    // than wait for the pump's next pass. A field the player has closed is only detected by its
+    // window going unseen, and the press that follows can land inside that window: run
+    // br-20260911-153836-c874 swallowed one at `+64139ms` and the close it was racing landed at
+    // `+64141ms`, two milliseconds later. Asking here turns that race into an open.
+    build_url_keyboard_latch_is_abandoned()
 }
 
 /// Ask for the link field. Called from the row press, on whatever thread dispatched the activation;
