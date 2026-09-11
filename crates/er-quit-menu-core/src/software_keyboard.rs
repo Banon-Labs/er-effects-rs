@@ -290,8 +290,10 @@ static BUILD_URL_MENU_PUMP_TICKS: AtomicUsize = AtomicUsize::new(0);
 /// the closed field emits, and this stamp is what makes absence measurable.
 static BUILD_URL_EDITOR_WINDOW_LAST_TICK: AtomicUsize = AtomicUsize::new(0);
 
-/// Advance the link field's clock. Called once per menu-pump pass, unconditionally, because the
-/// pump is the one thing that runs whether or not the field's own window still does.
+/// Advance the link field's clock. Called at the tail of the `MenuWindowJob::Run` detour, so it
+/// counts menu jobs, not menu frames -- several of these pass per frame, one per live window.
+/// Anything comparing it against [`BUILD_URL_EDITOR_WINDOW_LAST_TICK`] is measuring in that
+/// unit, which is why the unseen limit alone cannot decide that a field has closed.
 pub fn build_url_menu_pump_tick() -> usize {
     BUILD_URL_MENU_PUMP_TICKS.fetch_add(1, Ordering::SeqCst) + 1
 }
@@ -449,6 +451,23 @@ const BUILD_URL_WINDOW_UNSEEN_TICK_LIMIT: usize = 8;
 /// absence into a verdict.
 pub fn build_url_keyboard_latch_is_abandoned() -> bool {
     if keyboard_active_job_slot(KeyboardPurpose::BuildUrl).load(Ordering::SeqCst) == 0 {
+        return false;
+    }
+    // A window we are still holding is a field that is still up, whatever the clock says.
+    //
+    // This is what actually cancelled every link field, and it took three wrong fixes to find
+    // because the tick is not the unit its own doc claimed. `build_url_menu_pump_tick` runs at the
+    // tail of the `MenuWindowJob::Run` detour, so it advances once per menu job, not once per menu
+    // frame -- while `BUILD_URL_EDITOR_WINDOW_LAST_TICK` advances only when the job being run is
+    // the link field's own window. With nine or more menu windows alive, the difference exceeds
+    // `BUILD_URL_WINDOW_UNSEEN_TICK_LIMIT` every single frame and the watchdog fires on a field
+    // that is up and being rendered.
+    //
+    // Measured in run br-20260911-152940-417c, and the state log is what proves the close never
+    // came from the live->terminal path at all: `state -999 -> 0 (live=true)` at `+53877ms` is the
+    // only transition the window ever reports, and the release lands at `+53911ms` -- two frames
+    // later, with no terminal state in between.
+    if BUILD_URL_EDITOR_WINDOW.load(Ordering::SeqCst) != 0 {
         return false;
     }
     let last = BUILD_URL_EDITOR_WINDOW_LAST_TICK.load(Ordering::SeqCst);
