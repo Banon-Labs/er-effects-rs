@@ -261,6 +261,7 @@ fn reset_build_url_mirror() {
     MIRROR_FRAMES.store(0, Ordering::SeqCst);
     MIRROR_LOGS.store(0, Ordering::SeqCst);
     EDITOR_WINDOW.store(0, Ordering::SeqCst);
+    reset_build_url_backdrop_probe();
 }
 
 // The link field is told apart by its resource name, not by asking who owns the window.
@@ -312,6 +313,10 @@ pub(crate) unsafe fn build_url_editor_window_run(base: usize, menu_window: usize
         let _ = unsafe { place_text_input_02_990_caret_at_end(base, menu_window) };
     }
     unsafe { mirror_clipboard_into_field(base, menu_window, frame) };
+    // Third: say whether the dim that makes this field modal is in the live movie. It is authored
+    // into the movie rather than driven from here, so this reads it back and counts it -- see
+    // `build_url_backdrop`.
+    unsafe { probe_live_build_url_backdrop(base, menu_window, frame) };
 }
 
 /// Push a newly copied link into the open field, if there is one.

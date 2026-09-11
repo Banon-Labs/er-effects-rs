@@ -913,6 +913,25 @@ pub static SYSTEM_QUIT_LOAD_BUILD_URL_ACCEPTED_COUNT: AtomicUsize = AtomicUsize:
 pub static SYSTEM_QUIT_LOAD_BUILD_URL_REJECTED_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// `UrlRejection::code()` of the most recent refusal (`0` = none yet).
 pub static SYSTEM_QUIT_LOAD_BUILD_URL_LAST_REJECTION: AtomicUsize = AtomicUsize::new(0);
+// ---- the dim behind the link field ------------------------------------------------------------
+// Two independent things can go wrong with it and they have opposite fixes, so they are counted
+// apart. The derived movie may not carry the placement at all, which is an asset problem in
+// `er_gfx::build_url_backdrop`; or it may carry it and the live movie may not show it, which would
+// mean the native `CS::SoftwareKeyboard` controller rebuilds the root display list it was handed.
+// No edit in this repo had ever added a root-level child to `02_990` before this one, so the second
+// is genuinely unmeasured and the counter exists to measure it.
+/// Derivations of the link field's movie whose bytes carried the dim, read back out of the payload
+/// the MemoryFile swap is about to install.
+pub static SYSTEM_QUIT_LOAD_BUILD_URL_BACKDROP_DERIVED: AtomicUsize = AtomicUsize::new(0);
+/// Derivations whose bytes did not. A non-zero value here means the field went up undimmed and the
+/// cause is offline.
+pub static SYSTEM_QUIT_LOAD_BUILD_URL_BACKDROP_MISSING: AtomicUsize = AtomicUsize::new(0);
+/// Frames of the open field on which the live movie's root resolved a child by the dim's instance
+/// name through the game's own `assignComponentWithName`. This is the memory read that says the
+/// display object survived into the running movie.
+pub static SYSTEM_QUIT_LOAD_BUILD_URL_BACKDROP_RESOLVED: AtomicUsize = AtomicUsize::new(0);
+/// Frames on which it did not resolve. Derived but never resolved is the controller-rebuild case.
+pub static SYSTEM_QUIT_LOAD_BUILD_URL_BACKDROP_UNRESOLVED: AtomicUsize = AtomicUsize::new(0);
 // ---- the Generate Build Link row: the inverse of everything above -----------------------------
 // That row takes a link and rewrites the character; this one takes the character and writes a link.
 // It touches no game state at all, so it has no "applied" counter -- what it has instead is a

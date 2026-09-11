@@ -1652,7 +1652,7 @@ unsafe fn apply_profile_editor_one_field(
     }
 }
 
-unsafe fn resolve_row_child_proxy(
+pub(crate) unsafe fn resolve_row_child_proxy(
     base: usize,
     row_proxy: usize,
     name: &str,
@@ -1701,7 +1701,7 @@ unsafe fn resolve_row_child_proxy(
     }
 }
 
-unsafe fn destroy_resolved_row_child_proxy(_base: usize, proxy: usize) {
+pub(crate) unsafe fn destroy_resolved_row_child_proxy(_base: usize, proxy: usize) {
     let dtor: unsafe extern "system" fn(usize) = unsafe {
         std::mem::transmute(
             match crate::experiments::gated_game_fn(

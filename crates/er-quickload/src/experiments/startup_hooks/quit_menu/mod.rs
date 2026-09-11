@@ -47,6 +47,9 @@ pub(crate) use generate_build_link_row::*;
 pub(crate) mod build_url_editor;
 pub(crate) use build_url_editor::*;
 
+pub(crate) mod build_url_backdrop;
+pub(crate) use build_url_backdrop::*;
+
 pub(crate) mod system_quit_row_identity;
 pub(crate) use system_quit_row_identity::*;
 

@@ -749,6 +749,9 @@ pub(crate) unsafe fn text_input_02_990_swap_to_build_url(base: usize, file: usiz
                 derive: |vanilla| {
                     er_gfx::build_url_02_990::centered_build_url_editor(vanilla)
                         .map_err(|error| error.to_string())
+                        // Read the dim back out of the payload this is about to install, so a
+                        // derivation that lost it is a counter rather than an undimmed field.
+                        .and_then(crate::attest_derived_build_url_backdrop)
                 },
             },
         )

@@ -51,9 +51,9 @@ use er_game_base::fnv1a::fnv1a64;
 /// ([`crate::text_input_02_990::VANILLA_LEN`]). The installed 1.16.2 MemoryFile payload differs
 /// from the corpus by 11 bytes, so its derivation is structurally validated but not fingerprinted
 /// -- exactly as the save picker's derivation handles the same pair of inputs.
-pub const CENTERED_LEN: usize = 1222;
+pub const CENTERED_LEN: usize = 1264;
 /// FNV-1a-64 of the [`CENTERED_LEN`]-byte derived movie.
-pub const CENTERED_FNV1A64: u64 = 0x3d9c_14dd_0843_1971;
+pub const CENTERED_FNV1A64: u64 = 0xfa32_98ad_09d9_d0dd;
 
 /// `GFX_DefineExternalImage2`, the tag that declares an external bitmap's pixel size. The codec
 /// keeps it opaque, so the two fields this module needs are read straight out of the body: its
@@ -154,6 +154,7 @@ pub enum BuildUrlFieldError {
     UnknownInput { len: usize, fnv: u64 },
     MissingStructure(&'static str),
     KnownInputBadOutput { len: usize, fnv: u64 },
+    Backdrop(crate::build_url_backdrop::BackdropError),
 }
 
 impl core::fmt::Display for BuildUrlFieldError {
@@ -169,6 +170,7 @@ impl core::fmt::Display for BuildUrlFieldError {
                 f,
                 "known 02_990 input derived len={len} fnv=0x{fnv:016x}; expected len={CENTERED_LEN} fnv=0x{CENTERED_FNV1A64:016x}"
             ),
+            Self::Backdrop(error) => write!(f, "backdrop: {error}"),
         }
     }
 }
@@ -633,6 +635,11 @@ pub fn centered_build_url_editor(vanilla: &[u8]) -> Result<Vec<u8>, BuildUrlFiel
             "one Text_0 placement in sprite 8",
         ));
     }
+
+    // 4. Put the dim under the whole thing, so the field reads as a surface that has taken over the
+    //    screen rather than a box pasted over a live menu.
+    crate::build_url_backdrop::install_build_url_backdrop(&mut movie)
+        .map_err(BuildUrlFieldError::Backdrop)?;
 
     let out = movie.write().map_err(BuildUrlFieldError::Write)?;
     let out_fnv = fnv1a64(&out);

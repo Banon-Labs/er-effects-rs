@@ -445,6 +445,11 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         "  \"oracle_regist_return_title_disconnect_flag\": {},\n",
         format_optional_u8(regist_return_title_flag_494)
     ));
+    // The dim behind the link field. `_derived` is the asset half (the bytes handed to Scaleform
+    // carried the placement) and `_resolved` is the live half (the running movie's root still has
+    // it); `_stage_rect` names the screen region a luma probe should sample. None of the four is a
+    // pixel, which is why the rectangle is emitted with them.
+    body.push_str(&crate::build_url_backdrop_telemetry());
     body.push_str(&format!(
         "  \"autoload_attempts\": {},\n",
         state.autoload.attempts()
