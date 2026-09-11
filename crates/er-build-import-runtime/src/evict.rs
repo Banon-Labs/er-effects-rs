@@ -34,15 +34,34 @@
 //! core crate, where the property
 //! test can hold the classification to being total.
 //!
-//! # When the box is full, a surplus copy is destroyed
+//! # When the box is full, a surplus copy goes on the ground
+//!
+//! The storage box is not the only place an item can go, and for a long time this pass acted as
+//! though it were. `CS::MapItemManImpl::DropItem` puts the item in the world where the character
+//! is standing, and the engine's own filler builds the request from the gaitem instance -- so the
+//! armament arrives carrying the upgrade level it was carried at and the Ash of War still mounted
+//! on it. The ground has no capacity, so a full box stops being a reason for anything to stay.
+//!
+//! That rung is preferred over destroying the item and is reported separately from it, because
+//! one costs the player a walk and the other costs them the item. They must never be added
+//! together in a report.
+//!
+//! # When neither will take it
 //!
 //! An armament does not always have somewhere else to go. Measured 2026-09-10 and again
 //! 2026-09-11: the storage box was at `1920 of 1920` entries, so the box refused gear for no
 //! reason to do with the gear at all.
 //!
-//! So, by user directive: when the box will not take an entry **and** the character would still
-//! own [`REDUNDANT_COPIES`] or more of the same item without it, the carried copy is destroyed
-//! instead. That count is measured rather than accumulated -- see [`retained_after`] -- because
+//! So, by user directive: when neither the box nor the ground will take an entry **and** the
+//! character would still own [`REDUNDANT_COPIES`] or more of the same item without it, the
+//! carried copy is destroyed instead.
+//!
+//! The threshold stays at two even though the directive that authorised this widened it, and the
+//! reason is what the player actually agreed to. They agreed to items going on the ground. With
+//! the drop available that is what happens and the threshold never comes up; with the drop
+//! unavailable, destroying the only copy of a `+25` weapon is a materially different act from the
+//! one they approved, so it is not done silently in its place. Raising this number is a decision
+//! for the player, not a tidy-up for whoever reads this next. That count is measured rather than accumulated -- see [`retained_after`] -- because
 //! three separate live failures were all the same failure: a running total of the character's
 //! holdings that the loop keeping it was itself mutating.
 //!
@@ -281,6 +300,18 @@ pub struct EvictOutcome {
     /// the inventory does not hold under that id, which is how a copy survives while every count
     /// says it should not.
     pub destroy_failed: usize,
+    /// Entries put on the ground because the storage box would not take them.
+    ///
+    /// The rung that made a full box stop being a reason for anything to stay. Reversible: the
+    /// item is a world object the player can walk back to, carrying its upgrade level and its Ash
+    /// of War, which is why it is preferred over the destroy below and reported separately from
+    /// it. The two must never be added together in a report -- one costs the player a walk and
+    /// the other costs them the item.
+    pub dropped_entries: usize,
+    /// How many items that came to.
+    pub dropped_items: u32,
+    /// `(item, how many)` for every entry put on the ground. Uncapped, like the destroyed list.
+    pub dropped: Vec<(String, u32)>,
     /// Entries destroyed because the box would not take them and the character still owns a pair.
     pub discarded_entries: usize,
     /// How many items that came to.
@@ -355,8 +386,11 @@ impl EvictOutcome {
                  THE CHARACTER after this pass{}. Of {} gear entr(ies) examined, {} are within \
                  what the build asks for and stay and {} were surplus; {} went to the storage \
                  box ({} items, {} taken off the character first), {} entr(ies) ({} item(s)) \
-                 were destroyed because the box would not take them and the character still owns \
-                 {REDUNDANT_COPIES} or more ({} Ash(es) of War recovered first), {} refused -- \
+                 went on the GROUND because the box would not take them -- whole, keeping their \
+                 upgrade level and their Ash of War, and collectable where the character is \
+                 standing; {} entr(ies) ({} item(s)) were destroyed because neither the box nor \
+                 the ground would take them and the character still owns {REDUNDANT_COPIES} or \
+                 more ({} Ash(es) of War recovered first), {} refused -- \
                  {} still worn, {} the box had no room for, {} the box already holds at its \
                  maximum stack, {} the box will not take{}{}{}. {} entr(ies) were outside this \
                  pass entirely: consumables, materials, key items and the engine's own \
@@ -378,6 +412,8 @@ impl EvictOutcome {
                 self.deposited_entries,
                 self.deposited_items,
                 self.unequipped,
+                self.dropped_entries,
+                self.dropped_items,
                 self.discarded_entries,
                 self.discarded_items,
                 self.ashes_recovered,
@@ -579,9 +615,33 @@ pub unsafe fn unlisted_gear(module_base: usize, egd: usize, allowance: &Allowanc
             Refusal::WrongKind
         };
 
-        // The box would not take it. If the character would still own two or more of the same
-        // item without it -- the same item by name, so a different ash or infusion is still the
-        // same item -- this copy is redundant and is destroyed instead of being carried around
+        // The box would not take it, so the ground does. This is the rung that makes a full
+        // storage box stop being a reason for the previous build's gear to stay on the character,
+        // and it is preferred over destroying the item for the reason the whole rung exists: the
+        // engine's drop carries the armament's upgrade level and its mounted Ash of War onto the
+        // ground with it, so a `+25` shield is a `+25` shield the player can pick back up.
+        //
+        // Only for a box that is out of space. A worn entry means the unequip failed and this pass
+        // has no business moving it at all, and an item the box refuses by kind is refused for a
+        // reason that has nothing to do with room.
+        if why.is_the_box_being_full() && storage.can_drop() {
+            // Safety: game thread, player in the world (the caller's contract), `index` a live
+            // carried entry; the call fills from the gaitem, removes the entry and drops exactly
+            // what left.
+            let dropped = unsafe { storage.drop_to_ground(index, shed) }.max(0) as u32;
+            if dropped > 0 {
+                outcome.dropped_entries += 1;
+                outcome.dropped_items += dropped;
+                // Safety: game thread, `msg` live.
+                let label = unsafe { label_for(msg, module_base, item_id) };
+                outcome.dropped.push((label, dropped));
+                continue;
+            }
+        }
+
+        // The drop was unavailable or declined. If the character would still own two or more of
+        // the same item without this copy -- the same item by name, so a different ash or infusion
+        // is still the same item -- it is redundant and is destroyed rather than carried around
         // forever. See the module header for why the threshold is two and why the ash comes off
         // first.
         let id = identity(item_id);
@@ -800,6 +860,50 @@ mod tests {
             }
             .reconciles(),
             "a pass that evicted the build's own item has not finished, however much it moved"
+        );
+    }
+
+    /// A drop and a destroy are never one number. One costs the player a walk, the other costs
+    /// them the item.
+    #[test]
+    fn the_ground_and_the_destroy_are_reported_apart() {
+        let outcome = EvictOutcome {
+            found: 6,
+            dropped_entries: 5,
+            dropped_items: 5,
+            discarded_entries: 1,
+            discarded_items: 1,
+            ..EvictOutcome::default()
+        };
+        let summary = outcome.summary();
+        let ground = summary.find("GROUND").expect("the ground is named");
+        let destroyed = summary.find("destroyed").expect("the destroy is named");
+        assert!(
+            ground < destroyed,
+            "the reversible outcome is reported first: {summary}"
+        );
+        // The two counts are distinct fields and neither is the other's total.
+        assert!(
+            summary.contains("5 entr(ies) (5 item(s)) went on the GROUND"),
+            "{summary}"
+        );
+        assert!(
+            summary.contains("1 entr(ies) (1 item(s)) were destroyed"),
+            "{summary}"
+        );
+    }
+
+    /// Nothing on the ground still leaves the pass reconciled -- a drop is work done, and
+    /// `reconciles` is about what is left on the character.
+    #[test]
+    fn a_drop_is_not_a_failure() {
+        assert!(
+            EvictOutcome {
+                dropped_entries: 88,
+                dropped_items: 88,
+                ..EvictOutcome::default()
+            }
+            .reconciles()
         );
     }
 

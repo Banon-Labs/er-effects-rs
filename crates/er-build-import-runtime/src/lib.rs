@@ -881,6 +881,16 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
                  ask for",
             );
         }
+        // The reversible half of "your gear is not where you left it", named one by one so the
+        // player knows what to go and pick up. Listed before the destroyed items because it is
+        // the outcome they would rather read.
+        for (item, quantity) in &evicted.dropped {
+            log_line(&format!(
+                "[build-import]   DROPPED {item} x{quantity}: the storage box would not take it, \
+                 so it is on the ground where the character is standing, whole -- same upgrade \
+                 level, same Ash of War"
+            ));
+        }
         // Named one by one and never folded into the summary's count, because this is the second
         // irreversible thing the importer does and the player is owed the list.
         for (item, quantity, ash) in &evicted.discarded {

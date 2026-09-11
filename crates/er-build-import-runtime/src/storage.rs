@@ -120,6 +120,93 @@ type GetEntryFn = unsafe extern "system" fn(usize, u32) -> usize;
 type RemoveItemFn = unsafe extern "system" fn(usize, i32, u32, bool) -> bool;
 type AdjustQuantityFn = unsafe extern "system" fn(usize, u32, i32, *mut i32) -> u32;
 type RemoveGemFn = unsafe extern "system" fn(usize, *mut u32);
+type DropItemFn = unsafe extern "system" fn(usize, *mut ItemDropData, i32, bool);
+type FillDropFromGaitemFn = unsafe extern "system" fn(*mut ItemDropData, *mut u32);
+
+/// The request `CS::MapItemManImpl::DropItem` takes: sixteen bytes, four `i32`, no vtable.
+///
+/// `DropItem` reads the whole thing with one `movups` and copies the four fields into its own
+/// one-entry list, so this layout is the entire input contract. `-1` in `reinforce` or `gemId`
+/// means "nothing known", which is what the filler writes before it looks anything up -- a
+/// hand-built request left at those defaults drops a bare item.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ItemDropData {
+    /// Category-tagged item id, carrying an armament's affinity and upgrade level.
+    pub item_id: i32,
+    /// How many to put on the ground.
+    pub quantity: i32,
+    /// `GetDurability` off the instance. `-1` for an item that has none.
+    pub reinforce: i32,
+    /// The mounted Ash of War's own item id, or `-1` when nothing is mounted.
+    pub gem_id: i32,
+}
+
+impl ItemDropData {
+    /// The state the engine's own filler starts from, and what it leaves for an item it cannot
+    /// look up.
+    pub const EMPTY: Self = Self {
+        item_id: -1,
+        quantity: 0,
+        reinforce: -1,
+        gem_id: -1,
+    };
+}
+
+/// The pair a world drop needs: the filler and the drop itself, plus the singleton they act on.
+#[derive(Clone, Copy)]
+struct DropNatives {
+    fill_from_gaitem: FillDropFromGaitemFn,
+    drop_item: DropItemFn,
+    map_item_man: usize,
+}
+
+/// Resolve the drop trio, or `None` when any part has no mapping for the running build.
+///
+/// Optional for the same reason the discard pair is: its absence costs one rung and the pass says
+/// so. It is deliberately all-or-nothing -- a filler without a drop fills a struct nobody uses,
+/// and a drop without a filler would put bare items on the ground, which is the failure this rung
+/// exists to avoid.
+///
+/// # Safety
+///
+/// Game thread; the singleton read is fault-checked and answers zero rather than faulting.
+unsafe fn drop_natives(module_base: usize) -> Option<DropNatives> {
+    let [fill, drop] = crate::native::resolve_all(
+        module_base,
+        [
+            (
+                er_game_base::rva::ITEM_DROP_DATA_FROM_GAITEM_RVA,
+                "ItemDropData from GaItemHandle (FUN_14055e3d0)",
+            ),
+            (
+                er_game_base::rva::MAP_ITEM_MAN_DROP_ITEM_RVA,
+                "CS::MapItemManImpl::DropItem",
+            ),
+        ],
+    )
+    .ok()?;
+    // The singleton, read the way every one of the engine's own call sites reads it. Zero is the
+    // answer both for "no mapping" and for "not in the world yet", and both mean the same thing
+    // here: do not call.
+    // Safety: a fault-checked read of one pointer-sized slot in the loaded image.
+    let map_item_man = er_game_base::mem::read_global_ptr(
+        module_base,
+        er_game_base::rva::GLOBAL_MAP_ITEM_MAN_RVA,
+        "GLOBAL_MAP_ITEM_MAN_RVA",
+    );
+    if map_item_man == 0 {
+        return None;
+    }
+    // Safety: both addresses were resolved for the running build immediately above.
+    Some(unsafe {
+        DropNatives {
+            fill_from_gaitem: core::mem::transmute::<usize, FillDropFromGaitemFn>(fill),
+            drop_item: core::mem::transmute::<usize, DropItemFn>(drop),
+            map_item_man,
+        }
+    })
+}
 
 /// What one [`Storage::recycle`] did, measured by reading the entry back.
 ///
@@ -200,6 +287,12 @@ pub struct Storage {
     get_add_or_remove_amount: GetAddOrRemoveAmountFn,
     /// Reads the entry itself, so [`Storage::carried_sort_id`] can prove a re-acquisition landed.
     get_entry: GetEntryFn,
+    /// The world-drop trio, resolved together and `None` unless all three resolved.
+    ///
+    /// One `Option` for filler, drop and singleton because the drop is only worth taking with the
+    /// filler: the filler is what carries an armament's upgrade level and its mounted Ash of War
+    /// onto the ground, and a drop without it puts a bare item there and reports success.
+    drop: Option<DropNatives>,
     /// The discard pair, resolved together and `None` unless both resolved.
     ///
     /// One `Option` for the two because a partial discard needs both -- decrement, and then remove
@@ -258,6 +351,14 @@ impl Storage {
     /// Whether this session can destroy an item at all. See [`Storage::discard`].
     pub fn can_discard(&self) -> bool {
         self.discard.is_some()
+    }
+
+    /// Whether this session can put an item on the ground. See [`Storage::drop_to_ground`].
+    ///
+    /// `false` also when the world is not up: the `MapItemManImpl` singleton is null at the title
+    /// screen and is freed again by `CS::InGameStep::_Common_Finalize` on the way back to it.
+    pub fn can_drop(&self) -> bool {
+        self.drop.is_some()
     }
 
     /// Resolve every native and both inventory pointers, or refuse.
@@ -402,6 +503,8 @@ impl Storage {
             // Safety: as above.
             get_entry: unsafe { core::mem::transmute::<usize, GetEntryFn>(get_entry) },
             discard: discard_natives(module_base),
+            // Safety: game thread; the singleton read inside is fault-checked.
+            drop: unsafe { drop_natives(module_base) },
             remove_gem: crate::native::resolve(
                 module_base,
                 REMOVE_GEM_FROM_WEAPON_RVA,
@@ -533,6 +636,114 @@ impl Storage {
         // Measured, not assumed: the answer is the difference the inventory reports.
         // Safety: game thread, read only.
         (before - unsafe { self.carried_quantity(item_id) }).max(0)
+    }
+
+    /// Put up to `quantity` of the entry at `index` on the ground and take it out of the
+    /// inventory. Returns how many actually left, measured rather than assumed.
+    ///
+    /// # Why this and not [`Storage::discard`]
+    ///
+    /// The discard destroys the entry and everything invested in it. This spawns a world object
+    /// the player can walk back to: the engine's filler reads the item's own gaitem instance, so
+    /// an armament arrives on the ground at the upgrade level it was carried at and with its Ash
+    /// of War still on it. For gear an import is evicting because the storage box is full, that is
+    /// the whole difference between tidying up and taking something away.
+    ///
+    /// # The order is fill, remove, drop -- and each step is where it is for a reason
+    ///
+    /// **Fill first**, because the filler reads the gaitem instance through its handle and
+    /// `RemoveItem` is entitled to destroy that instance. Once filled, the request is sixteen
+    /// bytes of plain data that nothing can invalidate.
+    ///
+    /// **Remove second**, before the drop rather than after it. The inner drop reaches
+    /// `SaveRequest_Profile` on the ordinary path, so dropping first can raise a save while the
+    /// item is still in the inventory and persist it in both places at once -- a duplicate the
+    /// player keeps. Removing first makes the only window "out of the pockets, not yet on the
+    /// ground", and the spawn is queued rather than immediate anyway: `DropItem` pushes onto
+    /// `MapItemManImpl.broadcastQueue` and `STEP_MoveMap` drains it on the next world step.
+    ///
+    /// **Drop last, for exactly what left.** The quantity handed to the drop is the measured
+    /// difference in the carried inventory, not the quantity asked for. A removal that took less
+    /// than expected therefore drops less, and a removal that took nothing drops nothing -- which
+    /// is what stops this creating items out of a failed discard.
+    ///
+    /// # What it refuses
+    ///
+    /// A handle the filler cannot look up. `FUN_14055e3d0` leaves `itemId` at `-1` when it cannot
+    /// resolve the instance, and going on from there would remove the entry and spawn nothing --
+    /// a silent destruction wearing this method's name. The `-1` is checked before anything moves.
+    ///
+    /// # Safety
+    ///
+    /// Game thread, player in the world, `index` a live carried entry.
+    pub unsafe fn drop_to_ground(&self, index: i32, quantity: i32) -> i32 {
+        let Some(natives) = self.drop else {
+            return 0;
+        };
+        if quantity <= 0 {
+            return 0;
+        }
+        let Ok(slot) = u32::try_from(index) else {
+            return 0;
+        };
+        // Safety: engine-owned inventory and an index it bounds-checks; a freed slot answers null.
+        let entry = unsafe { (self.get_entry)(self.carried, slot) };
+        if entry == 0 {
+            return 0;
+        }
+        // The gaitem handle is the entry's first field, the same read `entries_of` does. It has to
+        // be the handle rather than the item id: the upgrade level and the ash live on the
+        // instance, and an id names a row rather than a copy.
+        // Safety: two fault-checked reads at confirmed offsets in a live 24-byte entry.
+        let handle = unsafe { er_game_base::mem::safe_read_i32(entry) };
+        let item_id = unsafe { er_game_base::mem::safe_read_i32(entry + 4) };
+        let (Some(handle), Some(item_id)) = (handle, item_id) else {
+            return 0;
+        };
+        if handle == 0 || item_id == -1 {
+            return 0;
+        }
+
+        let mut request = ItemDropData::EMPTY;
+        let mut handle = handle as u32;
+        // Safety: resolved for the running build; the filler writes only the four fields of the
+        // request, and both it and the handle are ours and outlive the call.
+        unsafe { (natives.fill_from_gaitem)(&raw mut request, &raw mut handle) };
+        if request.item_id == -1 {
+            // The filler could not resolve the instance, so there is nothing to put on the ground
+            // and the entry stays where it is.
+            return 0;
+        }
+
+        // Out of the pockets, and measured either side -- the only number worth acting on is the
+        // one the inventory agrees with.
+        // Safety: game thread, read only.
+        let before = unsafe { self.carried_quantity(item_id as u32) };
+        // Safety: delegated -- `discard` re-resolves the index immediately before its own call and
+        // refuses when the pair has no mapping for this build.
+        unsafe { self.discard(item_id as u32, quantity) };
+        // Safety: game thread, read only.
+        let after = unsafe { self.carried_quantity(item_id as u32) };
+        let removed = (before - after).max(0);
+        if removed <= 0 {
+            // Nothing left the inventory, so nothing goes on the ground. Dropping here would hand
+            // the player a second copy of something they still have.
+            return 0;
+        }
+        request.quantity = removed;
+
+        // `FALSE, false`, which is what four of the five vanilla callers pass, `AddOrRemoveItem`
+        // -- the engine's own inventory-overflow drop -- among them. `isNetworked` does not choose
+        // between the network spawn and the local one: that is a different flag bit, set from the
+        // item's own param row, so the game decides it whatever is passed here. All this argument
+        // does is set a bit on the drop record that nothing in the local path reads, and leaving
+        // it clear is the choice that adds no unexamined state to a co-op session.
+        // `spawnInRadiusAroundPlayer` is false, so several evicted items land on one point instead
+        // of scattering over a 0.8-unit disc.
+        // Safety: resolved for the running build, called on the game thread with the player in the
+        // world, and `map_item_man` was null-checked when it was resolved.
+        unsafe { (natives.drop_item)(natives.map_item_man, &raw mut request, 0, false) };
+        removed
     }
 
     /// Every live entry the carried inventory holds, as `(inventory index, item id, quantity)`.
@@ -1100,6 +1311,37 @@ mod tests {
         assert_eq!(GET_INVENTORY_ITEM_ENTRY_BY_INDEX_RVA, 0x24e770);
         assert_eq!(EQUIP_GAME_DATA_REMOVE_ITEM_RVA, 0x248ad0);
         assert_eq!(ADJUST_QUANTITY_BY_RVA, 0x24bfe0);
+    }
+
+    /// The world-drop trio, pinned to the 1.16.2 static RE and to the ledger row that carries it.
+    ///
+    /// `docs/recon/rva-map-1162-to-1170.verified.tsv` maps `0x14055aba0 -> 0x14055b9f0` and
+    /// `0x14055e3d0 -> 0x14055f220`, both `IDENTICAL-WHOLE` at ratio 1.000 over their whole bodies
+    /// with matching `.pdata` extents, and the data map carries `0x3d67a50 -> 0x3d6bac0`. If one
+    /// of these constants is edited without the ledger, the address resolves to a function that is
+    /// not this one, so the constant and the row are checked together rather than separately.
+    #[test]
+    fn the_drop_trio_matches_the_1162_static_re() {
+        assert_eq!(er_game_base::rva::MAP_ITEM_MAN_DROP_ITEM_RVA, 0x55aba0);
+        assert_eq!(er_game_base::rva::ITEM_DROP_DATA_FROM_GAITEM_RVA, 0x55e3d0);
+        assert_eq!(er_game_base::rva::GLOBAL_MAP_ITEM_MAN_RVA, 0x3d67a50);
+    }
+
+    /// The request is sixteen bytes of four ints, which is the whole input contract.
+    ///
+    /// `DropItem` reads it with a single `movups` and copies all sixteen bytes into its own list,
+    /// so a struct that is not exactly this shape hands the engine four fields it did not mean.
+    #[test]
+    fn the_drop_request_is_four_ints_and_nothing_else() {
+        assert_eq!(core::mem::size_of::<ItemDropData>(), 16);
+        assert_eq!(core::mem::align_of::<ItemDropData>(), 4);
+        // `-1` is "nothing known", which is what the engine's own per-entry constructor writes and
+        // what the filler leaves behind when it cannot resolve an instance. A request still
+        // holding it in `item_id` must never be dropped.
+        assert_eq!(ItemDropData::EMPTY.item_id, -1);
+        assert_eq!(ItemDropData::EMPTY.quantity, 0);
+        assert_eq!(ItemDropData::EMPTY.reinforce, -1);
+        assert_eq!(ItemDropData::EMPTY.gem_id, -1);
     }
 
     /// The discard pair is the only optional group here, and the two halves move together.

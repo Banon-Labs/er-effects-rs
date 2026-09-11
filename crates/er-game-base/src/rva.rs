@@ -369,6 +369,51 @@ pub const ADJUST_QUANTITY_BY_RVA: usize = 0x24bfe0;
 /// instance, so the id of the item cannot say which copy to strip.
 pub const REMOVE_GEM_FROM_WEAPON_RVA: usize = 0x249e60;
 
+/// `CS::MapItemManImpl::DropItem(MapItemManImpl*, ItemDropData*, DL_BOOL isNetworked, bool
+/// spawnInRadiusAroundPlayer)` -- the engine's put-this-on-the-ground action.
+///
+/// The body is short and copies rather than interprets: it builds a one-entry `ItemDropDataList`,
+/// copies `itemId`, `quantity`, `reinforce` into `upgrade` and `gemId` straight across, calls the
+/// inner drop, and destroys the list. So whatever is in the `ItemDropData` is what lands.
+///
+/// # Why this and not the Discard
+///
+/// [`EQUIP_GAME_DATA_REMOVE_ITEM_RVA`] destroys the entry and everything on it. This spawns a
+/// world object the player can walk back to and pick up, carrying the armament's upgrade level
+/// and its mounted Ash of War with it -- so a `+25` shield the storage box had no room for lands
+/// as a `+25` shield instead of ceasing to exist. For gear an import did not ask for, that is the
+/// difference between a tidy-up and a loss.
+///
+/// # It does not touch the inventory
+///
+/// The inner drop's whole callee set contains no `EquipGameData` or `EquipInventoryData` symbol.
+/// This spawns the object and nothing else; the caller still has to remove the entry, and the
+/// order matters -- see `er_build_import_runtime::storage::Storage::drop_to_ground`.
+pub const MAP_ITEM_MAN_DROP_ITEM_RVA: usize = 0x55aba0;
+
+/// `FUN_14055e3d0(ItemDropData *out, GaItemHandle *held)` -- fill a drop request from an instance.
+///
+/// The reason a drop preserves anything. It zeroes the request to `{-1, 0, -1, -1}` and then, for
+/// a weapon, reads `GetItemId` into `itemId`, `GetDurability` into `reinforce`, and -- when
+/// `GetGemGaitemHandleFromWeapon` finds one -- that gem's own item id into `gemId`. Anything else
+/// gets the first two. A hand-built `ItemDropData` cannot do this: the upgrade level and the ash
+/// live on the gaitem instance, not in the item id, so filling the struct by hand drops a bare
+/// item and calls it success.
+///
+/// `quantity` is deliberately left at zero here; the game's own caller sets it afterwards.
+///
+/// Its caller `FUN_140784960` is the inventory menu's Drop action, which is the path this repo
+/// clones: fill from the handle, set the quantity, null-check the singleton, drop.
+pub const ITEM_DROP_DATA_FROM_GAITEM_RVA: usize = 0x55e3d0;
+
+/// `GLOBAL_MapItemMan` -- the `CS::MapItemManImpl` singleton [`MAP_ITEM_MAN_DROP_ITEM_RVA`] takes.
+///
+/// A plain data global, not a getter. Every one of its five call sites null-checks it and takes
+/// the `FD4Singleton` `DLPanic` path when it is null, so a caller must check it too rather than
+/// pass a null through. It is populated once the world is up and freed again by
+/// `CS::InGameStep::_Common_Finalize` on return to title.
+pub const GLOBAL_MAP_ITEM_MAN_RVA: usize = 0x3d67a50;
+
 /// `EquipInventoryData::GetInventoryItemEntryByIndex(inventory, uint itemIdx)
 /// -> InventoryItemEntry*`.
 ///
