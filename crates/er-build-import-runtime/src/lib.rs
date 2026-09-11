@@ -70,7 +70,7 @@ pub const CONFIG_FILE_NAME: &str = "er-quickload.toml";
 /// Identifies this client to the API owner, who runs the service for free.
 pub(crate) const USER_AGENT: &str = "er-mods-rs build-import (+github.com/Banon-Labs)";
 
-/// Log file name, written next to the game executable.
+/// Log file name, used as the game-directory default when no launcher redirect is set.
 const LOG_NAME: &str = "er-build-import.log";
 
 // ------------------------------------------------------------------ state
@@ -1421,8 +1421,32 @@ fn module_base() -> usize {
 /// Routed through `er_game_base::log` so the file describes one run: the shared helper rotates the
 /// previous run's log aside on first write instead of letting runs pile up in one file.
 pub fn log_line(line: &str) {
-    let path = er_game_base::log::game_directory_path()
-        .map(|dir| dir.join(LOG_NAME))
-        .unwrap_or_else(|| PathBuf::from(LOG_NAME));
-    er_game_base::log::append_line(&path, format_args!("{line}"));
+    er_game_base::log::append_line(&log_path(), format_args!("{line}"));
+}
+
+/// Where this run's import report lands: the artifact directory the launcher named, else beside the
+/// game executable.
+///
+/// This crate wrote straight into the game directory until 2026-09-10, so a run directory under
+/// `~/.cache/er-me3-runs/` held zero build-import lines and the only copy of the report sat in the
+/// single slot every later launch competes for. `er_game_base::log::begin_fresh_run` rotates
+/// `<name>` to `<name>.prev` and truncates on the first write of each process, so two more imports
+/// destroy the report anyone is still asking about. Measured on run `br-20260911-005533-858a`: the
+/// investigation had to read the game-directory copy, which had survived only because nothing had
+/// rotated it yet.
+///
+/// Public because the standalone shell's panic hook writes into the same file and must follow the
+/// same redirect. A hook that resolved the game-directory name itself would put the crash report
+/// somewhere other than the run whose log explains it.
+///
+/// The default with no env var set is unchanged, which is the whole contract of
+/// `redirected_artifact_path`: a redirect that does not survive `launch.sh` -> me3 -> Proton must
+/// still leave the report beside `eldenring.exe` rather than write it nowhere.
+pub fn log_path() -> PathBuf {
+    // The knob is spelled inline rather than through a `const`:
+    // `scripts/er-artifact-redirect-audit.py` discovers every launcher knob by reading the Rust for
+    // this exact call shape with a string literal, so a name hidden behind a constant is a knob the
+    // audit cannot see -- and an invisible knob is how this file went unredirected in the first
+    // place.
+    er_game_base::log::redirected_artifact_path("ER_QUICKLOAD_BUILD_IMPORT_LOG_PATH", LOG_NAME)
 }
