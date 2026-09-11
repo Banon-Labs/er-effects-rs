@@ -1093,9 +1093,11 @@ pub unsafe fn install_title_update_hook(base: usize) {
             ));
         }
     }
-    // `MhHook` is three raw pointers and dropping it does not revert the patch, so the handle is
-    // let go rather than kept.
-    std::mem::forget(hook);
+    // No statement here releases `hook`, and none is needed: `MhHook` is three raw pointers with
+    // no `Drop` impl, so it neither reverts the patch nor frees anything when it falls out of
+    // scope at the end of this function. `std::mem::forget` and `drop` are both rejected on such a
+    // type, by `forget_non_drop` and `drop_non_drop` respectively, and the two lints agree: on a
+    // non-`Drop` type those calls are identical and neither does anything.
 }
 /// Gated, fail-closed, one-shot readiness advance past press-any-button. Reads the built job at
 /// `[step+0x130]`; once it is a valid in-image job (we are at press-any-button) and has settled, sets

@@ -451,9 +451,14 @@ pub fn install() -> bool {
     // SAFETY: applies the queue this function just added to.
     match unsafe { er_hook::MH_ApplyQueued() } {
         er_hook::MH_STATUS::MH_OK => {
-            // Leaked with the rest of the install: `MhHook` is three raw pointers and dropping it
-            // does not revert the patch, so there is nothing to keep alive and nothing to free.
-            core::mem::forget(hook);
+            // No statement here releases `hook`, and none is needed: `MhHook` is three raw
+            // pointers with no `Drop` impl, so it neither reverts the patch nor frees anything
+            // when it falls out of scope at the end of this function.
+            //
+            // It carried `core::mem::forget(hook)` until clippy's `forget_non_drop` rejected it,
+            // and then `drop(hook)` until `drop_non_drop` rejected that. Both lints say the same
+            // thing from opposite directions -- on a non-`Drop` type the two calls are identical
+            // and neither does anything -- so the honest spelling is the absence of a call.
             crate::standalone_log(format_args!(
                 "announce: watching CS::FeSystemAnnounceView::Update at {address:#x} to learn the \
                  live view -- this is the game's own auto-closing notice, not a dialog. Bare \
