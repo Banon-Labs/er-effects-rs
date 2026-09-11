@@ -526,6 +526,60 @@ pub fn quit_row_verdict_text(verdict: QuitRowVerdict) -> String {
     }
 }
 
+/// What a press on one of the two native Quit rows should do in this load.
+///
+/// The two native rows are on the tab whether or not anything is cloned, and unlike a cloned row
+/// they cannot be left out of a [`crate::row_cloner::RowSet`] -- the game put them there. So a load
+/// that does not own a native row's flow has to decide what happens to a press it is not equipped
+/// to handle, and only one of the three answers is correct for each case.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeRowAction {
+    /// This load supplies the row's flow; run it and suppress the game's own action.
+    RunFlow,
+    /// This load does not supply the flow, and the press is positively this row's own thunk.
+    /// Forward it, so the row keeps exactly the behaviour vanilla gave it.
+    ForwardNative,
+    /// This load does not supply the flow and cannot prove whose thunk the press is carrying.
+    /// Run nothing.
+    Suppress,
+}
+
+/// Decide what a native Quit row's press does, from the four facts that bear on it.
+///
+/// The rule this encodes: **a load that does not implement a native row must leave that row
+/// alone.** Suppressing it instead produces a row that does nothing -- measured 2026-09-11 on a
+/// standalone shell, where the tab's first row read "Quit Game" and was inert because the router
+/// swallowed the native action and had no Save Game flow to put in its place. For Return to Desktop
+/// the same gap is worse than inert: the product's instant `ExitProcess(0)` is only safe because it
+/// persists the character first, so a load with no save request that took that path would terminate
+/// on unsaved progress.
+///
+/// Forwarding is gated on both halves of the row's identity, never on the cursor alone.
+/// `dispatching_controller` must be the controller captured for this row when the tab was built,
+/// because the visible buttons dispatch through only two controllers -- a press can arrive carrying
+/// the *other* native row's thunk, and the action behind that one is the irreversible Return to
+/// Desktop. Without that agreement, or without a trampoline to forward through, the answer is
+/// [`NativeRowAction::Suppress`]: a row that does nothing is a nuisance, and a row that quits the
+/// process when the player did not ask it to is not shippable.
+#[must_use]
+pub fn native_row_action(
+    load_supplies_flow: bool,
+    trampoline_available: bool,
+    captured_controller: usize,
+    dispatching_controller: usize,
+) -> NativeRowAction {
+    if load_supplies_flow {
+        return NativeRowAction::RunFlow;
+    }
+    if trampoline_available
+        && captured_controller != 0
+        && dispatching_controller == captured_controller
+    {
+        return NativeRowAction::ForwardNative;
+    }
+    NativeRowAction::Suppress
+}
+
 /// `true` when a resolved non-quit row arrived at an instant-quit gate. Root telemetry records this
 /// separately from plain ambiguity because it catches action-alias false-positive regressions.
 pub fn quit_row_is_false_quit_claim(verdict: QuitRowVerdict) -> bool {
@@ -542,6 +596,86 @@ pub fn quit_row_is_false_quit_claim(verdict: QuitRowVerdict) -> bool {
 #[cfg(test)]
 mod system_quit_row_identity_tests {
     use super::*;
+
+    /// The product owns both native flows, so nothing about its two rows changes -- whatever the
+    /// controllers happen to be.
+    #[test]
+    fn a_load_that_owns_the_flow_always_runs_it() {
+        assert_eq!(
+            native_row_action(true, true, 0x1a026d00, 0x1a026d00),
+            NativeRowAction::RunFlow
+        );
+        // Not even a controller disagreement diverts it: the product suppressed and ran its flow
+        // before this decision existed, and that behaviour is deliberately untouched.
+        assert_eq!(
+            native_row_action(true, false, 0, 0x1a025f00),
+            NativeRowAction::RunFlow
+        );
+    }
+
+    /// The standalone-shell case this exists for: no flow, but the press is provably this row's
+    /// own thunk, so the row behaves exactly as vanilla built it.
+    #[test]
+    fn a_load_without_the_flow_forwards_the_rows_own_thunk() {
+        assert_eq!(
+            native_row_action(false, true, 0x1a026d00, 0x1a026d00),
+            NativeRowAction::ForwardNative
+        );
+    }
+
+    /// The press arrived carrying the other native row's controller. Forwarding here runs whatever
+    /// action sits behind that thunk, and for the second row that is `ExitProcess(0)`.
+    #[test]
+    fn a_press_carrying_another_rows_controller_is_never_forwarded() {
+        assert_eq!(
+            native_row_action(false, true, 0x1a026d00, 0x1a025f00),
+            NativeRowAction::Suppress
+        );
+    }
+
+    /// Nothing was captured for this row, so there is no identity to agree with.
+    #[test]
+    fn an_uncaptured_row_is_never_forwarded() {
+        assert_eq!(
+            native_row_action(false, true, 0, 0x1a026d00),
+            NativeRowAction::Suppress
+        );
+        // ... and a zero dispatching controller must not match a zero captured one.
+        assert_eq!(
+            native_row_action(false, true, 0, 0),
+            NativeRowAction::Suppress
+        );
+    }
+
+    /// No trampoline to forward through. The union slot is unset, so there is nothing to call.
+    #[test]
+    fn without_a_trampoline_there_is_nothing_to_forward_to() {
+        assert_eq!(
+            native_row_action(false, false, 0x1a026d00, 0x1a026d00),
+            NativeRowAction::Suppress
+        );
+    }
+
+    /// Exhaustive over the decision's whole input shape: forwarding is reachable from exactly one
+    /// combination, so no future edit can widen it without failing this.
+    #[test]
+    fn forwarding_requires_every_one_of_its_three_conditions() {
+        let mut forwarding = Vec::new();
+        for flow in [false, true] {
+            for trampoline in [false, true] {
+                for captured in [0usize, 0x1a026d00] {
+                    for dispatching in [0usize, 0x1a026d00, 0x1a025f00] {
+                        if native_row_action(flow, trampoline, captured, dispatching)
+                            == NativeRowAction::ForwardNative
+                        {
+                            forwarding.push((flow, trampoline, captured, dispatching));
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(forwarding, vec![(false, true, 0x1a026d00, 0x1a026d00)]);
+    }
 
     /// The measured table from the fatal run: dialog 0x175842080, rows 0..3 =
     /// Save Game / Return to Desktop / Load Character / Load Character from File, cursor on row 1,
