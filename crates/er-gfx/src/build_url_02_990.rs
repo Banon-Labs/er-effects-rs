@@ -33,12 +33,15 @@
 //!   (character 6, depths 2 and 4) are kept and scaled horizontally with the field, so the field
 //!   keeps the game's own text-entry chrome;
 //! * the field grows from 400 px to [`FIELD_WIDTH_PX`], measured against the link it has to hold;
-//! * a caption ([`CAPTION`]) is added above the box, naming the row that opened it;
-//! * [`build_url_window_position`] centres the box on the 1920x1080 stage.
+//! * a caption ([`CAPTION`]) is added above the box, centred over it, naming the row that opened
+//!   it;
+//! * [`build_url_window_position`] centres the caption and the box together on the 1920x1080
+//!   stage.
 //!
 //! Font height, text colour, box height and the frame's vertical scale are the movie's own values,
 //! read out of it rather than chosen here.
 
+use crate::announce_notice::ALIGN_CENTER;
 use crate::text_input_02_990::is_known_vanilla;
 use crate::{EditTextLayout, GfxError, Matrix, Movie, Rect, TWIPS_PER_PIXEL, Tag};
 use er_game_base::fnv1a::fnv1a64;
@@ -49,7 +52,7 @@ use er_game_base::fnv1a::fnv1a64;
 /// -- exactly as the save picker's derivation handles the same pair of inputs.
 pub const CENTERED_LEN: usize = 1222;
 /// FNV-1a-64 of the [`CENTERED_LEN`]-byte derived movie.
-pub const CENTERED_FNV1A64: u64 = 0xad1c_495a_f7fb_8787;
+pub const CENTERED_FNV1A64: u64 = 0xacd1_3190_e7fc_24d1;
 
 /// Sprite id of the `TextInput` sprite, and character ids inside it. Vanilla values.
 const TEXT_INPUT_SPRITE_ID: u16 = 8;
@@ -73,6 +76,14 @@ const NATIVE_PLATE_LEFT_TWIPS: i32 = -200;
 const NATIVE_PLATE_LEFT_PX: f32 = -10.0;
 const NATIVE_PLATE_RIGHT_PX: f32 = 390.0;
 const NATIVE_PLATE_HEIGHT_PX: f32 = 36.0;
+/// The ornament's bottom edge in sprite-local px, which is the composition's lowest painted edge.
+///
+/// Both `MENU_FL_Arts_waku2` placements (character 6, depths 2 and 4) sit at `ty = -343` twips
+/// with `scale_y = 45889/65536` over a 100 px tall image, so the frame runs from -17.15 px to
+/// 52.87 px -- roughly 17 px above the plate and 17 px below it, which is why centring on the
+/// plate and centring on the ornament come out within a fifth of a pixel of each other.
+/// [`scale_matrix_horizontally`] touches neither term, so this holds at any field width.
+const NATIVE_FRAME_BOTTOM_PX: f32 = 52.871_057;
 /// Root placement of the `TextInput` sprite (`tx = ty = 2000` twips).
 const NATIVE_TEXT_INPUT_ORIGIN_PX: f32 = 100.0;
 /// The movie's authored stage (header rect `0..38400 x 0..21600` twips).
@@ -151,24 +162,50 @@ fn width_scale() -> f64 {
     FIELD_WIDTH_PX as f64 / NATIVE_FIELD_WIDTH_PX as f64
 }
 
-/// Where the owning `MenuWindow` root has to sit for the box to land dead centre on the stage.
+/// Top and bottom of everything this movie paints, in sprite-local px.
 ///
-/// The window root is positioned in stage pixels with the origin at the top-left -- the same
-/// coordinate space the save picker's proven placement writes through
-/// `set_scaleform_value_position`. The box's centre inside the movie is the sprite's authored
-/// `(100, 100)` origin plus the scaled plate's own centre, so the translate is simply stage centre
-/// minus that.
+/// The top is the caption box's own top edge; the bottom is whichever of the plate and the
+/// ornament reaches lower, which is the ornament. Splitting this out is what lets
+/// [`build_url_window_position`] centre a composition rather than one of its parts.
+fn composition_extent_y() -> (f32, f32) {
+    let caption_top =
+        CAPTION_BOTTOM_TWIPS as f32 / TWIPS_PER_PIXEL as f32 - CAPTION_HEIGHT_PX as f32;
+    (
+        caption_top,
+        NATIVE_FRAME_BOTTOM_PX.max(NATIVE_PLATE_HEIGHT_PX),
+    )
+}
+
+/// Where the owning `MenuWindow` root has to sit for the caption and the box to land dead centre
+/// on the stage, as one block.
 ///
-/// The caption rides above the box rather than sharing its centring: a labelled field centres on
-/// the field, which is what the eye tracks and what the caret sits in.
+/// The window root is positioned in stage pixels with the origin at the top-left. That is the
+/// display object's own registration point rather than its bounding-box centre, measured out of
+/// the setter this placement reaches: the game's `FUN_140d83e20` writes both floats verbatim into
+/// the first two doubles of the `DisplayInfo` buffer and raises the `V_x|V_y` bits, with no unit
+/// conversion of any kind on the position path -- unlike its scale sibling `FUN_140d84090`, which
+/// multiplies by 100.0 for Scaleform's percent space. It is also the coordinate space the save
+/// picker's proven placement writes through the same `set_scaleform_value_position`.
+///
+/// So the translate is stage centre minus the composition's own centre inside the movie, and that
+/// centre is the sprite's authored `(100, 100)` origin plus the midpoint of what the movie paints.
+/// Horizontally that is the scaled plate, which the caption is centred over rather than flushed
+/// against; vertically it is [`composition_extent_y`], the caption box's top down to the
+/// ornament's bottom.
+///
+/// Centring the plate alone was the earlier rule, and it is what put the pair off centre in both
+/// axes: the caption hung above a centred box, so the block's own centre sat about 31 px above the
+/// stage's, and the caption's text was left-aligned in a box as wide as the field, so its 203.7 px
+/// ended more than 100 px short of the screen's midline while the plate straddled it.
 pub fn build_url_window_position() -> (f32, f32) {
     let scale = width_scale() as f32;
     let box_center_x =
         NATIVE_TEXT_INPUT_ORIGIN_PX + (NATIVE_PLATE_LEFT_PX + NATIVE_PLATE_RIGHT_PX) * 0.5 * scale;
-    let box_center_y = NATIVE_TEXT_INPUT_ORIGIN_PX + NATIVE_PLATE_HEIGHT_PX * 0.5;
+    let (top, bottom) = composition_extent_y();
+    let composition_center_y = NATIVE_TEXT_INPUT_ORIGIN_PX + (top + bottom) * 0.5;
     (
         STAGE_WIDTH_PX * 0.5 - box_center_x,
-        STAGE_HEIGHT_PX * 0.5 - box_center_y,
+        STAGE_HEIGHT_PX * 0.5 - composition_center_y,
     )
 }
 
@@ -294,7 +331,11 @@ pub fn centered_build_url_editor(vanilla: &[u8]) -> Result<Vec<u8>, BuildUrlFiel
         ));
     };
 
-    // 2. Add the caption, defined immediately after the field it labels.
+    // 2. Add the caption, defined immediately after the field it labels. It inherits the field's
+    //    voice but not its alignment: the link inside the box stays left-aligned because that is
+    //    where the caret is, while a label names the whole field and belongs on the field's own
+    //    axis. Left-aligned in a box as wide as the field, the caption's 203.7 px sat entirely in
+    //    the left half of the screen and dragged the block off centre with it.
     let field_index = movie
         .tags
         .iter()
@@ -335,7 +376,10 @@ pub fn centered_build_url_editor(vanilla: &[u8]) -> Result<Vec<u8>, BuildUrlFiel
             font_height: style.font_height,
             text_color: style.text_color,
             max_length: None,
-            layout: style.layout,
+            layout: style.layout.map(|layout| EditTextLayout {
+                align: ALIGN_CENTER,
+                ..layout
+            }),
             variable_name: String::new(),
             initial_text: Some(CAPTION.to_owned()),
             force_long: false,
@@ -452,17 +496,40 @@ mod tests {
     /// The centring arithmetic, done twice: once by the helper, once by hand from the vanilla
     /// numbers this module documents.
     #[test]
-    fn the_box_centre_lands_on_the_stage_centre() {
+    fn the_composition_centre_lands_on_the_stage_centre() {
         let (window_x, window_y) = build_url_window_position();
         let scale = FIELD_WIDTH_PX as f32 / NATIVE_FIELD_WIDTH_PX as f32;
         let box_left = window_x + NATIVE_TEXT_INPUT_ORIGIN_PX + NATIVE_PLATE_LEFT_PX * scale;
         let box_right = window_x + NATIVE_TEXT_INPUT_ORIGIN_PX + NATIVE_PLATE_RIGHT_PX * scale;
         assert_eq!((box_left + box_right) * 0.5, STAGE_WIDTH_PX * 0.5);
         assert_eq!(box_right - box_left, FIELD_WIDTH_PX as f32);
-        let box_top = window_y + NATIVE_TEXT_INPUT_ORIGIN_PX;
-        assert_eq!(
-            box_top + NATIVE_PLATE_HEIGHT_PX * 0.5,
-            STAGE_HEIGHT_PX * 0.5
+
+        // The caption box ends 22 px above the sprite origin and is 40 px tall, so the block's top
+        // edge is 62 px above it -- by hand, from the two constants that decide it.
+        let (top, bottom) = composition_extent_y();
+        assert_eq!(top, -62.0);
+        assert_eq!(bottom, NATIVE_FRAME_BOTTOM_PX);
+        let block_top = window_y + NATIVE_TEXT_INPUT_ORIGIN_PX + top;
+        let block_bottom = window_y + NATIVE_TEXT_INPUT_ORIGIN_PX + bottom;
+        assert!(
+            ((block_top + block_bottom) * 0.5 - STAGE_HEIGHT_PX * 0.5).abs() < 0.01,
+            "caption and box centre together, got {block_top}..{block_bottom}"
         );
+    }
+
+    /// The ornament overhangs the plate by about the same amount at each end, so which of the two
+    /// the block's bottom is measured from moves the result by a fifth of a pixel -- and taking the
+    /// lower of them cannot crop the art.
+    #[test]
+    fn the_ornament_is_concentric_with_the_plate() {
+        let frame_top = NATIVE_FRAME_BOTTOM_PX - 100.0 * 45_889.0 / 65_536.0;
+        assert!((frame_top + 17.15).abs() < 0.01, "frame top {frame_top}");
+        let frame_centre = (frame_top + NATIVE_FRAME_BOTTOM_PX) * 0.5;
+        assert!(
+            (frame_centre - NATIVE_PLATE_HEIGHT_PX * 0.5).abs() < 0.2,
+            "ornament centre {frame_centre} against plate centre {}",
+            NATIVE_PLATE_HEIGHT_PX * 0.5
+        );
+        assert!(NATIVE_FRAME_BOTTOM_PX > NATIVE_PLATE_HEIGHT_PX);
     }
 }

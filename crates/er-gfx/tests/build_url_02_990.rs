@@ -6,6 +6,7 @@
 mod common;
 
 use er_game_base::fnv1a::fnv1a64;
+use er_gfx::announce_notice::{ALIGN_CENTER, ALIGN_LEFT};
 use er_gfx::build_url_02_990::{
     CAPTION, CENTERED_FNV1A64, CENTERED_LEN, FIELD_WIDTH_PX, build_url_window_position,
     centered_build_url_editor,
@@ -104,6 +105,7 @@ fn the_link_field_keeps_the_movies_own_chrome_and_is_wide_enough_for_a_planner_l
                     font_height,
                     text_color,
                     initial_text,
+                    layout,
                     ..
                 } if *id == character_id => Some((
                     bounds.clone(),
@@ -111,13 +113,15 @@ fn the_link_field_keeps_the_movies_own_chrome_and_is_wide_enough_for_a_planner_l
                     *font_height,
                     *text_color,
                     initial_text.clone(),
+                    layout.clone(),
                 )),
                 _ => None,
             })
             .unwrap_or_else(|| panic!("DefineEditText {character_id} present"))
     };
-    let (field_bounds, field_font, field_height, field_color, _) = define(TEXT_FIELD_CHARACTER_ID);
-    let (caption_bounds, caption_font, caption_height, caption_color, caption_text) =
+    let (field_bounds, field_font, field_height, field_color, _, field_layout) =
+        define(TEXT_FIELD_CHARACTER_ID);
+    let (caption_bounds, caption_font, caption_height, caption_color, caption_text, caption_layout) =
         define(CAPTION_CHARACTER_ID);
     assert_eq!(
         field_bounds.x_max - field_bounds.x_min,
@@ -130,6 +134,17 @@ fn the_link_field_keeps_the_movies_own_chrome_and_is_wide_enough_for_a_planner_l
     );
     assert_eq!(caption_height, field_height);
     assert_eq!(caption_color, field_color);
+    // The caption is centred over the box and the field is not: the link starts where the caret
+    // does, while the label names the whole field and sits on its axis. Everything else about the
+    // caption's layout block is the field's own.
+    let field_layout = field_layout.expect("the vanilla field carries a layout block");
+    let caption_layout = caption_layout.expect("the caption inherits the field's layout block");
+    assert_eq!(field_layout.align, ALIGN_LEFT);
+    assert_eq!(caption_layout.align, ALIGN_CENTER);
+    assert_eq!(caption_layout.left_margin, field_layout.left_margin);
+    assert_eq!(caption_layout.right_margin, field_layout.right_margin);
+    assert_eq!(caption_layout.indent, field_layout.indent);
+    assert_eq!(caption_layout.leading, field_layout.leading);
     assert_eq!(
         field_height,
         Some(24 * TWIPS_PER_PIXEL as u16),
@@ -186,19 +201,31 @@ fn the_link_field_keeps_the_movies_own_chrome_and_is_wide_enough_for_a_planner_l
     );
 }
 
-/// The box lands centred on the movie's own 1920x1080 stage.
+/// The caption and the box land centred on the movie's own 1920x1080 stage as one block.
 #[test]
-fn the_window_translate_centres_the_box_on_the_stage() {
+fn the_window_translate_centres_the_caption_and_box_on_the_stage() {
     let (window_x, window_y) = build_url_window_position();
     let scale = FIELD_WIDTH_PX as f32 / 400.0;
     // sprite origin (100, 100) + the scaled plate rect (-10..390 px, 0..36 px).
     let left = window_x + 100.0 - 10.0 * scale;
     let right = window_x + 100.0 + 390.0 * scale;
-    let top = window_y + 100.0;
     assert_eq!((left + right) * 0.5, 960.0);
-    assert_eq!(top + 36.0 * 0.5, 540.0);
     assert_eq!(right - left, FIELD_WIDTH_PX as f32);
-    assert_eq!((window_x, window_y), (556.0, 422.0));
+
+    // Vertically the block runs from the caption box's top edge (22 px above the sprite origin,
+    // 40 px tall) down to the ornament's bottom edge (100 px of art at scale_y 45889/65536, placed
+    // at ty = -343 twips). Centring the plate alone left that block about 31 px high on the stage.
+    let block_top = window_y + 100.0 - 62.0;
+    let block_bottom = window_y + 100.0 - 17.15 + 100.0 * 45_889.0 / 65_536.0;
+    assert!(
+        ((block_top + block_bottom) * 0.5 - 540.0).abs() < 0.01,
+        "block {block_top}..{block_bottom} is not centred on 540"
+    );
+    assert_eq!(window_x, 556.0);
+    assert!(
+        (window_y - 444.564_47).abs() < 0.001,
+        "window_y drifted to {window_y}"
+    );
 }
 
 /// The two derivations of one movie must not collide: the save picker's is proven and in use, and
