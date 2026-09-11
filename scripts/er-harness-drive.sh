@@ -7,10 +7,10 @@
 # Every step of the first successful drive (2026-09-11) was retyped by hand, and two of them were
 # wrong in ways that cost far more than the typing:
 #
-#   * the command file is a QUEUE KEYED ON A SEQUENCE NUMBER, and the number must parse as one.
+#   * the command file is a queue keyed on a sequence number, and the number must parse as one.
 #     `300d` does not. Three commands written with hex-ish sequences were silently ignored and read
 #     as "the input channel does not work".
-#   * `resource='02_000_IngameTop'` is NOT a state oracle. The line is repeat-suppressed, so it sits
+#   * `resource='02_000_IngameTop'` is not a state oracle at all. It is repeat-suppressed, so it sits
 #     unchanged in the log while the menu moves underneath it. A confirm that had worked was read as
 #     a confirm that had not, and the drive was nearly abandoned on that reading. The state oracle is
 #     `optionsetting-rows: active tab=N`, which this script reads.
@@ -90,7 +90,12 @@ send() {
 	log=$(harness_log)
 	before=$(wc -l < "$log")
 	printf '%s\n%s\n' "$seq" "$command" > "$(cmd_file)"
-	if timeout 25 tail -n "+$((before + 1))" -f "$log" | grep -q -m1 -F "repl: > $command"; then
+	# grep's verdict, not the pipeline's: `grep -q` ends the pipe and `tail -f` dies of SIGPIPE,
+	# which `pipefail` would otherwise report as this function failing on a command that ran.
+	local verdict
+	verdict=$(timeout 25 tail -n "+$((before + 1))" -f "$log" 2>/dev/null |
+		{ grep -q -m1 -F "repl: > $command" && echo matched || echo missed; })
+	if [ "$verdict" = matched ]; then
 		tail -n "+$((before + 1))" "$log" | grep 'repl:' | sed 's/^/  /'
 		return 0
 	fi

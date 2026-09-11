@@ -15,7 +15,10 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 # What this DLL ships. `build-rows` is deliberately absent: see below.
-default = ["autoload", "quit-rows", "save-picker", "menu-trace"]
+# `autoload` left the default set on 2026-09-11: this shell is the System>Quit rows, and loading
+# a character at boot is the product's job, not theirs. The code stays compiled behind the
+# feature so the two chokepoints in `gating/env_flags.rs` can be read side by side.
+default = ["quit-rows", "save-picker", "menu-trace"]
 # Reach a clean title and deserialise a slot: the own-stepper, the Continue driver, the fullread.
 # The thing the crate is named after.
 autoload = []

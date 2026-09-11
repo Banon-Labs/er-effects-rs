@@ -10,6 +10,16 @@ use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
 use super::*;
 
 pub(crate) fn product_autoload_enabled() -> bool {
+    // Deliberately not gated on the `autoload` feature, and the name is why it looked like it should
+    // be. This latch has exactly one writer -- the System>Quit row arm in
+    // `system_quit_repro_guards.rs`, which sets it beside `SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED` --
+    // so it means "a switch the user asked for is in flight", not "load something at boot". The boot
+    // load is `pab_advance_enabled` and the title accept byte, which `autoload_disabled` below turns
+    // off.
+    //
+    // Gating it here was measured to break the Quit tab: Load Character armed the switch and then
+    // sat at `controller quick-load activation ignored ... phase=2; native handoff already armed`
+    // forever, because the tick that advances that handoff runs behind this reader.
     PRODUCT_AUTOLOAD_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
 }
 /// Default-off gate for the ProfileSelect load flow. When false (the default) `product_core_autoload_tick`
@@ -257,6 +267,14 @@ pub(crate) fn autoload_disabled() -> bool {
     // clean-A/B step-4 test (armed + autoload-off + DRIVE_MODE=full -> reload via harness-Continue epoch1
     // like vanilla, isolating arming from the epoch1-path confound; bd
     // STEP4-4fps-AB-is-structurally-CONFOUNDED). This is a measurement override, not a product feature gate.
+    // The `autoload` feature is the compile-time half of the same question. It is the lever that
+    // matters for this shell: `PRODUCT_AUTOLOAD_ARMED` is not the only driver of a boot load, and
+    // disarming it alone was measured to leave a character still loading -- through
+    // `pab_advance_enabled`, which sets the title accept byte and lets the game's own menu open and
+    // take the Continue row. Both readers derive from here, so one answer turns off both paths.
+    if !cfg!(feature = "autoload") {
+        return true;
+    }
     std::path::Path::new("er-quickload-diag-no-autoload.txt").exists()
 }
 /// Product direction (2026-07-04): the ProfileSelect / Load-Game menu shows a **stats panel** instead

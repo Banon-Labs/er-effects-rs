@@ -18,6 +18,18 @@ pub(crate) use er_save_picker_core::overlay::{
 pub(crate) use er_save_picker_core::overlay::overlay_save_picker_onto;
 
 pub(crate) fn boot_arm_missing_save_picker_in_game() -> bool {
+    // The boot picker exists to choose the save the autoload is about to load, so without the
+    // `autoload` feature there is nothing for it to answer and arming it is actively harmful:
+    // `TitleTopDialog::open_menu` is held while a picker is pending, and with no autoload nothing
+    // ever releases it. Measured 2026-09-11 -- the title sat through twelve confirms with
+    // `title-open-menu-suppress: ... native menu-open held while missing-save picker pending` as
+    // the only explanation in the log.
+    //
+    // This is the boot arm only. The Quit tab's own Load Character from File browser is a separate
+    // entry point and is untouched.
+    if !cfg!(feature = "autoload") {
+        return false;
+    }
     er_save_picker_core::overlay::arm_boot_picker()
 }
 
