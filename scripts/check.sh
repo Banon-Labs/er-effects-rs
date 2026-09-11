@@ -91,16 +91,29 @@ fi
 # the gate runs anyway -- a missing tool must not make the suite unrunnable.
 _check_lock="${XDG_RUNTIME_DIR:-/tmp}/er-mods-rs-check-sh.lock"
 if [[ "${ER_CHECK_FORCE:-}" != "1" && "${ER_CHECK_LOCK_HELD:-}" != "1" ]] && command -v flock >/dev/null 2>&1; then
-	exec 9>"$_check_lock" || true
+	# `9>` truncates on open, and it opens before flock decides anything -- so the refused run
+	# erased the holder's pid and then reported it as `pid unknown`, every time. `9<>` opens for
+	# read and write without truncating, which is why the holder can still be named below.
+	# `9<>` also creates the file when it is absent, so nothing is lost by not truncating here.
+	exec 9<>"$_check_lock" || true
 	if ! flock -n 9; then
-		_holder=$(cat "$_check_lock" 2>/dev/null || true)
-		echo "check.sh: REFUSED -- another run already holds $_check_lock (pid ${_holder:-unknown})." >&2
+		_holder=$(head -n 1 "$_check_lock" 2>/dev/null || true)
+		_holder_state="pid ${_holder:-unknown}"
+		if [[ -n "$_holder" ]] && ! kill -0 "$_holder" 2>/dev/null; then
+			_holder_state="pid $_holder, which is GONE -- a stale record, not a live run"
+		fi
+		echo "check.sh: REFUSED -- another run already holds $_check_lock ($_holder_state)." >&2
 		echo "  Concurrent runs do not just take longer, they corrupt each other's verdict:" >&2
 		echo "  contention produces INCONCLUSIVE and NOT RUN steps, which are not passes." >&2
 		echo "  Wait for that run and read ITS result, or override with ER_CHECK_FORCE=1." >&2
+		echo "  The lock is the flock, never the file: the file outlives every run, so testing" >&2
+		echo "  for its existence waits forever. Test with: flock -n 9 under 9<\"$_check_lock\"." >&2
 		exit 2
 	fi
-	echo "$$" >&9
+	# A second open, with its own truncation, rather than a write through fd 9: `9<>` leaves the
+	# offset at zero and truncates nothing, so a shorter pid written over a longer one would leave
+	# the old digits trailing. This run holds the lock, so nobody else can be opening the file.
+	printf '%s\n' "$$" >"$_check_lock"
 	# ...and a step of this suite may re-enter this preamble. test-check-sh-accumulates.py lifts
 	# it verbatim and drives it over synthetic suites -- deliberately, because testing a copy
 	# would prove nothing about the file that runs. Those children are not a second run competing
@@ -575,6 +588,7 @@ python3 "$repo_root/scripts/audit-selftest-vacuity.py" --selftest
 # over synthetic suites, and its own non-vacuity control deletes the ERR trap and requires the
 # cases to go red.
 python3 "$repo_root/scripts/test-check-sh-accumulates.py"
+python3 "$repo_root/scripts/test-check-sh-lock.py"
 # ...and the other half of "did this suite actually check anything": which of its steps could not
 # run on the machine it ran on. `.github/workflows/check.yml` ran 9 gates while this file ran 224,
 # and nothing said so, because the workflow's step list is hand-written and drifted. The CI set is
