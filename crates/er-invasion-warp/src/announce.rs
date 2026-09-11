@@ -360,16 +360,38 @@ fn verified_fn(rva: usize, prologue: &[u8], what: &str) -> Option<usize> {
 /// our cost on the frame budget and, worse, would mean writing the message from inside the very
 /// function that reads it. Capturing the pointer and writing later from the rejection path keeps
 /// the two apart, and both run on the game thread so there is no race to synchronise.
+///
+/// # The second argument is a float, which is why this is not on the union
+///
+/// `Update(this /*rcx*/, float deltaSeconds /*xmm1*/)`, read out of the image rather than
+/// assumed. At `0x1408c47c6` the function spills `xmm6`, at `0x1408c47ce` it does
+/// `movaps xmm6, xmm1` -- an incoming register read before anything writes it -- and at
+/// `0x1408c485f` it hands the same value back out as argument 2 with `movaps xmm1, xmm6`. It is
+/// single precision, not double: the helper it forwards to stores it `movss [rsp+0x30], xmm1`
+/// (`0x140745a08`), and the display step counts a `float` timer down with `subss xmm1, xmm6`
+/// (`0x1408c4a43`). There are only two arguments -- `rdx`, `r8` and `r9` are written before any
+/// read, and `[rsp+0x48]`, argument 2's home slot, is used to spill `rdi`, which a compiler does
+/// not do to a live incoming argument.
+///
+/// `er_hook::UnionFn` is four `usize`s and the union dispatcher forwards integer registers only,
+/// so a handler on it neither receives `xmm1` nor passes it on; the compiler is free to clobber
+/// that register in the dispatcher body before the trampoline runs, and the banner's own scroll
+/// and fade timers are what the game would then advance by garbage. So this is a bare
+/// [`er_hook::MhHook`] with a correctly typed detour, the same trade as
+/// `er-npc-possess`'s `CSFeManImp::UpdatePlayerComponents` hook and as
+/// `er-loading-portrait-core`'s `loading_screen_update_hook`.
 #[cfg(windows)]
-unsafe extern "system" fn update_hook(view: usize, a: usize, b: usize, c: usize) -> usize {
+unsafe extern "system" fn update_hook(view: usize, delta_seconds: f32) {
     if view != 0 {
         LIVE_VIEW.store(view, Ordering::SeqCst);
     }
     let orig = ORIG_UPDATE.load(Ordering::SeqCst);
     if orig == 0 {
-        return 0;
+        return;
     }
-    unsafe { core::mem::transmute::<usize, er_hook::UnionFn>(orig)(view, a, b, c) }
+    let orig: unsafe extern "system" fn(usize, f32) =
+        unsafe { core::mem::transmute::<usize, unsafe extern "system" fn(usize, f32)>(orig) };
+    unsafe { orig(view, delta_seconds) };
 }
 
 /// Install the view-capture hook. Idempotent; retries until the menu system exists.
@@ -386,20 +408,66 @@ pub fn install() -> bool {
         HOOK_INSTALLED.store(0, Ordering::SeqCst);
         return false;
     };
-    match unsafe {
-        er_hook::register_union_hook(address, update_hook as er_hook::UnionFn, &ORIG_UPDATE)
-    } {
-        Ok(()) => {
+    // Explicit, because leaving the union removed the implicit one. `register_union_hook` calls
+    // `MH_Initialize` itself; `MhHook::new` goes straight to `MH_CreateHook`, so without this the
+    // detour depends on some other hook in this DLL having initialised MinHook first and comes
+    // back `MH_ERROR_NOT_INITIALIZED` whenever the announce install happens to run earliest.
+    match unsafe { er_hook::MH_Initialize() } {
+        er_hook::MH_STATUS::MH_OK | er_hook::MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
             crate::standalone_log(format_args!(
-                "announce: watching CS::FeSystemAnnounceView::Update at {address:#x} to learn the \
-                 live view -- this is the game's own auto-closing notice, not a dialog"
+                "announce: MH_Initialize failed: {status:?} -- rejections will still work, only \
+                 the on-screen notice is missing"
             ));
-            true
+            HOOK_INSTALLED.store(0, Ordering::SeqCst);
+            return false;
         }
+    }
+    // `address` is the unresolved 1.16.2 address on purpose: `MhHook::new` owns the single
+    // 1.16.2 -> 1.17 resolve, exactly as `register_union_hook` did before it.
+    let hook = match unsafe {
+        er_hook::MhHook::new(
+            address as *mut core::ffi::c_void,
+            update_hook as *mut core::ffi::c_void,
+        )
+    } {
+        Ok(hook) => hook,
         Err(status) => {
             crate::standalone_log(format_args!(
                 "announce: could not hook the announce view: {status:?} -- rejections will still \
                  work, only the on-screen notice is missing"
+            ));
+            HOOK_INSTALLED.store(0, Ordering::SeqCst);
+            return false;
+        }
+    };
+    ORIG_UPDATE.store(hook.trampoline() as usize, Ordering::SeqCst);
+    // SAFETY: the hook was created above; enabling is MinHook's own queued path.
+    if unsafe { hook.queue_enable() }.is_err() {
+        ORIG_UPDATE.store(0, Ordering::SeqCst);
+        HOOK_INSTALLED.store(0, Ordering::SeqCst);
+        return false;
+    }
+    // SAFETY: applies the queue this function just added to.
+    match unsafe { er_hook::MH_ApplyQueued() } {
+        er_hook::MH_STATUS::MH_OK => {
+            // Leaked with the rest of the install: `MhHook` is three raw pointers and dropping it
+            // does not revert the patch, so there is nothing to keep alive and nothing to free.
+            core::mem::forget(hook);
+            crate::standalone_log(format_args!(
+                "announce: watching CS::FeSystemAnnounceView::Update at {address:#x} to learn the \
+                 live view -- this is the game's own auto-closing notice, not a dialog. Bare \
+                 detour, not the union: argument 2 is a float in xmm1, which the union dispatcher \
+                 neither receives nor forwards."
+            ));
+            true
+        }
+        status => {
+            ORIG_UPDATE.store(0, Ordering::SeqCst);
+            HOOK_INSTALLED.store(0, Ordering::SeqCst);
+            crate::standalone_log(format_args!(
+                "announce: could not enable the announce-view detour: {status:?} -- rejections \
+                 will still work, only the on-screen notice is missing"
             ));
             false
         }

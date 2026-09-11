@@ -72,12 +72,28 @@ pub(crate) fn hook_log(args: std::fmt::Arguments<'_>) {
 //
 // Constraint: the shared signature is `extern "system" fn(usize,usize,usize,usize)->usize`
 // -- correct for the integer/pointer <=4-arg game functions we contend on (menu/dialog
-// Run/activate/build). A handler using fewer args just ignores the extras; unused
-// register args are harmless. Not for float-arg targets at any arity: an integer dispatcher
+// Run/activate/build). Not for float-arg targets at any arity: an integer dispatcher
 // receives and forwards no `xmm` register, so a target taking a float is handed whatever the
 // caller happened to leave in `xmm1`. That exclusion is unchanged by the five-argument path
-// below, and `dlstring_lookat_math.rs` and `er-npc-possess/src/hud/detour.rs` record the two
-// hooks that stay on a bare `MhHook` because of it.
+// below, and `dlstring_lookat_math.rs`, `er-npc-possess/src/hud/detour.rs`,
+// `er-invasion-warp/src/announce.rs` and `install_title_update_hook` record the hooks that stay
+// on a bare `MhHook` because of it.
+//
+// # A handler is the dispatcher's arity exactly, not at most it
+//
+// This paragraph used to read "a handler using fewer args just ignores the extras; unused
+// register args are harmless", and that is true only of a handler that is alone on its address
+// -- which is the one case the union does not exist for. Chaining is what breaks it:
+// `register_union_hook_resolved` stores the new handler's address into the previous handler's
+// `orig` slot, so a narrow handler calling its orig through the game's own narrower signature
+// leaves `r8`/`r9` unset for the next handler and returns nothing for one whose return the game
+// uses. Twenty-seven handlers were written to the old sentence and twenty-three addresses ended
+// up carrying handlers that disagreed about arity, four of them inside `er_quickload.dll` alone
+// (`0x746e80`, `0x67b200`, `0x67b290`, `0xb0d960`) where no second module is needed to chain.
+// The safety contract on [`register_shared_hook`] already stated the rule; this is the same rule
+// stated where a handler author reads it first, and `scripts/check-union-hook-abi.py` enforces
+// it. A game function that genuinely takes fewer arguments is unharmed: the extra registers are
+// the caller's own, forwarded verbatim instead of left as the handler's scratch.
 //
 // # Five arguments, added 2026-09-10, as a parallel path rather than a widening
 //

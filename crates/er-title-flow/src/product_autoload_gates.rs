@@ -1008,9 +1008,28 @@ pub unsafe fn maybe_fire_tfc_continue(base: usize) {
         r.is_err()
     ));
 }
-/// Install the TitleTopDialog::update hook once so the Continue build runs in the pump's live frame.
-/// minhook on 0x1409aac10, mirroring install_continue_trace_hooks (queue_enable + MH_ApplyQueued +
-/// mem::forget to keep the hook alive). Gated by `fire_tfc_continue_enabled` at the call site.
+/// Install the `TitleTopDialog::update` hook once so the Continue build runs in the pump's live
+/// frame. Gated by `fire_tfc_continue_enabled` at the call site.
+///
+/// # A bare detour, because argument 2 is a float
+///
+/// `update(this /*rcx*/, float delta /*xmm1*/, const u8* input /*r8*/)`, read out of the image:
+/// `0x1409aac2a` spills `xmm6`, `0x1409aac40` does `movaps xmm6, xmm1` before anything writes
+/// that register, and the value goes back out as argument 2 at `0x1409aae21` and `0x1409aae2c`.
+/// It is single precision -- one callee stores it `movss [rbp-0x20], xmm6` (`0x1407457ec`) and
+/// the other accumulates it `addss xmm6, [rdi+0x188]` (`0x14082d79f`). Argument 3 is a pointer,
+/// dereferenced at `0x1409aac4e` (`movzx eax, byte ptr [r8]`) before any write. There is no
+/// argument 4: its home slot holds a spilled `rbx`.
+///
+/// This used to go through `create_continue_trace_hook`, which transmuted the detour to
+/// `er_hook::UnionFn` -- four `usize`s -- and handed it to the hook union. The union dispatcher
+/// forwards integer registers only, so it neither receives `xmm1` nor passes it on, and the
+/// detour's declared `f32` would have been read from whatever the dispatcher body happened to
+/// leave there. The float made the union unusable, not optional, so this installs its own
+/// [`MhHook`] with the true signature, the same call this repo already makes for
+/// `er-npc-possess`'s `CSFeManImp::UpdatePlayerComponents` and `er-loading-portrait-core`'s
+/// `loading_screen_update_hook`. `scripts/check-union-hook-abi.py` is the gate that keeps a float
+/// handler off the union from here on.
 pub unsafe fn install_title_update_hook(base: usize) {
     if TITLE_UPDATE_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
         != TITLE_OWNER_SCAN_START_ADDRESS
@@ -1026,30 +1045,57 @@ pub unsafe fn install_title_update_hook(base: usize) {
             return;
         }
     }
-    let mut hooks = Vec::new();
-    unsafe {
-        create_continue_trace_hook(
-            &mut hooks,
-            "titletopdialog_update_9aac10",
-            TITLE_TOP_DIALOG_UPDATE_RVA as u32,
+    // Unresolved on purpose: `MhHook::new` owns the single 1.16.2 -> 1.17 resolve, which is why
+    // this is `game_rva_for_hook` and not `game_data_addr`. Resolving here and again inside the
+    // hook API is the double-resolve `scripts/check-double-resolved-hook-targets.py` refuses.
+    let Ok(address) = er_game_base::mem::game_rva_for_hook(TITLE_TOP_DIALOG_UPDATE_RVA as u32)
+    else {
+        append_autoload_debug(format_args!(
+            "title-update-hook: no game module base; TitleTopDialog::update is not hooked"
+        ));
+        return;
+    };
+    let hook = match unsafe {
+        MhHook::new(
+            address as *mut c_void,
             title_update_detour as *mut c_void,
-            &TITLE_UPDATE_ORIG,
-        );
+        )
+    } {
+        Ok(hook) => hook,
+        Err(status) => {
+            append_autoload_debug(format_args!(
+                "title-update-hook: MhHook::new on TitleTopDialog::update failed: {status:?}"
+            ));
+            return;
+        }
+    };
+    TITLE_UPDATE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+    if let Err(status) = unsafe { hook.queue_enable() } {
+        TITLE_UPDATE_ORIG.store(0, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "title-update-hook: queue_enable failed: {status:?}"
+        ));
+        return;
     }
     match unsafe { MH_ApplyQueued() } {
         MH_STATUS::MH_OK => append_autoload_debug(format_args!(
-            "title-update-hook: INSTALLED on TitleTopDialog::update 0x{:x} -- in-context Continue build armed",
+            "title-update-hook: INSTALLED on TitleTopDialog::update 0x{:x} -- in-context Continue build armed; bare detour, not the union, because argument 2 is a float in xmm1",
             er_game_base::mem::game_data_addr(
                 base,
                 TITLE_TOP_DIALOG_UPDATE_RVA,
                 "TITLE_TOP_DIALOG_UPDATE_RVA"
             )
         )),
-        status => append_autoload_debug(format_args!(
-            "title-update-hook: MH_ApplyQueued failed: {status:?}"
-        )),
+        status => {
+            TITLE_UPDATE_ORIG.store(0, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "title-update-hook: MH_ApplyQueued failed: {status:?}"
+            ));
+        }
     }
-    std::mem::forget(hooks);
+    // `MhHook` is three raw pointers and dropping it does not revert the patch, so the handle is
+    // let go rather than kept.
+    std::mem::forget(hook);
 }
 /// Gated, fail-closed, one-shot readiness advance past press-any-button. Reads the built job at
 /// `[step+0x130]`; once it is a valid in-image job (we are at press-any-button) and has settled, sets

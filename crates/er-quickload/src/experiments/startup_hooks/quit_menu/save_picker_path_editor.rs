@@ -648,21 +648,23 @@ unsafe extern "system" fn software_keyboard_result_gate_hook(
     job: usize,
     result: usize,
     time: usize,
+    d: usize,
 ) -> usize {
     let original_addr = SOFTWARE_KEYBOARD_RESULT_GATE_ORIG.load(Ordering::SeqCst);
     if original_addr == HOOK_ORIGINAL_UNSET {
         return result;
     }
-    let original: unsafe extern "system" fn(usize, usize, usize) -> usize =
-        unsafe { std::mem::transmute(original_addr) };
+    // Through the union's own shape: this rides `register_union_hook`, so the slot may hold the
+    // next handler on the address rather than the game trampoline.
+    let original: crate::mh::UnionFn = unsafe { std::mem::transmute(original_addr) };
     let Some(purpose) = keyboard_owner_of(job) else {
-        return unsafe { original(job, result, time) };
+        return unsafe { original(job, result, time, d) };
     };
 
     // Preserve the native accepted-state and intermediate cleanup chain. The owned terminal d220
     // detour below replaces only the callback leaf that our intentionally-empty std::function cannot
     // satisfy. Cancellation still terminates here and never reaches d220.
-    let ret = unsafe { original(job, result, time) };
+    let ret = unsafe { original(job, result, time, d) };
     let result_state = unsafe { safe_read_i32(result) }.unwrap_or(0);
     if result_state == MENU_JOB_STATE_FAILED {
         // The back action lands here. `FUN_14081d3d0` reads the controller's result code
@@ -687,15 +689,16 @@ unsafe extern "system" fn software_keyboard_terminal_callback_hook(
     job: usize,
     result: usize,
     time: usize,
+    d: usize,
 ) -> usize {
     let original_addr = SOFTWARE_KEYBOARD_TERMINAL_CALLBACK_ORIG.load(Ordering::SeqCst);
     if original_addr == HOOK_ORIGINAL_UNSET {
         return result;
     }
     let Some(purpose) = keyboard_owner_of(job) else {
-        let original: unsafe extern "system" fn(usize, usize, usize) -> usize =
-            unsafe { std::mem::transmute(original_addr) };
-        return unsafe { original(job, result, time) };
+        // Through the union's own shape -- see the sibling gate hook above.
+        let original: crate::mh::UnionFn = unsafe { std::mem::transmute(original_addr) };
+        return unsafe { original(job, result, time, d) };
     };
 
     let outcome = match unsafe { software_keyboard_text(job) } {

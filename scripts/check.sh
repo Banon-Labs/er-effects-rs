@@ -2018,6 +2018,18 @@ python3 "$repo_root/scripts/check-me3-dll-conflicts.py"
 python3 "$repo_root/scripts/check-shared-hook-rvas.py" --selftest
 python3 "$repo_root/scripts/check-shared-hook-rvas.py"
 
+# Sharing one MinHook instance is only half of sharing a prologue; the other half is that every
+# handler on it agrees with the dispatcher about the ABI. The union dispatchers forward integer
+# registers only and at a fixed width, so a handler declaring a float gets `xmm1` from nowhere,
+# and a handler declaring fewer arguments than its dispatcher cannot forward the ones it never
+# received -- which matters because its `orig` slot holds the next handler as often as it holds
+# the game trampoline. Both had shipped: `TitleTopDialog::update` and
+# `CS::FeSystemAnnounceView::Update` are float targets that reached the union through a helper
+# that took `*mut c_void` and transmuted, so the type checker never saw the declaration it would
+# have refused. That erasure is why this is a source gate rather than a compile error.
+python3 "$repo_root/scripts/check-union-hook-abi.py" --selftest
+python3 "$repo_root/scripts/check-union-hook-abi.py"
+
 # The branch-launch pipeline. Each stage refuses rather than guessing, and each carries its own
 # selftest for the refusal it exists to make -- a stale DLL, an unrankable conflict, a save with
 # no decoded identity, a block printed without the DLL's testimony.
