@@ -772,6 +772,11 @@ mod tests {
             "ornament centre {frame_centre} against plate centre {}",
             NATIVE_PLATE_HEIGHT_PX * 0.5
         );
-        assert!(NATIVE_FRAME_BOTTOM_PX > NATIVE_PLATE_HEIGHT_PX);
+        // A `const` block, because both operands are constants and clippy's
+        // `assertions_on_constants` is right that a runtime assertion over two literals proves
+        // nothing at test time -- it is a fact about the source, so the compiler should be the one
+        // to reject it. `composition_extent_y` takes the lower edge as the greater of these two,
+        // and this is what says which one that is.
+        const { assert!(NATIVE_FRAME_BOTTOM_PX > NATIVE_PLATE_HEIGHT_PX) };
     }
 }
