@@ -613,12 +613,34 @@ static BUILD_URL_CARET_RESOLVED: AtomicUsize = AtomicUsize::new(0);
 static BUILD_URL_WINDOW_POSITION_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
 static BUILD_URL_WINDOW_POSITION_SUCCESSES: AtomicUsize = AtomicUsize::new(0);
 
-/// Re-arm the end-caret for a newly opened link field. Keyed off the window's open transition
-/// rather than a window pointer, because the allocator reuses that address across opens and a
-/// pointer-keyed latch would silently skip every field after the first.
-pub fn reset_build_url_caret_latch() {
+/// Re-arm both per-open latches for a newly opened link field: the end-caret pass and the window
+/// placement's attempt counter.
+///
+/// Keyed off the window's open transition rather than a window pointer, because the allocator
+/// reuses that address across opens and a pointer-keyed latch would silently skip every field
+/// after the first.
+///
+/// Both counters are per-open and neither used to be reset, because the only caller reached for
+/// the save picker's [`crate::host::reset_path_editor_caret_latch`] instead -- a different editor's
+/// latch, and in a standalone shell with no host a no-op. The link field therefore got its caret
+/// moved to the end exactly once per process: on the second field of a session
+/// `BUILD_URL_CARET_APPLIES` was already past [`BUILD_URL_CARET_APPLY_FRAMES`], so the caret stayed
+/// at index 0 and typing prepended to the prefilled link. `BUILD_URL_WINDOW_POSITION_ATTEMPTS` has
+/// the same shape with a smaller blast radius: it only gates how many placement lines reach the
+/// log, so past the first field the placement trace went silent.
+pub fn reset_build_url_field_latches() {
     BUILD_URL_CARET_APPLIES.store(0, Ordering::SeqCst);
     BUILD_URL_CARET_RESOLVED.store(0, Ordering::SeqCst);
+    BUILD_URL_WINDOW_POSITION_ATTEMPTS.store(0, Ordering::SeqCst);
+    BUILD_URL_WINDOW_POSITION_SUCCESSES.store(0, Ordering::SeqCst);
+}
+
+/// Count one placement pass without touching game memory, so a test can prove the per-open latch
+/// resets. The live counter is bumped inside [`apply_build_url_editor_window_position`], which
+/// writes a transform through a live `SceneObjProxy` and cannot run off a game thread.
+#[cfg(test)]
+pub(crate) fn note_build_url_window_position_attempt_for_test() {
+    BUILD_URL_WINDOW_POSITION_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
 }
 
 /// How many placement attempts succeeded, for the telemetry line a run reads back.

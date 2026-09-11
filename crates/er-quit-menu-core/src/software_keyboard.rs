@@ -19,6 +19,7 @@ use er_telemetry_core::counters::*;
 use crate::host::{
     append_autoload_debug, reset_path_editor_caret_latch, save_picker_stage_row_records,
 };
+use crate::scaleform_proxy::reset_build_url_field_latches;
 
 /// A null pointer, named. Same value as the product's `TITLE_OWNER_SCAN_START_ADDRESS`.
 const TITLE_OWNER_SCAN_START_ADDRESS: usize = usize::MIN;
@@ -312,7 +313,13 @@ pub fn build_url_note_editor_window_state(window: usize, state: i32) -> bool {
         if BUILD_URL_EDITOR_WINDOW.swap(window, Ordering::SeqCst) == 0 {
             // A fresh field. The window pointer is recycled across opens, so this 0 -> window
             // transition is the only per-open signal there is.
-            reset_path_editor_caret_latch();
+            //
+            // This used to re-arm the save picker's path editor instead of the link field's own
+            // latches -- a neighbouring editor that loads the same 02_990 movie, and in a
+            // standalone shell with no host a no-op. So the link field's caret pass ran once per
+            // process and every field after the first opened with the caret at index 0, which
+            // makes typing prepend to the prefilled link.
+            reset_build_url_field_latches();
         }
         return true;
     }
@@ -1182,6 +1189,11 @@ fn apply_path_editor_outcome(dialog: usize, outcome: PathEditorOutcome) {
 
 /// Menu-pump-owned submit/result bridge. The native text editor and its job queue are never touched
 /// from FrameBegin or the recurring game task.
+///
+/// # Safety
+///
+/// Menu-pump context only. It submits to and drains the native job queue, which is not serialised
+/// against FrameBegin or the recurring game task.
 pub unsafe fn save_picker_menu_pump_path_editor() {
     let active_before_watchdog = SAVE_PICKER_PATH_EDITOR_ACTIVE_JOB.load(Ordering::SeqCst);
     let editor_window = SAVE_PICKER_PATH_EDITOR_WINDOW.load(Ordering::SeqCst);
@@ -1442,6 +1454,53 @@ mod tests {
             assert!(SOFTWARE_KEYBOARD_MAX_PATH_UNITS <= 1024);
         }
     }
+    /// The second link field of a session must re-arm its own latches, not a neighbour's.
+    ///
+    /// `reset_build_url_field_latches` is keyed to the 0 -> window transition because the allocator
+    /// hands back the same window pointer across opens. Until 2026-09-11 that transition called the
+    /// save picker's reset instead, so the link field's caret pass and placement counter ran once
+    /// per process: field two opened with the caret at index 0 and typing prepended to the
+    /// prefilled link. The placement attempt counter is the observable half of the same latch, so
+    /// it is what this asserts.
+    #[test]
+    fn a_second_link_field_re_arms_the_caret_and_placement_latches() {
+        let _guard = KEYBOARD_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let window = 0xa0a0_0000;
+        keyboard_active_job_slot(KeyboardPurpose::BuildUrl).store(0, Ordering::SeqCst);
+        BUILD_URL_EDITOR_WINDOW.store(0, Ordering::SeqCst);
+        crate::scaleform_proxy::reset_build_url_field_latches();
+
+        assert!(build_url_note_editor_window_state(
+            window,
+            MENU_JOB_STATE_CONTINUE
+        ));
+        // Stand in for the placement passes a live field takes every frame it is up.
+        crate::scaleform_proxy::note_build_url_window_position_attempt_for_test();
+        crate::scaleform_proxy::note_build_url_window_position_attempt_for_test();
+        assert_eq!(
+            crate::scaleform_proxy::build_url_window_position_counts().0,
+            2,
+            "the open field must be counting its own placement passes"
+        );
+
+        assert!(!build_url_note_editor_window_state(
+            window,
+            MENU_JOB_STATE_FAILED
+        ));
+        assert!(build_url_note_editor_window_state(
+            window,
+            MENU_JOB_STATE_CONTINUE
+        ));
+
+        assert_eq!(
+            crate::scaleform_proxy::build_url_window_position_counts().0,
+            0,
+            "a fresh field starts its latches over, or its caret pass never runs again"
+        );
+    }
+
     /// Pressing B closed the field and killed the row for the rest of the session.
     ///
     /// Live session `dll:8dca09bb`, 2026-08-23: three link fields opened, each closed with the back
