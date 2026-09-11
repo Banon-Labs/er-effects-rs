@@ -383,6 +383,9 @@ unsafe extern "system" fn quit_menu_scaleform_file_open_hook(
     let served = if is_options_02_040 {
         unsafe { options_02_040_quit6_swap_to_edited(base, native) }
     } else {
+        // The game asking for this movie is its own statement that a new link field is being
+        // built, which is the signal that retires the previous field's window.
+        crate::software_keyboard::build_url_note_movie_served();
         unsafe { text_input_02_990_swap_to_build_url(base, native) }
     };
     append_autoload_debug(format_args!(

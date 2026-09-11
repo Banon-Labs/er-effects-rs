@@ -312,11 +312,54 @@ static BUILD_URL_EDITOR_WINDOW: AtomicUsize = AtomicUsize::new(0);
 /// cancelling a field the player had only just opened.
 static BUILD_URL_EDITOR_WINDOW_JOB: AtomicUsize = AtomicUsize::new(0);
 
+/// The window pointer whose field has already closed, and which must not be adopted again.
+///
+/// A closed 02_990 window keeps being run live for a further ~200ms before it stops, and during
+/// that tail it was re-adopted as though it were a fresh field. Run br-20260911-152507-b8e5: the
+/// old window `0x28dcf080` was still being positioned at `+51122ms`, the player pressed the row at
+/// `+51736ms`, and one millisecond later that same old window reported terminal and cancelled the
+/// job that had just been submitted. The window the new field actually got was `0x28dcc080`, and
+/// the game asked for its movie at `+51765ms` -- after the cancel.
+///
+/// Cleared by [`build_url_note_movie_served`], because the game acquiring the 02_990 resource is
+/// its own statement that a new field is being built. Keyed on the pointer, so an allocator that
+/// hands the next field the same address is covered by that clear rather than blocked forever.
+static BUILD_URL_CLOSED_WINDOW: AtomicUsize = AtomicUsize::new(0);
+
+/// The last state value seen for the link field's window, so only changes are logged.
+static BUILD_URL_EDITOR_WINDOW_LAST_STATE: core::sync::atomic::AtomicIsize =
+    core::sync::atomic::AtomicIsize::new(-999);
+
+/// The game has acquired the link field's 02_990 movie: a new field is being built, so the
+/// previous field's window is no longer the thing to refuse.
+pub fn build_url_note_movie_served() {
+    BUILD_URL_CLOSED_WINDOW.store(0, Ordering::SeqCst);
+}
+
 /// Note the link field's 02_990 MenuWindow state. `true` while it is a live transform target -- the
 /// caller may position it; `false` once the window is terminal and its SceneObjProxy teardown has
 /// begun, after which writing a transform through that proxy is a use-after-free.
 pub fn build_url_note_editor_window_state(window: usize, state: i32) -> bool {
+    // Log every state change for this window. Two fixes were built on a guess about which state
+    // arrives and when, and both were wrong, because no line in the log carried the number. It is
+    // one line per transition, not per frame, so a field that is simply up stays silent.
+    let previous =
+        BUILD_URL_EDITOR_WINDOW_LAST_STATE.swap(state as usize as isize, Ordering::SeqCst);
+    if previous != state as usize as isize {
+        append_autoload_debug(format_args!(
+            "system-quit-build-url: 02_990 window=0x{window:x} state {previous} -> {state} (live={})",
+            text_input_02_990_window_is_live(state)
+        ));
+    }
     if text_input_02_990_window_is_live(state) {
+        if BUILD_URL_CLOSED_WINDOW.load(Ordering::SeqCst) == window
+            && BUILD_URL_EDITOR_WINDOW.load(Ordering::SeqCst) == 0
+        {
+            // Its field is over; it is being run out, not up. Adopting it here is what let a dying
+            // window cancel the field that replaced it, and positioning it writes a transform
+            // nobody will see.
+            return false;
+        }
         BUILD_URL_EDITOR_WINDOW_LAST_TICK.store(
             BUILD_URL_MENU_PUMP_TICKS.load(Ordering::SeqCst),
             Ordering::SeqCst,
@@ -342,6 +385,7 @@ pub fn build_url_note_editor_window_state(window: usize, state: i32) -> bool {
     }
     if window != 0 && BUILD_URL_EDITOR_WINDOW.load(Ordering::SeqCst) == window {
         BUILD_URL_EDITOR_WINDOW.store(0, Ordering::SeqCst);
+        BUILD_URL_CLOSED_WINDOW.store(window, Ordering::SeqCst);
         let paired = BUILD_URL_EDITOR_WINDOW_JOB.swap(0, Ordering::SeqCst);
         let latched = keyboard_active_job_slot(KeyboardPurpose::BuildUrl).load(Ordering::SeqCst);
         if paired != latched || paired == 0 {
@@ -1527,6 +1571,14 @@ mod tests {
             window,
             MENU_JOB_STATE_FAILED
         ));
+        // The closed window is refused until the game asks for the movie again, which is what
+        // says a new field is being built. Without this the pointer is still the previous
+        // field's, and adopting it is what let a dying window cancel its successor.
+        assert!(
+            !build_url_note_editor_window_state(window, MENU_JOB_STATE_CONTINUE),
+            "a window that has closed is not a fresh field just because it runs again"
+        );
+        build_url_note_movie_served();
         assert!(build_url_note_editor_window_state(
             window,
             MENU_JOB_STATE_CONTINUE
