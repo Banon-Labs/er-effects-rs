@@ -678,11 +678,17 @@ def selftest() -> int:
     )
 
     # --- [always]: the standing half of --with ------------------------------------------
-    # The regression this pins is the one the user reported on 2026-09-08. `er-lockon-filter`
-    # was [opt_in_only], so it was absent from every launch that did not name it, and the
-    # lock-on the user was describing was vanilla lock-on. Reclassifying it [compatible] is not
-    # enough on its own: `er-quickload` has no reverse dependents, so a branch editing only the
-    # product closes over one shell and the filter would go missing again.
+    # The regression these controls pin was reported on 2026-09-08: a DLL classified
+    # [opt_in_only] was absent from every launch that did not name it, so the user was
+    # describing vanilla behaviour without knowing the shell was never in the process.
+    # Reclassifying it [compatible] is not enough on its own -- `er-quickload` has no reverse
+    # dependents, so a branch editing only the product closes over one shell and the companion
+    # goes missing again. Hence [always].
+    #
+    # These run against a synthetic table, which is why they kept working when the live
+    # [always] table emptied on 2026-09-11 (its one member, er-lockon-filter, was deleted by
+    # user directive). The mechanism is covered here; the table's contents are gated by
+    # check-me3-dll-conflicts.py, which refuses a member that is not a shipped shell.
     always_table = {"always": {"tag": "on by user directive"}}
     always_live = set(always_table["always"])
     candidates = {PRODUCT_PACKAGE}
@@ -718,28 +724,32 @@ def selftest() -> int:
                 "changed_outside_crates": 0,
                 "seed_crates": [],
                 "affected_crates": [],
-                "artifacts": ["er_quickload.dll", "er_lockon_filter.dll"],
+                "artifacts": ["er_quickload.dll", "er_example_shell.dll"],
                 "fallback": None,
-                "added_by_default": ["er-lockon-filter"],
+                "added_by_default": ["er-example-shell"],
                 "excluded": [],
                 "unresolvable": [],
             }
         ),
         "the rendered report names a DLL that arrived from [always] rather than from the diff",
     )
-    # The live table, against the real shipped set: the lock-on filter is on by default.
+    # The live table, against the real shipped set. Named members come and go -- the table is
+    # empty as of 2026-09-11 -- so these controls assert the invariant rather than a member:
+    # whatever [always] holds must be a shipped shell, and a product-only closure must load all
+    # of it. On an empty table the second is vacuous, which is why the first is here: it is the
+    # half that would catch a name outliving its crate.
+    always_real = set(live.get("always", {}))
+    shipped = {package for package, _ in shipped_pairs()}
     check(
-        "er-lockon-filter" in live.get("always", {})
-        and "er-lockon-filter" not in live.get("opt_in_only", {}),
-        "er-lockon-filter is declared [always] in the shipped table, and is no longer opt-in-only",
+        always_real <= shipped,
+        "every [always] package in the shipped table is still a shipped shell",
     )
-    always_real = set(live.get("always", {})) & {package for package, _ in shipped_pairs()}
     kept_default, _, _, _ = resolve_conflicts(
         {PRODUCT_PACKAGE} | always_real, live, set()
     )
     check(
-        "er-lockon-filter" in kept_default,
-        "a product-only closure still loads er_lockon_filter.dll: it is on by default",
+        always_real <= kept_default,
+        "a product-only closure loads every [always] package: they are on by default",
     )
 
     print("selftest:", "PASS" if ok else "FAIL")

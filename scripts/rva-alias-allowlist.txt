@@ -75,7 +75,6 @@
 0x67dc00    exempt:role-alias         # SAVE_SERIALIZE_CHAR_RVA, SAVE_SERIALIZE_CHAR_VA  || er-save-suppress: build.rs VA assembles SAVE_SERIALIZE_CHAR_SIG; src RVA is the observed call target.
 0x746e80    exempt:role-alias         # MENU_JOB_EMIT_RESULT_RVA, MENU_JOB_EMIT_RESULT_VA  || er-quickload/build.rs assembles MENU_JOB_EMIT_RESULT_SIG; er-title-flow declares the RVA; save_flow_boxes.rs:628-630 consumes RVA+SIG+MASK together.
 0x75f800    exempt:role-alias         # GET_PLAYER_CHR_NAME_RVA, GET_PLAYER_CHR_NAME_VA  || er-player-name-filter: build.rs VA assembles GET_PLAYER_CHR_NAME_PROLOGUE (the `48 8b c4` encoding case); src RVA is the detour target.
-0x713db0    exempt:role-alias         # LOCK_ON_POINT_OWNER_RVA, LOCK_ON_POINT_OWNER_VA  || er-lockon-filter: build.rs VA assembles LOCK_ON_POINT_OWNER_PROLOGUE from the image; src RVA is the detour target it guards.
 0x7af730    exempt:role-alias         # MSGBOX_BUILDER_CTOR_VA, SYSTEM_QUIT_MSGBOX_BUILDER_CTOR_RVA  || er-quickload/build.rs assembles SYSTEM_QUIT_MSGBOX_BUILDER_CTOR_SIG; er-title-flow declares the call RVA; save_flow_boxes.rs uses both.
 0x7b0140    exempt:role-alias         # MSGBOX_DTOR_VA, SYSTEM_QUIT_MSGBOX_DTOR_RVA  || same MessageBoxBuilder recipe: build.rs assembles SYSTEM_QUIT_MSGBOX_DTOR_SIG, er-title-flow declares the call RVA.
 0x7b10f0    exempt:role-alias         # MSGBOX_FINALIZE_VA, SYSTEM_QUIT_MSGBOX_FINALIZE_RVA  || same recipe: build.rs assembles SYSTEM_QUIT_MSGBOX_FINALIZE_SIG, er-title-flow declares the call RVA.

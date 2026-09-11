@@ -218,7 +218,6 @@ cmd_start() {
 			ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH="$artifact/er-crash-modules.txt" \
 			ER_QUICKLOAD_INPUT_HARNESS_LOG_PATH="$artifact/$HARNESS_LOG_NAME" \
 			ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH="$artifact/$HARNESS_PHASES_NAME" \
-			ER_QUICKLOAD_LOCKON_FILTER_LOG_PATH="$artifact/er-lockon-filter.log" \
 			ER_QUICKLOAD_BUILD_IMPORT_LOG_PATH="$artifact/er-build-import.log" \
 			"$ME3_BIN" \
 			--steam-dir "$ME3_STEAM_DIR" launch \

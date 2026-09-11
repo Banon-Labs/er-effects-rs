@@ -104,7 +104,6 @@ export ER_QUICKLOAD_CRASH_LOGGING_LOG_PATH="$ART_DIR/er-crash-log.txt"
 export ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH="$ART_DIR/er-crash-latest.txt"
 export ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH="$ART_DIR/er-crash-breadcrumb-latest.txt"
 export ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH="$ART_DIR/er-crash-modules.txt"
-export ER_QUICKLOAD_LOCKON_FILTER_LOG_PATH="$ART_DIR/er-lockon-filter.log"
 export ER_QUICKLOAD_BUILD_IMPORT_LOG_PATH="$ART_DIR/er-build-import.log"
 
 LAUNCH_EPOCH="$(date +%s)"

@@ -391,7 +391,6 @@ drive() {
         ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH="$ARTIFACT_DIR/er-crash-breadcrumb-latest.txt" \
         ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH="$ARTIFACT_DIR/er-crash-modules.txt" \
         ER_QUICKLOAD_ARMAMENT_ICONS_PATH="$ARTIFACT_DIR/er-armament-icons.log" \
-        ER_QUICKLOAD_LOCKON_FILTER_LOG_PATH="$ARTIFACT_DIR/er-lockon-filter.log" \
         ER_QUICKLOAD_BUILD_IMPORT_LOG_PATH="$ARTIFACT_DIR/er-build-import.log" \
         ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH="$ARTIFACT_DIR/er-save-disable.log" \
         ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH="$ARTIFACT_DIR/er-save-disable-telemetry.json" \

@@ -87,7 +87,7 @@ selftest() {
 	sandbox="$(mktemp -d)"
 	mkdir -p "$sandbox/br-00000000-000000-aaaa"
 	echo "nothing here" >"$sandbox/br-00000000-000000-aaaa/er-quickload-continue-trace.log"
-	echo "build git=7ac6a383a435+dirty module=er_lockon_filter.dll" >"$sandbox/br-00000000-000000-aaaa/er-lockon-filter.log"
+	echo "build git=7ac6a383a435+dirty module=er_npc_possess.dll" >"$sandbox/br-00000000-000000-aaaa/er-npc-possess.log"
 	runs_dir="$sandbox"
 	[ -z "$(newest_run_build)" ] || { echo "  FAIL a dirty build line must not count"; failures=1; }
 	echo "build git=7ac6a383a435 module=er_invasion_warp.dll base=0x1 pe=0x2 (t)" >"$sandbox/br-00000000-000000-aaaa/er-invasion-warp.log"

@@ -102,8 +102,8 @@ def selftest() -> int:
         if build_sha(run) is not None:
             print("  FAIL an empty run directory must have no sha")
             failures = 1
-        (run / "er-lockon-filter.log").write_text(
-            "build git=7ac6a383a435+dirty module=er_lockon_filter.dll\n", encoding="utf-8"
+        (run / "er-npc-possess.log").write_text(
+            "build git=7ac6a383a435+dirty module=er_npc_possess.dll\n", encoding="utf-8"
         )
         if build_sha(run) is not None:
             print("  FAIL a dirty build line must not count")
