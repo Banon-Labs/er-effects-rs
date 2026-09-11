@@ -46,6 +46,73 @@ repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 . "$repo_root/scripts/lib/cpu-courtesy.sh"
 cpu_courtesy check.sh
 
+# --- one suite, ten stages ---------------------------------------------------------------------
+# `bash scripts/check.sh` still runs everything. That has to stay true: every agent instruction,
+# every git hook and every piece of documentation in this repo invokes this file by name and
+# expects the whole verdict. What is new is how it gets there -- it runs its own stages as child
+# processes and merges their results -- and that one stage can be run on its own:
+#
+#     bash scripts/check.sh --stage lint      one stage, in this process, no children
+#     bash scripts/check.sh --jobs 1          every stage, one at a time
+#     bash scripts/check.sh --list-stages     what the stages are and how many steps each holds
+#
+# The reason for stages is the reason the user gave for asking: "I would like to know when specific
+# things fail faster, and it really just encapsulates too much." A formatting mistake used to be
+# reported at the same distance from the push as a broken cross-compile, because both arrived in
+# one summary after everything slow had finished.
+#
+# Which stage a step belongs to is decided by scripts/check-stages.py, from the fifth column of
+# docs/ci-gate-portability.tsv -- one row per gate, already held in bijection with this file's step
+# list by ci-gate-portability.py --check. `check-stages.py --check` is itself a step below, so a
+# gate added here without a stage is red, and no stage list anywhere can fall behind this file. The
+# same command emits the CI matrix, so a GitHub run page shows exactly these stages.
+_check_stage=""
+# How many stages run at once. 4 here and `max-parallel: 4` in .github/workflows/check.yml are the
+# same number on purpose: the user asked for one default used in both places. Why 4 -- see the
+# comment on the fan-out below, which is where the number is actually spent.
+_check_jobs="${ER_CHECK_JOBS:-4}"
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	--stage)
+		_check_stage="${2:?--stage needs a name; see --list-stages}"
+		shift 2
+		;;
+	--stage=*)
+		_check_stage="${1#*=}"
+		shift
+		;;
+	--jobs)
+		_check_jobs="${2:?--jobs needs a number}"
+		shift 2
+		;;
+	--jobs=*)
+		_check_jobs="${1#*=}"
+		shift
+		;;
+	--help | -h)
+		echo "usage: check.sh [--stage <name>] [--jobs <n>] [--list-stages]" >&2
+		echo "  no arguments: every stage, as child processes, ER_CHECK_JOBS at a time" >&2
+		exit 0
+		;;
+	--list-stages)
+		command python3 "$repo_root/scripts/check-stages.py" --counts
+		exit 0
+		;;
+	*)
+		echo "check.sh: unknown argument $1" >&2
+		echo "  usage: check.sh [--stage <name>] [--jobs <n>] [--list-stages]" >&2
+		exit 2
+		;;
+	esac
+done
+# A jobs count that is not a positive integer would make the throttle below compare against a
+# string, which bash evaluates as 0 -- every stage launched at once, on a machine cpu-courtesy has
+# just finished making polite. Refuse instead.
+if [[ ! $_check_jobs =~ ^[1-9][0-9]*$ ]]; then
+	echo "check.sh: REFUSED -- --jobs/ER_CHECK_JOBS must be a positive integer, got '$_check_jobs'." >&2
+	exit 2
+fi
+
 
 # --- who may run this, and how many at once -------------------------------------------------
 # Both REFUSALS below are measurements, not policy preferences. On 2026-09-02 three subagents
@@ -90,11 +157,28 @@ fi
 # prevent. XDG_RUNTIME_DIR is per-user and tmpfs-backed; /tmp is the fallback. If flock is absent
 # the gate runs anyway -- a missing tool must not make the suite unrunnable.
 _check_lock="${XDG_RUNTIME_DIR:-/tmp}/er-mods-rs-check-sh.lock"
+# Shared for a stage, exclusive for the whole suite (added with stages). The refusal above is
+# about one run corrupting another's verdict, and that is a statement about the whole suite: a
+# contended box manufactures `INCONCLUSIVE` and `NOT RUN` steps, and a whole-suite green is
+# something from a quiet tree. A single stage is a fraction of that load and a fraction of that
+# claim, and two people -- or one person and an editor-on-save -- running `--stage lint` and
+# `--stage policy` side by side is a use the split exists to enable, not a hazard.
+#
+# So a `--stage` run takes a shared lock and a whole-suite run takes an exclusive one. Stages
+# coexist with each other; a whole-suite run excludes every stage and every other whole-suite run,
+# in both directions, because it is the one whose verdict covers everything. The fan-out's children
+# take no lock at all -- they carry ER_CHECK_LOCK_HELD from the parent that already holds the
+# exclusive one, the same marker scripts/test-check-sh-accumulates.py relies on.
 if [[ "${ER_CHECK_FORCE:-}" != "1" && "${ER_CHECK_LOCK_HELD:-}" != "1" ]] && command -v flock >/dev/null 2>&1; then
 	exec 9>"$_check_lock" || true
-	if ! flock -n 9; then
+	_check_lock_mode=-x
+	[[ -n $_check_stage ]] && _check_lock_mode=-s
+	if ! flock -n $_check_lock_mode 9; then
 		_holder=$(cat "$_check_lock" 2>/dev/null || true)
 		echo "check.sh: REFUSED -- another run already holds $_check_lock (pid ${_holder:-unknown})." >&2
+		echo "  A whole-suite run holds it exclusively; a single --stage run holds it shared, so" >&2
+		echo "  the refusal you are reading is either a whole-suite run against yours, or yours" >&2
+		echo "  against a whole-suite run. Two --stage runs never collide." >&2
 		echo "  Concurrent runs do not just take longer, they corrupt each other's verdict:" >&2
 		echo "  contention produces INCONCLUSIVE and NOT RUN steps, which are not passes." >&2
 		echo "  Wait for that run and read ITS result, or override with ER_CHECK_FORCE=1." >&2
@@ -223,6 +307,50 @@ elif [[ -n $_check_scope_src ]]; then
 	printf '>>> check.sh: %s cargo step(s) NOT SELECTED for this diff (see the summary; NOT passes).\n' \
 		"$_check_scope_n" >&2
 fi
+
+# --- which steps belong to a different stage ------------------------------------------------
+# The third source of non-execution, and the only one that is a deliberate partition rather than
+# an absent input. `--stage lint` runs lint's steps and leaves the other nine stages' steps alone.
+# They get their own state in the summary, `OTHER STAGE`, so a single stage's log can never be
+# read as a verdict on the suite -- the same contract `SKIPPED` has carried since 2026-08-31, for
+# the same reason: a step that did not execute must not look like one that agreed with the tree.
+#
+# No per-step banner is printed for these, unlike the two skip sources above. 253 banners in a
+# 25-step stage would bury the stage's own output, and the information is not per-step anyway:
+# what a reader needs is "this was stage lint, and the other 253 steps are other stages' work",
+# which the summary header and one summary line say once.
+#
+# A tooling failure fails open -- the stage filter is dropped and the whole suite runs, which is
+# loud. An unknown stage name fails closed, because "run everything" is not a plausible reading of
+# a typo and silently doing so would hide the typo in CI forever.
+declare -A _check_stage_out=()
+if [[ -n $_check_stage ]]; then
+	_check_stage_src=$(command python3 "$repo_root/scripts/check-stages.py" --skip-lines "$_check_stage" 2>/dev/null)
+	_check_stage_rc=$?
+	if [[ $_check_stage_rc -eq 2 ]]; then
+		echo "check.sh: REFUSED -- no stage named '$_check_stage'." >&2
+		command python3 "$repo_root/scripts/check-stages.py" --counts >&2 || true
+		exit 2
+	elif [[ $_check_stage_rc -ne 0 ]]; then
+		printf '>>> check.sh: check-stages.py --skip-lines %s failed (exit %s).\n' \
+			"$_check_stage" "$_check_stage_rc" >&2
+		printf '>>> The stage filter is DROPPED: this run is the whole suite, not one stage.\n' >&2
+		_check_stage=""
+	else
+		while read -r _stage_line; do
+			[[ -n ${_stage_line:-} ]] && _check_stage_out[$_stage_line]=1
+		done <<<"$_check_stage_src"
+		printf '>>> check.sh: stage %s -- %s step(s) belong to other stages and will NOT run here.\n' \
+			"$_check_stage" "${#_check_stage_out[@]}" >&2
+	fi
+fi
+# Which stage owns cupcake, asked rather than written down. The `command -v cupcake` fail-fast
+# guard further down is the only step in this file whose execution a shim cannot intercept -- it is
+# a `command -v` inside a compound, not a call through one of the six shadowed names -- so it has
+# to test the filter itself, and a literal stage name here would be exactly the kind of second copy
+# the stage table exists to abolish. An empty answer (the tool failed) runs the guard, which is
+# what this file did before stages existed.
+_check_cupcake_stage=$(command python3 "$repo_root/scripts/check-stages.py" --stage-of 'cupcake validate' 2>/dev/null || true)
 declare -A _check_ran_at=()
 _check_ran=0
 _check_reached_end=0
@@ -299,6 +427,16 @@ trap '_check_count_step "$LINENO" "$BASH_COMMAND"' DEBUG
 # DEBUG trap records and the summary reads back -- which is why the skip can un-record a step the
 # DEBUG trap has already counted as run. (DEBUG fires before the command, so without the unset a
 # skipped step would appear in `steps run`.)
+# Not this stage's step. Cheapest of the three tests and therefore first in every shim: a step
+# another stage owns needs no ledger lookup and no `command -v`. The DEBUG trap has already
+# recorded the line as run (it fires before the command), so un-record it here, exactly as
+# _check_dep_skip does -- otherwise `steps run` would count steps this process never executed.
+_check_stage_skip() {
+	[[ -z ${_check_stage_out[$1]:-} ]] && return 1
+	unset "_check_ran_at[$1]"
+	return 0
+}
+
 _check_dep_skip() {
 	local line=$1
 	shift
@@ -336,40 +474,55 @@ _check_tool_skip() {
 # python3 and bash interpret a repo gate, so they are the two that can hit a missing input.
 python3() {
 	_check_step_cmd[${BASH_LINENO[0]}]="python3 $*"
+	_check_stage_skip "${BASH_LINENO[0]}" && return 0
 	_check_dep_skip "${BASH_LINENO[0]}" python3 "$@" && return 0
 	command python3 "$@"
 }
 bash() {
 	_check_step_cmd[${BASH_LINENO[0]}]="bash $*"
+	_check_stage_skip "${BASH_LINENO[0]}" && return 0
 	_check_dep_skip "${BASH_LINENO[0]}" bash "$@" && return 0
 	command bash "$@"
 }
-# The rest can only hit a missing tool. `cupcake` deliberately has no shim: the fail-fast guard
-# further down owns that case, because later steps consume its output and would produce verdicts
-# that are not about anything.
+# The rest can only hit a missing tool. `cupcake` has a shim for the stage test alone, further
+# down: the fail-fast guard owns its missing-binary case, because later steps consume its output
+# and would produce verdicts that are not about anything.
 # `cargo` is the one tool that can also hit a missing reason to run. `_check_dep_skip` comes
 # first because "this diff cannot have broken it" is a cheaper truth than "the tool is absent",
 # and both land in the same skipped bucket either way.
 cargo() {
 	_check_step_cmd[${BASH_LINENO[0]}]="cargo $*"
+	_check_stage_skip "${BASH_LINENO[0]}" && return 0
 	_check_dep_skip "${BASH_LINENO[0]}" cargo "$@" && return 0
 	_check_tool_skip cargo "${BASH_LINENO[0]}" cargo "$@" && return 0
 	command cargo "$@"
 }
 opa() {
 	_check_step_cmd[${BASH_LINENO[0]}]="opa $*"
+	_check_stage_skip "${BASH_LINENO[0]}" && return 0
 	_check_tool_skip opa "${BASH_LINENO[0]}" opa "$@" && return 0
 	command opa "$@"
 }
 rustfmt() {
 	_check_step_cmd[${BASH_LINENO[0]}]="rustfmt $*"
+	_check_stage_skip "${BASH_LINENO[0]}" && return 0
 	_check_tool_skip rustfmt "${BASH_LINENO[0]}" rustfmt "$@" && return 0
 	command rustfmt "$@"
 }
 shellcheck() {
 	_check_step_cmd[${BASH_LINENO[0]}]="shellcheck $*"
+	_check_stage_skip "${BASH_LINENO[0]}" && return 0
 	_check_tool_skip shellcheck "${BASH_LINENO[0]}" shellcheck "$@" && return 0
 	command shellcheck "$@"
+}
+# The one shim the header above says does not exist, added when the suite grew stages. It still
+# does not carry _check_tool_skip: a missing cupcake is owned by the fail-fast guard below, whose
+# reason (later steps consume its output) is unchanged. What it does carry is the stage test, so
+# `cupcake validate` is another stage's business in the other nine.
+cupcake() {
+	_check_step_cmd[${BASH_LINENO[0]}]="cupcake $*"
+	_check_stage_skip "${BASH_LINENO[0]}" && return 0
+	command cupcake "$@"
 }
 
 _check_summary() {
@@ -378,7 +531,7 @@ _check_summary() {
 	local failed=${#_check_failed_lines[@]}
 	local inconclusive=${#_check_inconclusive_lines[@]}
 	local skipped=${#_check_skipped_lines[@]}
-	local total=0 not_run=0 passed=0 i line text state
+	local total=0 not_run=0 passed=0 other=0 i line text state
 	declare -A failed_at=() inconclusive_at=() skipped_at=()
 	for ((i = 0; i < failed; i++)); do failed_at[${_check_failed_lines[i]}]=1; done
 	for ((i = 0; i < inconclusive; i++)); do inconclusive_at[${_check_inconclusive_lines[i]}]=1; done
@@ -400,6 +553,12 @@ _check_summary() {
 			state="INCONCLUSIVE"
 		elif [[ -n ${skipped_at[$line]:-} ]]; then
 			state="SKIPPED     "
+		elif [[ -n ${_check_stage_out[$line]:-} ]]; then
+			# Another stage's step. Resolved from the map rather than from whether a shim fired,
+			# so the state is right even for a step whose execution this file guards with an `if`
+			# instead of a shim -- the `command -v cupcake` fail-fast guard is the live example.
+			state="OTHER STAGE "
+			other=$((other + 1))
 		elif [[ -n ${_check_ran_at[$line]:-} ]]; then
 			state="passed      "
 			passed=$((passed + 1))
@@ -407,20 +566,31 @@ _check_summary() {
 			state="NOT RUN     "
 			not_run=$((not_run + 1))
 		fi
+		if [[ $state == "OTHER STAGE " ]]; then
+			continue
+		fi
 		table+=$(printf '  %s  line %-5s %.96s' "$state" "$line" "${text# }")
 		table+=$'\n'
 	done
 
 	echo
 	echo "======================================================================"
-	echo "== check.sh summary                                                 =="
+	if [[ -n ${_check_stage:-} ]]; then
+		printf '== check.sh summary -- STAGE %-38s ==\n' "$_check_stage"
+	else
+		echo "== check.sh summary                                                 =="
+	fi
 	echo "======================================================================"
-	printf 'steps run     : %s of %s\n' "$_check_ran" "$total"
+	printf 'steps run     : %s of %s\n' "$_check_ran" "$((total - other))"
 	printf 'passed        : %s\n' "$passed"
 	printf 'FAILED        : %s\n' "$failed"
 	printf 'INCONCLUSIVE  : %s\n' "$inconclusive"
 	printf 'SKIPPED       : %s   (input absent here, or NOT SELECTED for this diff -- NOT passes)\n' "$skipped"
 	printf 'NOT RUN       : %s\n' "$not_run"
+	if [[ $other -gt 0 ]]; then
+		printf 'OTHER STAGE   : %s   (steps of the other stages; this run says NOTHING about them)\n' \
+			"$other"
+	fi
 
 	if [[ $failed -gt 0 ]]; then
 		echo
@@ -449,6 +619,53 @@ _check_summary() {
 	echo
 	echo "per-step state (passed / FAILED / INCONCLUSIVE / SKIPPED / NOT RUN):"
 	printf '%s' "$table"
+
+	# The machine-readable copy, for whoever has to merge stages back together.
+	# Two callers need it and they are the same code path on two machines: the local fan-out below
+	# (ten children, one summary) and .github/workflows/check.yml (ten jobs, one report job that
+	# downloads these files as artifacts). Both hand it to scripts/check-stage-report.py, so the
+	# combined verdict is computed once rather than once per venue -- which is the only way the CI
+	# report and the local one can be trusted to mean the same thing.
+	#
+	# Written unconditionally when the directory is set, including when this run went red: a red
+	# stage's step states are exactly what the report has to show.
+	#
+	# The basename test keeps the accumulation fixture out of the results directory.
+	# scripts/test-check-sh-accumulates.py lifts this preamble into a `fixture.sh` in a temp
+	# directory and drives it over synthetic suites; those runs inherit the environment, so
+	# without this they would each write an `all.tsv` beside the real stages' files while the
+	# `suite` stage is running. The report ignores a file it has no stage for, so this is tidiness
+	# rather than a correctness fix -- but a results directory that contains a file from a
+	# synthetic suite is exactly the kind of thing someone later reads as evidence.
+	if [[ -n ${ER_CHECK_RESULT_DIR:-} && ${BASH_SOURCE[0]##*/} == check.sh ]]; then
+		local result_file="${ER_CHECK_RESULT_DIR}/${_check_stage:-all}.tsv"
+		mkdir -p "${ER_CHECK_RESULT_DIR}"
+		{
+			printf '# stage\t%s\n' "${_check_stage:-all}"
+			printf '# seconds\t%s\n' "$((SECONDS))"
+			printf '# reached_end\t%s\n' "$_check_reached_end"
+			for row in ${_check_step_rows[@]+"${_check_step_rows[@]}"}; do
+				line=${row%%:*}
+				text=${row#*:}
+				[[ -z $line ]] && continue
+				if [[ -n ${failed_at[$line]:-} ]]; then
+					state=FAILED
+				elif [[ -n ${inconclusive_at[$line]:-} ]]; then
+					state=INCONCLUSIVE
+				elif [[ -n ${skipped_at[$line]:-} ]]; then
+					state=SKIPPED
+				elif [[ -n ${_check_stage_out[$line]:-} ]]; then
+					state=OTHER_STAGE
+				elif [[ -n ${_check_ran_at[$line]:-} ]]; then
+					state=passed
+				else
+					state=NOT_RUN
+				fi
+				printf '%s\t%s\t%s\t%s\n' "$line" "$state" \
+					"${_check_skip_reason[$line]:-}" "${text# }"
+			done
+		} >"$result_file"
+	fi
 
 	# Did this suite damage the checkout it was checking? Snapshotted by the preflight below the
 	# preamble marker. Counted as a failure before the rc decision, because a suite that disarms
@@ -484,7 +701,12 @@ _check_summary() {
 	else
 		rc=0
 		echo
-		echo "all steps ran; none failed"
+		if [[ -n ${_check_stage:-} ]]; then
+			echo "every step of stage $_check_stage ran; none failed."
+			echo "The other $other step(s) are other stages' work and have no verdict here."
+		else
+			echo "all steps ran; none failed"
+		fi
 	fi
 
 	# A green here is not the strongest statement available, and a reader who does not know that
@@ -557,6 +779,156 @@ if ! declare -F gate_config_report >/dev/null || ! declare -F gate_config_snapsh
 fi
 gate_config_snapshot "$repo_root"
 
+# --- the fan-out: one process per stage ----------------------------------------------------
+# Reached only with no `--stage`, i.e. by every caller that has ever written `bash scripts/check.sh`
+# -- the pre-push hook, AGENTS.md, every agent brief. They get the whole suite, as they always have.
+# What changed is that it arrives as ten child processes and one merged verdict, which buys two
+# things a single process could not:
+#
+#   1. A stage's verdict lands the moment that stage finishes, not when the slowest one does. The
+#      lint stage answers in seconds; before this, its answer waited behind a cross-compile.
+#   2. Stages overlap. The suite is mostly single-process python gates that leave fifteen of this
+#      machine's sixteen cores idle while the one cargo stage is building.
+#
+# Why four. `ER_CHECK_JOBS` defaults to 4 here and `max-parallel: 4` says the same thing in
+# .github/workflows/check.yml, because the user asked for one default in both places. Four rather
+# than ten: scripts/lib/cpu-courtesy.sh already caps cargo at half this box (CARGO_BUILD_JOBS=8 of
+# 16) so the machine stays usable, and a cargo stage running eight rustc processes alongside three
+# python gates is already at that budget -- a fifth concurrent stage would take slices from the
+# desktop, which is the exact regression cpu-courtesy exists to prevent. On CI the number is not
+# about cores at all (each job gets its own runner) but about the caches: the two cargo stages
+# restore a ~1 GB xwin CRT/SDK and a rust-cache, and ten simultaneous cold jobs would pull them ten
+# times. Raise either with ER_CHECK_JOBS / max-parallel; they are one edit each.
+#
+# This function never returns. It is defined here, below the preamble marker, on purpose:
+# scripts/test-check-sh-accumulates.py lifts everything above that marker and runs it over synthetic
+# suites, and a fan-out lifted into that fixture would try to spawn the fixture's own stages.
+_check_fanout() {
+	local stages=() selected=() stage rc=0 dir cached=0
+	mapfile -t stages < <(command python3 "$repo_root/scripts/check-stages.py" --stages)
+	if [[ ${#stages[@]} -eq 0 ]]; then
+		echo "check.sh: REFUSED -- scripts/check-stages.py listed no stages." >&2
+		echo "  Without a stage list there is nothing to fan out to, and running the steps here" >&2
+		echo "  instead would silently ignore the partition every other caller relies on." >&2
+		exit 2
+	fi
+	# A deliberate subset, for someone iterating on one area. It is not a way to make a push
+	# cheaper: the pre-push hook sets nothing, so it always gets every stage.
+	if [[ -n ${ER_CHECK_STAGES:-} ]]; then
+		IFS=',' read -r -a selected <<<"$ER_CHECK_STAGES"
+		printf '>>> check.sh: ER_CHECK_STAGES restricts this run to: %s\n' "$ER_CHECK_STAGES" >&2
+		printf '>>> The other stages are NOT run and NOT passed; the report below says so.\n' >&2
+	else
+		selected=("${stages[@]}")
+	fi
+
+	dir="${ER_CHECK_RESULT_DIR:-${XDG_RUNTIME_DIR:-/tmp}/er-mods-rs-check-stages}"
+	mkdir -p "$dir"
+	# Only the files this run owns, never the directory. `ER_CHECK_RESULT_DIR` is a caller-supplied
+	# path and `rm -rf` on one of those is a loaded gun pointed at whatever the caller happened to
+	# name. Clearing the old `.tsv` files is what actually matters: a result left by a previous run
+	# under a different stage list would be joined into this run's verdict as if it were fresh.
+	rm -f "$dir"/*.tsv "$dir"/*.log
+	export ER_CHECK_RESULT_DIR="$dir"
+	# The children are this run's own stages, not a second run competing for the box, so they must
+	# not each refuse on the lock this process is holding. Same marker, same reason, as the one
+	# scripts/test-check-sh-accumulates.py already relies on.
+	export ER_CHECK_LOCK_HELD=1
+
+	# Where a green stage records that it was green for a given set of inputs. Opt-in
+	# (ER_CHECK_CACHE=1) rather than default, and the reason is soundness rather than caution: a
+	# digest over files cannot see everything a stage depends on. `suite` runs
+	# check-no-local-main-commits.sh, whose subject is git history; `addresses` reads a gitignored
+	# game image; every cargo stage depends on the installed toolchain. A hit on any of those would
+	# skip a gate whose answer really had changed. Where the inputs do determine the outcome -- the
+	# cargo stages, which is where the minutes are -- turning it on is a large win, so the lever
+	# exists and says what it is doing.
+	local cache_dir="${ER_CHECK_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/er-mods-rs/check-stages}"
+
+	local started=0
+	for stage in "${selected[@]}"; do
+		if [[ ${ER_CHECK_CACHE:-0} == 1 ]]; then
+			local digest marker
+			digest=$(command python3 "$repo_root/scripts/check-stages.py" --inputs "$stage" 2>/dev/null || true)
+			marker="$cache_dir/$stage-$digest"
+			if [[ -n $digest && -f $marker ]]; then
+				command python3 "$repo_root/scripts/check-stages.py" \
+					--result-stub "$stage" --state CACHED \
+					--reason "inputs unchanged since a green run ($digest)" >"$dir/$stage.tsv"
+				printf '>>> stage %-14s CACHED -- inputs unchanged; it did NOT run, and that is not a pass\n' \
+					"$stage" >&2
+				cached=$((cached + 1))
+				continue
+			fi
+		fi
+		# Throttle to ER_CHECK_JOBS concurrent stages. `wait -n` returns when any one child exits,
+		# which is what keeps the window full rather than draining it between batches.
+		while [[ $(jobs -rp | wc -l) -ge $_check_jobs ]]; do
+			wait -n || true
+		done
+		_check_run_stage "$stage" "$dir" "$cache_dir" &
+		started=$((started + 1))
+	done
+	wait
+
+	if [[ $started -eq 0 && $cached -eq 0 ]]; then
+		echo "check.sh: REFUSED -- no stage was selected to run." >&2
+		exit 2
+	fi
+
+	# The merged verdict. Computed by the same program the CI report job runs, over the same files,
+	# so the two venues cannot drift into disagreeing about what green means.
+	command python3 "$repo_root/scripts/check-stage-report.py" "$dir" --quiet
+	rc=$?
+	printf '\nper-stage logs: %s/<stage>.log\n' "$dir"
+	printf 'one stage on its own: bash scripts/check.sh --stage <name>\n'
+	printf 'the whole per-step table: python3 scripts/check-stage-report.py %s\n' "$dir"
+
+	# The config guard, once, in the parent. Each child runs its own copy too -- in CI a stage job
+	# is all there is, so the child's copy is the only one -- but the parent's is the one that sees
+	# damage done by a sibling stage after that sibling had already finished.
+	gate_config_report || rc=1
+
+	# The `EXIT` trap belongs to a run that executes steps. This process executed none; letting
+	# it fire would print a 283-row table of `NOT RUN` over the merged report that just answered
+	# same question properly.
+	trap - EXIT
+	exit "$rc"
+}
+
+# One stage, in a child, with its output in a file rather than interleaved with nine others.
+# The one-line verdict goes to this process's stderr the instant the stage finishes, which is the
+# "know faster" the user asked for: a red lint stage says so while cargo is still linking.
+_check_run_stage() {
+	local stage=$1 dir=$2 cache_dir=$3 rc=0 secs verdict
+	SECONDS=0
+	command bash "${BASH_SOURCE[0]}" --stage "$stage" >"$dir/$stage.log" 2>&1 || rc=$?
+	secs=$SECONDS
+	if [[ $rc -eq 0 ]]; then
+		verdict="green"
+		if [[ ${ER_CHECK_CACHE:-0} == 1 ]]; then
+			# Recorded only after a green run, so a marker can never mean "this failed quickly
+			# last time". The digest is recomputed here rather than reused from the loop above
+			# because a gate may legitimately rewrite a generated file it also checks.
+			local digest
+			digest=$(command python3 "$repo_root/scripts/check-stages.py" --inputs "$stage" 2>/dev/null || true)
+			if [[ -n $digest ]]; then
+				mkdir -p "$cache_dir"
+				: >"$cache_dir/$stage-$digest"
+			fi
+		fi
+	else
+		verdict="RED (exit $rc)"
+	fi
+	printf '>>> stage %-14s %-14s %4ss   %s\n' "$stage" "$verdict" "$secs" "$dir/$stage.log" >&2
+	return $rc
+}
+
+if [[ -z $_check_stage ]]; then
+	_check_fanout
+fi
+
+
 bash "$repo_root/scripts/check-no-local-main-commits.sh"
 # The meter on the meters. Almost every gate below is prefaced by its own `--selftest`, and the
 # whole value of that convention rests on one tool that was itself never run by anything:
@@ -584,6 +956,19 @@ python3 "$repo_root/scripts/test-check-sh-accumulates.py"
 # a classification gate that cannot catch its own drift is decoration.
 python3 "$repo_root/scripts/ci-gate-portability.py" --selftest
 python3 "$repo_root/scripts/ci-gate-portability.py" --check
+# ...and the partition of those same steps into stages, which is the other half of the same
+# bijection. The stage lives in a fifth column of the portability ledger, so the row that says
+# "this gate needs the game image" is the row that says which stage runs it -- one key set, held in
+# bijection with this file by the gate above. `--check` here adds the questions that gate cannot
+# ask: is every step in exactly one stage, is every stage occupied, is every stage name real.
+# Without it a gate could land with no stage and simply never run in any job, which is the
+# .github/workflows/check.yml drift this repo has already paid for once.
+python3 "$repo_root/scripts/check-stages.py" --selftest
+python3 "$repo_root/scripts/check-stages.py" --check
+# ...and the program that puts the stages back together into one verdict. Its selftest is the
+# control for the failure that splitting a suite invents: a stage that produces no result at all.
+# Ten green jobs are not a green suite if an eleventh never ran, and only the join can see that.
+python3 "$repo_root/scripts/check-stage-report.py" --selftest
 python3 "$repo_root/scripts/check-no-timeouts.py"
 # The grammar three things SHARE: scripts/hooks/commit-msg, and both jobs of
 # .github/workflows/conventional-commits.yml. Only the selftest runs here -- there is no
@@ -789,10 +1174,16 @@ python3 "$repo_root/scripts/check-reload-trace-policy.py" --audit
 python3 "$repo_root/scripts/check-windows-proof-render.py"
 python3 "$repo_root/scripts/test-windows-proof-render.py"
 python3 "$repo_root/scripts/test-windows-proof-render-smoke-verdict.py"
-command -v cupcake >/dev/null 2>&1 || {
-	echo "missing required command: cupcake" >&2
-	exit 127
-}
+# The justified fail-fast exception documented in the header, now also stage-aware. `policy` owns
+# cupcake; a `lint` job has no reason to install a policy engine to satisfy a guard about steps it
+# is not going to run. The summary resolves this line's state from the same stage map, so in the
+# other stages it reads `OTHER STAGE` rather than `NOT RUN`.
+if [[ -z $_check_stage || -z $_check_cupcake_stage || $_check_stage == "$_check_cupcake_stage" ]]; then
+	command -v cupcake >/dev/null 2>&1 || {
+		echo "missing required command: cupcake" >&2
+		exit 127
+	}
+fi
 cupcake validate --log-level error
 python3 "$repo_root/scripts/test-cupcake-policies.py"
 # Every cupcake guard in this REPO was partly or wholly inert until 2026-08-22, and the suite was
@@ -1578,6 +1969,8 @@ shellcheck "$repo_root/scripts/measure-git-hook-env.sh"
 shellcheck "$repo_root/scripts/er-stale-run-sentinel.sh"
 shellcheck "$repo_root/scripts/er-tree-bisect-run.sh"
 shellcheck "$repo_root/scripts/beads-prime.sh"
+shellcheck "$repo_root/scripts/check-step-timings.sh"
+shellcheck "$repo_root/scripts/act-check.sh"
 shellcheck "$repo_root/scripts/test-er-stale-run-sentinel-e2e.sh"
 shellcheck "$repo_root/scripts/git-strip-path-from-history.sh"
 

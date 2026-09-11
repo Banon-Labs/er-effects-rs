@@ -35,216 +35,234 @@
 # Toolchain steps (cargo/shellcheck/rustfmt/opa/cupcake) are deliberately NOT ledgered: their
 # dependency is "is the tool installed", which check.sh answers at run time in _check_tool_skip.
 #
-# columns: bucket <TAB> deps <TAB> key <TAB> what it does when the input is absent
+# A FIFTH COLUMN WAS ADDED 2026-09-11: which STAGE of scripts/check.sh runs this gate.
+#
+# It lives here rather than in a `docs/check-stages.tsv` of its own because this file already holds
+# exactly one row per gate step, and `ci-gate-portability.py --check` already keeps that set in
+# bijection with check.sh's step list. A second file keyed the same way would be a second key set
+# that could disagree with this one, which is the disease rather than the cure. So the row that
+# says what external input a gate needs is the row that says which stage runs it: one line to add
+# when a gate is written, and one gate to keep both answers honest.
+#
+# The stage names are declared in `scripts/check-stages.py`, and `check-stages.py --check` (a step
+# of check.sh) refuses a row naming a stage that does not exist, a step in no stage, a step in two,
+# and a declared stage that holds no steps. Toolchain steps -- cargo/shellcheck/rustfmt/opa/cupcake
+# -- are still not ledgered, and their stage comes from four rules in that file for the same reason
+# their portability does not live here: the answer is uniform and identical rows could go stale.
+#
+# columns: bucket <TAB> deps <TAB> key <TAB> what it does when the input is absent <TAB> stage
 #   portable  ran and passed with no game-derived input present
 #   partial   ran, asserted something real, and said which half it could not do. STILL RUN.
 #   blocked   asserted nothing (or refused outright). check.sh SKIPS it, loudly, as a non-pass.
 #   deps      '-' for portable; otherwise what must exist, probed by DEP_PROBES in that script.
 #             A leading '!' marks a dependency whose absence kills the gate outright rather than
 #             costing it a half -- see fatal_deps(). Every dep of a `blocked` row is fatal.
-blocked	git-baseline	check-no-local-main-commits.sh	exits 2 without refs/remotes/origin/main to diff a local main against
-portable	-	audit-selftest-vacuity.py --selftest	source/AST/text analysis only
-portable	-	test-check-sh-accumulates.py	source/AST/text analysis only
-portable	-	ci-gate-portability.py --selftest	synthetic check.sh + synthetic ledger; needs nothing
-portable	-	ci-gate-portability.py --check	reads check.sh and the ledger beside it
-portable	-	check-no-timeouts.py	source/AST/text analysis only
-portable	-	check-no-committed-build-artifacts.py --selftest	source/AST/text analysis only
-portable	-	check-no-committed-build-artifacts.py	source/AST/text analysis only
-portable	-	test-no-timeouts.py	source/AST/text analysis only
-portable	-	test-git-pre-push-block-main.sh	source/AST/text analysis only
-portable	-	check-oracle-writers.py --selftest	source/AST/text analysis only
-portable	-	check-oracle-writers.py	source/AST/text analysis only
-portable	-	check-panic-reporter-installed.py --selftest	source/AST/text analysis only
-portable	-	check-panic-reporter-installed.py	source/AST/text analysis only
-portable	-	check-counter-writers.py --selftest	source/AST/text analysis only
-portable	-	check-counter-writers.py	source/AST/text analysis only
-partial	image-1162,image-1170	check-oracle-singleton-globals.py --selftest	source half asserts and says 'selftest: ok'; the IMAGE half prints that it was skipped
-partial	image-1162,image-1170	check-oracle-singleton-globals.py	still audits ungated module-base arithmetic; the IMAGE half prints that it was skipped
-partial	game-install	ersc_identify.py --selftest	the five synthetic banner assertions run everywhere and say '0 failure(s)'; the four real-image assertions are replaced by 'no ersc.dll at <path>; synthetic checks only'. Measured with ER_GAME_DIR pointed at a directory that does not exist.
-portable	-	check-fromsoftware-symbols.py --selftest	source/AST/text analysis only
-portable	-	check-fromsoftware-symbols.py	source/AST/text analysis only
-portable	-	check-sibling-pin-lockstep.py --selftest	source/AST/text analysis only
-portable	-	check-sibling-pin-lockstep.py	reads .github/workflows/*.yml only
-portable	-	check-launch-guardrails.py --audit	source/AST/text analysis only
-portable	-	er-artifact-redirect-audit.py --selftest	source/AST/text analysis only
-portable	-	er-artifact-redirect-audit.py	source/AST/text analysis only
-portable	-	check-runtime-probe-contract.py --audit	source/AST/text analysis only
-portable	-	test-runtime-probe-contract.py	source/AST/text analysis only
-portable	-	test-er-readiness-watch.py	source/AST/text analysis only
-blocked	save-corpus	test-save-slot-oracle.py	one line: the .sl2 fixture is game-derived and uncommitted, so no slot is parsed
-portable	-	test-detect-proc.py	source/AST/text analysis only
-portable	-	test-semaphore-watchdog.py	source/AST/text analysis only
-portable	-	test-input-harness-static.py	source/AST/text analysis only
-portable	-	test-wall-of-text-classifier.py	source/AST/text analysis only
-portable	-	test-beads-prime-size.py	source/AST/text analysis only
-portable	-	check-retired-button-labels.py	source/AST/text analysis only
-portable	-	check-autoload-happy-path.py	source/AST/text analysis only
-portable	-	test-autoload-happy-path.py	source/AST/text analysis only
-portable	-	check-own-load-save-rejection-guard.py --selftest	source/AST/text analysis only
-portable	-	check-own-load-save-rejection-guard.py	source/AST/text analysis only
-portable	-	test-ifpe-finalization-proof.py	source/AST/text analysis only
-portable	-	check-save-suppression.py --selftest	source/AST/text analysis only
-portable	-	check-yk0j-runtime-proof.py --selftest	source/AST/text analysis only
-portable	-	check-user-release-package.py	source/AST/text analysis only
-blocked	image-1162	check-native-continue-static.py	one line: 'skipped: image is absent'. No byte window is checked
-blocked	image-1162	check-menu-constructor-static.py	one line: 'skipped: image is absent'. No byte window is checked
-portable	-	check-no-rva-zero.py --selftest	source/AST/text analysis only
-portable	-	check-no-rva-zero.py	source/AST/text analysis only
-portable	-	check-env-gate-comments.py	source/AST/text analysis only
-portable	-	test-env-gate-comments.py	source/AST/text analysis only
-portable	-	check-marker-file-gates.py	source/AST/text analysis only
-portable	-	test-marker-file-gates.py	source/AST/text analysis only
-portable	-	check-reload-trace-policy.py --audit	source/AST/text analysis only
-portable	-	check-windows-proof-render.py	source/AST/text analysis only
-portable	-	test-windows-proof-render.py	source/AST/text analysis only
-portable	-	test-windows-proof-render-smoke-verdict.py	verdict logic in-process; one case runs the smoke script --dry-run against a fixture launcher
-portable	-	test-cupcake-policies.py	176 cupcake eval spawns, 20-35s; needs the cupcake binary the fail-fast guard above checks for
-portable	-	check-cupcake-wasm-builtins.py --selftest	source/AST/text analysis only
-portable	-	check-cupcake-wasm-builtins.py	source/AST/text analysis only
-portable	-	test-cupcake-hook-shim.py	source/AST/text analysis only
-portable	-	test-cupcake-stop-guards.py	source/AST/text analysis only
-portable	-	test-authority-agreement-signal.py	source/AST/text analysis only
-portable	-	test-idle-hold-signal.py	source/AST/text analysis only
-portable	-	test-unexecuted-promise-signal.py	source/AST/text analysis only
-portable	-	test-native-ownership-vocab-signal.py	source/AST/text analysis only
-portable	-	test-stall-on-friction-signal.py	source/AST/text analysis only
-portable	-	test-wall-of-text-signal.py	source/AST/text analysis only
-portable	-	test-cupcake-delivered-shape.py --selftest	source/AST/text analysis only
-portable	-	test-cupcake-delivered-shape.py	source/AST/text analysis only
-portable	-	test-regulation-params-zstd-skip.py	blinds the interpreter in a subprocess; no game image, no regulation.bin
-portable	-	check-no-lossy-utf8.py	source/AST/text analysis only
-portable	-	check-comment-caps.py --selftest	source/AST/text analysis only
-portable	-	check-comment-caps.py	source/AST/text analysis only, plus git ls-files/show in the checkout itself
-portable	-	check-no-unguarded-cstr-from-ptr.py --selftest	source/AST/text analysis only
-portable	-	check-no-unguarded-cstr-from-ptr.py	source/AST/text analysis only
-portable	-	check-prologue-bytes.py --selftest	source/AST/text analysis only
-portable	-	check-prologue-bytes.py	source/AST/text analysis only
-portable	-	check-lint-parity.py --selftest	source/AST/text analysis only
-portable	-	check-lint-parity.py	source/AST/text analysis only
-portable	-	check-fnv1a-owner.py --selftest	source/AST/text analysis only
-portable	-	check-fnv1a-owner.py	source/AST/text analysis only
-portable	-	check-rva-alias-drift.py --selftest	source/AST/text analysis only
-portable	-	check-rva-alias-drift.py	source/AST/text analysis only
-portable	-	check-profile-summary-layout.py --selftest	source/AST/text analysis only
-portable	-	check-profile-summary-layout.py	source/AST/text analysis only
-portable	-	check-fresh-run-logs.py --selftest	source/AST/text analysis only
-portable	-	check-fresh-run-logs.py	source/AST/text analysis only
-portable	-	test-pr-refactor-scope.sh	source/AST/text analysis only
-partial	build-artifact	test-dll-byte-identical.py	'ok (list tests only)' -- the comparator tests are the part that is skipped
-portable	-	test-release-workflow.py	source/AST/text analysis only
-portable	-	check-rust-file-sizes.py	source/AST/text analysis only
-portable	-	check-experiments-rustfmt.py	source/AST/text analysis only
-portable	-	check-crate-extraction-roadmap.py --selftest	source/AST/text analysis only
-portable	-	check-crate-extraction-roadmap.py	source/AST/text analysis only
-portable	-	rva_symbols.py --selftest	source/AST/text analysis only
-portable	-	check-stale-rva-calls.py --selftest	source/AST/text analysis only
-portable	-	check-stale-rva-calls.py	source/AST/text analysis only
-portable	-	check-expression-constants.py --selftest	source/AST/text analysis only
-portable	-	check-expression-constants.py	source/AST/text analysis only
-blocked	rva-map-tsv	select-needed-1170-rows.py --selftest	selects rows OUT OF the gitignored 128k-row .pdata alignment
-portable	-	map-data-rvas-1162-to-1170.py --selftest-source	source/AST/text analysis only
-portable	-	check-no-stale-callsite-rva.py --selftest	source/AST/text analysis only
-portable	-	check-no-stale-callsite-rva.py	source/AST/text analysis only
-portable	-	derive-callsite-1170.py --selftest	source/AST/text analysis only
-portable	-	check-hook-log-sink.py --selftest	source/AST/text analysis only
-portable	-	check-hook-log-sink.py	source/AST/text analysis only
-blocked	image-1162,image-1170,uv	audit-1170-hook-targets.py --selftest	FileNotFoundError on the 1.17 image before any assertion
-portable	-	check-decode-extent-bounds.py --selftest	source/AST/text analysis only
-portable	-	check-decode-extent-bounds.py	source/AST/text analysis only
-blocked	uv	verify-prologue-masks-1170.py --selftest	re-derives every mask with capstone; os.execvp('uv') raises before the first assertion
-portable	-	verify-aob-patterns-1170.py --selftest	source/AST/text analysis only
-portable	-	verify-prologue-coverage-1170.py --selftest	source/AST/text analysis only
-portable	-	verify-prologue-coverage-1170.py --section	source/AST/text analysis only
-partial	image-1162,image-1170	classify-1170-entry-kind.py --selftest	synthetic half reports '0 failure(s)'; the image-backed half prints SKIPPED
-blocked	image-1162,image-1170	classify-1170-entry-kind.py --fail-on-mid	one line: 'entry-kind classification skipped'. Nothing is classified
-blocked	image-1162	check-leaf-extent-pdata-coverage.py	one line: 'skipped: missing image'. No extent is covered. (Measured to survive a missing uv, so uv is not listed.)
-blocked	image-1162,image-1170	check-no-chained-continuation-rows.py --selftest	says it itself: 'NOT A PASS: no row was checked'
-blocked	image-1162,image-1170	check-no-chained-continuation-rows.py	says it itself: 'NOT A PASS: no row was checked'
-portable	-	check-no-duplicate-ledger-rows.py --selftest	source/AST/text analysis only
-portable	-	check-no-duplicate-ledger-rows.py	source/AST/text analysis only
-portable	-	check-ledger-section-kind.py --selftest	source/AST/text analysis only
-portable	-	check-1170-translation-collisions.py --selftest	source/AST/text analysis only
-portable	-	check-1170-translation-collisions.py	source/AST/text analysis only
-portable	-	check-double-resolved-hook-targets.py --selftest	source/AST/text analysis only
-blocked	image-1162,image-1170,rva-map-tsv	verify-data-rvas-by-rtti.py --selftest	one line: 'SKIP: missing <image>'. No RTTI is verified. rva-map-tsv added 2026-09-01: without the whole-image map TRACE_MENU_TASK_UPDATE_TABLE_RVA's FNPTR anchor cannot be computed, the row falls to NO-ANCHOR and the UNANCHORED pin fails -- a false red, not a finding. The plain run below does not need it
-blocked	image-1162,image-1170	verify-data-rvas-by-rtti.py	one line: 'SKIP: missing <image>'. No RTTI is verified
-blocked	image-1162,image-1170	map-rvas-1162-to-1170.py --selftest	exits 1 with 'missing image: <path>' before the selftest runs; nothing is asserted
-blocked	ghidra-8765,ghidra-8767	confirm-1170-pair-in-dumps.py --selftest	one line: 'skipped: no <build> Ghidra MCP daemon on :<port>'. No pair is confirmed or refused
-blocked	image-1162,!uv	check-singleton-field-offsets.py --selftest	says it itself: 'SKIPPED (NOT A PASS) ... no field offset was checked at all'
-blocked	image-1162,!uv	check-singleton-field-offsets.py	says it itself: 'SKIPPED (NOT A PASS) ... no field offset was checked at all'
-blocked	image-1162,image-1170	check-object-field-offsets-1170.py --selftest	refuses to run: a green selftest without the images would be vacuous
-partial	image-1162,image-1170	check-object-field-offsets-1170.py	73 constant pins and 9 write-reach bounds still recomputed; 'image: SKIPPED'
-partial	image-1162,image-1170	audit-name-derived-offsets.py --selftest	60 kinds rows and 43 OS-ABI values still checked; only the lea known-answer test is skipped
-blocked	generated-address-map	audit-1170-coverage-inventory.py --selftest	'no generated address_map_1170.rs to compare against; build er-game-base first'
-portable	-	check-detour-rva-coverage.py --selftest	source/AST/text analysis only
-portable	-	check-detour-rva-coverage.py	source/AST/text analysis only
-portable	-	check-hook-batch-abort.py --selftest	source/AST/text analysis only
-portable	-	check-hook-batch-abort.py	source/AST/text analysis only
-blocked	rva-map-tsv	check-native-call-rva-coverage.py --selftest	its ledger pin names the gitignored .pdata alignment
-blocked	rva-map-tsv	check-native-call-rva-coverage.py	its ledger pin names the gitignored .pdata alignment
-blocked	game-install	check-game-version-supported.py --selftest	'PE reader not exercised' -- the selftest reads the INSTALLED exe, it has no synthetic PE
-blocked	game-install	check-game-version-supported.py	'SKIP: no game at ...' -- the installed build is the entire subject
-partial	game-install	check-ersc-version-supported.py --selftest	both parsers still assert on synthetic banners and the real constant; 'installed reader not exercised'
-blocked	game-install	check-ersc-version-supported.py	'SKIP: no Seamless Co-op at ...' -- the installed build is the entire subject
-portable	-	check-markdown-code-blocks.py	source/AST/text analysis only
-portable	-	er-stale-run-sentinel.sh --selftest	source/AST/text analysis only
-portable	-	er-launch-gate.py --selftest	source/AST/text analysis only
-blocked	game-install	diff-regulation-params.py --effects-json	exits 2 on purpose: 'could not look' is not evidence the effects.json ids agree
-blocked	game-install	check-starting-classes.py	exits 2 on purpose: the starting-class table drifts silently
-portable	-	audit-1170-readiness.py --selftest	source/AST/text analysis only
-portable	-	audit-1170-readiness.py --check	source/AST/text analysis only
-portable	-	audit-1170-gate-bypass.py --selftest	source/AST/text analysis only
-portable	-	audit-1170-gate-bypass.py --baseline	source/AST/text analysis only, compared against the committed baseline JSON beside it
-portable	-	audit-ungated-image-writes.py --selftest	source/AST/text analysis only
-portable	-	audit-ungated-image-writes.py	source/AST/text analysis only
-portable	-	check-test-target-coverage.py --selftest	synthetic fixture workspaces in tmp plus a source-only read of the live crates
-portable	-	check-test-target-coverage.py --prove-selftest-catches-regression	source/AST/text analysis only
-portable	-	check-test-target-coverage.py	source/AST/text analysis only
-portable	-	check-moveset-table.py --selftest	synthetic tables built in memory; needs nothing
-portable	-	er-moveset-coverage.py --selftest	measured 2026-09-03 in a tracked-files-only checkout of the merged tree: exit 0 and the real assertion 'c4351 reduced to locomotion is caught'; output matches the developer tree except for the temp path of its own synthetic table
-portable	-	er-moveset-coverage.py --check	measured 2026-09-03 in a tracked-files-only checkout of the merged tree: exit 0, output BYTE-IDENTICAL to the developer tree (408 creatures, 37 classifying zero attacks); the table and corpus it reads are both tracked, so it needs no game image
-partial	chr-corpus	check-moveset-table.py	grammar and invariant half asserts on the committed table; the regenerate-and-diff half prints SKIP
-portable	-	check-me3-shell-coverage.py --selftest	source/AST/text analysis only
-portable	-	check-me3-shell-coverage.py	source/AST/text analysis only
-portable	-	check-union-hook-abi.py --selftest	source/AST/text analysis only
-portable	-	check-union-hook-abi.py	source/AST/text analysis only
-portable	-	check-me3-dll-conflicts.py --selftest	source/AST/text analysis only
-portable	-	check-me3-dll-conflicts.py	source/AST/text analysis only
-portable	-	check-shared-hook-rvas.py --selftest	source/AST/text analysis only
-portable	-	check-shared-hook-rvas.py	source/AST/text analysis only
-portable	-	er_run_lib.py	source/AST/text analysis only
-blocked	git-baseline	er-dll-closure.py --selftest	calls git merge-base origin/main HEAD; on a shallow clone three --with/--without cases FAIL rather than skip
-portable	-	er-change-scope.py --selftest	pure: reads the build scripts, check.sh and scripts/ only -- no git baseline, unlike the closure tool above
-partial	build-artifact	er-dll-provenance.py --selftest	10 closure cases still run; 'fingerprint checks not exercised'
-blocked	crash-logging-dll	er-dll-freshness.sh --selftest	needs a linked er_crash_logging.dll to attest -- named by FILE, not by 'some dll exists': a partly-built tree passed build-artifact and the gate then exited 1 about the missing build
-partial	save-corpus	er-pick-save.py --selftest	argument and size-invariant cases still PASS; 'skip no save corpus found'
-portable	-	er-gen-me3-profile.py --selftest	source/AST/text analysis only
-portable	-	er-run-reaper.py --selftest	source/AST/text analysis only
-blocked	user-launcher	er-run-branch.py --selftest	asserts the user launcher it delegates to really exists at ~/Elden/launch.sh
-portable	-	er-release-bisect.py --selftest	source/AST/text analysis only
-portable	-	check-single-dll-product-contract.py --selftest	source/AST/text analysis only
-portable	-	check-single-dll-product-contract.py	source/AST/text analysis only
-portable	-	check-rust-build.sh	full cross-linked DLL build plus wine lib tests; the one step over the 30s audit cap, so not measured by the sweep -- CI has always run it
-blocked	minhook	check-committed-compiles.sh --selftest	compiles the workspace; er-hook needs vendor/minhook
-blocked	minhook	check-committed-compiles.sh	compiles the workspace; er-hook needs vendor/minhook
-portable	-	check-git-hooks-installed.sh --selftest	source/AST/text analysis only
-blocked	git-hooks	check-git-hooks-installed.sh	asserts THIS clone's hooks; a fresh checkout has only *.sample
-portable	-	test-check-config-guard.sh	source/AST/text analysis only
-portable	-	test-pre-push-scrubs-git-env.sh	builds its own main+linked-worktree pair under mktemp; touches no repo but its own
-portable	-	test-cpu-courtesy.sh	runs renice/taskset on itself; every number is derived from nproc, so a 2-core runner asserts 1
-portable	-	check-save-disable-warnings.py	source/AST/text analysis only
-portable	-	conventional-commit-subject.py --selftest	source/AST/text analysis only
-portable	-	test-described-next-step-signal.py	drives the signal script under mktemp; source/text only
-portable	-	check-no-thread-suspension.py --selftest	source/AST/text analysis only
-portable	-	check-no-thread-suspension.py	source/AST/text analysis only; silent and rc 0 in both the clone and the developer tree
-partial	git-baseline	check-runtime-evidence.sh --selftest	seven fixture cases run under mktemp and say PASS; the two carry-forward cases print 'skip' on a depth-1 checkout, which does not carry the commits they diff. fetch-depth: 0 runs them.
-portable	-	er-character-type-tables.py --selftest	source/AST/text analysis only
-portable	-	test-challenged-convention-classifier.py	source/AST/text analysis only
-portable	-	test-narrated-action-classifier.py	source/AST/text analysis only
-portable	-	test-admission-with-defence-classifier.py	source/AST/text analysis only
-portable	-	test-diagnosis-signal.py	source/AST/text analysis only
-portable	-	test-future-commitment-signal.py	source/AST/text analysis only
-portable	-	test-deferred-evidence-read-signal.py	source/AST/text analysis only
-portable	-	check-shared-detour-signatures.py --selftest	source/AST/text analysis only
-portable	-	check-shared-detour-signatures.py	source/AST/text analysis only
-portable	-	er-run-natives-history.py --selftest	source/AST/text analysis only
+blocked	git-baseline	check-no-local-main-commits.sh	exits 2 without refs/remotes/origin/main to diff a local main against	suite
+portable	-	audit-selftest-vacuity.py --selftest	source/AST/text analysis only	suite
+portable	-	test-check-sh-accumulates.py	source/AST/text analysis only	suite
+portable	-	ci-gate-portability.py --selftest	synthetic check.sh + synthetic ledger; needs nothing	suite
+portable	-	ci-gate-portability.py --check	reads check.sh and the ledger beside it	suite
+portable	-	check-stages.py --selftest	synthetic check.sh + synthetic ledger; needs nothing	suite
+portable	-	check-stages.py --check	reads check.sh and the stage column of the ledger beside it	suite
+portable	-	check-stage-report.py --selftest	synthetic stage result files in a temp directory; needs nothing	suite
+portable	-	check-no-timeouts.py	source/AST/text analysis only	suite
+portable	-	check-no-committed-build-artifacts.py --selftest	source/AST/text analysis only	suite
+portable	-	check-no-committed-build-artifacts.py	source/AST/text analysis only	suite
+portable	-	test-no-timeouts.py	source/AST/text analysis only	suite
+portable	-	test-git-pre-push-block-main.sh	source/AST/text analysis only	suite
+portable	-	check-oracle-writers.py --selftest	source/AST/text analysis only	source
+portable	-	check-oracle-writers.py	source/AST/text analysis only	source
+portable	-	check-panic-reporter-installed.py --selftest	source/AST/text analysis only	source
+portable	-	check-panic-reporter-installed.py	source/AST/text analysis only	source
+portable	-	check-counter-writers.py --selftest	source/AST/text analysis only	source
+portable	-	check-counter-writers.py	source/AST/text analysis only	source
+partial	image-1162,image-1170	check-oracle-singleton-globals.py --selftest	source half asserts and says 'selftest: ok'; the IMAGE half prints that it was skipped	addresses
+partial	image-1162,image-1170	check-oracle-singleton-globals.py	still audits ungated module-base arithmetic; the IMAGE half prints that it was skipped	addresses
+partial	game-install	ersc_identify.py --selftest	the five synthetic banner assertions run everywhere and say '0 failure(s)'; the four real-image assertions are replaced by 'no ersc.dll at <path>; synthetic checks only'. Measured with ER_GAME_DIR pointed at a directory that does not exist.	runtime-tools
+portable	-	check-fromsoftware-symbols.py --selftest	source/AST/text analysis only	source
+portable	-	check-fromsoftware-symbols.py	source/AST/text analysis only	source
+portable	-	check-sibling-pin-lockstep.py --selftest	source/AST/text analysis only	suite
+portable	-	check-sibling-pin-lockstep.py	reads .github/workflows/*.yml only	suite
+portable	-	check-launch-guardrails.py --audit	source/AST/text analysis only	policy
+portable	-	er-artifact-redirect-audit.py --selftest	source/AST/text analysis only	runtime-tools
+portable	-	er-artifact-redirect-audit.py	source/AST/text analysis only	runtime-tools
+portable	-	check-runtime-probe-contract.py --audit	source/AST/text analysis only	policy
+portable	-	test-runtime-probe-contract.py	source/AST/text analysis only	policy
+portable	-	test-er-readiness-watch.py	source/AST/text analysis only	runtime-tools
+blocked	save-corpus	test-save-slot-oracle.py	one line: the .sl2 fixture is game-derived and uncommitted, so no slot is parsed	runtime-tools
+portable	-	test-detect-proc.py	source/AST/text analysis only	runtime-tools
+portable	-	test-semaphore-watchdog.py	source/AST/text analysis only	runtime-tools
+portable	-	test-input-harness-static.py	source/AST/text analysis only	runtime-tools
+portable	-	test-wall-of-text-classifier.py	source/AST/text analysis only	policy
+portable	-	test-beads-prime-size.py	source/AST/text analysis only	docs
+portable	-	check-retired-button-labels.py	source/AST/text analysis only	product
+portable	-	check-autoload-happy-path.py	source/AST/text analysis only	product
+portable	-	test-autoload-happy-path.py	source/AST/text analysis only	product
+portable	-	check-own-load-save-rejection-guard.py --selftest	source/AST/text analysis only	product
+portable	-	check-own-load-save-rejection-guard.py	source/AST/text analysis only	product
+portable	-	test-ifpe-finalization-proof.py	source/AST/text analysis only	product
+portable	-	check-save-suppression.py --selftest	source/AST/text analysis only	product
+portable	-	check-yk0j-runtime-proof.py --selftest	source/AST/text analysis only	product
+portable	-	check-user-release-package.py	source/AST/text analysis only	product
+blocked	image-1162	check-native-continue-static.py	one line: 'skipped: image is absent'. No byte window is checked	addresses
+blocked	image-1162	check-menu-constructor-static.py	one line: 'skipped: image is absent'. No byte window is checked	addresses
+portable	-	check-no-rva-zero.py --selftest	source/AST/text analysis only	addresses
+portable	-	check-no-rva-zero.py	source/AST/text analysis only	addresses
+portable	-	check-env-gate-comments.py	source/AST/text analysis only	policy
+portable	-	test-env-gate-comments.py	source/AST/text analysis only	policy
+portable	-	check-marker-file-gates.py	source/AST/text analysis only	policy
+portable	-	test-marker-file-gates.py	source/AST/text analysis only	policy
+portable	-	check-reload-trace-policy.py --audit	source/AST/text analysis only	policy
+portable	-	check-windows-proof-render.py	source/AST/text analysis only	product
+portable	-	test-windows-proof-render.py	source/AST/text analysis only	product
+portable	-	test-windows-proof-render-smoke-verdict.py	verdict logic in-process; one case runs the smoke script --dry-run against a fixture launcher	product
+portable	-	test-cupcake-policies.py	176 cupcake eval spawns, 20-35s; needs the cupcake binary the fail-fast guard above checks for	policy
+portable	-	check-cupcake-wasm-builtins.py --selftest	source/AST/text analysis only	policy
+portable	-	check-cupcake-wasm-builtins.py	source/AST/text analysis only	policy
+portable	-	test-cupcake-hook-shim.py	source/AST/text analysis only	policy
+portable	-	test-cupcake-stop-guards.py	source/AST/text analysis only	policy
+portable	-	test-authority-agreement-signal.py	source/AST/text analysis only	policy
+portable	-	test-idle-hold-signal.py	source/AST/text analysis only	policy
+portable	-	test-unexecuted-promise-signal.py	source/AST/text analysis only	policy
+portable	-	test-native-ownership-vocab-signal.py	source/AST/text analysis only	policy
+portable	-	test-stall-on-friction-signal.py	source/AST/text analysis only	policy
+portable	-	test-wall-of-text-signal.py	source/AST/text analysis only	policy
+portable	-	test-cupcake-delivered-shape.py --selftest	source/AST/text analysis only	policy
+portable	-	test-cupcake-delivered-shape.py	source/AST/text analysis only	policy
+portable	-	test-regulation-params-zstd-skip.py	blinds the interpreter in a subprocess; no game image, no regulation.bin	product
+portable	-	check-no-lossy-utf8.py	source/AST/text analysis only	lint
+portable	-	check-comment-caps.py --selftest	source/AST/text analysis only	lint
+portable	-	check-comment-caps.py	source/AST/text analysis only, plus git ls-files/show in the checkout itself	lint
+portable	-	check-no-unguarded-cstr-from-ptr.py --selftest	source/AST/text analysis only	source
+portable	-	check-no-unguarded-cstr-from-ptr.py	source/AST/text analysis only	source
+portable	-	check-prologue-bytes.py --selftest	source/AST/text analysis only	addresses
+portable	-	check-prologue-bytes.py	source/AST/text analysis only	addresses
+portable	-	check-lint-parity.py --selftest	source/AST/text analysis only	lint
+portable	-	check-lint-parity.py	source/AST/text analysis only	lint
+portable	-	check-fnv1a-owner.py --selftest	source/AST/text analysis only	source
+portable	-	check-fnv1a-owner.py	source/AST/text analysis only	source
+portable	-	check-rva-alias-drift.py --selftest	source/AST/text analysis only	addresses
+portable	-	check-rva-alias-drift.py	source/AST/text analysis only	addresses
+portable	-	check-profile-summary-layout.py --selftest	source/AST/text analysis only	product
+portable	-	check-profile-summary-layout.py	source/AST/text analysis only	product
+portable	-	check-fresh-run-logs.py --selftest	source/AST/text analysis only	runtime-tools
+portable	-	check-fresh-run-logs.py	source/AST/text analysis only	runtime-tools
+portable	-	test-pr-refactor-scope.sh	source/AST/text analysis only	suite
+partial	build-artifact	test-dll-byte-identical.py	'ok (list tests only)' -- the comparator tests are the part that is skipped	cargo-build
+portable	-	test-release-workflow.py	source/AST/text analysis only	product
+portable	-	check-rust-file-sizes.py	source/AST/text analysis only	lint
+portable	-	check-experiments-rustfmt.py	source/AST/text analysis only	lint
+portable	-	check-crate-extraction-roadmap.py --selftest	source/AST/text analysis only	docs
+portable	-	check-crate-extraction-roadmap.py	source/AST/text analysis only	docs
+portable	-	rva_symbols.py --selftest	source/AST/text analysis only	addresses
+portable	-	check-stale-rva-calls.py --selftest	source/AST/text analysis only	addresses
+portable	-	check-stale-rva-calls.py	source/AST/text analysis only	addresses
+portable	-	check-expression-constants.py --selftest	source/AST/text analysis only	addresses
+portable	-	check-expression-constants.py	source/AST/text analysis only	addresses
+blocked	rva-map-tsv	select-needed-1170-rows.py --selftest	selects rows OUT OF the gitignored 128k-row .pdata alignment	addresses
+portable	-	map-data-rvas-1162-to-1170.py --selftest-source	source/AST/text analysis only	addresses
+portable	-	check-no-stale-callsite-rva.py --selftest	source/AST/text analysis only	addresses
+portable	-	check-no-stale-callsite-rva.py	source/AST/text analysis only	addresses
+portable	-	derive-callsite-1170.py --selftest	source/AST/text analysis only	addresses
+portable	-	check-hook-log-sink.py --selftest	source/AST/text analysis only	source
+portable	-	check-hook-log-sink.py	source/AST/text analysis only	source
+blocked	image-1162,image-1170,uv	audit-1170-hook-targets.py --selftest	FileNotFoundError on the 1.17 image before any assertion	addresses
+portable	-	check-decode-extent-bounds.py --selftest	source/AST/text analysis only	addresses
+portable	-	check-decode-extent-bounds.py	source/AST/text analysis only	addresses
+blocked	uv	verify-prologue-masks-1170.py --selftest	re-derives every mask with capstone; os.execvp('uv') raises before the first assertion	addresses
+portable	-	verify-aob-patterns-1170.py --selftest	source/AST/text analysis only	addresses
+portable	-	verify-prologue-coverage-1170.py --selftest	source/AST/text analysis only	addresses
+portable	-	verify-prologue-coverage-1170.py --section	source/AST/text analysis only	addresses
+partial	image-1162,image-1170	classify-1170-entry-kind.py --selftest	synthetic half reports '0 failure(s)'; the image-backed half prints SKIPPED	addresses
+blocked	image-1162,image-1170	classify-1170-entry-kind.py --fail-on-mid	one line: 'entry-kind classification skipped'. Nothing is classified	addresses
+blocked	image-1162	check-leaf-extent-pdata-coverage.py	one line: 'skipped: missing image'. No extent is covered. (Measured to survive a missing uv, so uv is not listed.)	addresses
+blocked	image-1162,image-1170	check-no-chained-continuation-rows.py --selftest	says it itself: 'NOT A PASS: no row was checked'	addresses
+blocked	image-1162,image-1170	check-no-chained-continuation-rows.py	says it itself: 'NOT A PASS: no row was checked'	addresses
+portable	-	check-no-duplicate-ledger-rows.py --selftest	source/AST/text analysis only	docs
+portable	-	check-no-duplicate-ledger-rows.py	source/AST/text analysis only	docs
+portable	-	check-ledger-section-kind.py --selftest	source/AST/text analysis only	docs
+portable	-	check-1170-translation-collisions.py --selftest	source/AST/text analysis only	addresses
+portable	-	check-1170-translation-collisions.py	source/AST/text analysis only	addresses
+portable	-	check-double-resolved-hook-targets.py --selftest	source/AST/text analysis only	addresses
+blocked	image-1162,image-1170,rva-map-tsv	verify-data-rvas-by-rtti.py --selftest	one line: 'SKIP: missing <image>'. No RTTI is verified. rva-map-tsv added 2026-09-01: without the whole-image map TRACE_MENU_TASK_UPDATE_TABLE_RVA's FNPTR anchor cannot be computed, the row falls to NO-ANCHOR and the UNANCHORED pin fails -- a false red, not a finding. The plain run below does not need it	addresses
+blocked	image-1162,image-1170	verify-data-rvas-by-rtti.py	one line: 'SKIP: missing <image>'. No RTTI is verified	addresses
+blocked	image-1162,image-1170	map-rvas-1162-to-1170.py --selftest	exits 1 with 'missing image: <path>' before the selftest runs; nothing is asserted	addresses
+blocked	ghidra-8765,ghidra-8767	confirm-1170-pair-in-dumps.py --selftest	one line: 'skipped: no <build> Ghidra MCP daemon on :<port>'. No pair is confirmed or refused	addresses
+blocked	image-1162,!uv	check-singleton-field-offsets.py --selftest	says it itself: 'SKIPPED (NOT A PASS) ... no field offset was checked at all'	addresses
+blocked	image-1162,!uv	check-singleton-field-offsets.py	says it itself: 'SKIPPED (NOT A PASS) ... no field offset was checked at all'	addresses
+blocked	image-1162,image-1170	check-object-field-offsets-1170.py --selftest	refuses to run: a green selftest without the images would be vacuous	addresses
+partial	image-1162,image-1170	check-object-field-offsets-1170.py	73 constant pins and 9 write-reach bounds still recomputed; 'image: SKIPPED'	addresses
+partial	image-1162,image-1170	audit-name-derived-offsets.py --selftest	60 kinds rows and 43 OS-ABI values still checked; only the lea known-answer test is skipped	addresses
+blocked	generated-address-map	audit-1170-coverage-inventory.py --selftest	'no generated address_map_1170.rs to compare against; build er-game-base first'	addresses
+portable	-	check-detour-rva-coverage.py --selftest	source/AST/text analysis only	addresses
+portable	-	check-detour-rva-coverage.py	source/AST/text analysis only	addresses
+portable	-	check-hook-batch-abort.py --selftest	source/AST/text analysis only	source
+portable	-	check-hook-batch-abort.py	source/AST/text analysis only	source
+blocked	rva-map-tsv	check-native-call-rva-coverage.py --selftest	its ledger pin names the gitignored .pdata alignment	addresses
+blocked	rva-map-tsv	check-native-call-rva-coverage.py	its ledger pin names the gitignored .pdata alignment	addresses
+blocked	game-install	check-game-version-supported.py --selftest	'PE reader not exercised' -- the selftest reads the INSTALLED exe, it has no synthetic PE	addresses
+blocked	game-install	check-game-version-supported.py	'SKIP: no game at ...' -- the installed build is the entire subject	addresses
+partial	game-install	check-ersc-version-supported.py --selftest	both parsers still assert on synthetic banners and the real constant; 'installed reader not exercised'	product
+blocked	game-install	check-ersc-version-supported.py	'SKIP: no Seamless Co-op at ...' -- the installed build is the entire subject	product
+portable	-	check-markdown-code-blocks.py	source/AST/text analysis only	lint
+portable	-	er-stale-run-sentinel.sh --selftest	source/AST/text analysis only	runtime-tools
+portable	-	er-launch-gate.py --selftest	source/AST/text analysis only	runtime-tools
+blocked	game-install	diff-regulation-params.py --effects-json	exits 2 on purpose: 'could not look' is not evidence the effects.json ids agree	product
+blocked	game-install	check-starting-classes.py	exits 2 on purpose: the starting-class table drifts silently	product
+portable	-	audit-1170-readiness.py --selftest	source/AST/text analysis only	addresses
+portable	-	audit-1170-readiness.py --check	source/AST/text analysis only	addresses
+portable	-	audit-1170-gate-bypass.py --selftest	source/AST/text analysis only	addresses
+portable	-	audit-1170-gate-bypass.py --baseline	source/AST/text analysis only, compared against the committed baseline JSON beside it	addresses
+portable	-	audit-ungated-image-writes.py --selftest	source/AST/text analysis only	addresses
+portable	-	audit-ungated-image-writes.py	source/AST/text analysis only	addresses
+portable	-	check-test-target-coverage.py --selftest	synthetic fixture workspaces in tmp plus a source-only read of the live crates	suite
+portable	-	check-test-target-coverage.py --prove-selftest-catches-regression	source/AST/text analysis only	suite
+portable	-	check-test-target-coverage.py	source/AST/text analysis only	suite
+portable	-	check-moveset-table.py --selftest	synthetic tables built in memory; needs nothing	moveset
+portable	-	er-moveset-coverage.py --selftest	measured 2026-09-03 in a tracked-files-only checkout of the merged tree: exit 0 and the real assertion 'c4351 reduced to locomotion is caught'; output matches the developer tree except for the temp path of its own synthetic table	moveset
+portable	-	er-moveset-coverage.py --check	measured 2026-09-03 in a tracked-files-only checkout of the merged tree: exit 0, output BYTE-IDENTICAL to the developer tree (408 creatures, 37 classifying zero attacks); the table and corpus it reads are both tracked, so it needs no game image	moveset
+partial	chr-corpus	check-moveset-table.py	grammar and invariant half asserts on the committed table; the regenerate-and-diff half prints SKIP	moveset
+portable	-	check-me3-shell-coverage.py --selftest	source/AST/text analysis only	product
+portable	-	check-me3-shell-coverage.py	source/AST/text analysis only	product
+portable	-	check-union-hook-abi.py --selftest	source/AST/text analysis only	source
+portable	-	check-union-hook-abi.py	source/AST/text analysis only	source
+portable	-	check-me3-dll-conflicts.py --selftest	source/AST/text analysis only	product
+portable	-	check-me3-dll-conflicts.py	source/AST/text analysis only	product
+portable	-	check-shared-hook-rvas.py --selftest	source/AST/text analysis only	addresses
+portable	-	check-shared-hook-rvas.py	source/AST/text analysis only	addresses
+portable	-	er_run_lib.py	source/AST/text analysis only	runtime-tools
+blocked	git-baseline	er-dll-closure.py --selftest	calls git merge-base origin/main HEAD; on a shallow clone three --with/--without cases FAIL rather than skip	suite
+portable	-	er-change-scope.py --selftest	pure: reads the build scripts, check.sh and scripts/ only -- no git baseline, unlike the closure tool above	suite
+partial	build-artifact	er-dll-provenance.py --selftest	10 closure cases still run; 'fingerprint checks not exercised'	product
+blocked	crash-logging-dll	er-dll-freshness.sh --selftest	needs a linked er_crash_logging.dll to attest -- named by FILE, not by 'some dll exists': a partly-built tree passed build-artifact and the gate then exited 1 about the missing build	cargo-build
+partial	save-corpus	er-pick-save.py --selftest	argument and size-invariant cases still PASS; 'skip no save corpus found'	runtime-tools
+portable	-	er-gen-me3-profile.py --selftest	source/AST/text analysis only	product
+portable	-	er-run-reaper.py --selftest	source/AST/text analysis only	runtime-tools
+blocked	user-launcher	er-run-branch.py --selftest	asserts the user launcher it delegates to really exists at ~/Elden/launch.sh	runtime-tools
+portable	-	er-release-bisect.py --selftest	source/AST/text analysis only	product
+portable	-	check-single-dll-product-contract.py --selftest	source/AST/text analysis only	product
+portable	-	check-single-dll-product-contract.py	source/AST/text analysis only	product
+portable	-	check-rust-build.sh	full cross-linked DLL build plus wine lib tests; the one step over the 30s audit cap, so not measured by the sweep -- CI has always run it	cargo-build
+blocked	minhook	check-committed-compiles.sh --selftest	compiles the workspace; er-hook needs vendor/minhook	cargo-build
+blocked	minhook	check-committed-compiles.sh	compiles the workspace; er-hook needs vendor/minhook	cargo-build
+portable	-	check-git-hooks-installed.sh --selftest	source/AST/text analysis only	suite
+blocked	git-hooks	check-git-hooks-installed.sh	asserts THIS clone's hooks; a fresh checkout has only *.sample	suite
+portable	-	test-check-config-guard.sh	source/AST/text analysis only	suite
+portable	-	test-pre-push-scrubs-git-env.sh	builds its own main+linked-worktree pair under mktemp; touches no repo but its own	suite
+portable	-	test-cpu-courtesy.sh	runs renice/taskset on itself; every number is derived from nproc, so a 2-core runner asserts 1	suite
+portable	-	check-save-disable-warnings.py	source/AST/text analysis only	product
+portable	-	conventional-commit-subject.py --selftest	source/AST/text analysis only	suite
+portable	-	test-described-next-step-signal.py	drives the signal script under mktemp; source/text only	policy
+portable	-	check-no-thread-suspension.py --selftest	source/AST/text analysis only	source
+portable	-	check-no-thread-suspension.py	source/AST/text analysis only; silent and rc 0 in both the clone and the developer tree	source
+partial	git-baseline	check-runtime-evidence.sh --selftest	seven fixture cases run under mktemp and say PASS; the two carry-forward cases print 'skip' on a depth-1 checkout, which does not carry the commits they diff. fetch-depth: 0 runs them.	suite
+portable	-	er-character-type-tables.py --selftest	source/AST/text analysis only	product
+portable	-	test-challenged-convention-classifier.py	source/AST/text analysis only	policy
+portable	-	test-narrated-action-classifier.py	source/AST/text analysis only	policy
+portable	-	test-admission-with-defence-classifier.py	source/AST/text analysis only	policy
+portable	-	test-diagnosis-signal.py	source/AST/text analysis only	policy
+portable	-	test-future-commitment-signal.py	source/AST/text analysis only	policy
+portable	-	test-deferred-evidence-read-signal.py	source/AST/text analysis only	policy
+portable	-	check-shared-detour-signatures.py --selftest	source/AST/text analysis only	addresses
+portable	-	check-shared-detour-signatures.py	source/AST/text analysis only	addresses
+portable	-	er-run-natives-history.py --selftest	source/AST/text analysis only	runtime-tools
