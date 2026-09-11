@@ -16,13 +16,15 @@ publish = false
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# THE READER, as a DEV dependency only. `tests/round_trip.rs` drives a document this crate wrote
-# through the encoder, back through an independent decoder, and into the importer's own parser and
-# equip planner -- so "the quickbar survives the round trip" is asserted against the code that
-# actually reads it rather than against this crate's opinion of the format. The direction matters:
-# er-build-import-core does NOT depend on er-build-export, so this stays a one-way edge and the
-# shipping graph is unchanged.
-[dev-dependencies]
+# THE READER, and now a real dependency rather than only a dev one. The appearance codec
+# (`er_build_import_core::sliders`) is the one piece of the document both directions need: this
+# crate decodes a character's `FaceDataBuffer` into the planner's slider object, and the importer
+# encodes that object back over a character's buffer. Two copies of a 200-row offset table is two
+# tables to move a byte in.
+#
+# The edge runs the same way the dev one already did, so the shipping graph keeps its shape:
+# er-build-import-core still does NOT depend on er-build-export, and nothing here can close a
+# cycle.
 er-build-import-core = { path = "../er-build-import-core" }
 
 [lints]

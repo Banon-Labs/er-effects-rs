@@ -60,6 +60,42 @@ pub unsafe extern "system" fn er_effects_union_register(
     }
 }
 
+/// C-ABI export: the five-argument sibling of [`er_effects_union_register`].
+///
+/// A separate export rather than an arity argument on the one above, because a companion resolves
+/// these by string and users install these DLLs one at a time from separate releases. The full
+/// reasoning is on `er_hook::UnionRegister5Fn`; the short version is that an older product would
+/// decode a five-argument handler as a `UnionFn`, install a four-argument dispatcher, and call a
+/// handler whose fifth parameter was never written -- for `AddCancelButton` that parameter is a
+/// function pointer the game calls. A distinct name turns that into a null `GetProcAddress` and a
+/// logged local fallback instead.
+///
+/// The product's own row cloner registers through `register_union_hook5` directly, so this export
+/// exists for companions. Both paths land in the same slot table, so the address is owned by one
+/// dispatcher at one arity no matter which door a registrant came through.
+///
+/// # Safety
+/// `handler` must be a valid `UnionFn5` matching `target`'s ABI (exactly five integer/pointer
+/// arguments, no floats); `target` must be a real code address in this process; `orig_slot_ptr`
+/// must point at a live, aligned `usize` cell that outlives every dispatch (a companion
+/// `'static`).
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn er_effects_union_register5(
+    target: usize,
+    handler: UnionFn5,
+    orig_slot_ptr: *mut usize,
+) -> i32 {
+    if orig_slot_ptr.is_null() {
+        return -1;
+    }
+    // AtomicUsize is a repr(transparent) wrapper over usize, so a *mut usize aliases it soundly.
+    let orig_slot: &'static AtomicUsize = unsafe { &*(orig_slot_ptr as *const AtomicUsize) };
+    match unsafe { register_union_hook5(target, handler, orig_slot) } {
+        Ok(()) => 0,
+        Err(status) => status as i32,
+    }
+}
+
 /// C-ABI export: hold (or release, with 0) a DirectInput keyboard scancode in front of the game.
 ///
 /// The only keyboard stage ER 1.17 reads. `eldenring.exe` imports no RawInput API at all, so a

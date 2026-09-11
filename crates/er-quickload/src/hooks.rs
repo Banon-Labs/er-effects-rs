@@ -7,7 +7,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook, UnionFn, register_union_hook};
 use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
@@ -340,33 +340,33 @@ pub(crate) fn install_safe_input_hooks() {
     }
 
     let mut hooks = Vec::new();
-    match safe_input_proc(b"user32.dll\0", b"GetAsyncKeyState\0") {
-        Ok(target) => unsafe {
-            create_absolute_hook(
-                &mut hooks,
-                "GetAsyncKeyState",
-                target,
-                get_async_key_state_hook as *mut c_void,
-                &GET_ASYNC_KEY_STATE_ORIG,
-            )
-        },
-        Err(error) => append_autoload_debug(format_args!(
-            "safe_input GetAsyncKeyState resolve failed: {error}"
-        )),
-    }
-    match safe_input_proc(b"user32.dll\0", b"GetKeyState\0") {
-        Ok(target) => unsafe {
-            create_absolute_hook(
-                &mut hooks,
-                "GetKeyState",
-                target,
-                get_key_state_hook as *mut c_void,
-                &GET_KEY_STATE_ORIG,
-            )
-        },
-        Err(error) => append_autoload_debug(format_args!(
-            "safe_input GetKeyState resolve failed: {error}"
-        )),
+    // The two key-state getters go through the union; `DirectInput8Create` below does not.
+    //
+    // Not a style choice -- these two exports are contended and that one is not.
+    // `er-hotkey-conflicts` arms `GetAsyncKeyState` and `GetKeyState` from its own attach thread,
+    // before the first game frame, as the conflict census; `experiments::input_block` arms
+    // `GetKeyState` and `GetKeyboardState` for focus-independent injection. A bare `MhHook::new`
+    // against an export another handler already owns returns `MH_ERROR_ALREADY_CREATED`, and the
+    // loser is then silently absent for the whole session -- which is exactly what the user32
+    // injection stage did on every run until 96e22d1c, 3756 failed re-arms per session.
+    //
+    // This path is gated on the `er-quickload-safe-input.txt` marker, so it has not been the one
+    // storming. That is the reason to fix it now rather than after it is: the marker's presence
+    // decided nothing about whether the hook took, and a diagnostic that quietly does not run is
+    // worse than one that refuses.
+    unsafe {
+        register_safe_input_union(
+            "GetAsyncKeyState",
+            b"GetAsyncKeyState\0",
+            get_async_key_state_union,
+            &GET_ASYNC_KEY_STATE_ORIG,
+        );
+        register_safe_input_union(
+            "GetKeyState",
+            b"GetKeyState\0",
+            get_key_state_union,
+            &GET_KEY_STATE_ORIG,
+        );
     }
     match safe_input_proc(b"dinput8.dll\0", b"DirectInput8Create\0") {
         Ok(target) => unsafe {
@@ -410,28 +410,78 @@ pub(crate) fn safe_input_key_state_override(vkey: i32, original_value: i16) -> i
     }
 }
 
-pub(crate) unsafe extern "system" fn get_async_key_state_hook(vkey: i32) -> i16 {
-    type GetAsyncKeyState = unsafe extern "system" fn(i32) -> i16;
-    let original = GET_ASYNC_KEY_STATE_ORIG.load(Ordering::SeqCst);
-    let original_value = if original == HOOK_ORIGINAL_UNSET {
-        SAFE_INPUT_KEY_UP_STATE
-    } else {
-        let original: GetAsyncKeyState = unsafe { std::mem::transmute(original) };
-        unsafe { original(vkey) }
+/// Resolve one contended USER32 getter and register `handler` on its union chain.
+///
+/// # Safety
+///
+/// `handler` must be a real `UnionFn` and `slot` must be the static this module calls back
+/// through, because `register_union_hook` publishes the chain's forward pointer into it.
+unsafe fn register_safe_input_union(
+    label: &str,
+    export: &[u8],
+    handler: UnionFn,
+    slot: &'static AtomicUsize,
+) {
+    let target = match safe_input_proc(b"user32.dll\0", export) {
+        Ok(target) => target,
+        Err(error) => {
+            append_autoload_debug(format_args!(
+                "safe_input {label} resolve failed: {error} -- this surface stays unhooked"
+            ));
+            return;
+        }
     };
-    safe_input_key_state_override(vkey, original_value)
+    match unsafe { register_union_hook(target as usize, handler, slot) } {
+        Ok(()) => append_autoload_debug(format_args!(
+            "safe_input {label}: joined the union at {target:p}"
+        )),
+        Err(status) => append_autoload_debug(format_args!(
+            "safe_input {label}: register_union_hook at {target:p} failed: {status:?} -- the \
+             safe-input override does not apply to this export for the session"
+        )),
+    }
 }
 
-pub(crate) unsafe extern "system" fn get_key_state_hook(vkey: i32) -> i16 {
-    type GetKeyState = unsafe extern "system" fn(i32) -> i16;
-    let original = GET_KEY_STATE_ORIG.load(Ordering::SeqCst);
-    let original_value = if original == HOOK_ORIGINAL_UNSET {
-        SAFE_INPUT_KEY_UP_STATE
-    } else {
-        let original: GetKeyState = unsafe { std::mem::transmute(original) };
-        unsafe { original(vkey) }
-    };
-    safe_input_key_state_override(vkey, original_value)
+/// Call the next element of this export's union chain.
+///
+/// Through [`UnionFn`], not through the export's own `fn(i32) -> i16`: the slot may hold the next
+/// handler rather than the game trampoline, and a narrow call would leave that handler's `r8` and
+/// `r9` holding this function's scratch. The unset sentinel means the chain has nowhere to go yet
+/// -- `chain_append` publishes the previous handler's forward pointer before the new handler's own
+/// `orig`, so a call landing in that window reads a slot that is still the sentinel.
+unsafe fn chain_safe_input(slot: &AtomicUsize, a: usize, rest: [usize; 3]) -> i16 {
+    let next = slot.load(Ordering::SeqCst);
+    if next == HOOK_ORIGINAL_UNSET {
+        return SAFE_INPUT_KEY_UP_STATE;
+    }
+    // SAFETY: the slot holds either the game trampoline or the next handler in the chain, both
+    // `UnionFn`-shaped by the registrar's contract.
+    let call: UnionFn = unsafe { std::mem::transmute::<usize, UnionFn>(next) };
+    let returned = unsafe { call(a, rest[0], rest[1], rest[2]) };
+    returned as u16 as i16
+}
+
+/// `UnionFn` shim for `GetAsyncKeyState(int)`.
+///
+/// `rest` is the caller's `rdx`/`r8`/`r9`, which this export does not read. It is carried through
+/// rather than zeroed, because a handler chained after this one would otherwise be handed this
+/// function's scratch instead of the caller's own registers.
+unsafe extern "system" fn get_async_key_state_union(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let vkey = a as i32;
+    let original = unsafe { chain_safe_input(&GET_ASYNC_KEY_STATE_ORIG, a, [b, c, d]) };
+    safe_input_key_state_override(vkey, original) as u16 as usize
+}
+
+/// `UnionFn` shim for `GetKeyState(int)`: same treatment as `GetAsyncKeyState`.
+unsafe extern "system" fn get_key_state_union(a: usize, b: usize, c: usize, d: usize) -> usize {
+    let vkey = a as i32;
+    let original = unsafe { chain_safe_input(&GET_KEY_STATE_ORIG, a, [b, c, d]) };
+    safe_input_key_state_override(vkey, original) as u16 as usize
 }
 
 pub(crate) unsafe fn install_direct_input_create_device_hook(direct_input: *mut c_void) {

@@ -52,6 +52,45 @@ pub struct BuildDoc {
     /// Equipped great rune, when the author chose one.
     #[serde(default, rename = "greatRune")]
     pub great_rune: Option<String>,
+    /// The character's appearance, as the planner's Cosmetics tab carries it.
+    ///
+    /// Absent on a build whose author never opened that tab, which is most of them, and on every
+    /// build authored before the planner grew it in v2.19. The importer leaves the character's own
+    /// face alone in that case rather than applying a default one -- see
+    /// [`crate::sliders::SlidersRejection::Absent`].
+    #[serde(default)]
+    pub sliders: Option<crate::sliders::SlidersDoc>,
+}
+
+impl BuildDoc {
+    /// The appearance this build asks for, or why there is none to apply.
+    ///
+    /// A `sliders` object carrying no slider values is [`SlidersRejection::Absent`] and not an
+    /// empty appearance: the planner writes exactly that shape when its Cosmetics tab is opened
+    /// and nothing is touched, and applying it would flatten every slider on the character to
+    /// zero -- a face, but not one anybody chose.
+    ///
+    /// ```
+    /// use er_build_import_core::model;
+    /// let none = model::parse("{}").expect("parses");
+    /// assert!(none.appearance().is_err());
+    ///
+    /// let empty = model::parse(r#"{"sliders":{"sliders":{}}}"#).expect("parses");
+    /// assert!(empty.appearance().is_err());
+    ///
+    /// let some = model::parse(r#"{"sliders":{"sliders":{"age":3}}}"#).expect("parses");
+    /// assert_eq!(some.appearance().expect("present").sliders["age"], 3);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`SlidersRejection::Absent`] when the build names no appearance.
+    pub fn appearance(&self) -> Result<&crate::sliders::SlidersDoc, crate::SlidersRejection> {
+        self.sliders
+            .as_ref()
+            .filter(|found| !found.sliders.is_empty())
+            .ok_or(crate::SlidersRejection::Absent)
+    }
 }
 
 /// A category's slot list.

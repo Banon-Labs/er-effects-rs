@@ -3059,15 +3059,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "er-lockon-filter"
-version = "0.1.0"
-dependencies = [
- "er-game-base",
- "er-hook",
- "iced-x86",
-]
-
-[[package]]
 name = "er-net-effects"
 version = "0.1.0"
 dependencies = [
@@ -3200,11 +3191,14 @@ dependencies = [
  "er-build-import-core",
  "er-build-import-runtime",
  "er-game-base",
+ "er-gfx",
  "er-hook",
  "er-save-loader",
  "er-save-picker-core",
  "er-telemetry-core",
+ "er-title-flow",
  "fromsoftware-shared",
+ "iced-x86",
  "windows 0.62.2",
 ]
 

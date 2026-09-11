@@ -1766,92 +1766,34 @@ pub(crate) unsafe extern "system" fn mms_step_finish_hook(
     unsafe { mms_call_original(&MMS_STEP_FINISH_ORIG, this, b, c, d) }
 }
 
-pub(crate) unsafe fn call_wrapper_original(
+/// Call whatever a union handler's `orig` slot holds, through the union's own shape.
+///
+/// Every trace hook here rides the four-argument union, so its `orig` slot holds the next handler
+/// on the address as often as it holds the game trampoline -- `register_union_hook_resolved`
+/// stores the new handler's address into the previous handler's slot. A narrower call through it
+/// therefore leaves `r8`/`r9` unset for a chained handler that reads them, and returns nothing for
+/// one whose return the game uses. `er_hook::register_shared_hook`'s safety contract already says
+/// the value "may be the next handler in the chain rather than the game trampoline, so the handler
+/// must call it through the 4-argument `UnionFn` signature, not the game's narrower one" -- this
+/// is that call, in one place, so no hook has to remember.
+///
+/// A game function that genuinely takes fewer arguments is unharmed: the extra integer registers
+/// are the ones the caller already had live, passed on verbatim rather than left as this DLL's
+/// scratch. `scripts/check-union-hook-abi.py` is the gate that keeps a narrower one out.
+pub(crate) unsafe fn call_union_original(
     original: &AtomicUsize,
-    this: *mut c_void,
-) -> Option<*mut c_void> {
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
     let original = original.load(Ordering::SeqCst);
     if original == HOOK_ORIGINAL_UNSET {
-        return None;
+        return 0;
     }
-    let original: unsafe extern "system" fn(*mut c_void) -> *mut c_void =
-        unsafe { std::mem::transmute(original) };
-    Some(unsafe { original(this) })
+    let original: crate::mh::UnionFn = unsafe { std::mem::transmute(original) };
+    unsafe { original(a, b, c, d) }
 }
-
-pub(crate) unsafe fn call_bool3_original(
-    original: &AtomicUsize,
-    arg0: i32,
-    arg1: u8,
-    arg2: u8,
-) -> Option<u8> {
-    let original = original.load(Ordering::SeqCst);
-    if original == HOOK_ORIGINAL_UNSET {
-        return None;
-    }
-    let original: unsafe extern "system" fn(i32, u8, u8) -> u8 =
-        unsafe { std::mem::transmute(original) };
-    Some(unsafe { original(arg0, arg1, arg2) })
-}
-
-pub(crate) unsafe fn call_task_enqueue_original(
-    arg0: *mut c_void,
-    arg1: *mut c_void,
-) -> Option<*mut c_void> {
-    let original = TASK_ENQUEUE_ORIG.load(Ordering::SeqCst);
-    if original == HOOK_ORIGINAL_UNSET {
-        return None;
-    }
-    let original: unsafe extern "system" fn(*mut c_void, *mut c_void) -> *mut c_void =
-        unsafe { std::mem::transmute(original) };
-    Some(unsafe { original(arg0, arg1) })
-}
-
-pub(crate) unsafe fn call_result_void1_original(
-    original: &AtomicUsize,
-    result: usize,
-) -> Option<()> {
-    let original = original.load(Ordering::SeqCst);
-    if original == HOOK_ORIGINAL_UNSET {
-        return None;
-    }
-    let original: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(original) };
-    unsafe { original(result) };
-    Some(())
-}
-
-pub(crate) unsafe fn call_result_void2_original(
-    original: &AtomicUsize,
-    result: usize,
-    event: usize,
-) -> Option<()> {
-    let original = original.load(Ordering::SeqCst);
-    if original == HOOK_ORIGINAL_UNSET {
-        return None;
-    }
-    let original: unsafe extern "system" fn(usize, usize) =
-        unsafe { std::mem::transmute(original) };
-    unsafe { original(result, event) };
-    Some(())
-}
-
-pub(crate) unsafe fn call_wrapper_builder_original(
-    rcx: usize,
-    rdx: usize,
-    r8: usize,
-) -> Option<usize> {
-    let original = RESULT_EVENT_WRAPPER_BUILDER_ORIG.load(Ordering::SeqCst);
-    if original == HOOK_ORIGINAL_UNSET {
-        return None;
-    }
-    let original: unsafe extern "system" fn(usize, usize, usize) -> usize =
-        unsafe { std::mem::transmute(original) };
-    Some(unsafe { original(rcx, rdx, r8) })
-}
-
-/// Defensive default when a b80 trampoline is somehow unset (dead branch: if our hook
-/// runs, MhHook installed and the trampoline is set).
-const B80_HOOK_DEFAULT_RET: i32 = 0;
 
 /// State snapshot for the b80 save-mount capture: the GameMan load-phase fields plus the
 /// iodev request-handle pair the poll keys on. Logged at enter and leave of each hooked
@@ -1891,96 +1833,96 @@ pub(crate) fn b80_mount_trace_summary() -> String {
     )
 }
 
-/// Call an original slot-int b80 initiator/deserialize (fastcall, ecx=slot). Returns the
-/// full eax the original produced so the game's caller sees the unmodified result.
-unsafe fn call_b80_initiator_original(original: &AtomicUsize, slot: i32) -> i32 {
-    let original = original.load(Ordering::SeqCst);
-    if original == HOOK_ORIGINAL_UNSET {
-        return B80_HOOK_DEFAULT_RET;
-    }
-    let original: unsafe extern "system" fn(i32) -> i32 = unsafe { std::mem::transmute(original) };
-    unsafe { original(slot) }
-}
-
-/// Call the original b80 poll 0x140679180(cl,dl). Returns its full eax (0 ready /
-/// 1 in-progress / else error) so the dispatcher's switch is unchanged.
-unsafe fn call_b80_poll_original(original: &AtomicUsize, arg0: u8, arg1: u8) -> i32 {
-    let original = original.load(Ordering::SeqCst);
-    if original == HOOK_ORIGINAL_UNSET {
-        return B80_HOOK_DEFAULT_RET;
-    }
-    let original: unsafe extern "system" fn(u8, u8) -> i32 =
-        unsafe { std::mem::transmute(original) };
-    unsafe { original(arg0, arg1) }
-}
-
-pub(crate) unsafe extern "system" fn b80_preview_initiator_hook(slot: i32) -> i32 {
+pub(crate) unsafe extern "system" fn b80_preview_initiator_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let slot = a as i32;
     append_continue_trace(format_args!(
         "b80_preview_67b4e0 ENTER slot={slot} {}",
         b80_mount_trace_summary()
     ));
-    let ret = unsafe { call_b80_initiator_original(&B80_PREVIEW_INITIATOR_ORIG, slot) };
+    let ret = unsafe { call_union_original(&B80_PREVIEW_INITIATOR_ORIG, a, b, c, d) } as i32;
     append_continue_trace(format_args!(
         "b80_preview_67b4e0 LEAVE slot={slot} ret={ret} {}",
         b80_mount_trace_summary()
     ));
-    ret
+    ret as usize
 }
 
-pub(crate) unsafe extern "system" fn b80_loadsavedata_hook(slot: i32) -> i32 {
+pub(crate) unsafe extern "system" fn b80_loadsavedata_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let slot = a as i32;
     append_continue_trace(format_args!(
         "b80_loadsavedata_67b200 ENTER slot={slot} {}",
         b80_mount_trace_summary()
     ));
-    let ret = unsafe { call_b80_initiator_original(&B80_LOAD_SAVE_DATA_INITIATOR_ORIG, slot) };
+    let ret = unsafe { call_union_original(&B80_LOAD_SAVE_DATA_INITIATOR_ORIG, a, b, c, d) } as i32;
     append_continue_trace(format_args!(
         "b80_loadsavedata_67b200 LEAVE slot={slot} ret={ret} {}",
         b80_mount_trace_summary()
     ));
-    ret
+    ret as usize
 }
 
-pub(crate) unsafe extern "system" fn b80_fullload_hook(slot: i32) -> i32 {
+pub(crate) unsafe extern "system" fn b80_fullload_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let slot = a as i32;
     append_continue_trace(format_args!(
         "b80_fullload_67b1a0 ENTER slot={slot} {}",
         b80_mount_trace_summary()
     ));
-    let ret = unsafe { call_b80_initiator_original(&B80_FULL_LOAD_INITIATOR_ORIG, slot) };
+    let ret = unsafe { call_union_original(&B80_FULL_LOAD_INITIATOR_ORIG, a, b, c, d) } as i32;
     append_continue_trace(format_args!(
         "b80_fullload_67b1a0 LEAVE slot={slot} ret={ret} {}",
         b80_mount_trace_summary()
     ));
-    ret
+    ret as usize
 }
 
-pub(crate) unsafe extern "system" fn b80_poll_hook(arg0: u8, arg1: u8) -> i32 {
+pub(crate) unsafe extern "system" fn b80_poll_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let arg0 = a as u8;
+    let arg1 = b as u8;
     append_continue_trace(format_args!(
         "b80_poll_679180 ENTER arg0={arg0} arg1={arg1} {}",
         b80_mount_trace_summary()
     ));
-    let ret = unsafe { call_b80_poll_original(&B80_POLL_ORIG, arg0, arg1) };
+    let ret = unsafe { call_union_original(&B80_POLL_ORIG, a, b, c, d) } as i32;
     append_continue_trace(format_args!(
         "b80_poll_679180 LEAVE ret={ret} {}",
         b80_mount_trace_summary()
     ));
-    ret
+    ret as usize
 }
 
-pub(crate) unsafe extern "system" fn b80_dispatcher2_observe_hook(this: usize) -> u8 {
+pub(crate) unsafe extern "system" fn b80_dispatcher2_observe_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let this = a;
     if this != TITLE_OWNER_SCAN_START_ADDRESS {
         B80_NATIVE_DISPATCHER_OWNER.store(this, Ordering::SeqCst);
     }
     let count = B80_DISPATCHER2_OBSERVE_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     let before = b80_mount_trace_summary();
-    let ret = unsafe {
-        let orig = B80_DISPATCHER2_OBSERVE_ORIG.load(Ordering::SeqCst);
-        if orig == HOOK_ORIGINAL_UNSET {
-            TITLE_OWNER_SCAN_START_ADDRESS as u8
-        } else {
-            let f: unsafe extern "system" fn(usize) -> u8 = std::mem::transmute(orig);
-            f(this)
-        }
-    };
+    let ret = unsafe { call_union_original(&B80_DISPATCHER2_OBSERVE_ORIG, a, b, c, d) } as u8;
     if count < MENU_ITEM_UPDATE_LOG_MAX
         || before.contains("b80=1")
         || before.contains("b80=2")
@@ -1992,15 +1934,21 @@ pub(crate) unsafe extern "system" fn b80_dispatcher2_observe_hook(this: usize) -
             trace_callers_summary()
         ));
     }
-    ret
+    ret as usize
 }
 
-pub(crate) unsafe extern "system" fn b80_deserialize_hook(slot: i32) -> i32 {
+pub(crate) unsafe extern "system" fn b80_deserialize_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let slot = a as i32;
     append_continue_trace(format_args!(
         "b80_deserialize_67b290 ENTER slot={slot} {}",
         b80_mount_trace_summary()
     ));
-    let ret = unsafe { call_b80_initiator_original(&B80_DESERIALIZE_ORIG, slot) };
+    let ret = unsafe { call_union_original(&B80_DESERIALIZE_ORIG, a, b, c, d) } as i32;
     const B80_DESERIALIZE_SUCCESS_RET: i32 = 1;
     const C30_ZERO: i32 = 0;
     let gm = game_man_ptr_or_null();
@@ -2019,10 +1967,16 @@ pub(crate) unsafe extern "system" fn b80_deserialize_hook(slot: i32) -> i32 {
         "b80_deserialize_67b290 LEAVE slot={slot} ret={ret} {}",
         b80_mount_trace_summary()
     ));
-    ret
+    ret as usize
 }
 
-pub(crate) unsafe extern "system" fn menu_continue_wrapper_hook(this: *mut c_void) -> *mut c_void {
+pub(crate) unsafe extern "system" fn menu_continue_wrapper_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let this = a as *mut c_void;
     unsafe {
         append_menu_semaphore_trace(
             "menu_continue_wrapper",
@@ -2032,8 +1986,11 @@ pub(crate) unsafe extern "system" fn menu_continue_wrapper_hook(this: *mut c_voi
             this,
         )
     };
-    let result =
-        unsafe { call_wrapper_original(&MENU_CONTINUE_WRAPPER_ORIG, this) }.unwrap_or(this);
+    let result = if MENU_CONTINUE_WRAPPER_ORIG.load(Ordering::SeqCst) == HOOK_ORIGINAL_UNSET {
+        this
+    } else {
+        unsafe { call_union_original(&MENU_CONTINUE_WRAPPER_ORIG, a, b, c, d) as *mut c_void }
+    };
     unsafe {
         append_menu_semaphore_trace(
             "menu_continue_wrapper",
@@ -2043,12 +2000,16 @@ pub(crate) unsafe extern "system" fn menu_continue_wrapper_hook(this: *mut c_voi
             result,
         )
     };
-    result
+    result as usize
 }
 
 pub(crate) unsafe extern "system" fn menu_new_or_load_wrapper_hook(
-    this: *mut c_void,
-) -> *mut c_void {
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let this = a as *mut c_void;
     unsafe {
         append_menu_semaphore_trace(
             "menu_new_or_load_wrapper",
@@ -2058,8 +2019,11 @@ pub(crate) unsafe extern "system" fn menu_new_or_load_wrapper_hook(
             this,
         )
     };
-    let result =
-        unsafe { call_wrapper_original(&MENU_NEW_OR_LOAD_WRAPPER_ORIG, this) }.unwrap_or(this);
+    let result = if MENU_NEW_OR_LOAD_WRAPPER_ORIG.load(Ordering::SeqCst) == HOOK_ORIGINAL_UNSET {
+        this
+    } else {
+        unsafe { call_union_original(&MENU_NEW_OR_LOAD_WRAPPER_ORIG, a, b, c, d) as *mut c_void }
+    };
     unsafe {
         append_menu_semaphore_trace(
             "menu_new_or_load_wrapper",
@@ -2069,12 +2033,16 @@ pub(crate) unsafe extern "system" fn menu_new_or_load_wrapper_hook(
             result,
         )
     };
-    result
+    result as usize
 }
 
 pub(crate) unsafe extern "system" fn menu_other_load_wrapper_hook(
-    this: *mut c_void,
-) -> *mut c_void {
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let this = a as *mut c_void;
     unsafe {
         append_menu_semaphore_trace(
             "menu_other_load_wrapper",
@@ -2084,8 +2052,11 @@ pub(crate) unsafe extern "system" fn menu_other_load_wrapper_hook(
             this,
         )
     };
-    let result =
-        unsafe { call_wrapper_original(&MENU_OTHER_LOAD_WRAPPER_ORIG, this) }.unwrap_or(this);
+    let result = if MENU_OTHER_LOAD_WRAPPER_ORIG.load(Ordering::SeqCst) == HOOK_ORIGINAL_UNSET {
+        this
+    } else {
+        unsafe { call_union_original(&MENU_OTHER_LOAD_WRAPPER_ORIG, a, b, c, d) as *mut c_void }
+    };
     unsafe {
         append_menu_semaphore_trace(
             "menu_other_load_wrapper",
@@ -2095,5 +2066,5 @@ pub(crate) unsafe extern "system" fn menu_other_load_wrapper_hook(
             result,
         )
     };
-    result
+    result as usize
 }

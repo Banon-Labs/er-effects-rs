@@ -151,7 +151,11 @@ impl GaitemLookupResult {
         // Safety: both records are ours and are the length the engine writes.
         unsafe { arts_for_weapon(&raw mut *self, &raw mut arts) };
         let param_id = arts.param_id;
-        (param_id != 0 && param_id != u32::MAX).then_some(param_id)
+        // Zero is an answer, not a blank. `SwordArtsParam` row 0 is `No Skill`, the ash that
+        // takes a weapon's innate skill away, so folding it into `None` reports a shield that
+        // carries it as having no ash at all -- and the import then scores its own correct mount
+        // as a failure. Only `u32::MAX` means the engine had nothing to say.
+        (param_id != u32::MAX).then_some(param_id)
     }
 }
 

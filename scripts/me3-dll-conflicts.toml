@@ -316,6 +316,26 @@ evidence = "crates/er-loading-bar/src/lib.rs:102"
 
 [[conflict]]
 a = "er-quickload"
+b = "er-quit-menu"
+kind = "duplicate-owner"
+reason = """Both arm the System>Quit rows, from the same code: since 2026-09-11 the cloner, the row router and the three routing detours live in `er-quit-menu-core`, and each DLL calls `er_quit_menu_core::row_cloner::arm` with its own row set. Two arms in one process is two of everything that call installs -- two `AddCancelButton` registrations appending two sets of rows to one dialog, two row tables writing one set of telemetry counters, and two claims on the three routing prologues. The union makes the detours chain rather than trample, which is why this is a duplicate OWNER rather than a hook collision: the damage is the second set of rows, not a corrupted trampoline.
+
+The `02_040` grid settles it on its own. Both derive the six-cell Quit panel from the game's own vanilla payload, and `er_gfx::options_02_040::quit6` fail-closes when its input is not vanilla (`Quit6Error::KnownInputBadOutput`, asserted by `crates/er-gfx/tests/options_02_040.rs`). Whichever deriver runs second is handed already-derived bytes and correctly refuses -- so co-loading cannot produce a working tab, only a fail-closed log line and whichever half of the pair happened to win.
+
+The product DLL is the one to keep. The shell exists for a profile that does not load it, and it arms `RowSet::BUILD_ROWS_ONLY`: the two build rows, and none of the four whose flows only a product has."""
+evidence = "crates/er-quit-menu/src/lib.rs; crates/er-quit-menu-core/src/row_cloner.rs; crates/er-quickload/src/experiments/startup_hooks/diagnostics/layout_global_hooks.rs"
+
+[[conflict]]
+a = "er-build-import"
+b = "er-quit-menu"
+kind = "duplicate-owner"
+reason = """The same two-owners-of-one-mutation this table already records between `er-build-import` and the product, for the same reason: both link `er-build-import-runtime`, whose statics are per DLL, and both now register a `CSTaskImp` FrameBegin task that drives its phase machine. The shell imports the configured `build_url` unprompted at character load; the quit-menu shell imports on demand from the **Load Build from URL** row. Two copies of the phase machine, two fetch workers and two tasks mutating one character's inventory, equipment slots and PlayerGameData, with no shared lock.
+
+This entry became true on 2026-09-11, when `er-quit-menu` stopped being a harness that armed nothing. Its `[compatible]` note predicted exactly this: "if the harness ever arms that row, this entry becomes a `duplicate-owner` conflict with `er-build-import` and with `er-quickload`"."""
+evidence = "crates/er-build-import/src/lib.rs:23; crates/er-quit-menu-core/src/game_task.rs"
+
+[[conflict]]
+a = "er-quickload"
 b = "er-build-import"
 kind = "duplicate-owner"
 reason = """Both link `er-build-import-runtime`, and a statically linked crate's statics are \
@@ -720,17 +740,7 @@ request ring, which is mutex-guarded by the engine and is consumed by every NPC 
 in-flight request per target, drained on the frame it completes, is the same traffic a handful of \
 extra NPCs would make."""
 "er-player-name-filter" = "Hooks SessionManagerPlayerEntryBase::Copy only; er-quickload no longer carries this hook, and the standalone DLL byte-checks the 1.16.2 prologue before installing."
-"er-quit-menu" = """System>Quit harness. Its detours route through `er_hook::register_union_hook` \
-rather than a bare `MhHook`, and -- the part that actually matters -- none of its targets is claimed \
-by another shell, which `check-shared-hook-rvas.py` re-proves on every run. Note that the union alone \
-would NOT be enough if one were: `register_union_hook` unions handlers within ONE DLL, because its \
-statics and its MinHook instance are per-DLL. Crossing images takes `register_shared_hook`. \
-Since the Generate Build Link row moved into `er-quit-menu-core` this shell also LINKS \
-`er-build-import-runtime`, whose statics are per-DLL for the same reason -- but the harness calls \
-none of it and arms no row, so the second copy of the importer's phase machine never runs. If the \
-harness ever arms that row, this entry becomes a `duplicate-owner` conflict with `er-build-import` \
-and with `er-quickload`, for exactly the reason the `er-quickload`/`er-build-import` pair \
-below already records."""
+
 "er-save-picker" = "Detects the product DLL and stays inert when it is present."
 "er-seamless-bugfixes" = """Own MinHook instance, but on SpecialEffect::HasSpecialEffectId \
 (0x4f9940) and SpecialEffect::Apply (0x4fa8e0) -- prologues no other DLL in this repo hooks \
@@ -741,31 +751,6 @@ comparison and disarms with a log line rather than trampling a trampoline. Both 
 stubs that tail-jump to the original for every non-null container, so a co-loaded run is \
 byte-for-byte vanilla unless the null case occurs."""
 "er-telemetry" = "Read-only oracles on a FrameBegin task; installs no hooks."
-
-"er-lockon-filter" = """Co-loadable with the product and with every other shell here. One \
-detour, on the lock-on system's point-owner resolver (1.16.2 `0x140713db0`, 1.17 `0x140714c00`), \
-and it goes through `er_hook::register_union_hook`, so a second DLL that ever wants that prologue \
-chains rather than overwriting a trampoline. No other crate in this workspace declares that \
-address -- `crates/er-lockon-filter/{build.rs,src/lib.rs}` are the only files that name it -- and \
-`check-shared-hook-rvas.py` keys on resolved values, so that claim stays checkable rather than \
-asserted.
-
-It writes no game memory, patches no param row and touches no swapchain. The param half matters \
-beyond tidiness: a DLL that patches a param row moves the Seamless lobby-key fingerprint and \
-drops the player out of matchmaking, which is what put `er-death-persist` in [opt_in_only] above. \
-This one reads three integers (`ChrIns::chr_type` +0x68, `WorldChrManImp::mainPlayer` +0x1e508, \
-`GameMan::summonParamType` +0xd84) and changes one function's return value. Damage in both \
-directions and nameplates are unchanged.
-
-It fails closed rather than degrading: an unrecognised build gets `REFUSED` and nothing is read or \
-installed, a prologue that is not the verified 13 bytes gets `DISARMED`, and a missing WorldChrMan \
-singleton stops the install. All three land in `er-lockon-filter.log` beside the executable.
-
-It was [opt_in_only] from 2026-09-07 to 2026-09-08 on a consent argument, not a mechanism one -- it \
-changes what happens when the player presses lock-on, and a dependency-closure walk is not consent. \
-The user gave that consent directly on 2026-09-08 ("I can still target other invaders ... it should \
-be included with the quickload by default"), so the entry that withheld it is gone and the DLL is \
-listed in [always] below."""
 
 # ---------------------------------------------------------------------------
 # LOADED WHENEVER THE PRODUCT IS, whether or not this branch touched the crate.
@@ -792,21 +777,10 @@ listed in [always] below."""
 # GATED BY     scripts/check-me3-dll-conflicts.py
 # ---------------------------------------------------------------------------
 [always]
-"er-lockon-filter" = """On by user directive, 2026-09-08: "I can still target other invaders. \
-Are we including that? It should be included with the quickload by default." It had been \
-[opt_in_only] since the day it landed, so it was absent from the 20-DLL profile the user was \
-playing, and the lock-on they were describing was vanilla lock-on -- the filter was never in the \
-process. That is the whole defect this row fixes.
+# Deliberately empty since 2026-09-11. Its only member was er-lockon-filter, and that
+# product was deleted by user directive; the research it carried is in
+# docs/recon/lockon-filter-findings.md. The mechanism is unchanged and still gated --
+# check-me3-dll-conflicts.py and er-dll-closure.py --selftest both cover it against
+# synthetic tables, so an empty table here is a table with no members rather than a
+# feature nobody checks any more.
 
-Reclassifying it [compatible] alone would not have done it. The closure selects on the diff, and \
-`er-quickload` has no reverse dependents, so a branch that edits only the product closes over one \
-shell and the filter would be missing again on the next session -- the same report, a week later.
-
-STILL NOT PROVEN AT RUNTIME, and being default-on does not change that. The seam, the three \
-offsets and the 1.16.2 -> 1.17 pair are byte-proven in both images, and a live Seamless run has \
-the detour installed and its census logging, but the filter has never been observed to fire: that \
-needs two players invading one world. The known risk is the opposite of a crash. Under Seamless \
-the local player has been measured typing as `Local` (0) / `Duelist` (2) with summonParamType \
-0 / -12, none of which is an invader kind, so the gate may simply never arm and the feature would \
-be silently absent while appearing to be loaded. `er-lockon-filter.log` answers that on the first \
-live invasion; see bd seamless-types-the-local-player-duelist-2-summonparam-minus12-2026-09-07."""

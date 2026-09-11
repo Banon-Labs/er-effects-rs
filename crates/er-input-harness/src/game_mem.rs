@@ -245,6 +245,16 @@ const MENU_DATA_RETURN_TITLE_5D_OFFSET: usize = 0x5d;
 pub const INGAMETOP_MENU_ID: i32 = 0xffff;
 #[allow(dead_code)]
 pub const OPTIONSETTING_MENU_ID: i32 = 0x25;
+///
+/// Kept, and no longer used as an effect check. `optionsetting_tab_index` reads a 1.16.2 offset
+/// chain that drifted on 1.17 and answers `-1`, so comparing against this constant is a wait that
+/// never ends -- `Phase::TabToQuit` now advances on the Quit tab's own rows being readable and
+/// logs the drifted index beside them, which is the only line that would show the offset coming
+/// back to life on a future patch.
+#[expect(
+    dead_code,
+    reason = "the diagnostic that would use it prints the raw index instead"
+)]
 pub const OPTIONSETTING_QUIT_TAB_INDEX: i32 = 8;
 
 fn input_mgr() -> usize {
@@ -480,6 +490,57 @@ pub fn pause_menu_grid() -> Option<(usize, i32)> {
     None
 }
 
+/// `PlayerGameData -> EquipGameData` and `EquipGameData -> the carried EquipInventoryData`.
+///
+/// The same two hops `er-build-import-runtime` walks, repeated here because this DLL cannot call
+/// into that one and the harness needs its own answer.
+const PLAYER_GAME_DATA_EQUIP_2B0_OFFSET: usize = 0x2b0;
+const EQUIP_GAME_DATA_INVENTORY_158_OFFSET: usize = 0x158;
+/// `EquipInventoryData.nextSortId`, the monotonic acquisition counter.
+const EQUIP_INVENTORY_NEXT_SORT_ID_84_OFFSET: usize = 0x84;
+
+/// The carried inventory's acquisition counter, or -1 when it cannot be read.
+///
+/// The effect oracle for [`crate::drive`]'s build-import phase, and the reason that phase can
+/// prove anything at all. Every other row on the Quit tab opens a pane, so a changed
+/// `currentTopMenuJob` is evidence the press landed; **Load Build from URL** opens nothing -- it
+/// grants, equips and re-orders the character in place -- so the top job never moves and a
+/// job-pointer check would report the press as never having happened.
+///
+/// This counter is what the import moves, and it moves it a lot: `CS::EquipInventoryData::InsertItem`
+/// stamps `entry.sortId` from it and increments on every insert, and the importer's reorder pass
+/// deposits and retrieves every item the build names. Measured on the live 1.17.1 process at
+/// pid 790212 on 2026-09-10: 13393, with 2225 carried entries holding 2225 distinct sort ids and
+/// the largest at 13392.
+///
+/// It is not a general-purpose "did anything happen" flag: it also rises when the player picks
+/// something up. During a driven run nothing else adds items, which is what makes it usable here.
+pub fn carried_next_sort_id() -> i64 {
+    let Some(base) = game_base() else {
+        return -1;
+    };
+    let Some(gdm) = deref_singleton(base, GAME_DATA_MAN_GLOBAL_RVA, "GAME_DATA_MAN_GLOBAL_RVA")
+    else {
+        return -1;
+    };
+    let Some(pgd) = (unsafe { read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) })
+        .filter(|p| *p >= HEAP_LO)
+    else {
+        return -1;
+    };
+    let inventory = pgd + PLAYER_GAME_DATA_EQUIP_2B0_OFFSET + EQUIP_GAME_DATA_INVENTORY_158_OFFSET;
+    unsafe { read_usize(inventory + EQUIP_INVENTORY_NEXT_SORT_ID_84_OFFSET) }
+        .map_or(-1, |v| i64::from((v & 0xffff_ffff) as u32))
+}
+
+/// Row index of **Load Build from URL** on the currently displayed Quit-tab pane, or -1.
+///
+/// Read for the same reason [`optionsetting_load_from_file_row`] is read: the Quit tab carries
+/// *Return to Desktop*, and a guessed row order quits the game instead of importing a build.
+pub fn optionsetting_load_build_url_row() -> i32 {
+    optionsetting_row_of(er_quit_menu_core::rows::QuitRow::LoadBuildFromUrl)
+}
+
 /// Row index of **Load Character from File** on the currently displayed Quit-tab pane, or -1.
 ///
 /// The drive needs this before it presses Confirm, because the Quit tab also carries *Return to
@@ -489,15 +550,23 @@ pub fn pause_menu_grid() -> Option<(usize, i32)> {
 /// "Load Character from File" is never mistaken for "Load Character"), which is what makes it usable
 /// from this DLL even though the label arrays live in `er_quickload.dll`'s image.
 pub fn optionsetting_load_from_file_row() -> i32 {
+    optionsetting_row_of(er_quit_menu_core::rows::QuitRow::LoadSaveProfiles)
+}
+
+/// Row index of one of our cloned rows on the currently displayed Quit-tab pane, or -1.
+///
+/// One walk for every caller, so a second row can be driven without a second copy of the scan --
+/// and so the two callers cannot drift into disagreeing about which pane they read.
+fn optionsetting_row_of(wanted: er_quit_menu_core::rows::QuitRow) -> i32 {
     use er_quit_menu_core::row_identity::system_quit_row_label_at;
-    use er_quit_menu_core::rows::{QuitRow, QuitRowLabel};
+    use er_quit_menu_core::rows::QuitRowLabel;
     let dialog = optionsetting_current_pane();
     if dialog == 0 {
         return -1;
     }
     for index in 0..16i32 {
-        if let Some(QuitRowLabel::Ours(QuitRow::LoadSaveProfiles)) =
-            unsafe { system_quit_row_label_at(dialog, index) }
+        if let Some(QuitRowLabel::Ours(row)) = unsafe { system_quit_row_label_at(dialog, index) }
+            && row == wanted
         {
             return index;
         }

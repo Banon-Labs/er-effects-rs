@@ -109,6 +109,22 @@ pub struct QuitMenuHost {
     pub save_flow_box_recipe_available: fn() -> bool,
     /// Clear the save-flow confirm box state before a direct destination commit.
     pub save_flow_box_clear: fn(),
+
+    // --- the save picker's own browse surface (owner: product, until that surface moves) ------
+    /// Re-stage the picker's browse rows onto `model`, returning whether any row was written.
+    /// Reached from the shared software keyboard when a path editor accepts, which is the one
+    /// caller of the picker's surface that now lives on this side of the seam.
+    pub save_picker_stage_row_records: unsafe fn(&er_save_picker_core::SavePickerModel) -> bool,
+    /// Re-arm the path editor's end-caret for a newly opened picker field. The link field has its
+    /// own latch in `scaleform_proxy`; this one belongs to the picker.
+    pub reset_path_editor_caret_latch: fn(),
+
+    // --- the build importer's after-effects (owner: the loading-cover pipeline) ---------------
+    /// An import has just landed on the live character: re-derive its record and rebuild both
+    /// character portraits. Product-owned because the per-slot data-change replica belongs beside
+    /// the loading-cover pipeline that also drives it; a shell has no such pipeline, so its
+    /// neutral default is to do nothing and the import still applies.
+    pub build_import_applied: unsafe fn(),
 }
 
 fn default_log(_args: std::fmt::Arguments<'_>) {}
@@ -168,6 +184,11 @@ fn default_no_save_dest_origin() -> Option<SaveDestOrigin> {
 }
 fn default_set_target(_path: PathBuf, _source: &'static str) {}
 fn default_clear_save_flow_box() {}
+unsafe fn default_stage_row_records(_model: &er_save_picker_core::SavePickerModel) -> bool {
+    false
+}
+fn default_reset_caret_latch() {}
+unsafe fn default_import_applied() {}
 fn default_windows_path_for_log(path: &str) -> String {
     path.to_owned()
 }
@@ -208,6 +229,9 @@ impl QuitMenuHost {
             save_dest_set_target: default_set_target,
             save_flow_box_recipe_available: default_gate_off,
             save_flow_box_clear: default_clear_save_flow_box,
+            save_picker_stage_row_records: default_stage_row_records,
+            reset_path_editor_caret_latch: default_reset_caret_latch,
+            build_import_applied: default_import_applied,
         }
     }
 }
@@ -352,6 +376,20 @@ pub(crate) fn save_flow_box_recipe_available() -> bool {
 #[allow(dead_code)]
 pub(crate) fn save_flow_box_clear() {
     (host().save_flow_box_clear)()
+}
+#[allow(dead_code)]
+pub(crate) unsafe fn save_picker_stage_row_records(
+    model: &er_save_picker_core::SavePickerModel,
+) -> bool {
+    unsafe { (host().save_picker_stage_row_records)(model) }
+}
+#[allow(dead_code)]
+pub(crate) fn reset_path_editor_caret_latch() {
+    (host().reset_path_editor_caret_latch)()
+}
+#[allow(dead_code)]
+pub(crate) unsafe fn build_import_applied() {
+    unsafe { (host().build_import_applied)() }
 }
 
 #[cfg(test)]

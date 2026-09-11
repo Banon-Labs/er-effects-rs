@@ -18,10 +18,12 @@ needs no game running and no Ghidra daemon.
   derives from it -- the `GameMan::GetSummonParamType -> MultiplayProperties ->
   PlayerGameData::SetChrType` chain in one table.
 
-Joining the two answers the question `er-lockon-filter` exists to ask -- which
-`ChrType` values and which `SummonParamType` values mean "this is a hostile phantom" --
-out of the game's own data rather than a hand-written list, which is why `--rust` prints
-the sets in the shape that crate's constants take.
+Joining the two answers which `ChrType` values and which `SummonParamType` values mean
+"this is a hostile phantom", out of the game's own data rather than a hand-written list,
+which is why `--rust` prints the sets in the shape a Rust constant takes. The crate that
+first asked, `er-lockon-filter`, was deleted on 2026-09-11 by user directive; its findings
+are in docs/recon/lockon-filter-findings.md and this script is the half of them that still
+re-reads the image.
 
 Usage
     python3 scripts/er-character-type-tables.py

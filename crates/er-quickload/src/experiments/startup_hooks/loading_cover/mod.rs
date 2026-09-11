@@ -58,7 +58,6 @@ pub(crate) fn ensure_loading_cover_host() {
     INSTALLED.call_once(|| {
         er_loading_portrait_core::install_loading_cover_host(
             er_loading_portrait_core::LoadingCoverHost {
-                trace_first_game_caller_rva: crate::crashlog::trace_first_game_caller_rva,
                 resolve_module_proc: crate::hooks::safe_input_proc,
                 game_main_window: crate::hooks::own_window,
                 create_absolute_hook: crate::hooks::create_absolute_hook,

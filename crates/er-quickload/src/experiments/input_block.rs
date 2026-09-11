@@ -1117,14 +1117,57 @@ pub(crate) fn set_injected_vk(vk: u8) {
     INJECTED_VK.store(vk, Ordering::Relaxed);
 }
 
+/// Call the next element of a union chain from one of this module's USER32 detours.
+///
+/// Two things it does that a direct transmute of the slot did not. It calls through [`UnionFn`]
+/// rather than through the export's own narrower signature, which is what
+/// `register_union_hook`'s safety contract requires: the slot may hold the next handler in the
+/// chain rather than the game trampoline, and a narrow call leaves that handler's `r8`/`r9`
+/// unset. And it treats the install-time sentinel as "nowhere to go" instead of transmuting it:
+/// `chain_append` publishes the previous handler's forward pointer before it publishes the new
+/// handler's own `orig`, so a call landing in that window reads a slot that is still zero.
+///
+/// `None` is answered by the caller the way `er-hotkey-conflicts` answers it on this same chain
+/// -- zero, which every one of these surfaces reads as "no key held, nothing written".
+unsafe fn chain_user32(
+    orig_slot: &AtomicUsize,
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> Option<usize> {
+    let next = orig_slot.load(Ordering::SeqCst);
+    if next == TITLE_OWNER_SCAN_START_ADDRESS {
+        return None;
+    }
+    // SAFETY: the slot holds either the game trampoline or the next handler in the union chain,
+    // both `UnionFn`-shaped by the registrar's contract.
+    let call: UnionFn = unsafe { std::mem::transmute::<usize, UnionFn>(next) };
+    Some(unsafe { call(a, b, c, d) })
+}
+
 /// `GetKeyboardState(lpKeyState)` detour: run the original, then mark `INJECTED_VK` held in the
 /// 256-byte table the game is about to read. High bit set = key down, per the Win32 contract.
-unsafe extern "system" fn get_keyboard_state_hook(key_state: *mut u8) -> BOOL {
+///
+/// `rest` is the caller's `rdx`/`r8`/`r9`, which the export itself does not read. It is carried
+/// through rather than zeroed because a handler chained after this one would otherwise be handed
+/// this function's scratch instead of the caller's registers -- the rule `er-hook`'s module docs
+/// state as "a handler is the dispatcher's arity exactly, not at most it".
+unsafe fn get_keyboard_state_hook(key_state: *mut u8, rest: [usize; 3]) -> BOOL {
     USER32_GET_KEYBOARD_STATE_FIRES.fetch_add(1, Ordering::Relaxed);
-    let orig_addr = GET_KEYBOARD_STATE_ORIG.load(Ordering::SeqCst);
-    let orig: unsafe extern "system" fn(*mut u8) -> BOOL =
-        unsafe { std::mem::transmute(orig_addr) };
-    let ret = unsafe { orig(key_state) };
+    let chained = unsafe {
+        chain_user32(
+            &GET_KEYBOARD_STATE_ORIG,
+            key_state as usize,
+            rest[0],
+            rest[1],
+            rest[2],
+        )
+    };
+    let Some(ret) = chained else {
+        return BOOL(0);
+    };
+    let ret = BOOL(ret as i32);
     let vk = INJECTED_VK.load(Ordering::Relaxed);
     if vk != 0 && !key_state.is_null() {
         unsafe { *key_state.add(vk as usize) |= 0x80 };
@@ -1135,11 +1178,23 @@ unsafe extern "system" fn get_keyboard_state_hook(key_state: *mut u8) -> BOOL {
 
 /// `GetKeyState(nVirtKey)` detour: run the original, then force the down bit (0x8000) when the query
 /// is for the key the harness is holding. Every other key answers exactly as the OS said.
-unsafe extern "system" fn get_key_state_hook(virt_key: i32) -> i16 {
+///
+/// `rest` is carried through for the reason `get_keyboard_state_hook` records.
+unsafe fn get_key_state_hook(virt_key: i32, rest: [usize; 3]) -> i16 {
     USER32_GET_KEY_STATE_FIRES.fetch_add(1, Ordering::Relaxed);
-    let orig_addr = GET_KEY_STATE_ORIG.load(Ordering::SeqCst);
-    let orig: unsafe extern "system" fn(i32) -> i16 = unsafe { std::mem::transmute(orig_addr) };
-    let ret = unsafe { orig(virt_key) };
+    let chained = unsafe {
+        chain_user32(
+            &GET_KEY_STATE_ORIG,
+            virt_key as usize,
+            rest[0],
+            rest[1],
+            rest[2],
+        )
+    };
+    let Some(ret) = chained else {
+        return 0;
+    };
+    let ret = ret as u16 as i16;
     let vk = INJECTED_VK.load(Ordering::Relaxed);
     if vk != 0 && virt_key == vk as i32 {
         USER32_INJECTED_VK_STAMPS.fetch_add(1, Ordering::Relaxed);
@@ -1154,12 +1209,23 @@ unsafe extern "system" fn get_key_state_hook(virt_key: i32) -> i16 {
 /// only stampable here if the menu's pointer position actually comes through this USER32 import.
 /// Zero fires means the menu reads the pointer somewhere else (DirectInput mouse device) and the
 /// injection has to go there instead.
-unsafe extern "system" fn get_cursor_pos_hook(point: *mut c_void) -> BOOL {
+///
+/// `rest` is carried through for the reason `get_keyboard_state_hook` records.
+unsafe fn get_cursor_pos_hook(point: *mut c_void, rest: [usize; 3]) -> BOOL {
     USER32_GET_CURSOR_POS_FIRES.fetch_add(1, Ordering::Relaxed);
-    let orig_addr = GET_CURSOR_POS_ORIG.load(Ordering::SeqCst);
-    let orig: unsafe extern "system" fn(*mut c_void) -> BOOL =
-        unsafe { std::mem::transmute(orig_addr) };
-    let ret = unsafe { orig(point) };
+    let chained = unsafe {
+        chain_user32(
+            &GET_CURSOR_POS_ORIG,
+            point as usize,
+            rest[0],
+            rest[1],
+            rest[2],
+        )
+    };
+    let Some(ret) = chained else {
+        return BOOL(0);
+    };
+    let ret = BOOL(ret as i32);
     // Author the answer, do not move the real cursor. `SetCursorPos` would yank the user's pointer
     // across their desktop and would still lose a race with whatever they do with the mouse; this
     // replaces only what the game is told, so the injection is invisible outside the process and
@@ -1195,75 +1261,116 @@ pub(crate) fn set_injected_cursor_pos(packed: u64) {
     INJECTED_CURSOR_POS.store(packed, Ordering::Relaxed);
 }
 
-/// Install both USER32 keyboard-getter detours once (idempotent). Called every frame from the same
-/// place as the RawInput counter, so it is live long before any injection window opens.
+/// `UnionFn` shim for `GetKeyboardState(BYTE*)`. The export reads one argument; the other three
+/// are the caller's own registers and are handed straight to the chain.
+unsafe extern "system" fn get_keyboard_state_union(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    unsafe { get_keyboard_state_hook(a as *mut u8, [b, c, d]).0 as usize }
+}
+
+/// `UnionFn` shim for `GetKeyState(int)`: same treatment as `GetKeyboardState`. The return is a
+/// `SHORT`, so only the low 16 bits of the chain's `usize` carry it.
+unsafe extern "system" fn get_key_state_union(a: usize, b: usize, c: usize, d: usize) -> usize {
+    unsafe { get_key_state_hook(a as i32, [b, c, d]) as u16 as usize }
+}
+
+/// `UnionFn` shim for `GetCursorPos(POINT*)`: same treatment as `GetKeyboardState`.
+unsafe extern "system" fn get_cursor_pos_union(a: usize, b: usize, c: usize, d: usize) -> usize {
+    unsafe { get_cursor_pos_hook(a as *mut c_void, [b, c, d]).0 as usize }
+}
+
+/// Whether the USER32 getter install has already run its body.
+///
+/// A separate latch from the `_ORIG` slots, because those record whether a particular surface
+/// armed and this records whether the attempt was made. Conflating them is what produced the
+/// retry storm this claim exists to end: the old guard read `GET_KEYBOARD_STATE_ORIG`, so a
+/// registration that could never succeed left the sentinel in place and the whole body ran again
+/// on the next frame, forever.
+static USER32_INJECT_INSTALL_CLAIMED: AtomicUsize = AtomicUsize::new(0);
+
+/// Install the three USER32 getter detours once. Called every frame from the same place as the
+/// RawInput counter, so it is live long before any injection window opens.
+///
+/// # Why these go through the union, and why the attempt is latched
+///
+/// Both halves were measured on run `br-20260911-015630-4de9`, and they are the same two halves
+/// `install_xinput_block` records for the same cause one screen up.
+///
+/// `er-hotkey-conflicts` censuses `GetKeyState` and `GetKeyboardState` from its own attach
+/// thread, through `register_shared_hook_with_budget`, which chains into this DLL's MinHook
+/// instance. It therefore owns those two prologues before the first game frame runs. The bare
+/// `MhHook::new` that used to sit here answered `MH_ERROR_ALREADY_CREATED` on both, the old guard
+/// never latched, and the loop ran again every frame: 3,756 passes, 7,513 collision lines, and
+/// the keyboard injection stage dead for the whole session while the cursor getter -- the one
+/// surface nothing else claims -- reported `1 of 3`.
+///
+/// Registering through the union makes that incumbent a chain rather than a defeat. The census
+/// handler stays outermost and returns its chain's value untouched, this module's handlers run
+/// inside it against the real export, and both features get what they hook for. The claim then
+/// makes the attempt happen once. It is released only when USER32 is not in the process yet,
+/// because that is the one outcome a later frame can change; a registration that lost cannot win
+/// on a retry, so retrying it is pure log traffic.
 pub(crate) fn ensure_user32_keyboard_injection_installed() {
-    if GET_KEYBOARD_STATE_ORIG.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS {
+    if USER32_INJECT_INSTALL_CLAIMED.swap(1, Ordering::SeqCst) != 0 {
         return;
-    }
-    match unsafe { MH_Initialize() } {
-        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
-        status => {
-            append_autoload_debug(format_args!(
-                "input-inject: MH_Initialize failed: {status:?}"
-            ));
-            return;
-        }
     }
     let hmod = match unsafe { GetModuleHandleA(s!("user32.dll")) } {
         Ok(h) if !h.is_invalid() => h,
-        _ => return,
+        _ => {
+            // The module, not the registration, is what a retry is for: release the claim so a
+            // later frame can try again once USER32 is mapped.
+            USER32_INJECT_INSTALL_CLAIMED.store(0, Ordering::SeqCst);
+            return;
+        }
     };
-    let pairs: [(PCSTR, &AtomicUsize, *mut c_void); 3] = [
+    let mut armed = 0usize;
+    // Spelled inline rather than through a named `let`, because `check-union-hook-abi.py` reads
+    // a loop-bound handler out of the rows of a `for ... in [ .. ]` and would otherwise see only
+    // the opaque name `handler`. Inlining is what lets the gate check these three declarations
+    // against the four-argument dispatcher instead of skipping them.
+    for (label, name, handler, slot) in [
         (
+            "GetKeyboardState",
             s!("GetKeyboardState"),
+            get_keyboard_state_union as UnionFn,
             &GET_KEYBOARD_STATE_ORIG,
-            get_keyboard_state_hook as *mut c_void,
         ),
         (
+            "GetKeyState",
             s!("GetKeyState"),
+            get_key_state_union as UnionFn,
             &GET_KEY_STATE_ORIG,
-            get_key_state_hook as *mut c_void,
         ),
         (
+            "GetCursorPos",
             s!("GetCursorPos"),
+            get_cursor_pos_union as UnionFn,
             &GET_CURSOR_POS_ORIG,
-            get_cursor_pos_hook as *mut c_void,
         ),
-    ];
-    let mut queued = 0usize;
-    for (name, slot, detour) in pairs {
+    ] {
         let Some(addr) = (unsafe { GetProcAddress(hmod, name) }) else {
+            append_autoload_debug(format_args!(
+                "input-inject: user32!{label} is not exported -- this surface stays unhooked for the session"
+            ));
             continue;
         };
         let addr = addr as usize;
-        match unsafe { MhHook::new(addr as *mut c_void, detour) } {
-            Ok(hook) => {
-                // Store the trampoline before enabling so the detour never transmutes the sentinel.
-                slot.store(hook.trampoline() as usize, Ordering::SeqCst);
-                if unsafe { hook.queue_enable() }.is_ok() {
-                    crate::mh::leak_installed_hook(hook);
-                    queued += 1;
-                } else {
-                    slot.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
-                }
-            }
+        // SAFETY: each shim has the union's four-`usize` shape and each slot is the static its
+        // own detour reads to reach the rest of the chain.
+        match unsafe { register_union_hook(addr, handler, slot) } {
+            Ok(()) => armed += 1,
             Err(status) => append_autoload_debug(format_args!(
-                "input-inject: MhHook::new user32 keyboard getter failed: {status:?}"
+                "input-inject: register_union_hook user32!{label} at 0x{addr:x} failed: {status:?} -- this surface stays unhooked for the session, and is not retried because that outcome cannot change between frames"
             )),
         }
     }
-    if queued == 0 {
-        return;
-    }
-    match unsafe { MH_ApplyQueued() } {
-        MH_STATUS::MH_OK => append_autoload_debug(format_args!(
-            "input-inject: hooked USER32 GetKeyboardState+GetKeyState+GetCursorPos ({queued} of 3) -- focus-independent keyboard injection (the cursor hook counts only); ER 1.17 imports these and no RawInput API at all"
-        )),
-        status => append_autoload_debug(format_args!(
-            "input-inject: MH_ApplyQueued user32 keyboard getters failed: {status:?}"
-        )),
-    }
+    append_autoload_debug(format_args!(
+        "input-inject: hooked USER32 GetKeyboardState+GetKeyState+GetCursorPos ({armed} of 3, union) -- focus-independent keyboard injection (the cursor hook counts only); ER 1.17 imports these and no RawInput API at all"
+    ));
 }
 
 /// Install the GetRawInputData reception counter (user32.dll). minhook, mirroring install_xinput_block.

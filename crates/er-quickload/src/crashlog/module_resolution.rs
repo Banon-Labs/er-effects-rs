@@ -1,4 +1,12 @@
 
+// The two return-address stack readers now live in `er_game_base::stack`, re-exported here under
+// their original names so the ~35 `crate::crashlog::` call sites read unchanged. They left because
+// neither touches product state and both are needed outside this DLL: `trace_first_game_caller_rva`
+// had a second definition that `er-loading-portrait-core` reached through a `LoadingCoverHost`
+// function pointer, and `callstack_contains_game_rva` is how the System>Quit row cloner tells its
+// two native `AddCancelButton` call sites apart.
+pub(crate) use er_game_base::stack::{callstack_contains_game_rva, trace_first_game_caller_rva};
+
 /// Locate the live module's .text section [start, len) by parsing the PE headers at `base`.
 unsafe fn find_text_section(base: usize) -> Option<(usize, usize)> {
     let e_lfanew = unsafe { safe_read_usize(base + PE_DOS_LFANEW_OFFSET) }? & PE_U32_MASK;
@@ -347,32 +355,6 @@ pub(crate) fn trace_callers_summary() -> String {
     format!("callers=[{callers}]")
 }
 
-#[cfg(windows)]
-pub(crate) fn callstack_contains_game_rva(start_rva: usize, end_rva: usize) -> bool {
-    let mut frames = [std::ptr::null_mut::<c_void>(); STACK_TRACE_FRAME_COUNT];
-    let captured = unsafe {
-        RtlCaptureStackBackTrace(
-            STACK_TRACE_FRAMES_TO_SKIP,
-            frames.len() as u32,
-            frames.as_mut_ptr(),
-            std::ptr::null_mut(),
-        )
-    } as usize;
-    let module_base = unsafe { GetModuleHandleA(PCSTR::null()) }
-        .ok()
-        .map(|module| module.0 as usize)
-        .unwrap_or(NULL_MODULE_BASE);
-    if module_base == NULL_MODULE_BASE {
-        return false;
-    }
-    frames.iter().take(captured).any(|frame| {
-        let address = *frame as usize;
-        address >= module_base
-            && address.wrapping_sub(module_base) >= start_rva
-            && address.wrapping_sub(module_base) < end_rva
-    })
-}
-
 /// GX command-queue producer attribution (`gx_reserve_cmd_queue_slot_hook`): walk the captured
 /// stack and return `(producer_rva, self_in_stack)` -- the first game-.text return address (as an
 /// RVA) that falls outside `wrapper_rvas` (the reserve/enqueue transport band), plus whether any
@@ -423,52 +405,6 @@ pub(crate) fn stack_producer_rva(wrapper_rvas: std::ops::Range<usize>) -> (usize
         }
     }
     (producer, self_in_stack)
-}
-
-#[cfg(windows)]
-pub(crate) fn trace_first_game_caller_rva() -> usize {
-    const GAME_TEXT_RVA_LIMIT: usize = 0x0400_0000;
-    let mut frames = [std::ptr::null_mut::<c_void>(); STACK_TRACE_FRAME_COUNT];
-    let captured = unsafe {
-        RtlCaptureStackBackTrace(
-            STACK_TRACE_FRAMES_TO_SKIP,
-            frames.len() as u32,
-            frames.as_mut_ptr(),
-            std::ptr::null_mut(),
-        )
-    } as usize;
-    let module_base = unsafe { GetModuleHandleA(PCSTR::null()) }
-        .ok()
-        .map(|module| module.0 as usize)
-        .unwrap_or(NULL_MODULE_BASE);
-    if module_base == NULL_MODULE_BASE {
-        return TITLE_OWNER_SCAN_START_ADDRESS;
-    }
-    frames
-        .iter()
-        .take(captured)
-        .filter_map(|frame| {
-            let address = *frame as usize;
-            if address >= module_base {
-                let rva = address.wrapping_sub(module_base);
-                if rva < GAME_TEXT_RVA_LIMIT {
-                    return Some(rva);
-                }
-            }
-            None
-        })
-        .next()
-        .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
-}
-
-#[cfg(not(windows))]
-pub(crate) fn callstack_contains_game_rva(_start_rva: usize, _end_rva: usize) -> bool {
-    false
-}
-
-#[cfg(not(windows))]
-pub(crate) fn trace_first_game_caller_rva() -> usize {
-    TITLE_OWNER_SCAN_START_ADDRESS
 }
 
 #[cfg(not(windows))]

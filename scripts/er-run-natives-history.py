@@ -9,15 +9,17 @@ in the process, because a DLL's own game-directory log is single-slot: `begin_fr
 the run's testimony is gone. The launcher log is not rotated, so it outlives the thing it
 describes.
 
-That asymmetry is the reason this script exists. Reconstructed on 2026-09-09, `er_lockon_filter.dll`
-had been loaded by 43 separate runs and exactly two of their logs still existed -- neither of them
-an invasion -- because that crate was the one loaded DLL with no `ER_QUICKLOAD_*_PATH` redirect
+That asymmetry is the reason this script exists. Reconstructed on 2026-09-09, one shell had been
+loaded by 43 separate runs and exactly two of their logs still existed -- neither of them the run
+anyone wanted -- because that crate was the one loaded DLL with no `ER_QUICKLOAD_*_PATH` redirect
 knob, so no launcher could move its log into the run directory. The knob was added the same day;
-`scripts/er-artifact-redirect-audit.py` is what keeps every launcher setting it.
+`scripts/er-artifact-redirect-audit.py` is what keeps every launcher setting it. (That shell was
+`er-lockon-filter`, deleted on 2026-09-11 by user directive; the episode is written up in
+docs/recon/lockon-filter-findings.md.)
 
 Usage
-    python3 scripts/er-run-natives-history.py er_lockon_filter.dll
-    python3 scripts/er-run-natives-history.py er_lockon_filter.dll --with-log er-lockon-filter.log
+    python3 scripts/er-run-natives-history.py er_invasion_warp.dll
+    python3 scripts/er-run-natives-history.py er_invasion_warp.dll --with-log er-invasion-warp.log
     python3 scripts/er-run-natives-history.py --list-dlls
     python3 scripts/er-run-natives-history.py --selftest
 """
@@ -126,12 +128,12 @@ def selftest() -> int:
             '[launch] profile: /home/x/Elden/br-1.me3\n'
             'AttachConfig { game: EldenRing, natives: ['
             'Native { path: ModFile("/x/ersc.dll"), optional: false }, '
-            'Native { path: ModFile("/x/er_lockon_filter.dll"), optional: false }'
+            'Native { path: ModFile("/x/er_invasion_warp.dll"), optional: false }'
             '], early_natives: [], packages: [] }\n',
             encoding="utf-8",
         )
         check(
-            natives_of(attached / LAUNCHER_LOG_NAME) == ["ersc.dll", "er_lockon_filter.dll"],
+            natives_of(attached / LAUNCHER_LOG_NAME) == ["ersc.dll", "er_invasion_warp.dll"],
             "the natives list is read out of the attach config",
         )
 
@@ -141,7 +143,7 @@ def selftest() -> int:
         mentioned = root / "br-2"
         mentioned.mkdir()
         (mentioned / LAUNCHER_LOG_NAME).write_text(
-            '[launch] profile: /home/x/Elden/er_lockon_filter-experiment.me3\n'
+            '[launch] profile: /home/x/Elden/er_invasion_warp-experiment.me3\n'
             'AttachConfig { game: EldenRing, natives: ['
             'Native { path: ModFile("/x/er_quickload.dll"), optional: false }'
             '], early_natives: [], packages: [] }\n',
@@ -174,7 +176,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("dll", nargs="?", help="DLL file name, e.g. er_lockon_filter.dll")
+    parser.add_argument("dll", nargs="?", help="DLL file name, e.g. er_invasion_warp.dll")
     parser.add_argument("--run-root", type=Path, default=DEFAULT_RUN_ROOT)
     parser.add_argument(
         "--with-log",

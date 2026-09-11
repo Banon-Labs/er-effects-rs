@@ -638,14 +638,15 @@ python3 "$repo_root/scripts/check-oracle-singleton-globals.py"
 # image when there is one. Only `--selftest` runs: the bare form is a report, and it exits
 # non-zero when no game is installed, which is not a repo defect.
 python3 "$repo_root/scripts/ersc_identify.py" --selftest
-# er-lockon-filter decides who is a hostile phantom from two tables in the game image --
-# `CharacterTypeProperties` and `MultiplayProperties` -- and carries the answer as constants,
-# because reading them at runtime would need two more pinned data addresses for the sake of
-# values that have not moved between builds. This is the gate that keeps the constants honest:
-# it re-reads both tables and fails if the game's own classification stops being the one they
-# were derived from. It exists because the hand-written predecessor was narrower than the game's
-# answer in a way nothing caught -- the crate required chr_type 15/16/18, the live session
-# measured 2, and the feature was silently inert. An absent image is a skip, not a pass.
+# Who the game itself calls a hostile phantom, read from two tables in the game image --
+# `CharacterTypeProperties` and `MultiplayProperties`. This gate re-reads both and fails if the
+# classification stops being the one the recorded sets were derived from. It exists because a
+# hand-written predecessor was narrower than the game's answer in a way nothing caught: it
+# required chr_type 15/16/18, a live session measured 2, and the feature built on it was
+# silently inert. The consumer, er-lockon-filter, was deleted on 2026-09-11 by user directive
+# (findings in docs/recon/lockon-filter-findings.md); the measurement is kept because the
+# tables are the durable half and re-deriving them costs a session. An absent image is a skip,
+# not a pass.
 python3 "$repo_root/scripts/er-character-type-tables.py" --selftest
 # The workspace uses `../fromsoftware-rs` path dependencies, and CI clones that sibling at one
 # pinned revision while a developer's is whatever they have checked out -- often a fork carrying
@@ -835,6 +836,7 @@ python3 "$repo_root/scripts/test-stall-on-friction-signal.py"
 python3 "$repo_root/scripts/test-wall-of-text-signal.py"
 python3 "$repo_root/scripts/test-deferred-evidence-read-signal.py"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement_reminder.rego" "$repo_root/.cupcake/tests/no_authority_agreement_test.rego" "$repo_root/.cupcake/tests/no_authority_agreement_reminder_test.rego" "$repo_root/.cupcake/policies/claude/idle_hold.rego" "$repo_root/.cupcake/policies/claude/idle_hold_reminder.rego" "$repo_root/.cupcake/tests/idle_hold_test.rego" "$repo_root/.cupcake/tests/idle_hold_reminder_test.rego" "$repo_root/.cupcake/policies/claude/native_ownership_vocab_reminder.rego" "$repo_root/.cupcake/tests/native_ownership_vocab_reminder_test.rego" "$repo_root/.cupcake/policies/claude/block_manual_pgrep.rego" "$repo_root/.cupcake/tests/block_manual_pgrep_test.rego" "$repo_root/.cupcake/policies/claude/bash_elden_ring_launch_guard.rego" "$repo_root/.cupcake/tests/bash_elden_ring_launch_guard_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion.rego" "$repo_root/.cupcake/tests/block_askuserquestion_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion_reminder.rego" "$repo_root/.cupcake/tests/block_askuserquestion_reminder_test.rego" "$repo_root/.cupcake/policies/claude/no_stall_on_friction.rego" "$repo_root/.cupcake/tests/no_stall_on_friction_test.rego" "$repo_root/.cupcake/policies/claude/no_unexecuted_promise.rego" "$repo_root/.cupcake/tests/no_unexecuted_promise_test.rego" "$repo_root/.cupcake/policies/claude/wall_of_text.rego" "$repo_root/.cupcake/tests/wall_of_text_test.rego"
+opa test "$repo_root/.cupcake/policies/claude/no_mergeable_without_green_ci.rego" "$repo_root/.cupcake/tests/no_mergeable_without_green_ci_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_push.rego" "$repo_root/.cupcake/tests/git_block_main_push_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_commit.rego" "$repo_root/.cupcake/tests/git_block_main_commit_test.rego"
 # The shared executed-text decomposition every git guard now reads (bd
@@ -1752,13 +1754,6 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-seamless-bugfixes --lib
 # data and the byte arithmetic is pure.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-convenient-deaths --lib
 
-# er-lockon-filter's rule. The crate is one detour plus one predicate over two integers, and the
-# predicate is the whole feature: which character kinds stop being lock-on targets, and which kinds
-# you have to be for that to happen. It cannot be exercised offline any other way -- the live check
-# needs two players invading one world -- and both of its failure modes are silent, so the host run
-# is the only thing standing between a wrong constant and an invasion spent locking the wrong red.
-cargo test --manifest-path "$repo_root/Cargo.toml" -p er-lockon-filter --lib
-
 # er-hook's raw code-patch primitives. This crate is linked into 15 of the 23 cdylibs, the shipped
 # er_quickload.dll among them, so a defect in a byte-patch primitive here is a defect in all of
 # them at once -- and it is the crate least able to report one: it carries a crate-level
@@ -2017,6 +2012,18 @@ python3 "$repo_root/scripts/check-me3-dll-conflicts.py"
 # 2026-08-23 before an A/B against a one-DLL profile named it.
 python3 "$repo_root/scripts/check-shared-hook-rvas.py" --selftest
 python3 "$repo_root/scripts/check-shared-hook-rvas.py"
+
+# Sharing one MinHook instance is only half of sharing a prologue; the other half is that every
+# handler on it agrees with the dispatcher about the ABI. The union dispatchers forward integer
+# registers only and at a fixed width, so a handler declaring a float gets `xmm1` from nowhere,
+# and a handler declaring fewer arguments than its dispatcher cannot forward the ones it never
+# received -- which matters because its `orig` slot holds the next handler as often as it holds
+# the game trampoline. Both had shipped: `TitleTopDialog::update` and
+# `CS::FeSystemAnnounceView::Update` are float targets that reached the union through a helper
+# that took `*mut c_void` and transmuted, so the type checker never saw the declaration it would
+# have refused. That erasure is why this is a source gate rather than a compile error.
+python3 "$repo_root/scripts/check-union-hook-abi.py" --selftest
+python3 "$repo_root/scripts/check-union-hook-abi.py"
 
 # The branch-launch pipeline. Each stage refuses rather than guessing, and each carries its own
 # selftest for the refusal it exists to make -- a stale DLL, an unrankable conflict, a save with

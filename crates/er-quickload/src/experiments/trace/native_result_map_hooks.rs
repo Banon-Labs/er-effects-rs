@@ -21,12 +21,12 @@ use crate::{
         RESULT_ACTION_LAST_WRAPPER_BUILDER_RET, RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA,
         RESULT_ACTION_WRAPPER_BUILDER_HITS, RESULT_EVENT_HANDLER_HITS, RESULT_EVENT_HANDLER_ORIG,
         RESULT_EVENT_LAST_EVENT, RESULT_EVENT_LAST_FD4_ARG, RESULT_EVENT_LAST_FD4_CODE,
-        RESULT_EVENT_LAST_RAW_QWORD0, RESULT_EVENT_LAST_RESULT,
+        RESULT_EVENT_LAST_RAW_QWORD0, RESULT_EVENT_LAST_RESULT, RESULT_EVENT_WRAPPER_BUILDER_ORIG,
         SAFE_INPUT_CONFIRM_FRAMES_REMAINING, SAFE_INPUT_CONFIRM_PULSE_SEQ,
         SAVE_LOAD_STATE_INIT_ORIG, SAVE_REQUEST_PROFILE_ORIG, SET_SAVE_SLOT_ORIG,
-        TASK_ENQUEUE_TRACE_COUNT, TASK_ENQUEUE_TRACE_INCREMENT, TASK_ENQUEUE_TRACE_LIMIT,
-        TITLE_HANDOFF_COMPLETE, TITLE_HANDOFF_COMPLETE_VALUE, TITLE_OWNER_SCAN_START_ADDRESS,
-        TRACE_MENU_CONTINUE_WRAPPER_RVA, TRACE_TASK_ENQUEUE_RVA,
+        TASK_ENQUEUE_ORIG, TASK_ENQUEUE_TRACE_COUNT, TASK_ENQUEUE_TRACE_INCREMENT,
+        TASK_ENQUEUE_TRACE_LIMIT, TITLE_HANDOFF_COMPLETE, TITLE_HANDOFF_COMPLETE_VALUE,
+        TITLE_OWNER_SCAN_START_ADDRESS, TRACE_MENU_CONTINUE_WRAPPER_RVA, TRACE_TASK_ENQUEUE_RVA,
         menu_continue_idle_insert_call_site, menu_continue_idle_insert_caller_band,
         result_action_builder_trace_band,
     },
@@ -59,10 +59,7 @@ use crate::{
 
 use crate::experiments::trace::{
     menu_constructor_capture::log_menu_insert_details,
-    menu_trace_hooks::{
-        call_bool3_original, call_result_void1_original, call_result_void2_original,
-        call_task_enqueue_original, call_wrapper_builder_original, game_man_trace_summary,
-    },
+    menu_trace_hooks::{call_union_original, game_man_trace_summary},
 };
 
 fn format_optional_usize_hex(value: usize) -> String {
@@ -111,7 +108,12 @@ fn fd4_event_code_arg(raw_qword0: usize) -> (usize, usize) {
     (raw_qword0 & U32_MASK, (raw_qword0 >> 32) & U32_MASK)
 }
 
-pub(crate) unsafe extern "system" fn native_submit_hook(result: usize) {
+pub(crate) unsafe extern "system" fn native_submit_hook(
+    result: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
     const TRACE_FIRST: usize = 16;
     let seq =
         NATIVE_SUBMIT_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) + OWN_STEPPER_CALL_INC;
@@ -123,7 +125,7 @@ pub(crate) unsafe extern "system" fn native_submit_hook(result: usize) {
             trace_callers_summary()
         ));
     }
-    let _ = unsafe { call_result_void1_original(&NATIVE_SUBMIT_ORIG, result) };
+    let ret = unsafe { call_union_original(&NATIVE_SUBMIT_ORIG, result, b, c, d) };
     if seq <= TRACE_FIRST {
         append_continue_trace(format_args!(
             "native_submit_7ac890 seq={seq} phase=LEAVE result=0x{result:x} built={} {}",
@@ -131,9 +133,15 @@ pub(crate) unsafe extern "system" fn native_submit_hook(result: usize) {
             game_man_trace_summary()
         ));
     }
+    ret
 }
 
-pub(crate) unsafe extern "system" fn result_event_handler_hook(result: usize, event: usize) {
+pub(crate) unsafe extern "system" fn result_event_handler_hook(
+    result: usize,
+    event: usize,
+    c: usize,
+    d: usize,
+) -> usize {
     const TRACE_FIRST: usize = 16;
     let seq = RESULT_EVENT_HANDLER_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
         + OWN_STEPPER_CALL_INC;
@@ -155,7 +163,7 @@ pub(crate) unsafe extern "system" fn result_event_handler_hook(result: usize, ev
             trace_callers_summary()
         ));
     }
-    let _ = unsafe { call_result_void2_original(&RESULT_EVENT_HANDLER_ORIG, result, event) };
+    let ret = unsafe { call_union_original(&RESULT_EVENT_HANDLER_ORIG, result, event, c, d) };
     let built_after = unsafe { result_built_flag(result) };
     if seq <= TRACE_FIRST {
         append_continue_trace(format_args!(
@@ -164,19 +172,25 @@ pub(crate) unsafe extern "system" fn result_event_handler_hook(result: usize, ev
             game_man_trace_summary()
         ));
     }
+    ret
 }
 
 pub(crate) unsafe extern "system" fn result_event_wrapper_builder_hook(
     rcx: usize,
     rdx: usize,
     r8: usize,
+    r9: usize,
 ) -> usize {
     const TRACE_FIRST: usize = 16;
     // Resolved for the running build: raw, this compared a live frame against a 1.16.2 RVA and
     // simply never matched off 1.16.2, so the trace went quiet without ever saying why.
     let from_result_action_builder = result_action_builder_trace_band()
         .is_some_and(|band| callstack_contains_game_rva(band.start, band.end));
-    let result = unsafe { call_wrapper_builder_original(rcx, rdx, r8) }.unwrap_or(rcx);
+    let mut result =
+        unsafe { call_union_original(&RESULT_EVENT_WRAPPER_BUILDER_ORIG, rcx, rdx, r8, r9) };
+    if RESULT_EVENT_WRAPPER_BUILDER_ORIG.load(Ordering::SeqCst) == HOOK_ORIGINAL_UNSET {
+        result = rcx;
+    }
     if from_result_action_builder {
         let seq = RESULT_ACTION_WRAPPER_BUILDER_HITS
             .fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
@@ -202,7 +216,12 @@ pub(crate) unsafe extern "system" fn result_event_wrapper_builder_hook(
     result
 }
 
-pub(crate) unsafe extern "system" fn result_action_builder_hook(result: usize, event: usize) {
+pub(crate) unsafe extern "system" fn result_action_builder_hook(
+    result: usize,
+    event: usize,
+    c: usize,
+    d: usize,
+) -> usize {
     const TRACE_FIRST: usize = 16;
     let seq = RESULT_ACTION_BUILDER_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
         + OWN_STEPPER_CALL_INC;
@@ -220,7 +239,7 @@ pub(crate) unsafe extern "system" fn result_action_builder_hook(result: usize, e
             trace_callers_summary()
         ));
     }
-    let _ = unsafe { call_result_void2_original(&RESULT_ACTION_BUILDER_ORIG, result, event) };
+    let ret = unsafe { call_union_original(&RESULT_ACTION_BUILDER_ORIG, result, event, c, d) };
     if seq <= TRACE_FIRST {
         append_continue_trace(format_args!(
             "result_action_builder_746a00 seq={seq} phase=LEAVE result=0x{result:x} event=0x{event:x} built={} {}",
@@ -228,6 +247,7 @@ pub(crate) unsafe extern "system" fn result_action_builder_hook(result: usize, e
             game_man_trace_summary()
         ));
     }
+    ret
 }
 
 unsafe fn text_section_bounds(base: usize) -> Option<(usize, usize)> {
@@ -451,9 +471,13 @@ unsafe fn capture_continue_member_node_candidate(base: usize, candidate: usize, 
 }
 
 pub(crate) unsafe extern "system" fn task_enqueue_hook(
-    arg0: *mut c_void,
-    arg1: *mut c_void,
-) -> *mut c_void {
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let arg0 = a as *mut c_void;
+    let arg1 = b as *mut c_void;
     let caller_rva = trace_first_game_caller_rva();
     let trace_index = TASK_ENQUEUE_TRACE_COUNT
         .fetch_add(TASK_ENQUEUE_TRACE_INCREMENT, Ordering::SeqCst)
@@ -474,7 +498,11 @@ pub(crate) unsafe extern "system" fn task_enqueue_hook(
             game_man_trace_summary()
         ));
     }
-    let result = unsafe { call_task_enqueue_original(arg0, arg1) }.unwrap_or(arg1);
+    let result = if TASK_ENQUEUE_ORIG.load(Ordering::SeqCst) == HOOK_ORIGINAL_UNSET {
+        arg1
+    } else {
+        unsafe { call_union_original(&TASK_ENQUEUE_ORIG, a, b, c, d) as *mut c_void }
+    };
     let arg0_pointee = if arg0 as usize != TITLE_OWNER_SCAN_START_ADDRESS {
         unsafe { safe_read_usize(arg0 as usize) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
     } else {
@@ -622,143 +650,176 @@ pub(crate) unsafe extern "system" fn task_enqueue_hook(
             game_man_trace_summary()
         ));
     }
-    result
+    result as usize
 }
 
-pub(crate) unsafe extern "system" fn set_save_slot_hook(slot: i32) {
+pub(crate) unsafe extern "system" fn set_save_slot_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let slot = a as i32;
     append_continue_trace(format_args!(
         "ENTER set_save_slot slot={slot} {} {}",
         trace_callers_summary(),
         game_man_trace_summary()
     ));
-    let original = SET_SAVE_SLOT_ORIG.load(Ordering::SeqCst);
-    if original != HOOK_ORIGINAL_UNSET {
-        let original: unsafe extern "system" fn(i32) = unsafe { std::mem::transmute(original) };
-        unsafe { original(slot) };
-    }
+    let ret = unsafe { call_union_original(&SET_SAVE_SLOT_ORIG, a, b, c, d) };
     append_continue_trace(format_args!(
         "LEAVE set_save_slot {}",
         game_man_trace_summary()
     ));
+    ret
 }
 
-pub(crate) unsafe extern "system" fn save_request_profile_hook(enabled: u8) {
+pub(crate) unsafe extern "system" fn save_request_profile_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let enabled = a as u8;
     append_continue_trace(format_args!(
         "ENTER save_request_profile enabled={enabled} {} {}",
         trace_callers_summary(),
         game_man_trace_summary()
     ));
-    let original = SAVE_REQUEST_PROFILE_ORIG.load(Ordering::SeqCst);
-    if original != HOOK_ORIGINAL_UNSET {
-        let original: unsafe extern "system" fn(u8) = unsafe { std::mem::transmute(original) };
-        unsafe { original(enabled) };
-    }
+    let ret = unsafe { call_union_original(&SAVE_REQUEST_PROFILE_ORIG, a, b, c, d) };
     append_continue_trace(format_args!(
         "LEAVE save_request_profile {}",
         game_man_trace_summary()
     ));
+    ret
 }
 
-pub(crate) unsafe extern "system" fn request_save_hook(enabled: u8) {
+pub(crate) unsafe extern "system" fn request_save_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let enabled = a as u8;
     append_continue_trace(format_args!(
         "ENTER request_save enabled={enabled} {} {}",
         trace_callers_summary(),
         game_man_trace_summary()
     ));
-    let original = REQUEST_SAVE_ORIG.load(Ordering::SeqCst);
-    if original != HOOK_ORIGINAL_UNSET {
-        let original: unsafe extern "system" fn(u8) = unsafe { std::mem::transmute(original) };
-        unsafe { original(enabled) };
-    }
+    let ret = unsafe { call_union_original(&REQUEST_SAVE_ORIG, a, b, c, d) };
     append_continue_trace(format_args!(
         "LEAVE request_save {}",
         game_man_trace_summary()
     ));
+    ret
 }
 
-pub(crate) unsafe extern "system" fn current_slot_load_hook(arg0: i32, arg1: u8, arg2: u8) -> u8 {
+pub(crate) unsafe extern "system" fn current_slot_load_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let arg0 = a as i32;
+    let arg1 = b as u8;
+    let arg2 = c as u8;
     append_continue_trace(format_args!(
         "ENTER current_slot_load_67b570 arg0={arg0} arg1={arg1} arg2={arg2} {} {}",
         trace_callers_summary(),
         game_man_trace_summary()
     ));
-    let ret = unsafe { call_bool3_original(&CURRENT_SLOT_LOAD_ORIG, arg0, arg1, arg2) }
-        .unwrap_or(HOOK_FALSE_RETURN);
+    let ret = unsafe { call_union_original(&CURRENT_SLOT_LOAD_ORIG, a, b, c, d) };
     append_continue_trace(format_args!(
-        "LEAVE current_slot_load_67b570 ret={ret} {}",
+        "LEAVE current_slot_load_67b570 ret={} {}",
+        ret as u8,
         game_man_trace_summary()
     ));
     ret
 }
 
-pub(crate) unsafe extern "system" fn continue_load_hook(slot: i32, arg1: u8, arg2: u8) -> u8 {
+pub(crate) unsafe extern "system" fn continue_load_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let slot = a as i32;
+    let arg1 = b as u8;
+    let arg2 = c as u8;
     append_continue_trace(format_args!(
         "ENTER continue_load_67b750 slot={slot} arg1={arg1} arg2={arg2} {} {}",
         trace_callers_summary(),
         game_man_trace_summary()
     ));
-    let ret = unsafe { call_bool3_original(&CONTINUE_LOAD_ORIG, slot, arg1, arg2) }
-        .unwrap_or(HOOK_FALSE_RETURN);
+    let ret = unsafe { call_union_original(&CONTINUE_LOAD_ORIG, a, b, c, d) };
     append_continue_trace(format_args!(
-        "LEAVE continue_load_67b750 ret={ret} {}",
+        "LEAVE continue_load_67b750 ret={} {}",
+        ret as u8,
         game_man_trace_summary()
     ));
     ret
 }
 
-pub(crate) unsafe extern "system" fn combined_load_hook(slot: i32, arg1: u8, arg2: u8) -> u8 {
+pub(crate) unsafe extern "system" fn combined_load_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let slot = a as i32;
+    let arg1 = b as u8;
+    let arg2 = c as u8;
     append_continue_trace(format_args!(
         "ENTER combined_load_67b940 slot={slot} arg1={arg1} arg2={arg2} {} {}",
         trace_callers_summary(),
         game_man_trace_summary()
     ));
-    let ret = unsafe { call_bool3_original(&COMBINED_LOAD_ORIG, slot, arg1, arg2) }
-        .unwrap_or(HOOK_FALSE_RETURN);
+    let ret = unsafe { call_union_original(&COMBINED_LOAD_ORIG, a, b, c, d) };
     append_continue_trace(format_args!(
-        "LEAVE combined_load_67b940 ret={ret} {}",
+        "LEAVE combined_load_67b940 ret={} {}",
+        ret as u8,
         game_man_trace_summary()
     ));
     ret
 }
 
-pub(crate) unsafe extern "system" fn map_load_hook() -> u8 {
+pub(crate) unsafe extern "system" fn map_load_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
     append_continue_trace(format_args!(
         "ENTER map_load_67bc10 {} {}",
         trace_callers_summary(),
         game_man_trace_summary()
     ));
-    let original = MAP_LOAD_ORIG.load(Ordering::SeqCst);
-    let ret = if original == HOOK_ORIGINAL_UNSET {
-        HOOK_FALSE_RETURN
-    } else {
-        let original: unsafe extern "system" fn() -> u8 = unsafe { std::mem::transmute(original) };
-        unsafe { original() }
-    };
-    if ret != HOOK_FALSE_RETURN {
+    let ret = unsafe { call_union_original(&MAP_LOAD_ORIG, a, b, c, d) };
+    if ret as u8 != HOOK_FALSE_RETURN {
         TITLE_HANDOFF_COMPLETE.store(TITLE_HANDOFF_COMPLETE_VALUE, Ordering::SeqCst);
     }
     append_continue_trace(format_args!(
-        "LEAVE map_load_67bc10 ret={ret} {}",
+        "LEAVE map_load_67bc10 ret={} {}",
+        ret as u8,
         game_man_trace_summary()
     ));
     ret
 }
 
-pub(crate) unsafe extern "system" fn save_load_state_init_hook() -> u8 {
+pub(crate) unsafe extern "system" fn save_load_state_init_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
     append_continue_trace(format_args!(
         "ENTER save_load_state_init_67b030 {} {}",
         trace_callers_summary(),
         game_man_trace_summary()
     ));
-    let original = SAVE_LOAD_STATE_INIT_ORIG.load(Ordering::SeqCst);
-    let ret = if original == HOOK_ORIGINAL_UNSET {
-        HOOK_FALSE_RETURN
-    } else {
-        let original: unsafe extern "system" fn() -> u8 = unsafe { std::mem::transmute(original) };
-        unsafe { original() }
-    };
+    let ret = unsafe { call_union_original(&SAVE_LOAD_STATE_INIT_ORIG, a, b, c, d) };
     append_continue_trace(format_args!(
-        "LEAVE save_load_state_init_67b030 ret={ret} {}",
+        "LEAVE save_load_state_init_67b030 ret={} {}",
+        ret as u8,
         game_man_trace_summary()
     ));
     ret

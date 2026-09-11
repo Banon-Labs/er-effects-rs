@@ -2,6 +2,9 @@ use super::*;
 
 pub(crate) unsafe extern "system" fn system_quit_profile_load_confirmed_hook(
     action_obj: usize,
+    b: usize,
+    c: usize,
+    d: usize,
 ) -> usize {
     let orig = SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ORIG.load(Ordering::SeqCst);
     if orig == HOOK_ORIGINAL_UNSET {
@@ -10,7 +13,9 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_confirmed_hook(
         ));
         return 0;
     }
-    let original: unsafe extern "system" fn(usize) -> usize = unsafe { std::mem::transmute(orig) };
+    // Through the union's own shape: this rides `mh_install_hook_once` -> `register_union_hook`,
+    // so the slot may hold the next handler on the address rather than the game trampoline.
+    let original: crate::mh::UnionFn = unsafe { std::mem::transmute(orig) };
     let dialog =
         unsafe { safe_read_usize(action_obj + 0x8) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
     let profile_window = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
@@ -19,7 +24,7 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_confirmed_hook(
         && dialog == profile_window
         && SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0;
     if !system_quit_profile_active {
-        return unsafe { original(action_obj) };
+        return unsafe { original(action_obj, b, c, d) };
     }
 
     if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) >= SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED
@@ -62,7 +67,7 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_confirmed_hook(
     append_autoload_debug(format_args!(
         "system-quit-dup: ProfileSelect confirmed-load transition ALLOWED action=0x{action_obj:x} dialog=0x{dialog:x}; actual load/deser is guarded at LoadJobContext::Run"
     ));
-    unsafe { original(action_obj) }
+    unsafe { original(action_obj, b, c, d) }
 }
 
 /// Portrait RETARGET + boot-view cover rearm for an own-menu character switch. It used to be shared

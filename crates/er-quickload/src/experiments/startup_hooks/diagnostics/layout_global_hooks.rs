@@ -47,7 +47,8 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     // install_system_quit_menu_window_job_run_hook();
     install_system_quit_window_list_push_hook();
     install_system_quit_save_game_text_hook();
-    install_system_quit_noop_action_hook();
+    // The three routing detours this used to install are part of the shared arm call below
+    // (`er_quit_menu_core::row_cloner::arm`), on the `er-hook` union rather than a bare `MhHook`.
     install_system_quit_save_game_confirm_hook();
     // Save-flow confirm boxes: observe `CS::MenuJob::EmitResult` so the user's Yes/No on a
     // Save Game confirm is read from the game's own `MenuJobResult` instead of guessed from
@@ -66,62 +67,51 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     {
         return;
     }
-    match unsafe { MH_Initialize() } {
-        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
-        status => {
-            append_autoload_debug(format_args!(
-                "system-quit-dup: MH_Initialize failed: {status:?}"
-            ));
-            return;
-        }
-    }
-    let Ok(addr) = game_rva_for_hook(SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA) else {
-        append_autoload_debug(format_args!(
-            "system-quit-dup: failed to resolve AddCancelButton rva 0x{SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA:x}"
-        ));
-        return;
-    };
-    match unsafe {
-        MhHook::new(
-            addr as *mut c_void,
-            system_quit_duplicate_add_cancel_button_hook as *mut c_void,
+    // One arm call, shared with the standalone `er-quit-menu` shell (2026-09-11). The cloner, the
+    // row router and the three routing detours all moved to `er_quit_menu_core::row_cloner`, so the
+    // product and a shell install the same code rather than two implementations of it -- which is
+    // what makes the shell's path testable by running the product. Every detour goes through the
+    // `er-hook` union: `AddCancelButton` takes five arguments, and until `er_hook::UnionFn5`
+    // existed this prologue was the one row-building hook holding MinHook's single slot by itself.
+    //
+    // The product arms every row and supplies the four flows this crate does not own. A shell arms
+    // `RowSet::BUILD_ROWS_ONLY` and supplies none, so a row whose flow it lacks is never on the tab.
+    let armed = unsafe {
+        er_quit_menu_core::row_cloner::arm(
+            er_quit_menu_core::row_cloner::RowSet::ALL,
+            er_quit_menu_core::row_cloner::QuitRowActions {
+                open_profile_load_dialog: Some(system_quit_open_profile_load_dialog),
+                open_save_picker_menu: Some(open_save_picker_menu_for_row),
+                save_game_start_flow: Some(system_quit_save_game_start_flow),
+                save_game_request_save_only: Some(system_quit_save_game_request_save_only),
+                // No product half: the moved reset already clears the row table, the link
+                // field and the export latch, which is everything this side used to do.
+                row_table_reset: None,
+                note_drive_strip_click_event: Some(save_picker_note_drive_strip_click_event),
+            },
         )
-    } {
-        Ok(hook) => {
-            SYSTEM_QUIT_DUPLICATE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            if let Err(status) = unsafe { hook.queue_enable() } {
-                append_autoload_debug(format_args!(
-                    "system-quit-dup: queue_enable AddCancelButton failed: {status:?}"
-                ));
-                return;
-            }
-            match unsafe { MH_ApplyQueued() } {
-                MH_STATUS::MH_OK => {
-                    crate::mh::leak_installed_hook(hook);
-                    SYSTEM_QUIT_DUPLICATE_INSTALLED
-                        .store(SYSTEM_QUIT_DUPLICATE_INSTALLED_YES, Ordering::SeqCst);
-                    append_autoload_debug(format_args!(
-                        // Print the return address this build will actually compare against, not
-                        // the 1.16.2 constant. The old line printed 0x958a20 on every build --
-                        // including the ones where nothing was ever going to match it, which made
-                        // the log read like the feature was armed when it was inert.
-                        "system-quit-dup: hooked AddCancelButton 0x{addr:x}; will clone the Quit Game row as Load Character / Load Character from File / Load Build from URL at caller rva {}",
-                        match er_title_flow::system_quit_row_return_rvas() {
-                            Some((first, second)) =>
-                                format!("0x{first:x} (second row 0x{second:x})"),
-                            None => "UNRESOLVED on this build -- no rows will be cloned".to_owned(),
-                        }
-                    ));
-                }
-                status => append_autoload_debug(format_args!(
-                    "system-quit-dup: MH_ApplyQueued failed: {status:?}"
-                )),
-            }
-        }
-        Err(status) => append_autoload_debug(format_args!(
-            "system-quit-dup: MhHook::new AddCancelButton failed: {status:?}"
+    };
+    match armed {
+        Ok(()) => SYSTEM_QUIT_DUPLICATE_INSTALLED
+            .store(SYSTEM_QUIT_DUPLICATE_INSTALLED_YES, Ordering::SeqCst),
+        // The flag is only raised on success, so a failure leaves it at
+        // `SYSTEM_QUIT_DUPLICATE_NOT_INSTALLED` and a later call retries.
+        Err(error) => append_autoload_debug(format_args!(
+            "system-quit-dup: arming the Quit rows failed: {error:?} -- no rows will be cloned"
         )),
     }
+}
+
+/// The row router's save-picker arm, adapted to the action table's shape.
+///
+/// # Safety
+///
+/// Menu thread, with the row's action object.
+unsafe fn open_save_picker_menu_for_row(action_obj: usize) -> bool {
+    matches!(
+        unsafe { system_quit_open_save_picker_menu(action_obj) },
+        er_save_picker_core::PickerOpenOutcome::Opened
+    )
 }
 
 /// Install the MenuWindow-latch hook once (MinHook on the SceneObjProxy ctor 0x14074a700),

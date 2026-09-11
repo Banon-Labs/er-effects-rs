@@ -1758,6 +1758,43 @@ def selftest_retirement_gate() -> int:
     return len(failures)
 
 
+def _untracked_input(repo: Path, relative: str) -> Path:
+    """Locate one of this tool's three gitignored inputs: here first, then the main worktree.
+
+    The two deobf images and `rva-map-1162-to-1170.functions.tsv` are all gitignored, and a
+    gitignored file is never copied into a `git worktree`. So every one of the three is absent
+    from a linked checkout, and the missing-input branch prints `SKIP: missing <path>` and returns
+    0 -- a tool reporting that it did not run, at the exit code of a tool that ran and found
+    nothing. That is the same fallback `map-rvas-1162-to-1170.py` and
+    `check-ledger-section-kind.py` already take, for the same reason and by the same route.
+
+    `--old`, `--new` and `--map` still win: this is only what the defaults resolve to.
+    """
+    local = repo / relative
+    if local.exists():
+        return local
+    # `git rev-parse --git-common-dir` resolves to the primary checkout's `.git` from inside a
+    # linked worktree, and to our own otherwise, so its parent is the main working tree.
+    try:
+        import subprocess
+
+        common = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if common.returncode == 0:
+            main_root = (repo / common.stdout.strip()).resolve().parent
+            candidate = main_root / relative
+            if candidate.is_file():
+                return candidate
+    except Exception:
+        pass
+    return local
+
+
 def main() -> int:
     repo = Path(__file__).resolve().parent.parent
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1828,9 +1865,9 @@ def main() -> int:
     global CS_OP_IMM_TYPE
     CS_OP_IMM_TYPE = (X86_OP_IMM,)
 
-    args.old = args.old or repo / "eldenring-deobf.bin"
-    args.new = args.new or repo / "eldenring-deobf-1.17.bin"
-    args.map = args.map or repo / "docs/recon/rva-map-1162-to-1170.functions.tsv"
+    args.old = args.old or _untracked_input(repo, "eldenring-deobf.bin")
+    args.new = args.new or _untracked_input(repo, "eldenring-deobf-1.17.bin")
+    args.map = args.map or _untracked_input(repo, "docs/recon/rva-map-1162-to-1170.functions.tsv")
 
     for path in (args.old, args.new, args.map):
         if not path.is_file():

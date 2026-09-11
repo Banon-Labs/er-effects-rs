@@ -214,9 +214,12 @@ HAND_BUILT = re.compile(
 # -> `er_game_base::game_build::resolve_detour_address` before MinHook sees the address, exactly as
 # `MhHook::new` does. Omitting them would file a correctly-gated installer as a defect, which is the
 # mirror image of the blindness above and just as useless.
+# The `5?` suffixes cover the five-argument registrars (`er_hook::UnionFn5`, 2026-09-10), which
+# resolve through the same `resolve_target`. Without them a `\s*\(` match fails on the trailing
+# digit and a correctly-gated installer is filed as a defect.
 GATED = re.compile(
     r"\b(?:game_rva|resolve_game_address|resolve_detour_address|resolve_target"
-    r"|MhHook::new|game_ptr|register_shared_hook|register_union_hook)\s*\("
+    r"|MhHook::new|game_ptr|register_shared_hook5?|register_union_hook5?)\s*\("
 )
 # A raw store through a pointer, or the byte-patch primitive.
 #

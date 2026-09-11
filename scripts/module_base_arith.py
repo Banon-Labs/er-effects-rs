@@ -120,6 +120,12 @@ RESOLVING_CONSUMERS = (
     "register_union_hook",
     "register_union_hook_runtime_derived",
     "register_shared_hook",
+    # The five-argument siblings, added with `er_hook::UnionFn5` (2026-09-10). This tuple is
+    # consumed by `.endswith`, for which "register_union_hook5" does not end with
+    # "register_union_hook", so each has to be spelled out.
+    "register_union_hook5",
+    "register_union_hook5_runtime_derived",
+    "register_shared_hook5",
     "create_and_apply_single_hook",
     "create_absolute_hook",
 )

@@ -87,6 +87,9 @@ pub(crate) mod pgd {
     const _: () = assert!(NAME == 0x9c);
     const _: () = assert!(NAME_LEN_U16 == 17);
 
+    /// `PlayerGameData::gender`. Zero and one; the exporter maps it onto the planner's two bodies.
+    pub const GENDER: usize = core::mem::offset_of!(PlayerGameData, gender);
+
     /// `PlayerGameData::face_data.face_data_buffer` -- the character's appearance, magic first.
     ///
     /// Bound to the upstream layout the same way every other offset here is, so a struct change
@@ -220,6 +223,12 @@ pub struct CharacterRead {
     /// first. `None` when the read failed or the magic was wrong, which is the only two ways this
     /// can be anything other than the player's own face.
     pub face_data: Option<Vec<u8>>,
+    /// `PlayerGameData::gender`, which is what the exported appearance's `bodyType` is set from.
+    ///
+    /// Not derivable from the face buffer. The planner's own AOB importer hardcodes `bodyType:
+    /// "A"` whatever it parsed, so a shared build shows the right body only if the writer says
+    /// which one it is.
+    pub gender: u8,
     /// Arrows and bolts the character is carrying. Counted, not exported -- see the ammunition
     /// note in `read_carried`.
     pub carried_ammunition: usize,
@@ -548,6 +557,8 @@ pub unsafe fn read_character(module_base: usize, msg: usize, egd: usize) -> Opti
     out.name = unsafe { read_character_name(pgd) };
     // Safety: as above -- a fault-checked read of a fixed-length field at a derived offset.
     out.face_data = unsafe { read_face_data(pgd) };
+    // Safety: a fault-checked one-byte read at the upstream-bound `gender` offset.
+    out.gender = unsafe { er_game_base::mem::safe_read_u8(pgd + pgd::GENDER).unwrap_or_default() };
 
     let mut unnamed = 0usize;
 
@@ -1177,9 +1188,10 @@ fn ash_of_war_arts_rows() -> std::collections::BTreeSet<u32> {
         return rows;
     };
     for (_, row) in repo.rows::<EquipParamGem>() {
-        if let Ok(arts_id) = u32::try_from(row.sword_arts_param_id())
-            && arts_id != 0
-        {
+        // Row 0 stays in. It is `No Skill`, an ash the player can mount to take a weapon's own
+        // skill away, so filtering it out here made the export drop `weaponArt: "No Skill"` from
+        // every build that used it -- the same blind spot that made the import ignore it.
+        if let Ok(arts_id) = u32::try_from(row.sword_arts_param_id()) {
             rows.insert(arts_id);
         }
     }
@@ -1443,7 +1455,7 @@ fn protector_parts() -> std::collections::BTreeMap<u32, &'static str> {
 /// # Safety
 ///
 /// `pgd` must be a live `PlayerGameData*`.
-unsafe fn read_face_data(pgd: usize) -> Option<Vec<u8>> {
+pub(crate) unsafe fn read_face_data(pgd: usize) -> Option<Vec<u8>> {
     let mut buffer = vec![0u8; pgd::FACE_DATA_BUFFER_LEN];
     // Safety: fault-checked; an unmapped page answers false instead of taking the game down.
     if !unsafe { er_game_base::mem::read_bytes(pgd + pgd::FACE_DATA_BUFFER, &mut buffer) } {

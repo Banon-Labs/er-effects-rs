@@ -250,9 +250,21 @@ def resolve_conflicts(
             }
         )
 
-    for conflict in find_conflicts(kept, table):
+    # Product-ranked conflicts first, and a pair whose members are already gone is no longer a
+    # pair. The single pass this replaced evaluated every conflict against the set as it stood
+    # before any exclusion, so two shells that conflict with each other were reported
+    # unresolvable even when the product had already displaced both of them -- a refusal to emit
+    # any profile at all, over two DLLs the profile was never going to carry. Measured on
+    # 2026-09-11 with `er-build-import` and `er-quit-menu`, which conflict with the product and,
+    # since that day, with each other.
+    ranked = [c for c in find_conflicts(kept, table) if PRODUCT_PACKAGE in (c["a"], c["b"])]
+    unranked = [c for c in find_conflicts(kept, table) if PRODUCT_PACKAGE not in (c["a"], c["b"])]
+    for conflict in ranked + unranked:
         a, b = conflict["a"], conflict["b"]
         if PRODUCT_PACKAGE not in (a, b):
+            # Both sides still standing, or there is nothing left to rank.
+            if a not in kept or b not in kept:
+                continue
             unresolvable.append({**conflict, "why": "neither side is the product; nothing ranks them"})
             continue
         loser = b if a == PRODUCT_PACKAGE else a
@@ -666,11 +678,17 @@ def selftest() -> int:
     )
 
     # --- [always]: the standing half of --with ------------------------------------------
-    # The regression this pins is the one the user reported on 2026-09-08. `er-lockon-filter`
-    # was [opt_in_only], so it was absent from every launch that did not name it, and the
-    # lock-on the user was describing was vanilla lock-on. Reclassifying it [compatible] is not
-    # enough on its own: `er-quickload` has no reverse dependents, so a branch editing only the
-    # product closes over one shell and the filter would go missing again.
+    # The regression these controls pin was reported on 2026-09-08: a DLL classified
+    # [opt_in_only] was absent from every launch that did not name it, so the user was
+    # describing vanilla behaviour without knowing the shell was never in the process.
+    # Reclassifying it [compatible] is not enough on its own -- `er-quickload` has no reverse
+    # dependents, so a branch editing only the product closes over one shell and the companion
+    # goes missing again. Hence [always].
+    #
+    # These run against a synthetic table, which is why they kept working when the live
+    # [always] table emptied on 2026-09-11 (its one member, er-lockon-filter, was deleted by
+    # user directive). The mechanism is covered here; the table's contents are gated by
+    # check-me3-dll-conflicts.py, which refuses a member that is not a shipped shell.
     always_table = {"always": {"tag": "on by user directive"}}
     always_live = set(always_table["always"])
     candidates = {PRODUCT_PACKAGE}
@@ -706,28 +724,32 @@ def selftest() -> int:
                 "changed_outside_crates": 0,
                 "seed_crates": [],
                 "affected_crates": [],
-                "artifacts": ["er_quickload.dll", "er_lockon_filter.dll"],
+                "artifacts": ["er_quickload.dll", "er_example_shell.dll"],
                 "fallback": None,
-                "added_by_default": ["er-lockon-filter"],
+                "added_by_default": ["er-example-shell"],
                 "excluded": [],
                 "unresolvable": [],
             }
         ),
         "the rendered report names a DLL that arrived from [always] rather than from the diff",
     )
-    # The live table, against the real shipped set: the lock-on filter is on by default.
+    # The live table, against the real shipped set. Named members come and go -- the table is
+    # empty as of 2026-09-11 -- so these controls assert the invariant rather than a member:
+    # whatever [always] holds must be a shipped shell, and a product-only closure must load all
+    # of it. On an empty table the second is vacuous, which is why the first is here: it is the
+    # half that would catch a name outliving its crate.
+    always_real = set(live.get("always", {}))
+    shipped = {package for package, _ in shipped_pairs()}
     check(
-        "er-lockon-filter" in live.get("always", {})
-        and "er-lockon-filter" not in live.get("opt_in_only", {}),
-        "er-lockon-filter is declared [always] in the shipped table, and is no longer opt-in-only",
+        always_real <= shipped,
+        "every [always] package in the shipped table is still a shipped shell",
     )
-    always_real = set(live.get("always", {})) & {package for package, _ in shipped_pairs()}
     kept_default, _, _, _ = resolve_conflicts(
         {PRODUCT_PACKAGE} | always_real, live, set()
     )
     check(
-        "er-lockon-filter" in kept_default,
-        "a product-only closure still loads er_lockon_filter.dll: it is on by default",
+        always_real <= kept_default,
+        "a product-only closure loads every [always] package: they are on by default",
     )
 
     print("selftest:", "PASS" if ok else "FAIL")

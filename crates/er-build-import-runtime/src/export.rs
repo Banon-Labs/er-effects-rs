@@ -239,7 +239,7 @@ impl ExportReport {
             } else {
                 ""
             },
-            if written.face_data { ", face" } else { "" },
+            if written.sliders { ", face" } else { "" },
             self.skipped_goods,
             self.skipped_ammunition,
             self.url_len,
@@ -410,7 +410,7 @@ fn export_inner(read: CharacterRead, sinks: Sinks) {
         written.ammo,
         written.physick,
         written.great_rune,
-        written.face_data,
+        written.sliders,
         read.carried_goods,
         read.carried_ammunition,
     ));

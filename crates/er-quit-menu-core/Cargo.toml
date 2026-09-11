@@ -46,6 +46,10 @@ er-telemetry-core = { path = "../er-telemetry-core" }
 # when it VALIDATES, so the pure host-side parser comes with the row. Data transformation only --
 # the game-side importer stays in er-build-import-runtime.
 er-build-import-core = { path = "../er-build-import-core" }
+# The Scaleform-GFX reader/writer that derives the two movies these rows stand on: the six-cell
+# `02_040_optionsetting` grid the rows are cells of, and the `02_990` link field. Pure-Rust and
+# host-testable, so it comes in on both targets -- the backdrop attestation is a host test.
+er-gfx = { path = "../er-gfx" }
 
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
@@ -61,6 +65,12 @@ er-game-base = { path = "../er-game-base", features = ["game-types"] }
 # System>Quit "Load Build from URL" and "Generate Build Link" rows are the product entry
 # points into it.
 er-build-import-runtime = { path = "../er-build-import-runtime" }
+# The reverse-engineered layout of the menu surfaces these rows live on: the `CS::MenuJob` queue
+# and submit addresses the software keyboard drives, the System dialog's job-queue and window-list
+# offsets, and the two `AddCancelButton` caller return addresses the row cloner tells its two call
+# sites apart by. Each of those is one declaration in that crate; re-declaring any of them here
+# would be a second claim about the same address (`scripts/check-rva-alias-drift.py`).
+er-title-flow = { path = "../er-title-flow" }
 windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
@@ -70,6 +80,14 @@ windows = { version = "0.62", features = [
   "Win32_Storage_FileSystem",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
+] }
+
+# The assembler the build script encodes each pinned prologue with, so the bytes this crate
+# byte-checks are generated from named instructions rather than transcribed.
+[build-dependencies]
+iced-x86 = { version = "1.21", default-features = false, features = [
+  "std",
+  "code_asm",
 ] }
 
 # Lint parity with `../fromsoftware-rs` (root `[workspace.lints]`): stock rustc + clippy lint

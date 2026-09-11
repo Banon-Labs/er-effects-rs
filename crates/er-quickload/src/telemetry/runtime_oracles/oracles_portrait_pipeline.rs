@@ -671,7 +671,7 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
         // GLOBAL_* render managers _Common_Finalize frees (data RVAs read straight off the 0xaed380
         // disasm; 0-shift data-global convention, same 0x143d_xxxx block as GameDataMan/CSSystemStep).
         const GLOBAL_CS_DIST_VIEW_MANAGER_RVA: usize = 0x3d675c0;
-        const GLOBAL_MAP_ITEM_MAN_RVA: usize = 0x3d67a50;
+        const GLOBAL_MAP_ITEM_MAN_RVA: usize = er_game_base::rva::GLOBAL_MAP_ITEM_MAN_RVA;
         const RENDER_READ_FAIL: i64 = -1;
         const MIN_VALID_PTR: usize = 0x10000;
         let gxdc = unsafe {

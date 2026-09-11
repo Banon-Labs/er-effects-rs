@@ -165,3 +165,11 @@ SYSTEM_QUIT_TOP_HIDE_COUNT
 SYSTEM_QUIT_TOP_RESTORE_COUNT
 TFC_DRAIN_DIALOG
 TITLE_TEXT_GFX_VALUES
+
+# WIRE-INVISIBLE -- both are er-hook TEST arrays, written inside the five-argument dispatcher's
+#          own handler as `cell.store(value, ..)` over `.iter().zip([a, b, c, d, e])`. The write
+#          never names the static, which is the one shape the shared write rule cannot see, so
+#          these are false negatives rather than dead counters: deleting either would delete the
+#          assertion that `union_dispatch5` forwards all five arguments.
+GAME_SAW
+SEEN
