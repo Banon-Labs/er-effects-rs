@@ -192,17 +192,27 @@ pub(crate) unsafe fn system_quit_build_import_tick() {
 // `kick_target_profile_slot` is the per-slot replica of the engine's data-change sequence and it
 // belongs beside the loading-cover pipeline that also drives it.
 
-/// Re-derive the live character's own record and ask its portrait to rebuild from it.
+/// Re-derive the live character's own record and ask both character portraits to rebuild from it.
 ///
-/// Drives the `CSMenuAsmModelRend` whose offscreen target Scaleform sees as
-/// `SYSTEX_Menu_Profile{NN}` -- proven to be what `05_010_ProfileSelect` shows, and not what the
-/// System>Quit panel shows, whose `Icon_0` is a one-frame sprite bound to `MENU_DummyStatus_Face`.
-/// See `er_profile_summary_core::portrait_refresh`.
+/// Two independent surfaces, driven in turn because they have two producers:
+///
+/// * the `CSMenuAsmModelRend` whose offscreen target Scaleform sees as `SYSTEX_Menu_Profile{NN}`,
+///   which is what `05_010_ProfileSelect` shows. That is everything below, and it needs the record
+///   re-derived first because the profile renderer is dressed from a record and from nothing else;
+/// * the `CSMenuFaceModelRend` at `OptionSettingTopDialog+0x1890`, which fills
+///   `SYSTEX_Menu_StatusFace` -- the portrait on the Quit panel the player is looking at when they
+///   press the row. It reads no record at all; it is rebuilt from the live `PlayerGameData` by
+///   re-invoking its builder, and the call belongs to the menu pump rather than to this game task,
+///   so this only arms it. See `er_profile_summary_core::quit_panel_portrait`.
 ///
 /// # Safety
 ///
 /// Game task thread, character in the world, called once per applied import.
 unsafe fn build_url_refresh_character_portrait() {
+    // Armed first and unconditionally: the Quit panel's portrait does not read a record, so a slot
+    // this code cannot attribute -- which stops the profile refresh below dead -- is no reason to
+    // leave the panel the player is actually looking at showing the previous face.
+    er_profile_summary_core::arm_quit_panel_portrait_refresh();
     let Some(slot) = portrait_loaded_slot_confirmed() else {
         er_profile_summary_core::note_unattributable_slot();
         return;

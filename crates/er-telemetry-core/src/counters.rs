@@ -25,6 +25,9 @@ mod input_injection;
 mod loading_cover;
 mod picked_save_source;
 mod portrait_equipment;
+/// The System>Quit panel's portrait fields, kept out of this file because it is already past the
+/// hard limit `scripts/check-rust-file-sizes.py` enforces. The glob keeps every consumer's spelling.
+mod quit_face_portrait;
 mod save_flow;
 mod save_picker;
 
@@ -34,6 +37,7 @@ pub use input_injection::*;
 pub use loading_cover::*;
 pub use picked_save_source::*;
 pub use portrait_equipment::*;
+pub use quit_face_portrait::*;
 pub use save_flow::*;
 pub use save_picker::*;
 

@@ -1991,6 +1991,13 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
             && let Ok(base) = game_module_base()
         {
             unsafe { sample_optionsetting_pane_visibility(base, owner) };
+            // The one place in this process that holds a live `CS::OptionSettingTopDialog`: it is
+            // read from `job+0x130` on the frame that job is running, so there is no stored pointer
+            // to go stale. A build import applied from the Quit tab arms a portrait refresh and
+            // this consumes it, then keeps sampling the verify window. It re-proves the window's
+            // class before touching anything, so the other OptionSetting resource name and any
+            // foreign owner cost a refusal rather than a corrupted object.
+            unsafe { er_profile_summary_core::quit_panel_portrait_tick(owner) };
         }
         if filename == "05_010_ProfileSelect"
             && let Ok(base) = game_module_base()

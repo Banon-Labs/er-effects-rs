@@ -88,3 +88,9 @@ pub use live_player_sync::*;
 pub mod portrait_refresh;
 #[cfg(windows)]
 pub use portrait_refresh::*;
+
+/// The System>Quit panel's own portrait, which has a different producer from the one above.
+#[cfg(windows)]
+pub mod quit_panel_portrait;
+#[cfg(windows)]
+pub use quit_panel_portrait::*;

@@ -503,6 +503,19 @@ pub unsafe extern "system" fn per_frame_push_hook(renderer: usize, frame: usize)
         er_telemetry_core::counters::BUILD_URL_PORTRAIT_DRAW_TASK_CALLS
             .fetch_add(1, Ordering::SeqCst);
     }
+    // The same measurement for the System>Quit panel's `CS::CSMenuFaceModelRend`, which reaches
+    // this detour because that class derives from `CSMenuAsmModelRend` and this is a detour on the
+    // function rather than on a vtable slot. Its own pair of counters, not a second consumer of the
+    // two above: both windows can be open at once, and one target field cannot answer for two
+    // renderers.
+    if renderer != 0
+        && renderer
+            == er_telemetry_core::counters::BUILD_URL_QUIT_FACE_TARGET_RENDERER
+                .load(Ordering::SeqCst)
+    {
+        er_telemetry_core::counters::BUILD_URL_QUIT_FACE_DRAW_TASK_CALLS
+            .fetch_add(1, Ordering::SeqCst);
+    }
     // Capture the engine's live render context (param_2/frame) on its own calls only (not our re-drives),
     // so our per-frame draw can enqueue the model into the same offscreen pass the engine routes to. Our
     // draw-phase task_data routes to the wrong pass -> nothing renders into the portrait RT.
