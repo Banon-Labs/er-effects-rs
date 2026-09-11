@@ -290,6 +290,10 @@ static BUILD_URL_MENU_PUMP_TICKS: AtomicUsize = AtomicUsize::new(0);
 /// the closed field emits, and this stamp is what makes absence measurable.
 static BUILD_URL_EDITOR_WINDOW_LAST_TICK: AtomicUsize = AtomicUsize::new(0);
 
+/// The largest gap, in menu-job ticks, between two consecutive runs of this field's window --
+/// one frame, measured rather than assumed. See [`build_url_unseen_limit`].
+static BUILD_URL_WINDOW_SEEN_GAP: AtomicUsize = AtomicUsize::new(0);
+
 /// Advance the link field's clock. Called at the tail of the `MenuWindowJob::Run` detour, so it
 /// counts menu jobs, not menu frames -- several of these pass per frame, one per live window.
 /// Anything comparing it against [`BUILD_URL_EDITOR_WINDOW_LAST_TICK`] is measuring in that
@@ -362,10 +366,14 @@ pub fn build_url_note_editor_window_state(window: usize, state: i32) -> bool {
             // nobody will see.
             return false;
         }
-        BUILD_URL_EDITOR_WINDOW_LAST_TICK.store(
-            BUILD_URL_MENU_PUMP_TICKS.load(Ordering::SeqCst),
-            Ordering::SeqCst,
-        );
+        let now = BUILD_URL_MENU_PUMP_TICKS.load(Ordering::SeqCst);
+        let previous = BUILD_URL_EDITOR_WINDOW_LAST_TICK.swap(now, Ordering::SeqCst);
+        if previous != 0 {
+            // One frame, in the clock's own unit. Taking the maximum rather than the mean keeps a
+            // frame that ran extra windows from being read as the field going quiet.
+            let gap = now.saturating_sub(previous);
+            BUILD_URL_WINDOW_SEEN_GAP.fetch_max(gap, Ordering::SeqCst);
+        }
         if BUILD_URL_EDITOR_WINDOW.swap(window, Ordering::SeqCst) == 0 {
             // Pair this window with the job that is latched right now, so its close can only ever
             // release that job and never a later one.
@@ -381,6 +389,7 @@ pub fn build_url_note_editor_window_state(window: usize, state: i32) -> bool {
             // standalone shell with no host a no-op. So the link field's caret pass ran once per
             // process and every field after the first opened with the caret at index 0, which
             // makes typing prepend to the prefilled link.
+            BUILD_URL_WINDOW_SEEN_GAP.store(0, Ordering::SeqCst);
             reset_build_url_field_latches();
         }
         return true;
@@ -435,13 +444,9 @@ pub fn build_url_note_editor_window_state(window: usize, state: i32) -> bool {
 /// Deposits `Cancelled` only if no outcome is already waiting: an accept records its text from the
 /// terminal callback and its window goes terminal immediately afterwards, so overwriting here would
 /// turn every accepted link into a cancel.
-/// How many menu-pump passes the link field may go unseen before its latch is treated as debris.
-///
-/// The pump runs once per menu frame, so this is the game's own cadence rather than wall-clock: a
-/// field that is genuinely up is seen on every pass and can never reach the threshold, while a
-/// closed one stops being seen immediately. Small enough that the row is pressable again well
-/// inside the time it takes a player to move the cursor back to it.
-const BUILD_URL_WINDOW_UNSEEN_TICK_LIMIT: usize = 8;
+
+/// The bound used before a frame has been measured. See [`build_url_unseen_limit`].
+const BUILD_URL_UNCALIBRATED_UNSEEN_LIMIT: usize = 256;
 
 /// Has the link field's window stopped being run while its keyboard is still latched?
 ///
@@ -453,35 +458,47 @@ pub fn build_url_keyboard_latch_is_abandoned() -> bool {
     if keyboard_active_job_slot(KeyboardPurpose::BuildUrl).load(Ordering::SeqCst) == 0 {
         return false;
     }
-    // A window we are still holding is a field that is still up, whatever the clock says.
-    //
-    // This is what actually cancelled every link field, and it took three wrong fixes to find
-    // because the tick is not the unit its own doc claimed. `build_url_menu_pump_tick` runs at the
-    // tail of the `MenuWindowJob::Run` detour, so it advances once per menu job, not once per menu
-    // frame -- while `BUILD_URL_EDITOR_WINDOW_LAST_TICK` advances only when the job being run is
-    // the link field's own window. With nine or more menu windows alive, the difference exceeds
-    // `BUILD_URL_WINDOW_UNSEEN_TICK_LIMIT` every single frame and the watchdog fires on a field
-    // that is up and being rendered.
-    //
-    // Measured in run br-20260911-152940-417c, and the state log is what proves the close never
-    // came from the live->terminal path at all: `state -999 -> 0 (live=true)` at `+53877ms` is the
-    // only transition the window ever reports, and the release lands at `+53911ms` -- two frames
-    // later, with no terminal state in between.
-    if BUILD_URL_EDITOR_WINDOW.load(Ordering::SeqCst) != 0 {
-        return false;
-    }
     let last = BUILD_URL_EDITOR_WINDOW_LAST_TICK.load(Ordering::SeqCst);
     if last == 0 {
         return false;
     }
     let now = BUILD_URL_MENU_PUMP_TICKS.load(Ordering::SeqCst);
-    now.saturating_sub(last) > BUILD_URL_WINDOW_UNSEEN_TICK_LIMIT
+    now.saturating_sub(last) > build_url_unseen_limit()
+}
+
+/// How long "not seen" has to run before the field counts as closed, in the clock's own unit.
+///
+/// The clock counts menu jobs, not menu frames: `build_url_menu_pump_tick` runs at the tail of the
+/// `MenuWindowJob::Run` detour, so it advances once per live menu window per frame, while
+/// [`BUILD_URL_EDITOR_WINDOW_LAST_TICK`] advances only when the job being run is the link field's
+/// own. A fixed limit of 8 was therefore eight jobs -- under two frames with nine windows alive --
+/// and it tore down every field about two frames after it opened, while the player was looking at
+/// it (run br-20260911-152940-417c: the window's only state transition is `-999 -> 0 (live=true)`
+/// at `+53877ms`, and the release lands at `+53911ms` with no terminal state in between).
+///
+/// So the period is measured instead of assumed. While the field is up its window is run every
+/// frame, so the largest gap between two consecutive sightings is one frame expressed in jobs.
+/// Four of those is the limit, and it self-calibrates to however many menu windows this particular
+/// screen happens to have. The fixed floor stays as the answer before any gap has been observed.
+fn build_url_unseen_limit() -> usize {
+    let frame = BUILD_URL_WINDOW_SEEN_GAP.load(Ordering::SeqCst);
+    if frame == 0 {
+        // Seen once, or not at all: there is no measured period yet, so absence cannot be measured
+        // against one. `BUILD_URL_WINDOW_UNSEEN_TICK_LIMIT` was the old answer here and it is the
+        // bug -- eight jobs is under two frames on any busy screen. This bound exists only to stop
+        // a latch sticking forever if a field is seen exactly once and then vanishes; on a
+        // twelve-window screen it is about twenty frames, far longer than the one-frame gap a live
+        // field ever shows, and the measured period takes over at the second sighting.
+        return BUILD_URL_UNCALIBRATED_UNSEEN_LIMIT;
+    }
+    frame.saturating_mul(4)
 }
 
 /// Release an abandoned link-field latch, reported so the next occurrence is legible.
 pub fn release_abandoned_build_url_keyboard() {
     let window = BUILD_URL_EDITOR_WINDOW.swap(0, Ordering::SeqCst);
     BUILD_URL_EDITOR_WINDOW_LAST_TICK.store(0, Ordering::SeqCst);
+    BUILD_URL_WINDOW_SEEN_GAP.store(0, Ordering::SeqCst);
     release_build_url_keyboard_on_window_close(window);
 }
 
@@ -1665,6 +1682,54 @@ mod tests {
         keyboard_active_job_slot(KeyboardPurpose::BuildUrl).store(0, Ordering::SeqCst);
     }
 
+    /// The unseen limit is one measured frame times four, not eight menu jobs.
+    ///
+    /// Eight jobs is under two frames whenever nine or more menu windows are alive, which is why
+    /// every link field was torn down about two frames after it opened. A field whose window is
+    /// seen every frame must never be judged abandoned, however many other windows share the pump.
+    #[test]
+    fn a_field_seen_every_frame_is_never_judged_abandoned() {
+        let _guard = KEYBOARD_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let window = 0xc0c0_0000;
+        let job = 0x5151_0000;
+        // A busy screen: twelve menu windows, so twelve job ticks pass per frame.
+        const WINDOWS_PER_FRAME: usize = 12;
+
+        keyboard_active_job_slot(KeyboardPurpose::BuildUrl).store(job, Ordering::SeqCst);
+        BUILD_URL_EDITOR_WINDOW.store(0, Ordering::SeqCst);
+        BUILD_URL_EDITOR_WINDOW_LAST_TICK.store(0, Ordering::SeqCst);
+        BUILD_URL_WINDOW_SEEN_GAP.store(0, Ordering::SeqCst);
+        build_url_note_movie_served();
+
+        for _ in 0..6 {
+            assert!(build_url_note_editor_window_state(
+                window,
+                MENU_JOB_STATE_CONTINUE
+            ));
+            for _ in 0..WINDOWS_PER_FRAME {
+                build_url_menu_pump_tick();
+            }
+            assert!(
+                !build_url_keyboard_latch_is_abandoned(),
+                "a field run every frame is up, not abandoned"
+            );
+        }
+
+        // ...and once it genuinely stops being run, it is.
+        for _ in 0..(WINDOWS_PER_FRAME * 5) {
+            build_url_menu_pump_tick();
+        }
+        assert!(
+            build_url_keyboard_latch_is_abandoned(),
+            "a window that stopped running must still be recoverable, or the row dies"
+        );
+        keyboard_active_job_slot(KeyboardPurpose::BuildUrl).store(0, Ordering::SeqCst);
+        BUILD_URL_EDITOR_WINDOW.store(0, Ordering::SeqCst);
+        BUILD_URL_EDITOR_WINDOW_LAST_TICK.store(0, Ordering::SeqCst);
+    }
+
     /// Pressing B closed the field and killed the row for the rest of the session.
     ///
     /// Live session `dll:8dca09bb`, 2026-08-23: three link fields opened, each closed with the back
@@ -1763,20 +1828,22 @@ mod tests {
         let now = 1_000;
         BUILD_URL_MENU_PUMP_TICKS.store(now, Ordering::SeqCst);
 
+        // A measured frame, so the limit is four of them rather than a count of menu jobs that
+        // happens to be smaller than one frame on a busy screen.
+        const FRAME: usize = 12;
+        BUILD_URL_WINDOW_SEEN_GAP.store(FRAME, Ordering::SeqCst);
+        let limit = FRAME * 4;
+
         // Seen this very tick: a field that is genuinely up must never be judged abandoned.
         BUILD_URL_EDITOR_WINDOW_LAST_TICK.store(now, Ordering::SeqCst);
         assert!(!build_url_keyboard_latch_is_abandoned());
 
         // Seen exactly at the limit is still within tolerance.
-        BUILD_URL_EDITOR_WINDOW_LAST_TICK
-            .store(now - BUILD_URL_WINDOW_UNSEEN_TICK_LIMIT, Ordering::SeqCst);
+        BUILD_URL_EDITOR_WINDOW_LAST_TICK.store(now - limit, Ordering::SeqCst);
         assert!(!build_url_keyboard_latch_is_abandoned());
 
         // Past it, the window has stopped running and the row must become pressable again.
-        BUILD_URL_EDITOR_WINDOW_LAST_TICK.store(
-            now - BUILD_URL_WINDOW_UNSEEN_TICK_LIMIT - 1,
-            Ordering::SeqCst,
-        );
+        BUILD_URL_EDITOR_WINDOW_LAST_TICK.store(now - limit - 1, Ordering::SeqCst);
         assert!(build_url_keyboard_latch_is_abandoned());
 
         release_abandoned_build_url_keyboard();
