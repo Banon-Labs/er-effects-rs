@@ -45,6 +45,7 @@
 blocked	git-baseline	check-no-local-main-commits.sh	exits 2 without refs/remotes/origin/main to diff a local main against
 portable	-	audit-selftest-vacuity.py --selftest	source/AST/text analysis only
 portable	-	test-check-sh-accumulates.py	source/AST/text analysis only
+portable	-	test-check-sh-lock.py	source/AST/text analysis only
 portable	-	ci-gate-portability.py --selftest	synthetic check.sh + synthetic ledger; needs nothing
 portable	-	ci-gate-portability.py --check	reads check.sh and the ledger beside it
 portable	-	check-no-timeouts.py	source/AST/text analysis only

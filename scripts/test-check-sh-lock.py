@@ -72,12 +72,28 @@ def announcement(process: subprocess.Popen, seconds: float = 30.0) -> str:
     return process.stdout.readline()
 
 
+def probe_env() -> dict:
+    """The ambient environment with check.sh's own escape hatches removed.
+
+    `ER_CHECK_LOCK_HELD` is exported by the preamble under test, so a probe launched from a step
+    of a running check.sh inherits it and skips the entire lock block -- acquiring nothing and
+    reporting success. That is not a weaker version of the test, it is no test at all: measured on
+    2026-09-11, case 1 came back `rc 0` where a refusal was required, and the assertions after it
+    fell over a tempdir that had already been cleaned. `ER_CHECK_FORCE` goes for the same reason.
+    """
+    env = dict(os.environ)
+    env.pop("ER_CHECK_LOCK_HELD", None)
+    env.pop("ER_CHECK_FORCE", None)
+    return env
+
+
 def run(probe: pathlib.Path, lock: pathlib.Path, hold: str = "0") -> subprocess.CompletedProcess:
     return subprocess.run(
         ["bash", str(probe), str(lock), hold],
         capture_output=True,
         text=True,
         timeout=30,
+        env=probe_env(),
     )
 
 
@@ -107,6 +123,7 @@ def main() -> int:
             stderr=subprocess.STDOUT,
             text=True,
             start_new_session=True,
+            env=probe_env(),
         )
         # The probe announces itself on stdout once it holds the lock, and a refusal goes to the
         # same merged stream -- so one blocking read is a deterministic readiness signal and can
@@ -150,6 +167,7 @@ def main() -> int:
             stderr=subprocess.STDOUT,
             text=True,
             start_new_session=True,
+            env=probe_env(),
         )
         check(
             announcement(holder2).startswith("ACQUIRED by "),
