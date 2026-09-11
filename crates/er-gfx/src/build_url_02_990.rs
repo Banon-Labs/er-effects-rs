@@ -48,9 +48,12 @@ use crate::{EditTextLayout, GfxError, Matrix, Movie, Rect, TWIPS_PER_PIXEL, Tag}
 use er_game_base::fnv1a::fnv1a64;
 
 /// Derived-movie fingerprint for the July extraction corpus input
-/// ([`crate::text_input_02_990::VANILLA_LEN`]). The installed 1.16.2 MemoryFile payload differs
-/// from the corpus by 11 bytes, so its derivation is structurally validated but not fingerprinted
-/// -- exactly as the save picker's derivation handles the same pair of inputs.
+/// ([`crate::text_input_02_990::VANILLA_LEN`]). The payload the running game hands us differs from
+/// the corpus by 11 bytes ([`crate::text_input_02_990::RUNTIME_VANILLA_LEN`]), so its derivation is
+/// structurally validated but not fingerprinted -- exactly as the save picker's derivation handles
+/// the same pair of inputs. That is why this constant gates on `corpus_variant` rather than on
+/// every input: it is a build-time golden value for one known input, and computing it at runtime
+/// from the bytes it checks would match every time, including when the derivation is broken.
 pub const CENTERED_LEN: usize = 1264;
 /// FNV-1a-64 of the [`CENTERED_LEN`]-byte derived movie.
 pub const CENTERED_FNV1A64: u64 = 0x6e6f_6ace_2a90_e0f7;
