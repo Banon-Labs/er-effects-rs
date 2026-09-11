@@ -16,6 +16,15 @@
 //!
 //! Each is installed by its own module and reported separately, because each fails differently and
 //! a run has to be able to say which one was missing.
+//!
+//! # Only the machinery the row set actually uses
+//!
+//! Items 2 and 3 exist for the link field and the importer behind it, and both cost a real detour:
+//! the pump claims `MenuWindowJob::Run`, and the task registers on `CSTaskImp`. A shell arming no
+//! build row has no field to drive and nothing to import, so installing them would put two claims
+//! on the process for work that can never be requested. They are therefore installed only when the
+//! row set contains a build row, and reported as [`None`] -- not as a failure and not as a success
+//! -- when it does not. The grid and the rows themselves are needed by every row set.
 
 use core::sync::atomic::Ordering;
 
@@ -29,37 +38,46 @@ pub struct StandaloneArm {
     pub gfx_served: bool,
     /// The row cloner and the row router are installed.
     pub rows_armed: bool,
-    /// The link field has a menu pump.
-    pub menu_pump: bool,
-    /// The import and the export have a game task to finish on.
-    pub game_task: bool,
+    /// The link field has a menu pump. `None` when this row set has no field to drive.
+    pub menu_pump: Option<bool>,
+    /// The import and the export have a game task to finish on. `None` when this row set has
+    /// nothing to import or export.
+    pub game_task: Option<bool>,
 }
 
 impl StandaloneArm {
-    /// True only when every part a row needs to work is in place.
+    /// True only when every part this row set needs is in place.
+    ///
+    /// A [`None`] is not a missing part: it is machinery the armed rows never reach, so it is
+    /// neither installed nor required. Only `Some(false)` -- asked for and refused -- fails.
     pub fn is_complete(&self) -> bool {
-        self.gfx_served && self.rows_armed && self.menu_pump && self.game_task
+        self.gfx_served
+            && self.rows_armed
+            && self.menu_pump != Some(false)
+            && self.game_task != Some(false)
     }
 }
 
-/// Arm `rows` with no product behind them.
+/// Arm `rows` with no product behind them, routing presses to `actions`.
 ///
 /// Call from a bootstrap thread, not from `DllMain`: the game-task registration waits for the
 /// game's task manager to exist, and waiting inside the loader lock deadlocks the process.
 ///
-/// The row actions are left at their defaults on purpose. A shell has no character-switch flow, no
-/// save browser and no Save Game commit, and the rows that would reach them are not in `rows` -- so
-/// the table stays empty rather than carrying a pointer to something that does not exist.
+/// `actions` must carry an entry for every row in `rows` that this crate does not drive itself.
+/// The build rows are driven from inside the crate and need none; the two character rows need the
+/// opener a shell supplies. A `None` beside a row that is in the set is a row that appears and does
+/// nothing, which is worse than absent -- so a shell that cannot supply a flow must leave that row
+/// out of `rows` rather than out of `actions`.
 ///
 /// # Safety
 ///
 /// Bootstrap thread, once per process, before the Quit tab has built a dialog.
-pub unsafe fn arm_standalone(rows: RowSet) -> StandaloneArm {
+pub unsafe fn arm_standalone(rows: RowSet, actions: QuitRowActions) -> StandaloneArm {
     // First, because it is the only one with a deadline: the movie is served the first time the
     // Quit tab is opened, and a swap registered after that shows a vanilla two-cell grid until the
     // panel is rebuilt.
     let gfx_served = unsafe { crate::gfx_swap::install_quit_menu_gfx_swap_hook() };
-    let rows_armed = match unsafe { crate::row_cloner::arm(rows, QuitRowActions::default()) } {
+    let rows_armed = match unsafe { crate::row_cloner::arm(rows, actions) } {
         Ok(()) => true,
         Err(ArmError::AlreadyArmed) => {
             append_autoload_debug(format_args!(
@@ -74,17 +92,30 @@ pub unsafe fn arm_standalone(rows: RowSet) -> StandaloneArm {
             false
         }
     };
-    let menu_pump = unsafe { crate::menu_pump::install_quit_menu_window_run_hook() };
-    let game_task = crate::game_task::install_build_row_game_task();
+    // The link field and the importer are the only reasons either of these exists, so a row set
+    // without a build row neither installs nor needs them.
+    let build_rows = rows.load_build_from_url || rows.generate_build_link;
+    let menu_pump =
+        build_rows.then(|| unsafe { crate::menu_pump::install_quit_menu_window_run_hook() });
+    let game_task = build_rows.then(crate::game_task::install_build_row_game_task);
     let arm = StandaloneArm {
         gfx_served,
         rows_armed,
         menu_pump,
         game_task,
     };
+    // `not-required` rather than `None`: the line is read by a person looking for what went wrong,
+    // and a bare `None` beside three booleans reads as a failure that printed oddly.
+    let describe = |part: Option<bool>| match part {
+        Some(true) => "yes",
+        Some(false) => "FAILED",
+        None => "not-required",
+    };
     append_autoload_debug(format_args!(
-        "system-quit-dup: standalone arm complete={} gfx_served={gfx_served} rows_armed={rows_armed} menu_pump={menu_pump} game_task={game_task} rows={rows:?}",
-        arm.is_complete()
+        "system-quit-dup: standalone arm complete={} gfx_served={gfx_served} rows_armed={rows_armed} menu_pump={} game_task={} rows={rows:?}",
+        arm.is_complete(),
+        describe(menu_pump),
+        describe(game_task)
     ));
     arm
 }

@@ -87,6 +87,10 @@ fn arm_build_rows() {
     let arm = unsafe {
         er_quit_menu_core::arm::arm_standalone(
             er_quit_menu_core::row_cloner::RowSet::BUILD_ROWS_ONLY,
+            // Both build rows are driven from inside the feature crate, so this shell supplies no
+            // flow of its own. The four entries that stay `None` belong to rows this set leaves
+            // off the tab.
+            er_quit_menu_core::row_cloner::QuitRowActions::default(),
         )
     };
     if !arm.is_complete() {
