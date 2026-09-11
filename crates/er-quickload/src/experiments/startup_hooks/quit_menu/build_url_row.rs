@@ -194,6 +194,11 @@ pub(crate) unsafe fn system_quit_build_import_tick() {
 
 /// Re-derive the live character's own record and ask its portrait to rebuild from it.
 ///
+/// Drives the `CSMenuAsmModelRend` whose offscreen target Scaleform sees as
+/// `SYSTEX_Menu_Profile{NN}` -- proven to be what `05_010_ProfileSelect` shows, and not what the
+/// System>Quit panel shows, whose `Icon_0` is a one-frame sprite bound to `MENU_DummyStatus_Face`.
+/// See `er_profile_summary_core::portrait_refresh`.
+///
 /// # Safety
 ///
 /// Game task thread, character in the world, called once per applied import.

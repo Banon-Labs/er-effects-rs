@@ -50,18 +50,31 @@
 //!
 //! The record synced is the one belonging to the character that is loaded -- the same field the two
 //! native save lanes pass to the native. That is the only record it is correct to overwrite with
-//! live data: it is that character's own summary.
+//! live data: it is that character's own summary. The tempting shortcut is to write the live
+//! character into `record[0]` instead, on the theory that the panel always binds entry 0. That must
+//! not happen whatever the display turns out to bind: `record[0]` belongs to a different character,
+//! the whole ten-record table is serialized by the next save, and the corruption would reach disk.
+//! [`BUILD_URL_PORTRAIT_RECORD_SLOT_PLUS1`] records the slot a run actually used.
 //!
-//! It is worth saying what is deliberately not done. The panel's row model is built with a literal
-//! slot index of 0 (`FUN_1408753f0` -> `FUN_1408759e0(row, 0, ..)`) and the populate ends in
-//! `Icon_0.gotoAndStop(row[+8] + 1)`, so the panel binds profile-renderer entry 0. For a character
-//! in slot 0 -- the ordinary case -- that is the same slot this syncs and everything lines up. For a
-//! character in another slot it is not, and the tempting shortcut is to write the live character
-//! into `record[0]` instead. That must not happen: `record[0]` belongs to a different character, the
-//! whole ten-record table is serialized by the next save, and the corruption would reach disk. A
-//! portrait bound to another character's renderer is a pre-existing display defect, left visible
-//! rather than papered over with a destructive write. [`BUILD_URL_PORTRAIT_RECORD_SLOT_PLUS1`]
-//! records the slot so a run can tell the two cases apart.
+//! # Which surface this drives, and the one it is now known not to be
+//!
+//! Everything below drives a `CSMenuAsmModelRend` and its offscreen render target, published to
+//! Scaleform as `SYSTEX_Menu_Profile{NN}`. That is what the `05_010_ProfileSelect` list shows: its
+//! `MENU_DummyProfileFace_01..10` external-image symbols are bound to those ten targets.
+//!
+//! The System>Quit panel is not one of them, and an earlier version of this file asserted that it
+//! was. Read out of the vanilla movie (`menu/win/02_040_optionsetting.gfx`): the Quit Game panel is
+//! sprite 138 `MENU_FL_QuitGame` placing `PlayerInfo` = sprite 137 `GameEnd`, whose `Icon_0` is
+//! sprite 130 -- a one-frame sprite holding image char 74, `MENU_DummyStatus_Face`, 512x256. The
+//! movie contains zero occurrences of `DummyProfileFace`. So `Icon_0.gotoAndStop(row[+8] + 1)`, the
+//! call the old reasoning rested on, is inert on this surface; it is load-bearing only on 05_010,
+//! whose `Icon_0` really does have ten frames.
+//!
+//! What `MENU_DummyStatus_Face` is backed by is not recorded anywhere in this workspace, and until
+//! it is, the honest statement is that this module's producer-side work is proven correct for the
+//! ProfileSelect portraits and unproven for the Quit panel. The measurement is cheap: the Scaleform
+//! bind observer in `title_resources_stats_text` already logs symbol and target for every bind whose
+//! symbol contains `menu_`, so one run naming that pair settles it.
 //!
 //! # What is measured, and the measurement that was not enough
 //!
