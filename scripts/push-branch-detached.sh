@@ -31,6 +31,30 @@ fi
 mkdir -p "$(dirname "$log")"
 : >"$log"
 
+# Wait for scripts/check.sh's lock before starting, rather than letting the pre-push hook walk
+# into it. A concurrent run is refused on purpose -- contention produces "INCONCLUSIVE" and "NOT RUN"
+# steps, which are not passes -- so an unwaited push just fails with the refusal buried in a log
+# nobody is watching, which is how a branch silently stays local. Measured 2026-09-11: two pushes
+# failed this way.
+#
+# The lock is the `flock`, never the file. The file outlives every run, so `[ -e "$lock" ]` waits
+# forever -- that mistake cost hours the same day. `flock -w` asks the kernel, blocks only while a
+# live holder has it, and returns the moment it is released. The wait is bounded so a wedged holder
+# turns into a refusal rather than a job that never ends, and it is a separate descriptor from the
+# one check.sh will take: this one is closed again immediately, so the hook's own run acquires it.
+lock="${XDG_RUNTIME_DIR:-/tmp}/er-mods-rs-check-sh.lock"
+lock_wait_seconds="${ER_PUSH_LOCK_WAIT_SECONDS:-1800}"
+if command -v flock >/dev/null 2>&1; then
+	if ! (exec 8<>"$lock" && flock -w "$lock_wait_seconds" 8); then
+		holder=$(head -n 1 "$lock" 2>/dev/null || true)
+		printf 'push-branch-detached: REFUSED -- scripts/check.sh has been locked for %ss (holder pid %s).\n' \
+			"$lock_wait_seconds" "${holder:-unknown}" >&2
+		printf '  The pre-push suite cannot run while another holds it. Wait for that run, or raise\n' >&2
+		printf '  ER_PUSH_LOCK_WAIT_SECONDS if the suite legitimately takes longer here.\n' >&2
+		exit 3
+	fi
+fi
+
 setsid nohup git push -u origin "$branch" >>"$log" 2>&1 </dev/null &
 pid=$!
 
