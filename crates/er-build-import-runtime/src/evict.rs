@@ -287,7 +287,12 @@ pub struct EvictOutcome {
     pub discarded_items: u32,
     /// Ashes of War taken off a doomed armament and given back.
     pub ashes_recovered: usize,
-    /// `(item, how many, whether an ash came back)` for the log, capped like the refusals.
+    /// `(item, how many, whether an ash came back)` for the log, one per entry and never capped.
+    ///
+    /// The refusal list is sampled because a character with a full box can refuse hundreds of
+    /// arrows and the log has to stay readable. This one is not, and the asymmetry is the point:
+    /// a refusal leaves the item where it was and can be summarised, while destruction is the
+    /// only thing this importer does that the player cannot walk back. They are owed the list.
     pub discarded: Vec<(String, u32, bool)>,
     /// Gear the character still holds that the build does not entitle it to, measured by reading
     /// the inventory back after the pass rather than by counting what the pass attempted.
@@ -492,7 +497,6 @@ pub unsafe fn unlisted_gear(module_base: usize, egd: usize, allowance: &Allowanc
     // ammunition and armour before a single weapon reached the log, so the pass looked like it
     // had never touched one.
     let mut refused_shown = [0usize; 3];
-    let mut destroyed_shown = [0usize; 3];
 
     // Why each surplus entry did not leave, keyed by the handle of the copy it was decided about.
     // The verify pass reads this to say whether a survivor is one this pass knew about.
@@ -614,13 +618,10 @@ pub unsafe fn unlisted_gear(module_base: usize, egd: usize, allowance: &Allowanc
                 if ash_recovered {
                     outcome.ashes_recovered += 1;
                 }
-                let category = category_of(item_id);
-                if destroyed_shown[category] < LINES_PER_CATEGORY {
-                    destroyed_shown[category] += 1;
-                    // Safety: game thread, `msg` live.
-                    let label = unsafe { label_for(msg, module_base, item_id) };
-                    outcome.discarded.push((label, destroyed, ash_recovered));
-                }
+                // Never sampled. See `EvictOutcome::discarded`.
+                // Safety: game thread, `msg` live.
+                let label = unsafe { label_for(msg, module_base, item_id) };
+                outcome.discarded.push((label, destroyed, ash_recovered));
                 continue;
             }
         }

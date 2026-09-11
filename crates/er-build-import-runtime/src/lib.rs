@@ -153,7 +153,16 @@ pub struct Report {
     /// leaves empty.
     pub vacated: (usize, usize),
     /// Consumables destroyed to free a pot group the storage box would not take.
+    ///
+    /// The grant pass's own irreversible rung, and separate from [`Report::destroyed_gear`] on
+    /// purpose: one is a stack shrinking so the build's own pots fit, the other is a weapon
+    /// ceasing to exist. Folding them into one number would let the second hide inside the first.
     pub discarded: u32,
+    /// Armaments, armour and talismans destroyed because the storage box would not take them.
+    ///
+    /// The count the player is owed before anything else this report says. Every one of these is
+    /// named individually and uncapped in the log.
+    pub destroyed_gear: u32,
     /// Armaments, armour and talismans the build does not name that went to the storage box.
     pub evicted: u32,
     /// Gear the build does not name that is still on the character when the import is over.
@@ -195,7 +204,7 @@ impl Report {
     /// One line for a menu help field or a log: what a player wants to know is whether it worked.
     pub fn summary(&self) -> String {
         format!(
-            "{}/{} items, {}/{} gear, {}/{} spells, RL{}{}{}{}",
+            "{}/{} items, {}/{} gear, {}/{} spells, RL{}{}{}{}{}",
             self.granted.0,
             self.granted.1,
             self.equipped.0,
@@ -207,6 +216,14 @@ impl Report {
                 String::new()
             } else {
                 format!(", {} attributes WRONG", self.attributes_wrong)
+            },
+            // Before anything else, because it is the only thing here that cannot be undone. A
+            // player reading this line has to learn what they lost before they learn what they
+            // gained; silent at zero, which is the ordinary case.
+            if self.destroyed_gear == 0 {
+                String::new()
+            } else {
+                format!(", {} piece(s) of gear DESTROYED", self.destroyed_gear)
             },
             // The two failures a player sees and the counters could not previously name: gear the
             // import did not take off them, and gear it put somewhere they did not ask for. Both
@@ -887,6 +904,7 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         }
         report.evicted = evicted.deposited_items;
         report.left_behind = evicted.left_behind;
+        report.destroyed_gear = evicted.discarded_items;
     }
 
     // What each armament slot should be holding, computed before the equip rather than after it,
