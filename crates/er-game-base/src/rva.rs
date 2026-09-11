@@ -474,6 +474,48 @@ pub const GET_PHYSIC_TEAR_BY_SLOT_RVA: usize = 0x247a20;
 /// inside the callee to report anything.
 pub const PLAYER_GAME_DATA_COPY_CHR_NAME_RVA: usize = 0x2610c0;
 
+/// `CS::PlayerGameData::CopyFaceDataFromBuffer(PlayerGameData*, FaceDataBuffer*)` -- the game's
+/// own writer of a character's appearance, and the only sanctioned way to change one.
+///
+/// Decompiled 2026-09-10 against the 1.16.2 dump. The function itself is one line --
+/// `FaceData::CopyFromBuffer(&pgd->faceData, buffer)` -- and every reason to call it rather than
+/// storing 288 bytes into `PGD+0x760+0x08` lives in that callee (1.16.2 `0x140252f70`, which
+/// `er_profile_summary_core::FACE_DATA_COPY_FROM_BUFFER_RVA` names for the ProfileSummary side):
+///
+///   * It refuses a buffer whose `version` is not 4, and refuses a null pointer, without
+///     reporting either. A rejected call changes nothing and returns normally, so the caller has
+///     to read the buffer back rather than infer success from the call having returned.
+///   * After copying it recomputes a derived block of seven floats at `FaceData+0x130` through
+///     `FUN_140251b10`. A `memcpy` of the buffer alone leaves that block describing the previous
+///     face.
+///   * It then increments a generation stamp at `FaceData+0x14c` and sets bit 0 of
+///     `FaceData+0x154`. The stamp is what makes an appearance change reach a model that is
+///     already built, and the bit is what stops a stale override at `FaceData+0x128` masking the
+///     write. A hand-written copy sets neither and is invisible to both.
+///
+/// The argument is the `PlayerGameData*` itself, not the inner `FaceData`; the wrapper is one
+/// instruction, `add rcx, 0x760`, so no offset arithmetic crosses this boundary.
+///
+/// # A write reaches a character already in the world
+///
+/// The world player's model instance aliases this very object rather than holding a copy:
+/// `InitializeCharacterRendering(PlayerIns*)` (1.16.2 `0x140650bf0`) runs
+/// `SetFaceData(playerIns->chrAsmModelIns, &GetPlayerGameData(chrIns)->faceData)`.
+/// `CSChrAsmModelIns::SetFaceData` (1.16.2 `0x1409eb640`) caches the stamp at `modelIns+0x308`,
+/// and `CS::PlayerIns::PrePhysicsSafe1` calls `FUN_1409ec160` on every frame that
+/// `chrAsmModelIns` is non-null, ending in `FUN_1409e9b20`: compare the stamp with the cached
+/// one and, on a difference, re-apply the face across the instance's 27 model slots. So the
+/// character re-renders on the next frame with nothing pumped. The game leans on this itself --
+/// `CS::PlayerIns::PopulateFromPcInfo` writes a peer's face into a live `PlayerGameData` as
+/// routine network handling.
+///
+/// The exception is the eight leading `i32`s of the payload, which are model ids (face mesh,
+/// hair, eyes, ...). Their consumer `FUN_1409e6fb0` is reached for a live `PlayerIns` only
+/// through vtable slot `0x500`, whose one dispatch site is inside the `ChrSet` load-state
+/// machine, so those are expected to wait for the next load. That is inference from a
+/// single-dispatch-site search, not a proven negative.
+pub const PLAYER_GAME_DATA_COPY_FACE_DATA_FROM_BUFFER_RVA: usize = 0x261000;
+
 /// `CS::EquipMagicData::GetMagicSlotsCount(emd, SpecialEffect*) -> uint`.
 ///
 /// A null `SpecialEffect` means "derive it from the player", which accounts for Memory Stones and

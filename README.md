@@ -1,14 +1,14 @@
 # er-mods-rs
 
 **Elden Ring mods, written in Rust.** Around twenty of them, each built as its own DLL and
-loaded through [me3](https://github.com/garyttierney/me3) — plus the host-side Rust libraries
+loaded through [me3](https://github.com/garyttierney/me3) -- plus the host-side Rust libraries
 they are built from and the reverse-engineering tooling used to find the addresses.
 
 Targets **Elden Ring 1.16.2** on Linux (native Steam + Proton) and Windows. Cross-compiled to
 `x86_64-pc-windows-msvc` from Linux with `cargo-xwin`. Compatible with vanilla and with Seamless
-Co-op — which is a compatibility target, never a bundled file.
+Co-op -- which is a compatibility target, never a bundled file.
 
-> Formerly `er-effects-rs`. That name described one feature — named SpEffect calls — which now
+> Formerly `er-effects-rs`. That name described one feature -- named SpEffect calls -- which now
 > lives in its own crate (`er-net-effects`) and is the smallest thing here. Beads issue keys
 > still carry the `er-effects-rs-` prefix on purpose: they are database identity, not branding.
 
@@ -24,7 +24,7 @@ anything else here unless the notes say so.
 | **`er_quickload.dll`** | Straight from process start to an in-world character with no menu input, and a real progress bar over the dead early-boot gap. Also owns the missing-save picker, the customized System > Quit load rows, and the loading-screen portrait and stat panel. [Manual](crates/er-quickload/README.md) |
 | `er_save_picker.dll` | The boot save picker on its own. Detects the product DLL and stays inert when it is loaded. |
 | `er_quit_menu.dll` | The customized System > Quit tab as a standalone harness. |
-| `er_loading_portrait.dll` / `er_loading_bar.dll` | Standalone shells for the portrait and the pre-native loading bar. **Never load either next to `er_quickload.dll`** — two D3D12 Present compositors in one process. |
+| `er_loading_portrait.dll` / `er_loading_bar.dll` | Standalone shells for the portrait and the pre-native loading bar. **Never load either next to `er_quickload.dll`** -- two D3D12 Present compositors in one process. |
 | `er_save_disable.dll` | Suppresses all save writes. Census/proof tool, not a play mod. |
 
 ### Inventory and equipment
@@ -40,8 +40,8 @@ anything else here unless the notes say so.
 
 | DLL | What it does |
 | --- | --- |
-| `er_build_import.dll` | Rebuilds the character you are playing from an [er-build-planner](https://er-build-planner.pages.dev/) share link — items, gear, spells, level, attributes. Where you stand; no title return, no save write. Also a System > Quit row in `er_quickload.dll`. |
-| `er_build_export.dll` | The inverse: encodes the live character into a self-contained planner link, copies it, opens it. Carries appearance too, as a `faceData` AOB the planner ignores. |
+| `er_build_import.dll` | Rebuilds the character you are playing from an [er-build-planner](https://er-build-planner.pages.dev/) share link -- items, gear, spells, level, attributes, and appearance. Where you stand; no title return, no save write. Also a System > Quit row in `er_quickload.dll`. |
+| `er_build_export.dll` | The inverse: encodes the live character into a self-contained planner link, copies it, opens it. Appearance travels under the planner's own `sliders` key, so its Cosmetics tab reads it. |
 | `er_death_persist.dll` | Keeps the transformation body-buffs (Rock Heart, Priestess Heart, Lamenter's Mask) through death. |
 | `er_net_effects.dll` | Keyboard-selected SpEffects applied to your own character. The original feature of this repo. [Manual](crates/er-net-effects/README.md) |
 | `mushroom_man.dll` | Zeroes the model id on every head/body/arm/leg `EquipParamProtector` row, so armour is worn but never rendered. Half a mod on its own: it stays inert unless the mushroom model binders are beside it (`parts/`, `facegen/` in the same folder, that folder loaded as an ME3 `[[packages]]` entry -- what `scripts/install_mushroom_man.py` sets up), because without them the patch strips armour and puts nothing in its place. |
@@ -50,7 +50,7 @@ anything else here unless the notes say so.
 
 | DLL | What it does |
 | --- | --- |
-| `er_invasion_path.dll` | A walkable route to every other player in your session, drawn on the ground and following the terrain — asking the engine's own Havok-AI navmesh, with a direction arrow when the navmesh cannot reach them. [Details](crates/er-invasion-path/README.md) |
+| `er_invasion_path.dll` | A walkable route to every other player in your session, drawn on the ground and following the terrain -- asking the engine's own Havok-AI navmesh, with a direction arrow when the navmesh cannot reach them. [Details](crates/er-invasion-path/README.md) |
 | `er_invasion_warp.dll` | World-map warp targets at the real invasion spawn points, read out of the `CSAutoInvadePoint` table. |
 | `er_player_name_filter.dll` | Filters remote player names, hooking `CS::SessionManagerPlayerEntryBase::Copy`. |
 | `er_seamless_bugfixes.dll` | Crash guards for faults only Seamless Co-op's networking mode reaches. Every guard is a null-container intercept on a vanilla function. |
@@ -66,9 +66,9 @@ Not for normal play. Several change behaviour merely by being present.
 | `er_telemetry.dll` | Read-only RAM oracles to JSON on a FrameBegin task. No hooks. |
 | `er_build_watermark.dll` | Draws which mods are loaded in the top-right, and whether any is an older published release than main. |
 | `er_diag_harness.dll` | Trace detours that used to ship unconditionally in the product DLL. |
-| `er_input_harness.dll` | Self-drive input harness. **Default-on by presence** — it writes the game's input memory every frame, so you are not the one driving. |
+| `er_input_harness.dll` | Self-drive input harness. **Default-on by presence** -- it writes the game's input memory every frame, so you are not the one driving. |
 | `er_reload_trace.dll` | Reload / MoveMapStep trace. Not purely passive: its diagnostic drive writes `menuData+0x5d` after a stuck-load streak. |
-| `amd_ags_x64.dll` | Not an me3 native — a drop-in replacement for the game's AMD AGS import, loaded by the PE loader by name, for RenderDoc capture runs. |
+| `amd_ags_x64.dll` | Not an me3 native -- a drop-in replacement for the game's AMD AGS import, loaded by the PE loader by name, for RenderDoc capture runs. |
 
 **Some of these must not be loaded together.** The machine-readable list is
 [`scripts/me3-dll-conflicts.toml`](scripts/me3-dll-conflicts.toml), enforced by
@@ -108,7 +108,7 @@ mods.
 
 ## Building
 
-This repo expects to sit **next to a `fromsoftware-rs` checkout** — the game-side crates use
+This repo expects to sit **next to a `fromsoftware-rs` checkout** -- the game-side crates use
 `../fromsoftware-rs` path dependencies.
 
 <!-- md-test: bash-n -->
@@ -116,7 +116,7 @@ This repo expects to sit **next to a `fromsoftware-rs` checkout** — the game-s
 # The quick-load product DLL:
 cargo xwin build --release --target x86_64-pc-windows-msvc -p er-quickload
 
-# Any other mod — name it explicitly:
+# Any other mod -- name it explicitly:
 cargo xwin build --release --target x86_64-pc-windows-msvc -p er-invasion-path
 ```
 
@@ -132,7 +132,7 @@ the code under test:
 sha256sum target/x86_64-pc-windows-msvc/release/er_quickload.dll
 ```
 
-Full gate — lossy-UTF8 lint, `cargo fmt --check`, clippy at upstream parity, and a
+Full gate -- lossy-UTF8 lint, `cargo fmt --check`, clippy at upstream parity, and a
 windows-target check:
 
 <!-- md-test: bash-n -->
@@ -155,7 +155,7 @@ The other half of the repo: host-side Rust that runs on Linux, with no game atta
 | Crate | What it is |
 | --- | --- |
 | `er-soulsformats` + `tools/er-param-inspect` | Read `regulation.bin` params through a generated .NET bridge against Smithbox's `Andre.Formats`/SoulsFormats. Inspect rows, validate effect lists. [Manual](tools/er-param-inspect/README.md) |
-| `er-gfx` | Lossless codec for uncompressed Scaleform `.gfx` movies — parse, edit tags, re-emit. Behind the runtime menu-GFX edits. |
+| `er-gfx` | Lossless codec for uncompressed Scaleform `.gfx` movies -- parse, edit tags, re-emit. Behind the runtime menu-GFX edits. |
 | `er-flver` | Host-only FLVER reader with two views over one parse. |
 | `er-tpf` | In-memory texture-payload builder for the game's raster formats. |
 | `er-objectkit` | Traces a shader/material back to the objects that use it. |
@@ -164,7 +164,7 @@ The other half of the repo: host-side Rust that runs on Linux, with no game atta
 | `er-hook`, `er-game-base`, `er-telemetry-core`, `er-hotkey-config`, `er-safe-input` | The shared runtime substrate: the MinHook union, RVA tables, telemetry counters, user-nameable hotkeys that reload without a restart. |
 | `*-core` crates | Every game-free half of a mod, split out so its logic is testable on Linux. |
 
-Cheat Engine tables — including the bundled CJK font override for Seamless/offline users — live
+Cheat Engine tables -- including the bundled CJK font override for Seamless/offline users -- live
 in [`scripts/cheat-engine/`](scripts/cheat-engine/README.md).
 
 ## Repo layout
@@ -179,7 +179,7 @@ data/              effect lists and other embedded data
 
 ## Reverse engineering
 
-Addresses come from a Ghidra runtime dump of **1.16.2** — see `AGENTS.md` for the MCP daemon,
+Addresses come from a Ghidra runtime dump of **1.16.2** -- see `AGENTS.md` for the MCP daemon,
 the deobfuscated-binary conventions, and the rule that matters most: the dump is authoritative
 for *meaning*, and `eldenring-deobf.bin` is authoritative for *addresses*. `scripts/ghidra/`
 holds the version-controlled query scripts.

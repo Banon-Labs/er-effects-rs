@@ -33,6 +33,7 @@ pub mod equip;
 pub mod model;
 pub mod name;
 pub mod plan;
+pub mod sliders;
 pub mod stats;
 pub mod sweep;
 
@@ -43,6 +44,7 @@ pub use equip::{
 };
 pub use model::BuildDoc;
 pub use plan::{Grant, Plan, Unresolved};
+pub use sliders::{SliderMap, SlidersDoc, SlidersRejection};
 
 /// The API host serving `?b=` builds.
 pub const API_HOST: &str = "er-inventory-api.nyasu.business";

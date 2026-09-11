@@ -40,6 +40,7 @@ pub mod equip_native;
 pub mod evict;
 pub mod export;
 pub mod export_doc;
+pub mod face;
 pub mod gaitem;
 pub mod gem_mount;
 pub mod grant;
@@ -169,6 +170,10 @@ pub struct Report {
     /// as well as the ones it fills, so an item in the wrong place has a number rather than
     /// needing somebody to notice it on screen.
     pub misplaced: usize,
+    /// Whether the character now wears the build's appearance -- read back out of
+    /// `PlayerGameData`, not inferred from the call having returned. False covers every other
+    /// case, including a build that carries no appearance at all.
+    pub face: bool,
 }
 
 impl Report {
@@ -219,7 +224,7 @@ impl Report {
                 Some(name) => format!(", named {name:?}"),
                 None => String::new(),
             }
-        )
+        ) + if self.face { ", face" } else { "" }
     }
 }
 
@@ -1324,6 +1329,27 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         let named = unsafe { chr_name::adopt_build_name(module_base, pgd, &doc.name) };
         report.name = named.adopted().map(str::to_owned);
         log_line(&format!("[build-import] NAME: {}", named.label()));
+
+        // The appearance, beside the name because they are the same kind of thing: both are
+        // identity rather than loadout, both live in `PlayerGameData`, and both are written
+        // through the one native the game provides for them.
+        //
+        // Unlike the name, this one is visible without a reload. The model instance holds a
+        // pointer to `PlayerGameData::faceData`, and the per-frame check in
+        // `CS::PlayerIns::PrePhysicsSafe1` re-applies the face whenever the generation stamp the
+        // native bumps no longer matches the one it cached -- see `face`'s module header for the
+        // chain, and for the one part of the payload expected to wait for the next load.
+        //
+        // Safety: game thread, character in the world (gated by the caller), `pgd` read above.
+        let face = unsafe {
+            face::adopt_build_face(
+                module_base,
+                pgd,
+                doc.appearance().ok().map(|found| &found.sliders),
+            )
+        };
+        report.face = face.adopted();
+        log_line(&format!("[build-import] APPEARANCE: {}", face.label()));
 
         // Safety: game thread, character in the world (gated by the caller).
         match unsafe { character::apply_stats(module_base, pgd, doc) } {

@@ -37,6 +37,7 @@ use er_build_export::model::{CRYSTAL_TEAR_SLOTS, Slot, SlotList, Stats};
 use er_build_import_core::equip::{POUCH_SLOTS, PROTECTOR_PARTS, QUICKBAR_SLOTS};
 use er_build_import_core::model::AMMO_POSITION_KEYS;
 use er_build_import_core::plan::{MAX_SOMBER_LEVEL, regular_level_for_somber};
+use er_build_import_core::sliders::{self, BodyType, SlidersDoc};
 
 use crate::read_character::{CharacterRead, ReadSlot};
 
@@ -259,25 +260,44 @@ pub fn document_from(read: &CharacterRead) -> BuildExportDoc {
     doc.items.flasks.total = read.flask_crimson + read.flask_cerulean;
 
     doc.great_rune = read.great_rune.clone();
-    // The appearance, as an uppercase hex AOB. Hex rather than base64 because it is what a player
-    // pastes into a save editor or a Cheat Engine table, which is the only tool that can do
-    // anything with it today -- the planner has no appearance at all.
-    doc.face_data = read.face_data.as_deref().map(hex_upper);
+    // The appearance, decoded into the planner's own slider object rather than shipped as a blob.
+    //
+    // A malformed buffer writes no key at all. That is the same decision the read side already
+    // made -- `read_face_data` returns `None` rather than 288 bytes of unrelated heap -- and it
+    // matters more here, because a `sliders` key the Cosmetics tab renders is a face somebody will
+    // look at. Better a build with no appearance than a build with a wrong one.
+    doc.sliders = read
+        .face_data
+        .as_deref()
+        .and_then(|buffer| sliders::decode_face_buffer(buffer).ok())
+        .map(|set| SlidersDoc::new(body_type_for(read.gender), set));
     doc
 }
 
-/// Bytes as one uppercase hex string, no separators -- an AOB the way every tool that eats one
-/// spells it.
-fn hex_upper(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push_str(HEX_DIGITS[usize::from(byte >> 4)]);
-        out.push_str(HEX_DIGITS[usize::from(byte & 0x0F)]);
+/// `PlayerGameData::gender` as the planner's two bodies.
+///
+/// # The direction of this mapping is inferred, not measured
+///
+/// What is established: the field holds 0 or 1 and nothing else -- both this repo's save readers
+/// and `scripts/save-slot-oracle.py` gate on `gender <= 1` -- and the planner has exactly two
+/// bodies. What is not established anywhere in this repo or in `fromsoftware-rs` is which value
+/// is which. [`GENDER_BODY_B`] is 1 on two pieces of outside convention that agree: ER's own
+/// character creator labels the bodies "Type A" and "Type B" where A is the masculine one, and
+/// `EquipParamProtector::equipModelGender` uses 0 for male and 1 for female.
+///
+/// It is written as an inference rather than measured because the whole cost of being wrong is a
+/// preview rendered on the other body on a website. Nothing about the character, the save, or the
+/// 264 bytes of sliders depends on it -- the planner's own AOB importer does not even read it,
+/// which is why it has to be set here at all. A single live export of a character whose body is
+/// known settles it; see the note in the agent report that shipped this.
+fn body_type_for(gender: u8) -> BodyType {
+    if gender == GENDER_BODY_B {
+        BodyType::B
+    } else {
+        BodyType::A
     }
-    out
 }
 
-/// Uppercase hex digits, indexed by nibble.
-const HEX_DIGITS: [&str; 16] = [
-    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F",
-];
+/// The `PlayerGameData::gender` value taken to be the planner's body B. See [`body_type_for`] --
+/// this is an inference, and the one number to change if a live export disagrees.
+const GENDER_BODY_B: u8 = 1;
