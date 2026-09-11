@@ -1017,6 +1017,31 @@ pub static BUILD_URL_PORTRAIT_STEPS_SEEN: AtomicUsize = AtomicUsize::new(0);
 /// scene. All three are required for the headline verdict to pass, because a correct model that
 /// nothing submits is still the previous picture.
 pub static BUILD_URL_PORTRAIT_DRAW_BITS: AtomicUsize = AtomicUsize::new(0);
+/// The renderer the build-import refresh asked to rebuild, so the draw task's detour can recognise
+/// its own calls without walking the ten-slot table on every frame.
+pub static BUILD_URL_PORTRAIT_TARGET_RENDERER: AtomicUsize = AtomicUsize::new(0);
+/// Executions of the per-frame draw task `FUN_140bba7d0` for that renderer -- the function that
+/// propagates the model's bones into every submodel and enqueues them into the offscreen pass, i.e.
+/// the one that actually rasterizes. Counted unconditionally in the detour, unlike
+/// `PROFILE_PERFRAME_HOOK_HITS`, which only counts frames where a look-at pose was applied.
+///
+/// Registration is not execution, and that distinction is the whole reason this exists: run
+/// `br-20260911-005533-858a` had the task registered, the offscreen scene registered and the parts
+/// in a scene -- all three draw bits -- on a screen that never changed. The renderer's own
+/// `CSEzUpdateTask`s are driven by ResMan, which this repo has already measured under-scheduling
+/// them (~4-19 times across a whole loading screen), so a registered task can simply not run.
+pub static BUILD_URL_PORTRAIT_DRAW_TASK_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// That count as it stood when the rebuild was asked for. The verdict needs the delta, not the
+/// total, because the task may have been running for the life of the dialog.
+pub static BUILD_URL_PORTRAIT_DRAW_CALLS_AT_KICK: AtomicUsize = AtomicUsize::new(0);
+/// `ChrAsmModelRes` entry 0's resolved param id (`res+0x30`) and the id that was requested
+/// (`res+0x34`). Unequal means the new gear was asked for and its parts file has not finished
+/// loading, which is a slow resource load rather than a broken rebuild -- and it is the one
+/// explanation a 240-tick window is too short to distinguish from a failure on its own.
+pub static BUILD_URL_PORTRAIT_MODELRES_RESOLVED: AtomicUsize = AtomicUsize::new(0);
+pub static BUILD_URL_PORTRAIT_MODELRES_REQUESTED: AtomicUsize = AtomicUsize::new(0);
+/// How many of the model-resource entries still have a request outstanding at the last sample.
+pub static BUILD_URL_PORTRAIT_MODELRES_PENDING: AtomicUsize = AtomicUsize::new(0);
 // ---- the Generate Build Link row: the inverse of everything above -----------------------------
 // That row takes a link and rewrites the character; this one takes the character and writes a link.
 // It touches no game state at all, so it has no "applied" counter -- what it has instead is a

@@ -61,6 +61,15 @@ pub const PROFILE_OFFSCREEN_SCENE_REGISTERED_OFFSET: usize = 0x58;
 /// rebuilt model and a visible one.
 pub const CHR_ASM_MODEL_INS_SCENE_OFFSET: usize = 0x10;
 
+/// The renderer's `ChrAsmModelRes`, the object that owns the requested and resolved part rows.
+///
+/// `STEP_Wait_Play` passes `renderer+0x768` as the first argument to the model-resource request
+/// `FUN_1409e6fb0`, and again to `FUN_1409ec160` alongside the model instance. Its entries are
+/// `0x40` bytes from `+0x30`, each carrying the resolved param id at `+0x00` and the requested one
+/// at `+0x04`; while a pair disagrees the parts file for that row is still loading and the request
+/// early-outs instead of rebuilding from it.
+pub const PROFILE_RENDERER_MODEL_RES_OFFSET: usize = 0x768;
+
 /// `CS::TexResCap` embeds the draw-usable `CSGxTexture*` at +0x78, and that wrapper keeps
 /// the backing graphics texture/reference at +0x10. The overlay cannot safely reinterpret this as
 /// a generic texture ID yet, but observing these handles during a native draw would be a concrete

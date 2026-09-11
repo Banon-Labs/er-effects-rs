@@ -96,28 +96,33 @@ use er_loading_portrait_core::{
     CHR_ASM_MODEL_INS_PARTS_NODE_COUNT, CHR_ASM_MODEL_INS_PARTS_NODE_OFFSET,
     CHR_ASM_MODEL_INS_SCENE_OFFSET, PROFILE_OFFSCREEN_SCENE_REGISTERED_OFFSET,
     PROFILE_RENDERER_CHR_ASM_LIVE_OFFSET, PROFILE_RENDERER_DRAW_TASK_PROXY_OFFSET,
-    PROFILE_RENDERER_MODEL_INS_OFFSET, PROFILE_RENDERER_STEP_INDEX_OFFSET,
-    PROFILE_RENDERER_STEP_MAX, TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET,
+    PROFILE_RENDERER_MODEL_INS_OFFSET, PROFILE_RENDERER_MODEL_RES_OFFSET,
+    PROFILE_RENDERER_STEP_INDEX_OFFSET, PROFILE_RENDERER_STEP_MAX,
+    TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET,
     TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA, portrait_renderer_table_entry,
 };
 use er_telemetry_core::counters::{
-    BUILD_URL_PORTRAIT_DRAW_BITS, BUILD_URL_PORTRAIT_EQUIP_VERDICT,
+    BUILD_URL_PORTRAIT_DRAW_BITS, BUILD_URL_PORTRAIT_DRAW_CALLS_AT_KICK,
+    BUILD_URL_PORTRAIT_DRAW_TASK_CALLS, BUILD_URL_PORTRAIT_EQUIP_VERDICT,
     BUILD_URL_PORTRAIT_KICK_REFUSALS, BUILD_URL_PORTRAIT_KICKS,
     BUILD_URL_PORTRAIT_MODEL_ABSENT_SEEN, BUILD_URL_PORTRAIT_MODEL_INS_AFTER,
-    BUILD_URL_PORTRAIT_MODEL_INS_BEFORE, BUILD_URL_PORTRAIT_PARTS_AFTER,
-    BUILD_URL_PORTRAIT_PARTS_BEFORE, BUILD_URL_PORTRAIT_REBUILD_VERDICT,
-    BUILD_URL_PORTRAIT_RECORD_FINGERPRINT, BUILD_URL_PORTRAIT_RECORD_LEVEL,
-    BUILD_URL_PORTRAIT_RECORD_SLOT_PLUS1, BUILD_URL_PORTRAIT_RECORD_SYNC_STATE,
-    BUILD_URL_PORTRAIT_RECORD_SYNCS, BUILD_URL_PORTRAIT_REFRESH_ATTEMPTS,
-    BUILD_URL_PORTRAIT_RENDER_VERDICT, BUILD_URL_PORTRAIT_RENDERER_FINGERPRINT,
-    BUILD_URL_PORTRAIT_STEPS_SEEN, BUILD_URL_PORTRAIT_VERIFY_TICKS,
+    BUILD_URL_PORTRAIT_MODEL_INS_BEFORE, BUILD_URL_PORTRAIT_MODELRES_PENDING,
+    BUILD_URL_PORTRAIT_MODELRES_REQUESTED, BUILD_URL_PORTRAIT_MODELRES_RESOLVED,
+    BUILD_URL_PORTRAIT_PARTS_AFTER, BUILD_URL_PORTRAIT_PARTS_BEFORE,
+    BUILD_URL_PORTRAIT_REBUILD_VERDICT, BUILD_URL_PORTRAIT_RECORD_FINGERPRINT,
+    BUILD_URL_PORTRAIT_RECORD_LEVEL, BUILD_URL_PORTRAIT_RECORD_SLOT_PLUS1,
+    BUILD_URL_PORTRAIT_RECORD_SYNC_STATE, BUILD_URL_PORTRAIT_RECORD_SYNCS,
+    BUILD_URL_PORTRAIT_REFRESH_ATTEMPTS, BUILD_URL_PORTRAIT_RENDER_VERDICT,
+    BUILD_URL_PORTRAIT_RENDERER_FINGERPRINT, BUILD_URL_PORTRAIT_STEPS_SEEN,
+    BUILD_URL_PORTRAIT_TARGET_RENDERER, BUILD_URL_PORTRAIT_VERIFY_TICKS,
+    PROFILE_PERFRAME_HOOK_INSTALLED,
 };
 
 use crate::equip_fingerprint::{
-    LiveSync, PORTRAIT_DRAW_TASK_LIVE, PORTRAIT_OFFSCREEN_REGISTERED, PORTRAIT_PARTS_IN_SCENE,
-    PortraitEquipmentVerdict, PortraitRenderVerdict, RebuildObservation, parts_fingerprint,
-    portrait_equipment_verdict, portrait_rebuild_verdict, portrait_render_verdict,
-    portrait_step_bit, portrait_walked_rebuild,
+    LiveSync, PORTRAIT_DRAW_HOOK_INSTALLED, PORTRAIT_DRAW_TASK_LIVE, PORTRAIT_DRAW_TASK_RAN,
+    PORTRAIT_OFFSCREEN_REGISTERED, PORTRAIT_PARTS_IN_SCENE, PortraitEquipmentVerdict,
+    PortraitRenderVerdict, RebuildObservation, parts_fingerprint, portrait_equipment_verdict,
+    portrait_rebuild_verdict, portrait_render_verdict, portrait_step_bit, portrait_walked_rebuild,
 };
 use crate::host::append_autoload_debug;
 use crate::live_player_sync::{chr_asm_equipment_fingerprint, sync_record_from_live_player};
@@ -298,7 +303,66 @@ unsafe fn read_draw_bits(renderer: usize) -> usize {
     {
         bits |= PORTRAIT_PARTS_IN_SCENE;
     }
+    // Whether the draw task has actually run since the rebuild was asked for, which is a different
+    // question from whether it is registered, and the one the two previous verdicts never asked.
+    if PROFILE_PERFRAME_HOOK_INSTALLED.load(Ordering::SeqCst) != 0 {
+        bits |= PORTRAIT_DRAW_HOOK_INSTALLED;
+        if BUILD_URL_PORTRAIT_DRAW_TASK_CALLS.load(Ordering::SeqCst)
+            > BUILD_URL_PORTRAIT_DRAW_CALLS_AT_KICK.load(Ordering::SeqCst)
+        {
+            bits |= PORTRAIT_DRAW_TASK_RAN;
+        }
+    }
     bits
+}
+
+/// Bytes per `ChrAsmModelRes` entry, and where the entry array starts inside it.
+///
+/// `STEP_Wait_Play` passes `renderer+0x768` to the model-resource request `FUN_1409e6fb0`, which
+/// walks entries of `0x40` bytes from `+0x30`. Each carries the resolved param id at `+0x00` and the
+/// id that was requested at `+0x04`; while they disagree the parts file for the new row is still
+/// loading, and the request early-outs rather than rebuilding the model from it.
+const MODEL_RES_ENTRY_BASE: usize = 0x30;
+const MODEL_RES_ENTRY_STRIDE: usize = 0x40;
+/// Entries sampled. The protector and armament slots the portrait shows are at the front of the
+/// array, and a bounded walk keeps this a fixed cost on a per-frame path.
+const MODEL_RES_ENTRIES_SAMPLED: usize = 8;
+
+/// Publish the model-resource request state: entry 0's resolved and requested ids, and how many of
+/// the sampled entries still disagree.
+///
+/// This is what separates "the rebuild loaded the old thing" from "the new thing has not finished
+/// loading yet" -- the second is a slow resource load, and a verify window shorter than the load
+/// would report it as a failure.
+///
+/// # Safety
+///
+/// Game task thread, `renderer` a live `CSMenuAsmModelRend`. Every read is fault-guarded.
+unsafe fn sample_model_resource(renderer: usize) {
+    let res = unsafe { safe_read_usize(renderer + PROFILE_RENDERER_MODEL_RES_OFFSET) }.unwrap_or(0);
+    if res == 0 {
+        return;
+    }
+    let mut pending = 0usize;
+    for index in 0..MODEL_RES_ENTRIES_SAMPLED {
+        let entry = res + MODEL_RES_ENTRY_BASE + index * MODEL_RES_ENTRY_STRIDE;
+        let (Some(resolved), Some(requested)) =
+            (unsafe { er_game_base::mem::safe_read_i32(entry) }, unsafe {
+                er_game_base::mem::safe_read_i32(entry + 4)
+            })
+        else {
+            continue;
+        };
+        if index == 0 {
+            BUILD_URL_PORTRAIT_MODELRES_RESOLVED.store(resolved as u32 as usize, Ordering::SeqCst);
+            BUILD_URL_PORTRAIT_MODELRES_REQUESTED
+                .store(requested as u32 as usize, Ordering::SeqCst);
+        }
+        if resolved != requested {
+            pending += 1;
+        }
+    }
+    BUILD_URL_PORTRAIT_MODELRES_PENDING.store(pending, Ordering::SeqCst);
 }
 
 /// Fold this tick's step index into the mask of steps the window has seen.
@@ -349,6 +413,14 @@ pub fn note_portrait_rebuild(slot: i32, renderer: usize, fired: bool) {
         .store(PortraitRenderVerdict::Unproven.code(), Ordering::SeqCst);
     BUILD_URL_PORTRAIT_STEPS_SEEN.store(0, Ordering::SeqCst);
     BUILD_URL_PORTRAIT_DRAW_BITS.store(0, Ordering::SeqCst);
+    // The draw-task delta is measured from here, and the detour needs to know which renderer to
+    // count for. Both are set at the kick rather than in the window so the very first sample already
+    // has a baseline to compare against.
+    BUILD_URL_PORTRAIT_TARGET_RENDERER.store(renderer, Ordering::SeqCst);
+    BUILD_URL_PORTRAIT_DRAW_CALLS_AT_KICK.store(
+        BUILD_URL_PORTRAIT_DRAW_TASK_CALLS.load(Ordering::SeqCst),
+        Ordering::SeqCst,
+    );
     BUILD_URL_PORTRAIT_VERIFY_TICKS.store(PORTRAIT_VERIFY_WINDOW_TICKS, Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "profile-portrait: asked slot {slot} to rebuild from the re-derived record (renderer=0x{renderer:x}); the verdict lands in oracle_build_url_portrait_equip_verdict once the async build completes"
@@ -422,6 +494,7 @@ pub unsafe fn portrait_verify_tick() {
     unsafe { note_step(renderer) };
     let draw_bits = unsafe { read_draw_bits(renderer) };
     BUILD_URL_PORTRAIT_DRAW_BITS.store(draw_bits, Ordering::SeqCst);
+    unsafe { sample_model_resource(renderer) };
 
     // The input. A model that is mid-teardown has no readable stage to compare, which is not a
     // mismatch -- so an unreadable stage leaves the previous equipment verdict standing.

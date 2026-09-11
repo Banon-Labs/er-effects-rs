@@ -309,6 +309,15 @@ pub enum PortraitRenderVerdict {
     /// no per-frame submission task, an unregistered offscreen scene, or parts attached to no scene.
     /// A correct model nothing submits is still the previous picture.
     RebuiltButNotDrawn,
+    /// Everything about the model is right and the draw task never ran, so the offscreen still holds
+    /// the render it held before the import. This is the state the observed defect is in if ResMan
+    /// simply did not schedule the task.
+    RebuiltButNeverRasterized,
+    /// The model is right and whether it was rasterized could not be established, because the draw
+    /// task's detour is not installed in this process. Deliberately not a pass and not a failure:
+    /// the measurement is missing, and reporting a missing measurement as either is the mistake that
+    /// produced two wrong verdicts already.
+    RasterizeUnmeasurable,
 }
 
 impl PortraitRenderVerdict {
@@ -323,6 +332,8 @@ impl PortraitRenderVerdict {
             Self::RebuiltUnchanged => 3,
             Self::InputWrong => 4,
             Self::RebuiltButNotDrawn => 5,
+            Self::RebuiltButNeverRasterized => 6,
+            Self::RasterizeUnmeasurable => 7,
         }
     }
 
@@ -336,6 +347,8 @@ impl PortraitRenderVerdict {
             Self::RebuiltUnchanged => "rebuilt-unchanged",
             Self::InputWrong => "input-wrong",
             Self::RebuiltButNotDrawn => "rebuilt-but-not-drawn",
+            Self::RebuiltButNeverRasterized => "rebuilt-but-never-rasterized",
+            Self::RasterizeUnmeasurable => "rasterize-unmeasurable",
         }
     }
 }
@@ -372,6 +385,13 @@ pub const fn portrait_render_verdict(
             PortraitRebuildVerdict::Rebuilt => {
                 if portrait_draw_ready(draw_bits) {
                     PortraitRenderVerdict::Proven
+                } else if draw_bits & PORTRAIT_DRAW_HOOK_INSTALLED == 0 {
+                    // The rasterize term cannot be evaluated at all, which is neither a pass nor a
+                    // defect. Checked before the other bits so a missing measurement is never
+                    // dressed up as one of the failures below.
+                    PortraitRenderVerdict::RasterizeUnmeasurable
+                } else if draw_bits & PORTRAIT_DRAW_TASK_RAN == 0 {
+                    PortraitRenderVerdict::RebuiltButNeverRasterized
                 } else {
                     PortraitRenderVerdict::RebuiltButNotDrawn
                 }
@@ -398,9 +418,23 @@ pub const PORTRAIT_DRAW_TASK_LIVE: usize = 1 << 0;
 pub const PORTRAIT_OFFSCREEN_REGISTERED: usize = 1 << 1;
 /// The model's parts were registered into a scene, so they are reachable by that draw.
 pub const PORTRAIT_PARTS_IN_SCENE: usize = 1 << 2;
-/// All three, which is the strongest statement RAM supports about a portrait being drawn.
-pub const PORTRAIT_DRAW_READY: usize =
-    PORTRAIT_DRAW_TASK_LIVE | PORTRAIT_OFFSCREEN_REGISTERED | PORTRAIT_PARTS_IN_SCENE;
+/// The draw task actually ran since the rebuild was asked for, not merely that it is registered.
+///
+/// Registration is not execution. Run `br-20260911-005533-858a` carried the other three bits on a
+/// screen that never changed, because the renderer's `CSEzUpdateTask`s are driven by ResMan and this
+/// repo has already measured it under-scheduling them. This bit is the delta on a counter
+/// incremented inside the draw task's own detour.
+pub const PORTRAIT_DRAW_TASK_RAN: usize = 1 << 3;
+/// Whether the draw task could be counted at all -- its detour has to be installed for the delta to
+/// mean anything, and a zero from an absent hook must not read as a zero from a task that did not
+/// run.
+pub const PORTRAIT_DRAW_HOOK_INSTALLED: usize = 1 << 4;
+/// All four, which is the strongest statement RAM supports about a portrait being drawn: the parts
+/// exist, are in a scene, a task submits that scene, and that task has run since the rebuild.
+pub const PORTRAIT_DRAW_READY: usize = PORTRAIT_DRAW_TASK_LIVE
+    | PORTRAIT_OFFSCREEN_REGISTERED
+    | PORTRAIT_PARTS_IN_SCENE
+    | PORTRAIT_DRAW_TASK_RAN;
 
 /// Is the whole draw chain live?
 ///
@@ -760,6 +794,8 @@ mod tests {
             PortraitRenderVerdict::RebuiltUnchanged,
             PortraitRenderVerdict::InputWrong,
             PortraitRenderVerdict::RebuiltButNotDrawn,
+            PortraitRenderVerdict::RebuiltButNeverRasterized,
+            PortraitRenderVerdict::RasterizeUnmeasurable,
         ];
         let passes = all
             .iter()
@@ -781,12 +817,13 @@ mod tests {
     #[test]
     fn a_rebuilt_model_nothing_draws_is_not_a_pass() {
         let rebuilt = PortraitRebuildVerdict::Rebuilt;
+        let installed = PORTRAIT_DRAW_READY | PORTRAIT_DRAW_HOOK_INSTALLED;
         for missing in [
             PORTRAIT_DRAW_TASK_LIVE,
             PORTRAIT_OFFSCREEN_REGISTERED,
             PORTRAIT_PARTS_IN_SCENE,
         ] {
-            let bits = PORTRAIT_DRAW_READY & !missing;
+            let bits = installed & !missing;
             assert!(!portrait_draw_ready(bits));
             assert_eq!(
                 portrait_render_verdict(PortraitEquipmentVerdict::Matches, rebuilt, bits),
@@ -794,14 +831,43 @@ mod tests {
                 "missing bit {missing:#x} must not pass"
             );
         }
-        assert!(portrait_draw_ready(PORTRAIT_DRAW_READY));
+        assert!(portrait_draw_ready(installed));
+        assert_eq!(
+            portrait_render_verdict(PortraitEquipmentVerdict::Matches, rebuilt, installed),
+            PortraitRenderVerdict::Proven
+        );
+    }
+
+    /// The state run `br-20260911-005533-858a` is actually in if ResMan never scheduled the task:
+    /// the model is right, the chain is registered, and nothing rasterized it. Registration is not
+    /// execution, and the previous version of this verdict could not tell the two apart.
+    #[test]
+    fn a_registered_draw_task_that_never_ran_is_not_a_pass() {
+        let bits = (PORTRAIT_DRAW_READY | PORTRAIT_DRAW_HOOK_INSTALLED) & !PORTRAIT_DRAW_TASK_RAN;
         assert_eq!(
             portrait_render_verdict(
                 PortraitEquipmentVerdict::Matches,
-                rebuilt,
-                PORTRAIT_DRAW_READY
+                PortraitRebuildVerdict::Rebuilt,
+                bits
             ),
-            PortraitRenderVerdict::Proven
+            PortraitRenderVerdict::RebuiltButNeverRasterized
+        );
+    }
+
+    /// A zero from an absent hook is not a zero from a task that did not run. Reporting a missing
+    /// measurement as a failure invents a defect; reporting it as a pass is the mistake that has
+    /// already produced two wrong verdicts, so it gets its own state.
+    #[test]
+    fn an_uninstalled_draw_hook_measures_nothing_rather_than_failing() {
+        let bits =
+            PORTRAIT_DRAW_TASK_LIVE | PORTRAIT_OFFSCREEN_REGISTERED | PORTRAIT_PARTS_IN_SCENE;
+        assert_eq!(
+            portrait_render_verdict(
+                PortraitEquipmentVerdict::Matches,
+                PortraitRebuildVerdict::Rebuilt,
+                bits
+            ),
+            PortraitRenderVerdict::RasterizeUnmeasurable
         );
     }
 
