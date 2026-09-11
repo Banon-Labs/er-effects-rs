@@ -135,6 +135,27 @@ TESTIMONY_BUDGET_SECONDS = 90.0
 SUBPROCESS_TIMEOUT = 28
 
 
+# The cdylib that actually presses buttons. `--harness-drive` selects a phase table inside it, so
+# the flag is meaningless when this package is not in the closure.
+HARNESS_PACKAGE = "er-input-harness"
+
+
+def harness_drive_refusal(harness_drive: str | None, packages: list[str]) -> str | None:
+    """Why this run cannot drive input, or `None` when it can.
+
+    Split out from the launch path so it is testable without a closure, a build or a game.
+    """
+    if not harness_drive or HARNESS_PACKAGE in packages:
+        return None
+    return (
+        f"--harness-drive {harness_drive} was requested, but {HARNESS_PACKAGE} is not in this\n"
+        "run's profile, so nothing would drive the input and the run would look passive.\n"
+        "\nRelaunch with the harness pinned and the drive declared:\n"
+        f"  python3 scripts/er-run-branch.py --agent-driven --with {HARNESS_PACKAGE} "
+        f"--harness-drive {harness_drive}"
+    )
+
+
 def game_dir() -> Path:
     return er_run_lib.game_dir()
 
@@ -598,6 +619,20 @@ def preflight(args) -> tuple[dict, dict | None]:
         raise RuntimeError(f"closure failed: {err.strip() or out.strip()}")
     closure = json.loads(out)
 
+    # `--harness-drive` without the harness in the profile is a run that drives nothing, and it
+    # says so nowhere. Measured on br-20260911-163835-032f: the mode was accepted, both marker
+    # files were written, and the block then listed `EXCLUDED er_input_harness.dll drives-input`
+    # -- so the phases never ran and the log is indistinguishable from a passive run that happened
+    # to load the same DLLs. The declaration and the artifact are separate things (see the marker
+    # comment below), and only the artifact can actually press a button.
+    #
+    # Refused rather than implied. `--agent-driven` is a claim about who is at the keyboard and
+    # AGENTS.md requires it to be deliberate, so this names the invocation instead of assembling
+    # one on the caller's behalf.
+    refusal = harness_drive_refusal(getattr(args, "harness_drive", None), closure["packages"])
+    if refusal:
+        raise RuntimeError(refusal)
+
     stale: list[str] = []
     for package, artifact in zip(closure["packages"], closure["artifacts"]):
         dll = target_dir() / artifact
@@ -992,6 +1027,23 @@ def selftest() -> int:
         "the sidecar path is parsed and normalises to the staged path",
     )
     check(parse_loaded_line("runtime-config: loaded 'x'") == {}, "a line with no fields yields none")
+
+    # The silent no-op this refusal closes, measured on br-20260911-163835-032f: the mode was
+    # accepted, the marker files were written, and the harness was excluded by the closure, so the
+    # phases never ran and the block read like a passive run.
+    check(
+        harness_drive_refusal(None, []) is None,
+        "a run that asked for no drive is never refused",
+    )
+    check(
+        harness_drive_refusal("buildimport", [HARNESS_PACKAGE, "er-quickload"]) is None,
+        "a drive with the harness in the profile is allowed",
+    )
+    refusal = harness_drive_refusal("buildimport", ["er-quickload"])
+    check(
+        refusal is not None and HARNESS_PACKAGE in refusal and "--agent-driven" in refusal,
+        "a drive without the harness is refused, and the refusal names the invocation to use",
+    )
 
     import tempfile
 
