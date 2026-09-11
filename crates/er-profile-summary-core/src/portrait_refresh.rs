@@ -70,11 +70,39 @@
 //! call the old reasoning rested on, is inert on this surface; it is load-bearing only on 05_010,
 //! whose `Icon_0` really does have ten frames.
 //!
-//! What `MENU_DummyStatus_Face` is backed by is not recorded anywhere in this workspace, and until
-//! it is, the honest statement is that this module's producer-side work is proven correct for the
-//! ProfileSelect portraits and unproven for the Quit panel. The measurement is cheap: the Scaleform
-//! bind observer in `title_resources_stats_text` already logs symbol and target for every bind whose
-//! symbol contains `menu_`, so one run naming that pair settles it.
+//! `MENU_DummyStatus_Face` was measured on run `br-20260911-011717-d587` (+45137ms): it binds
+//! `SYSTEX_Menu_StatusFace`, which is a different target from the ten this module drives. So the
+//! producer here serves ProfileSelect, and the Quit panel has a producer of its own.
+//!
+//! # The Quit panel's own producer, and why it cannot be driven yet
+//!
+//! `SYSTEX_Menu_StatusFace` is filled by `CS::CSMenuFaceModelRend` -- a sibling of the
+//! `CSMenuAsmModelRend` this module drives, and the good news is that it is the same machine. The
+//! builder `FUN_14099b950(rendSlot, dialog, 0x13, faceSource, 1)` lazily constructs the renderer
+//! (`HeapAlloc(0xa30)` -> `CSMenuFaceModelRend::CSMenuFaceModelRend`) and then calls the exact
+//! setters the profile refresh calls, because they are shared base-class methods: `FUN_140bb9860`
+//! FaceData, `FUN_140bb9880` gender, `FUN_140bb9890` the `+0x294` byte, the model source, then
+//! `FUN_140bb9810` and `FUN_140bb9830` -- the same `+0x754` and `+0x755` request latches, and the
+//! same `FD4StepTemplateBase` walk. It ends by registering the Scaleform pair
+//! `MENU_DummyStatus_Face` -> `SYSTEX_Menu_StatusFace` onto `dialog+0x3b8`.
+//!
+//! So the answer to "live view or one-shot" is: the Scaleform side samples a texture whose contents
+//! are refilled only when those latches are armed, and the only thing that arms them is that
+//! builder. Its single caller is `CS::OptionSettingTopDialog`'s constructor, at the guarded tail
+//! `if (param_4 != 0) { ... FUN_14099b950(&this->field_0x1890) }`, with the renderer slot at
+//! `dialog+0x1890`. That is precisely why backing out of the menu and reopening it fixes the
+//! portrait: reconstructing the dialog re-runs the builder against the current `PlayerGameData`.
+//!
+//! The in-place refresh is therefore a native call, not a texture write -- re-invoke the builder
+//! with the live dialog, whose `*rendSlot` is already non-null so it skips construction and goes
+//! straight to re-arming the latches. What blocks it is neither design nor safety but addressing:
+//! both `0x99b950` and `0x966120` are UNMAPPED onto 1.17 by every tool this repo has.
+//! `map-rvas-1162-to-1170.py` finds 55 and 39 shape matches respectively and none at a nearby
+//! anchor's delta, and `resolve-1170-by-caller-rel32.py` reports `no mapped bridge` for both --
+//! the builder's only caller is the constructor, and the constructor's only caller is unmapped too,
+//! so there is nothing to bridge from. Until one of that chain is pinned (call-graph topology, or
+//! the anchor ledger growing nearby), `game_rva_named` would refuse the address and the call would
+//! be inert. Writing it now would ship a feature that logs a refusal, so it is not written.
 //!
 //! # What is measured, and the measurement that was not enough
 //!
