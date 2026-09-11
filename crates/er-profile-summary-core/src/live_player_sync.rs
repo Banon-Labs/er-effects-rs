@@ -56,12 +56,13 @@
 
 use er_game_base::mem::{game_rva_named, safe_read_i32};
 use er_game_base::profile_summary::{
-    PROFILE_SUMMARY_CHR_ASM_OFFSET, PROFILE_SUMMARY_LEVEL_OFFSET,
+    PROFILE_SUMMARY_CHR_ASM_OFFSET, PROFILE_SUMMARY_FACE_DATA_OFFSET, PROFILE_SUMMARY_LEVEL_OFFSET,
     PROFILE_SUMMARY_SLOT_COUNT as SLOT_COUNT, profile_summary_record_address,
 };
 use er_loading_portrait_core::{CHR_ASM_EQUIPMENT_ENTRY_COUNT, CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET};
 
 use crate::equip_fingerprint::{LiveSync, RecordEquipment, equipment_fingerprint};
+use crate::face_data::{FACE_DATA_BUFFER_OFFSET, FACE_DATA_BUFFER_TOTAL_SIZE};
 use crate::host::append_autoload_debug;
 use crate::live_records::system_quit_profile_summary_ptr;
 
@@ -166,6 +167,7 @@ pub unsafe fn sync_record_from_live_player(slot: i32) -> LiveSync {
     let update: unsafe extern "system" fn(usize, u32) =
         unsafe { core::mem::transmute::<usize, unsafe extern "system" fn(usize, u32)>(address) };
     unsafe { update(summary, slot as u32) };
+    unsafe { rebaseline_preview_face_hash(slot, record) };
     let after = unsafe { read_record_equipment(record) };
     append_autoload_debug(format_args!(
         "profile-summary: re-derived record slot {slot} from the live character -- level {} -> {}, equipment fingerprint 0x{:016x} -> 0x{:016x}",
@@ -179,4 +181,57 @@ pub unsafe fn sync_record_from_live_player(slot: i32) -> LiveSync {
         before,
         after,
     }
+}
+
+/// Re-stamp the slot's preview face fingerprint after the record has been legitimately re-derived.
+///
+/// # The false alarm this exists to prevent
+///
+/// `PROFILE_PREVIEW_FACE_HASH[slot]` is taken from the picked save's own bytes when a foreign-save
+/// preview writes that slot, and the loading-portrait build kick re-hashes the record's inner
+/// `FaceDataBuffer` and compares. Drift means the portrait is about to be built from a different
+/// character's face than the user picked -- the wrong-head class a human caught three QA runs
+/// running. It is not merely counted: the kick feeds the disagreement to
+/// `loading_portrait_bridge_hold_face_check`, which falsifies the same-identity bridge hold.
+///
+/// [`sync_record_from_live_player`] rewrites that same `FaceData` block, from `PlayerGameData`. The
+/// new bytes are correct -- they are the character actually loaded -- but they no longer match a
+/// fingerprint taken from the previewed container, so every later build kick on this slot reports a
+/// wrong-character mismatch that is not one. Observed as
+/// `oracle_portrait_face_identity_checks = 2` with `oracle_portrait_face_identity_mismatches = 2` on
+/// run `br-20260911-005533-858a`, which is this function's absence.
+///
+/// So the fingerprint is re-baselined rather than cleared. Clearing would switch the check off for
+/// the slot and lose a real safety net; re-stamping keeps it armed against the next genuine drift,
+/// with the record that is now authoritative as its expectation. A slot with no preview fingerprint
+/// is left at zero, because stamping one would arm a check nothing asked for.
+///
+/// # Safety
+///
+/// Game task thread, `record` the `ProfileSummaryRecord` the native has just written.
+unsafe fn rebaseline_preview_face_hash(slot: i32, record: usize) {
+    let Some(previous) = crate::serialized_slot::PROFILE_PREVIEW_FACE_HASH.get(slot as usize)
+    else {
+        return;
+    };
+    if previous.load(core::sync::atomic::Ordering::SeqCst) == 0 {
+        return;
+    }
+    let inner = record + PROFILE_SUMMARY_FACE_DATA_OFFSET + FACE_DATA_BUFFER_OFFSET;
+    // The same window and the same hash the build kick's own check uses; `er_gfx`'s `fnv1a64` is a
+    // re-export of this one, so the two sides cannot disagree by construction.
+    let mut hash = er_game_base::fnv1a::FNV1A64_OFFSET_BASIS;
+    for offset in 0..FACE_DATA_BUFFER_TOTAL_SIZE {
+        let Some(byte) = (unsafe { er_game_base::mem::safe_read_u8(inner + offset) }) else {
+            // A partial read would stamp a fingerprint over a window this function never saw
+            // whole, which is worse than leaving the old one: the check would then pass on bytes
+            // nobody verified. Leave it armed and let the mismatch be reported honestly.
+            return;
+        };
+        hash = er_game_base::fnv1a::fnv1a64_mix(hash, byte as u64);
+    }
+    previous.store(hash as usize, core::sync::atomic::Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "profile-summary: re-baselined slot {slot} preview face fingerprint to 0x{hash:x} after re-deriving the record from the live character; the identity check stays armed against real drift"
+    ));
 }
