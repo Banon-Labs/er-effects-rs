@@ -345,13 +345,23 @@ jobs:
       # without them. The set is measured, not guessed -- `cargo tree -e normal,build --invert
       # pkg-config` shows exactly three crates build-depend on pkg-config (wayland-sys, alsa-sys,
       # libudev-sys) and a check with pkg-config blinded fails in those three and no others.
-      - name: Install Rust and the cross-compile system libraries
+      - name: Install the cross-compile system libraries
         if: steps.tools.outputs.cargo == '1'
         run: |
           sudo apt-get install -y --no-install-recommends clang lld llvm wine \
               libwayland-dev libasound2-dev libudev-dev \
             || { sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld llvm wine \
               libwayland-dev libasound2-dev libudev-dev; }
+
+      # Separate from the apt step above, and on a WIDER condition, because the two answer
+      # different questions. A stage can want the `rustfmt` binary without wanting a compiler --
+      # `check-stages.py --tools` reports exactly that for `source` -- and gating rustup on
+      # `cargo` would leave that stage without it. check.sh would then report those steps
+      # `SKIPPED` rather than red, which exits 0: a missing tool is the one under-install that is
+      # invisible, so the condition is written wide on purpose.
+      - name: Install Rust (stable, rustfmt, the windows target)
+        if: steps.tools.outputs.cargo == '1' || steps.tools.outputs.rustfmt == '1'
+        run: |
           # RUSTUP MAY NOT BE THERE. GitHub's `ubuntu-latest` image ships it, so this used to be
           # two bare `rustup` lines -- and both of the other places this workflow can run do not:
           # `catthehacker/ubuntu:act-latest`, which is what `act` uses, has no rustup (measured:

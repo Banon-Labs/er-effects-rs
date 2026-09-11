@@ -22,6 +22,11 @@
 #   bash scripts/act-check.sh --job plan             one job
 #   bash scripts/act-check.sh --dry-run --stage lint plan it without starting a container
 #
+# `--dry-run` has one limit worth knowing before you chase it: act does not execute `run:` steps in
+# a dry run, so `choose-runner` produces no outputs, and every job whose `runs-on` is
+# `fromJSON(needs.choose-runner.outputs.runs_on_json)` dies with "Invalid JSON: unexpected end of
+# JSON input". That is the dry run, not the workflow -- the same jobs run normally without it.
+#
 # A container runtime has to be reachable. On this machine that is Docker Desktop's user service
 # (`systemctl --user start docker-desktop`), which exposes its socket at
 # ~/.docker/desktop/docker.sock under the `desktop-linux` context -- `/var/run/docker.sock` does
