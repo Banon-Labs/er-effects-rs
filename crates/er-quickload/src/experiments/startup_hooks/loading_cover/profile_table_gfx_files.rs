@@ -818,8 +818,16 @@ pub(crate) unsafe fn options_02_040_quit6_swap_to_edited(base: usize, file: usiz
             match er_gfx::options_02_040::quit6(vanilla) {
                 Ok(out) => {
                     let out_fnv = er_gfx::title_05_000::fnv1a64(&out);
+                    // `in_fnv` is logged because `known_vanilla` comes back false on this path and
+                    // the pair is what would arm it. The fingerprint in `er_gfx` was taken from the
+                    // unpacked file; the loader hands us a payload 9 bytes longer, so the length
+                    // check fails and the derived output is never compared against its golden hash
+                    // -- a changed movie would be edited blind and served. Pinning the runtime
+                    // input's own length and fnv as a second accepted fingerprint closes that, and
+                    // this line is where the number to pin comes from.
+                    let in_fnv = er_gfx::title_05_000::fnv1a64(vanilla);
                     append_autoload_debug(format_args!(
-                        "system-quit-gfx: 02_040 quit6 runtime edit derived in={len} out={} known_vanilla={known} out_fnv=0x{out_fnv:016x}",
+                        "system-quit-gfx: 02_040 quit6 runtime edit derived in={len} in_fnv=0x{in_fnv:016x} out={} known_vanilla={known} out_fnv=0x{out_fnv:016x}",
                         out.len()
                     ));
                     OPTIONS_02_040_QUIT6_RUNTIME_EDITED.get_or_init(|| out)
