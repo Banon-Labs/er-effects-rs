@@ -254,40 +254,9 @@ pub(crate) const TITLE_ANIM_SPEEDUP_MAX: f32 = 16.0;
 /// anim-2026-06-24 -- the FadeIn is wall-clock/present-bound, so we skip it at the completion predicate
 /// instead). Kept as an f32 toggle so the existing env/file override (set to 1.0 = off) still works.
 pub(crate) const TITLE_ANIM_SPEEDUP_DEFAULT: f32 = 4.0;
-/// Part-A title-cover masquerade: `STEP_BeginTitle`'s only native visual side effect is wrapper
-/// 0x14081f9f0 building the `05_000_Title` MenuWindowJob through factory 0x1407acb00. Suppressing
-/// this wrapper hides the native press-any-button/title Scaleform while leaving TitleStep state,
-/// FixOrderJobSequence, native Continue/save-load state, and STEP_PlayGame untouched. It must never
-/// touch the global resident-UI flag (CSMenuMan+0x21 / STEP_Wait).
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) const TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA: usize = 0x81f9f0;
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) const TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA: usize = 0x81f8d0;
-/// The factory is `MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA`, and is spelled as that constant rather than
-/// as a second literal.
-///
-/// This was 0x7acbf0 until 2026-08-30, which is mid-instruction. `0xf0` into `FUN_1407acb00` lands
-/// on the third byte of the `mov %rbx,0x38(%rsp)` at 0x1407acbee -- not a function entry, not an
-/// instruction boundary, not an address anything may call or patch. The comment that used to sit
-/// here named the cause in passing: "Ghidra dump addresses are +0xf0". They are not. The 1.16.2
-/// dump, `eldenring-deobf.bin` and live memory all share one address space and the shift is zero
-/// (AGENTS.md, "SUPERSEDED FOR 1.16.2"), so subtracting a shift that does not exist moved a
-/// correct address 0xf0 bytes into the middle of its own function.
-///
-/// It survived because its only consumer is the log line below, which formatted a number nobody
-/// dereferenced. As `0x7acbf0` it is also absent from every 1.17 map, so on the current game it
-/// would print a translation refusal; `0x7acb00` is mapped to `0x7ad980` and verified.
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) const TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA: usize =
-    MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA as usize;
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) const TITLE_NATIVE_MENU_VISUAL_NAME: &str = "05_000_Title";
 pub(crate) const TITLE_PAB_INFORMATION_VISUAL_NAME: &str = "05_020_TitleInformation";
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_SUPPRESS_NOT_INSTALLED: usize = 0;
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_SUPPRESS_INSTALLED_YES: usize = 1;
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) static TITLE_NATIVE_MENU_VISUAL_SUPPRESS_ORIG: AtomicUsize =
-    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static TITLE_NATIVE_MENU_VISUAL_SUPPRESS_INSTALLED: AtomicUsize =
     AtomicUsize::new(TITLE_NATIVE_MENU_VISUAL_SUPPRESS_NOT_INSTALLED);
 pub(crate) use er_telemetry_core::counters::TITLE_NATIVE_MENU_VISUAL_SUPPRESSED_BUILDS;
@@ -308,10 +277,6 @@ pub(crate) static TITLE_NATIVE_MENU_VISUAL_NATIVE_JOB: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_NATIVE_MENU_VISUAL_NATIVE_WINDOW: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) static TITLE_PAB_INFORMATION_VISUAL_ORIG: AtomicUsize =
-    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry_core::counters::TITLE_PAB_INFORMATION_VISUAL_INSTALLED;
 pub(crate) use er_telemetry_core::counters::TITLE_PAB_INFORMATION_VISUAL_BUILDS;
 pub(crate) static TITLE_PAB_INFORMATION_VISUAL_LAST_JOB: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
@@ -319,64 +284,8 @@ pub(crate) static TITLE_PAB_INFORMATION_VISUAL_LAST_WINDOW: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_PAB_INFORMATION_VISUAL_LAST_CALLER_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-/// Render-only Part-A suppression: `MenuWindowJob::Run` writes the native window visible flags at
-/// `GLOBAL_CSMenuMan->field106_0x90[id]`: the Run body sets `|=1` before calling FadeIn, and the
-/// FadeIn helper at deobf 0x140744dd0 sets `|=3`. User-visible runtime falsified the old `0x2`
-/// draw-bit-only assumption: the title logo / PAB / Continue can still show with flags==1. Therefore
-/// product suppression clears the full native-visible mask for the preserved `05_000_Title` window.
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) const TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA: usize = 0x744dd0;
-/// Offset, within `MenuWindowJob::Run` ([`MENU_WINDOW_JOB_RUN_RVA`]), of the return after its call
-/// to the FadeIn helper above. Same offset in 1.16.2 and 1.17; the callee is
-/// `0x744dd0 -> 0x745c20` in both, which is how the two calls are known to be the same call
-/// (`scripts/derive-callsite-1170.py 0x7ad530`).
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) const TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALL_OFFSET: usize = 0x370;
-/// Current-branch GFx SetVisible return site inside the native title MenuWindowJob FadeIn helper,
-/// as an offset within [`TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA`].
-///
-/// Ordered log proof for the site itself: `user-visible-gfx-visible-logonly-current-branch-
-/// 20260713-140820` -- the first title-window visible calls were
-/// `value=0x10f6a0/0x10f350 caller_rva=0x744e02`, i.e. `0x744dd0 + 0x32`.
-///
-/// # Why it stopped being the single RVA `0x744e02`
-///
-/// It is a return address compared against a live stack frame. A return address is mid-function,
-/// so it can never be in the 1.16.2 -> 1.17 map (keyed on `.pdata` function starts), and on 1.17
-/// the comparison in `title_gfx_value_set_visible_hook` simply never matched: no hook refused, no
-/// address resolved, nothing logged, and the title FadeIn suppression was dead in silence.
-///
-/// Naming the containing function makes it mappable. Corroborated by
-/// `scripts/derive-callsite-1170.py 0x744e02`: the map carries `0x744dd0 -> 0x745c20`, and at
-/// `+0x32` both images hold an `E8` whose callee is the mapped pair of the GFx SetVisible setter
-/// (`0x733340 -> 0x734190`).
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) const TITLE_GFX_VISIBLE_TITLE_FADEIN_CALL_OFFSET: usize = 0x32;
 
-/// The GFx-SetVisible call site inside the title FadeIn helper, as an RVA on the running build.
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) fn title_gfx_visible_title_fadein_caller_rva() -> Option<usize> {
-    er_game_base::game_build::resolve_call_site_rva(
-        TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA,
-        TITLE_GFX_VISIBLE_TITLE_FADEIN_CALL_OFFSET,
-        "TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA (title FadeIn GFx SetVisible call site)",
-    )
-}
 
-/// The FadeIn-helper call site inside `MenuWindowJob::Run`, as an RVA on the running build.
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) fn title_native_menu_visual_window_fadein_run_caller_rva() -> Option<usize> {
-    er_game_base::game_build::resolve_call_site_rva(
-        MENU_WINDOW_JOB_RUN_RVA,
-        TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALL_OFFSET,
-        "MENU_WINDOW_JOB_RUN_RVA (FadeIn-helper call site)",
-    )
-}
-/// Within the title FadeIn GFx SetVisible callsite, this observed visible-call ordinal produces
-/// the user-visible flash/glare during the autoload transition. Keep the name behavioral: the
-/// underlying Scaleform object identity is still unknown.
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) const TITLE_05_000_FADEIN_FLASH_VISIBLE_ORDINAL: usize = 2;
 pub(crate) const CS_MENU_MAN_GLOBAL_RVA: usize = er_game_base::rva::CS_MENU_MAN_GLOBAL_RVA;
 /// OptionSetting tab-select visibility pass `FUN_14093b850` (deobf 0x93b760):
 /// `fn(CompositeOptionSettingDialog* composite, int tabIndex, u8* r8, u8* r9)`. It sets the current
@@ -391,13 +300,10 @@ pub(crate) const OPTIONSETTING_TAB_SELECT_VISIBILITY_RVA: usize = 0x93b760;
 // shells can read the same offsets the product does rather than keeping a second copy.
 pub(crate) use er_title_flow::{
     OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET, OPTIONSETTING_COMPOSITE_OFFSET,
-    OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT, TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK,
+    OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT
 };
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_NOT_INSTALLED: usize = 0;
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED_YES: usize = 1;
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_ORIG: AtomicUsize =
-    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED: AtomicUsize =
     AtomicUsize::new(TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_NOT_INSTALLED);
 pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESSED_WINDOWS: AtomicUsize =
@@ -574,18 +480,6 @@ pub(crate) const TPF_FILE_CAP_ALLOC_ALIGN: usize = 8;
 
 
 
-// Relocated from constants/portrait_lookat.rs (portrait crate split): the title-cover
-// Scaleform bind-observer block is title-cover domain and stays product-side.
-/// Passive observer for native Scaleform image-symbol -> system texture bindings.
-/// Dump `FUN_1407452c0` maps to live/deobf `0x1407451c0`. It receives an owning resource/list field
-/// in rcx and a pair of DLString<char> values in rdx. Do not call it from product code; observe native
-/// calls to learn valid owner/resource contexts for SYSTEX-backed surfaces.
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) const TITLE_SCALEFORM_BIND_OBSERVER_RVA: usize = 0x7451c0;
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_ORIG: AtomicUsize =
-    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry_core::counters::TITLE_SCALEFORM_BIND_OBSERVER_INSTALLED;
 pub(crate) use er_telemetry_core::counters::TITLE_SCALEFORM_BIND_OBSERVER_HITS;
 pub(crate) use er_telemetry_core::counters::TITLE_SCALEFORM_BIND_OBSERVER_SYSTEX_HITS;
 pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_OWNER: AtomicUsize =
@@ -596,11 +490,6 @@ pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_SYMBOL_PTR: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_TARGET_PTR: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-/// Experimental visible-surface bind rewrite for the replayed ProfileSelect cover: the native
-/// SYSTEX profile texture normally targets `MENU_DummyProfileFace_01`; rewrite slot0 to the
-/// visibly placed `MENU_FL_40135_Profile` surface and expose it as a distinct oracle.
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) const TITLE_PROFILE_VISIBLE_SURFACE_SYMBOL: &str = "MENU_FL_40135_Profile";
 // The four counters that were meant to record that rewrite -- _BIND_REWRITES, _BIND_LAST_OWNER,
 // _BIND_LAST_PAIR, _BIND_LAST_SYMBOL_PTR -- were removed 2026-08-31. The rewrite above was never
 // implemented, so none of them had a write site and the five oracles they fed reported absence

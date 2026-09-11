@@ -712,7 +712,7 @@ pub(crate) fn direct_save_file_source_active() -> bool {
 /// It exists because the full-read guard's level floor was keyed on the other predicate alone, so a
 /// genuine low-level character on the product path was refused. Measured 2026-09-06 on
 /// `~/Elden/launch.sh` with slot 0 = "Hero" RL7: `guard c30_real=true fp_real=true level=7
-/// level_real=false -> guard_pass=false`, `GUARD FAIL -- NO continue_confirm`, and the autoload
+/// level_real=false -> guard_pass=false`, `guard fail -- No continue_confirm`, and the autoload
 /// parked with the character never entering the world.
 pub(crate) fn default_user_save_source_active() -> bool {
     SAVE_REDIRECT_MODE.load(Ordering::SeqCst) == SAVE_REDIRECT_MODE_DEFAULT_USER
@@ -1849,7 +1849,7 @@ pub(super) unsafe extern "system" fn save_redirect_createfilew_hook(
     let len = unsafe { wide_len(lp_file_name) };
     if len != 0 {
         let path = unsafe { std::slice::from_raw_parts(lp_file_name, len) };
-        // SAVE-DESTINATION WRITE-OPEN REDIRECT (save-game-flow WP3), checked FIRST and only inside
+        // Save-destination write-open redirect (save-game-flow WP3), checked first and only inside
         // the armed commit window: the native BND4 writer emits the whole rebuilt container in one
         // write-open, so diverting exactly that open writes the current save state to the folder
         // the user chose while the loaded save is never opened for write. Read-opens (the writer's

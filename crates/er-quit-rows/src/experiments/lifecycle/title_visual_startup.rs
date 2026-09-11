@@ -34,35 +34,31 @@ pub(crate) fn install_title_visual_startup_hooks() {
                 .spawn(|| {
                     // The row-populate hook drives the per-slot attribute push and stays: it is
                     // what fills the Load Character submenu's rows. The named-child binder that
-                    // used to follow it is COMMENTED OUT -- its only duty here was the title
-                    // cover, hiding `PressStart`/`StaticSystemText` at bind time.
+                    // used to follow it is deleted -- its only duty here was the title cover,
+                    // hiding `PressStart`/`StaticSystemText` at bind time.
                     install_profile_row_populate_hook();
-                    // install_title_scene_obj_proxy_named_child_bind_hook();
                 });
         });
     }
-    // COMMENTED OUT pending the delete pass: the title-cover "masquerade" -- nine hook installers
-    // whose whole job is to stop native title visuals being drawn. None is a GFx edit, which is why
-    // trimming the movie swaps left them running and the logo still gone. Measured from a live log,
-    // they force `TitleBackViewParts` and `05_001_Title_Logo` hidden three separate ways
+    // Deleted here: the title-cover "masquerade", nine hook installers whose whole job was to stop
+    // native title visuals being drawn. None was a GFx edit, which is why trimming the movie swaps
+    // left them running and the logo still gone. Measured from a live log before they went, they
+    // forced `TitleBackViewParts` and `05_001_Title_Logo` hidden three separate ways
     // (`SetVisible(false)`, again at construction, and again after the native start-login call),
-    // hide `PressStart`/`StaticSystemText` at SceneObjProxy bind, blank the `05_000_Title` FadeIn
-    // flash, and cover `05_020_TitleInformation`.
+    // hid `PressStart`/`StaticSystemText` at SceneObjProxy bind, blanked the `05_000_Title` FadeIn
+    // flash, and covered `05_020_TitleInformation`. The title screen is not Save Game, Load
+    // Character or Load Character from File, so this crate has no business repainting it.
     //
-    // The title screen is not Save Game, Load Character or Load Character from File, so this crate
-    // has no business repainting it. Every installer below keeps `#[allow(dead_code)]` until the
-    // delete pass.
-    //
-    // `install_title_flow_context_record_regulation_fix_hook` is hoisted OUT and still runs: it is a
-    // TitleFlowContext record fix, not a visual hide, and shared the gate only by accident.
-    // Hoisted OUT with the same reasoning, and for a much sharper reason than the record fix: this
-    // installs `title_scaleform_file_open_observer_hook`, the Scaleform file-open detour through
-    // which EVERY movie edit this crate serves is delivered -- the `02_040` six-cell Quit grid, the
-    // `05_010_ProfileSelect` stats panel, the `02_990` path-editor field. Commenting it out with the
-    // title cover took the Load Character and Load Character from File rows off the tab entirely
-    // (the grid stayed vanilla, so there were no cells for them) and reverted the Save Game menu's
-    // layout, measured live: `02_040 quit6` served 0 times in that run against 1 before it.
-    // Serving a movie is not hiding a visual; only the hide hooks belong behind the comment.
+    // Two installers shared that gate by accident and are kept, deliberately outside any
+    // title-visual condition. `install_title_flow_context_record_regulation_fix_hook` is a
+    // TitleFlowContext record fix, not a visual hide. The resource-acquire observer matters far
+    // more: it installs `title_scaleform_file_open_observer_hook`, the Scaleform file-open detour
+    // through which every movie edit this crate serves is delivered -- the `02_040` six-cell Quit
+    // grid, the `05_010_ProfileSelect` stats panel, the `02_990` path-editor field. Losing it with
+    // the cover took the Load Character and Load Character from File rows off the tab entirely (the
+    // grid stayed vanilla, so there were no cells for them) and reverted the Save Game menu's
+    // layout, measured live: `02_040 quit6` served 0 times in that run against 1 before it. Serving
+    // a movie is not hiding a visual, so do not fold these two back into a visual gate.
     START_TITLE_MENU_RESOURCE_ACQUIRE_OBSERVER.call_once(|| {
         let _ = std::thread::Builder::new()
             .name("er-quickload-title-resource-observer".to_owned())
@@ -73,92 +69,6 @@ pub(crate) fn install_title_visual_startup_hooks() {
             .name("er-quickload-tfc-record-fix".to_owned())
             .spawn(install_title_flow_context_record_regulation_fix_hook);
     });
-    // // Title-cover masquerade Part A: install the BeginTitle `05_000_Title` hook as early as
-    // // splash/foreground patches, before STEP_BeginTitle can build the native title Scaleform. This
-    // // does not touch STEP_Wait or CSMenuMan+0x21; it preserves the native MenuWindowJob and hides
-    // // only its draw bit from the MenuWindowJob::Run/FadeIn path.
-    // if title_native_menu_visual_suppression_enabled() {
-    //     START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS.call_once(|| {
-    //         let _ = std::thread::Builder::new()
-    //             .name("er-quickload-title-cover-part-a".to_owned())
-    //             .spawn(install_title_native_menu_visual_suppression_hook);
-    //     });
-    //     START_TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS.call_once(|| {
-    //         let _ = std::thread::Builder::new()
-    //             .name("er-quickload-title-cover-render".to_owned())
-    //             .spawn(install_title_native_menu_visual_render_suppression_hook);
-    //     });
-    //     START_TITLE_LOGO_FORCE_HIDDEN.call_once(|| {
-    //         let _ = std::thread::Builder::new()
-    //             .name("er-quickload-title-logo-force-hidden".to_owned())
-    //             .spawn(install_title_logo_force_hidden_hooks);
-    //     });
-    //     START_TITLE_LOGO_START_LOGIN_HIDE.call_once(|| {
-    //         let _ = std::thread::Builder::new()
-    //             .name("er-quickload-title-logo-start-login-hide".to_owned())
-    //             .spawn(install_title_logo_start_login_hide_hook);
-    //     });
-    //     START_TITLE_PAB_INFORMATION_COVER.call_once(|| {
-    //         let _ = std::thread::Builder::new()
-    //             .name("er-quickload-title-pab-cover".to_owned())
-    //             .spawn(install_title_pab_information_visual_hook);
-    //     });
-    //     START_TITLE_GFX_VALUE_SET_VISIBLE.call_once(|| {
-    //         let _ = std::thread::Builder::new()
-    //             .name("er-quickload-title-gfx-visible".to_owned())
-    //             .spawn(install_title_gfx_value_set_visible_hook);
-    //     });
-    //     START_TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND.call_once(|| {
-    //         let _ = std::thread::Builder::new()
-    //             .name("er-quickload-title-child-bind".to_owned())
-    //             .spawn(install_title_scene_obj_proxy_named_child_bind_hook);
-    //     });
-    //     START_TITLE_SCALEFORM_BIND_OBSERVER.call_once(|| {
-    //         let _ = std::thread::Builder::new()
-    //             .name("er-quickload-title-bind-observer".to_owned())
-    //             .spawn(install_title_scaleform_bind_observer_hook);
-    //     });
-    //     START_TITLE_MENU_RESOURCE_ACQUIRE_OBSERVER.call_once(|| {
-    //         let _ = std::thread::Builder::new()
-    //             .name("er-quickload-title-resource-observer".to_owned())
-    //             .spawn(install_title_menu_resource_acquire_observer_hook);
-    //     });
-    //     // Do not install the independent custom-cover MenuWindowJob pump here. Runtime artifact
-    //     // product-continue-direct-20260628-121039 proved that pumping a separate 01_900_Black job
-    //     // keeps job+0x130 live and stalls the title flow before player/world. Future cover work must
-    //     // use an epilogue-neutral path (mutate an already-scheduled title surface/resource, or prove
-    //     // explicit completion semantics before adding an independent MenuWindowJob).
-    //     START_TITLE_FLOW_CONTEXT_RECORD_REGULATION.call_once(|| {
-    //         let _ = std::thread::Builder::new()
-    //             .name("er-quickload-tfc-record-fix".to_owned())
-    //             .spawn(install_title_flow_context_record_regulation_fix_hook);
-    //     });
-    // } else if title_resource_memory_gfx_enabled() {
-    //     // Branch-owned `05_001_Title_Logo` replacement: keep TitleBack visible, but hide the later
-    //     // title text layers (`PRESS ANY BUTTON` / Continue-ish title information) so the custom
-    //     // resource is not overdrawn by native text. Do not install the TitleBack/logo hide hooks here.
-    //     START_TITLE_PAB_INFORMATION_COVER.call_once(|| {
-    //         let _ = std::thread::Builder::new()
-    //             .name("er-quickload-title-text-latch".to_owned())
-    //             .spawn(install_title_pab_information_visual_hook);
-    //     });
-    //     START_TITLE_GFX_VALUE_SET_VISIBLE.call_once(|| {
-    //         let _ = std::thread::Builder::new()
-    //             .name("er-quickload-title-text-gfx-visible".to_owned())
-    //             .spawn(install_title_gfx_value_set_visible_hook);
-    //     });
-    //     START_TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND.call_once(|| {
-    //         let _ = std::thread::Builder::new()
-    //             .name("er-quickload-title-text-child-bind".to_owned())
-    //             .spawn(install_title_scene_obj_proxy_named_child_bind_hook);
-    //     });
-    //     START_TITLE_SCALEFORM_BIND_OBSERVER.call_once(|| {
-    //         let _ = std::thread::Builder::new()
-    //             .name("er-quickload-title-text-bind-observer".to_owned())
-    //             .spawn(install_title_scaleform_bind_observer_hook);
-    //     });
-    // }
-    //
     // er-effects-rs-jsm PIVOT: suppress the native loading tips (our overlay renders player-stats text
     // instead). Install at attach -- Before the KnowledgeLoadingScreen ctor's one-shot initial tip (~15s),
     // else the first tip is already set and only later cycles are suppressed. Live portrait overlay path only.

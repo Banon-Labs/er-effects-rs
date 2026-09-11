@@ -57,7 +57,7 @@ use super::*;
 // denies world entry (`title_tick_cover.rs` refuses `SetState(4/5)`) until a save is chosen, so
 // "return to what you were doing" would mean returning to a title that can never be left.
 //
-// THE ARMS DISAGREE, AND THIS IS THE LOUD PART OF SAYING SO. The in-game overlay browser has no
+// The arms disagree, and this is the loud part of saying so. The in-game overlay browser has no
 // cancel at all and this change does not give it one: its `PICKER_ACT_BACK` is `go_up()`, which is
 // a no-op at a drive root, so a user on that surface has no exit but killing the process. That is
 // pre-existing (bd `er-effects-rs-mb0y` tracks it), it is the default surface, and it is the one

@@ -339,9 +339,6 @@ pub(crate) static TITLE_PRESS_START_BIND_LAST_CONTEXT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) use er_telemetry_core::counters::TITLE_PRESS_START_BIND_HIDE_CALLS;
 pub(crate) use er_telemetry_core::counters::TITLE_PRESS_START_GFX_HIDE_CALLS;
-pub(crate) use er_title_flow::TITLE_LOGO_BACK_VIEW_PARTS_AA8_OFFSET;
-pub(crate) use er_title_flow::TITLE_LOGO_BACK_VIEW_PARTS_NAME;
-pub(crate) use er_title_flow::TITLE_LOGO_RESOURCE_NAME;
 /// `TitleBackViewParts` embeds its `SceneObjProxy` at `this+0x70`; the GFx/ScaleformValue handle
 /// used by the native label/frame helpers is the proxy field at `this+0x88` (`SceneObjProxy+0x18`).
 pub(crate) const TITLE_LOGO_GFX_VALUE_88_OFFSET: usize = 0x88;
@@ -357,40 +354,7 @@ pub(crate) const TITLE_LOGO_GFX_ROOT_DEPTH: usize = 3;
 pub(crate) const TITLE_LOGO_GFX_ROOT_SPRITE_CHAR: usize = 7;
 pub(crate) const TITLE_LOGO_GFX_MAIN_ASSET_CHAR: usize = 4;
 pub(crate) const TITLE_LOGO_GFX_MAIN_ASSET_NAME: &str = "MENU_Title_EldenRing_01";
-/// Stronger native hide lever than FadeIn/FadeOut: `CS::TitleBackViewParts::SetVisible` (dump
-/// 0x1409a6410 -> deobf/live 0x1409a62c0, content verified as `add rcx,0x70; jmp 0x140733340`)
-/// calls the generic `SceneObjProxy` visible setter on the embedded proxy at `this+0x70`.
-/// `TitleTopDialog` itself calls this with `1` in the start-login path (dump 0x1409b3050), so using
-/// it with `0` is a native visibility semantic, not a timeline FadeIn/FadeOut guess.
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_CTOR_RVA: usize = 0x9a6180;
-pub(crate) use er_title_flow::TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA;
-/// TitleTopDialog start-login/native accept path (dump 0x1409b3050 -> deobf/live 0x1409b2f00).
-/// It calls `TitleBackViewParts::SetVisible(1)` on dialog+0xaa8 before continuing through native
-/// login/save-load setup, so detouring it and hiding the logo after the original is the earliest
-/// proven TitleTopDialog-owned logo visibility point on the zero-input Continue path.
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) const TITLE_TOP_START_LOGIN_RVA: usize = 0x9b2f00;
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) const TITLE_TOP_START_LOGIN_HIDE_NOT_INSTALLED: usize = 0;
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) const TITLE_TOP_START_LOGIN_HIDE_INSTALLED_YES: usize = 1;
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) static TITLE_TOP_START_LOGIN_HIDE_ORIG: AtomicUsize =
-    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) static TITLE_TOP_START_LOGIN_HIDE_INSTALLED: AtomicUsize =
-    AtomicUsize::new(TITLE_TOP_START_LOGIN_HIDE_NOT_INSTALLED);
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) static TITLE_LOGO_SET_VISIBLE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry_core::counters::TITLE_LOGO_SET_VISIBLE_INSTALLED;
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) static TITLE_LOGO_CTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry_core::counters::TITLE_LOGO_CTOR_INSTALLED;
 pub(crate) use er_telemetry_core::counters::TITLE_LOGO_GFX_HIDE_CALLS;
-pub(crate) use er_title_flow::TITLE_LOGO_GFX_HIDE_LAST_DIALOG;
-pub(crate) use er_title_flow::TITLE_LOGO_GFX_HIDE_LAST_LOGO;
-pub(crate) use er_title_flow::TITLE_LOGO_GFX_HIDE_LAST_CALLER_PHASE;
 pub(crate) static TITLE_LOGO_GFX_HIDE_LAST_REQUESTED_VISIBLE: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// Passive observer for `CSScaleformSystem::AcquireMenuResource` (`dump 0x140d786e0 ->

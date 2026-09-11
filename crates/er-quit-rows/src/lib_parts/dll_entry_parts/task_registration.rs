@@ -499,7 +499,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     let p = player.chr_ins.modules.physics.position;
                     crate::experiments::can_move_probe::tick((p.0, p.1, p.2));
                 }
-                // NO PROGRAMMATIC SWITCH TRIGGER LIVES HERE ANY MORE (deleted 2026-09-05, user
+                // No PROGRAMMATIC switch trigger lives here any more (deleted 2026-09-05, user
                 // directive). `poll_switch_slot_control_file` used to read a game-directory control
                 // file and arm a menu-free character switch straight into
                 // `own_load_switch_reload_fire`, so every second and third load this project ever

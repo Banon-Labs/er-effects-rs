@@ -322,7 +322,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         START_SAVE_OBSERVERS.call_once(spawn_save_observers_only);
     }
 
-    // SAVE-DESTINATION WRITE-OPEN REDIRECT CORE (save-game-flow WP3): the "save somewhere else"
+    // Save-destination write-open redirect core (save-game-flow WP3): the "save somewhere else"
     // path diverts the native writer's single container write-open, which means the CreateFileW
     // detour must exist in every save mode -- including the default game-owned APPDATA mode, where
     // `install_save_redirect_hooks` deliberately installs nothing. The detour body is

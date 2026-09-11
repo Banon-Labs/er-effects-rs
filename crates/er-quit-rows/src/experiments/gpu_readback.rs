@@ -29,7 +29,7 @@ use windows::core::Interface;
 
 // The boot view: the progress cover this mod draws in front of the game's own loading screen,
 // with its bar, its portrait and its stat block. `save_picker_overlay` below shares the Present
-// compositor with it and is NOT part of this feature -- the boot missing-save picker and the
+// compositor with it and is not part of this feature -- the boot missing-save picker and the
 // System>Quit save browser both draw through it.
 #[cfg(feature = "loading-cover")]
 mod boot_progress;

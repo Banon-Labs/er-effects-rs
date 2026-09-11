@@ -441,7 +441,7 @@ macro_rules! own_stepper_idx10_fallbacks {
                 // `game_data_addr`. It resolves on 1.17 today; the check is what keeps that a fact
                 // rather than an assumption.
                 let open_menu_addr = er_game_base::mem::game_data_addr($base, TITLE_TOP_DIALOG_OPEN_MENU_RVA, "TITLE_TOP_DIALOG_OPEN_MENU_RVA");
-                // WHY `in_loop` IS NOT REQUIRED (2026-09-04). `TitleTopDialog::update` calls this
+                // Why `in_loop` is not required (2026-09-04). `TitleTopDialog::update` calls this
                 // same registrar from two sites, and only the first is gated on the "Loop" anim
                 // state. Read on 1.16.2 `FUN_1409aac10` (1.17 `FUN_1409abdb0`):
                 //

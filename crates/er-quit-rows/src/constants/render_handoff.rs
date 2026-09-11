@@ -80,7 +80,7 @@ pub(crate) const STEP_MOVEMAP_FINISH_RVA: usize = 0xaf5a20; // dump 0x140af5b10
 /// the MoveMap child (by STEP_MoveMap_Update) and on `testNetStep` (by STEP_Finish).
 #[allow(dead_code)]
 pub(crate) const MOVEMAP_CHILD_FINISHED_POLL_RVA: usize = 0xeb5530; // dump 0x140eb5550
-// REMOVED 2026-08-01: `EZ_CHILDSTEP_RESET_RVA = 0xeb54e0` was a MID-FUNCTION address. The
+// removed 2026-08-01: `EZ_CHILDSTEP_RESET_RVA = 0xeb54e0` was a mid-function address. The
 // 1.16.2 dump resolves 0x140eb54e0 to entry 0x140eb54c0 (size 111,
 // `FUN_140eb54c0(EzChildStepBase*)`), i.e. it pointed 0x20 bytes into the function. Calling or
 // hooking it would have executed from the middle of a prologue-established frame. It was never

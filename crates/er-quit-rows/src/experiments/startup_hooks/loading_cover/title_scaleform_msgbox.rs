@@ -677,7 +677,7 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
     d: usize,
 ) -> usize {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    // SAVE-FLOW CONFIRM BOX (save-game-flow WP2) -- checked FIRST, before any suppression.
+    // Save-flow confirm box (save-game-flow WP2) -- checked first, before any suppression.
     // `save_flow_submit_box` tags the box id here immediately before submitting its MenuJob,
     // so this build is the dialog the user must answer. Forward it unconditionally and stash
     // the pointer in the flow's own slot: `MSGBOX_LAST_DIALOG`/`CONNECTION_ERROR_DIALOG` feed

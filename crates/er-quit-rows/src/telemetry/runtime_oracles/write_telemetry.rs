@@ -22,7 +22,7 @@ pub(crate) fn publish_effects_state(state: &Arc<Mutex<EffectsState>>) {
 /// Flush the telemetry file from a thread that does not own `EffectsState`. Returns whether it
 /// actually wrote.
 ///
-/// NON-BLOCKING BY CONSTRUCTION. `try_lock` fails rather than waits, so a game task frozen mid-tick
+/// Non-blocking by construction. `try_lock` fails rather than waits, so a game task frozen mid-tick
 /// costs a stale file (recorded as `oracle_save_picker_boot_telemetry_flushed = 0`) instead of
 /// costing the caller its ability to finish. A short bounded retry covers the ordinary case where
 /// the task merely holds the lock for the microseconds of its own tick.
@@ -640,7 +640,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // `oracle_system_quit_row_resolved_by_cursor_row_count` must equal
     // `resolve_count - ambiguous_count`. `oracle_system_quit_row_last_ambiguity` says why a row could
     // not be named; `..._refused_disagreement_count` counts the subset where the captured row table
-    // and the label read live at the cursor CONTRADICTED each other, so the row ran nothing.
+    // and the label read live at the cursor contradicted each other, so the row ran nothing.
     // `oracle_system_quit_grid_*` is the navigability evidence read live off the dialog's
     // `CS::GridControl`. The tab now has six rows in a 2x3 grid, and the three numbers must agree:
     // `navigable_cells == 6` (the bound of the native mouse hit-test loop, i.e. `cols * rows`),
@@ -1036,7 +1036,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // dropped, not queued, so "the menu will build post-pick" rests entirely on the native title
     // re-issuing `open_menu` afterwards. `passthrough_after_suppress_count` is that claim as a
     // number: 0 after a late pick means the title never asked again and the rows can never be
-    // rebuilt with the save present -- the pick would then have to TRIGGER the open itself.
+    // rebuilt with the save present -- the pick would then have to trigger the open itself.
     //
     // `boot_save_container_matches_runtime`: 0 = undecided, 1 = the boot default-save check
     // accepted the container this runtime opens (or accepted nothing and armed the picker),
@@ -1065,7 +1065,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_BEFORE.load(Ordering::SeqCst),
         SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_AFTER.load(Ordering::SeqCst)
     ));
-    // SAVE-FLOW / SAVE-SUPPRESS oracles (save-game-flow WP1): suppression state and the
+    // Save-flow / save-suppress oracles (save-game-flow WP1): suppression state and the
     // one-shot bypass counters come straight from the er-save-suppress crate accessors
     // (the product wires that crate's publish sink to a no-op because this writer is the
     // export path); the flow stage/counters are the product-side state machine. Probes
@@ -1228,7 +1228,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         // `FUN_140afb880`, and that caller gates the whole dispatch on
         // `cVar6 = FUN_14067a080(); if (cVar6 == 0) return;` -- and `FUN_14067a080` is literally
         // `MOV RAX,[0x143d69918]; CMP dword [RAX+0xb80],0; SETZ AL; RET`, i.e. `saveState == 0`.
-        // So every game-originated decline is PROVEN idle one call earlier, and this field can only
+        // So every game-originated decline is proven idle one call earlier, and this field can only
         // ever report 0 for one. What it therefore measures is the INSTRUMENT: 0 says the sampler
         // ran and agrees with the call graph, `u32::MAX` says it never sampled at all.
         //
@@ -1526,7 +1526,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         },
         er_save_suppress::submit_latch_verdict(),
     ));
-    // SAVE-FLOW CONFIRM oracles. There is ONE confirm box in the flow -- "Are you sure you want to
+    // Save-flow confirm oracles. There is one confirm box in the flow -- "Are you sure you want to
     // overwrite this file?" -- so there is one set of counters. The three-box spelling
     // (`oracle_save_flow_box1/2/3_*`) is gone with the two up-front confirms it described; a probe
     // written against those names will not silently read zeros from a renamed field, it will fail
@@ -1566,7 +1566,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         // failure: the user believes they saved and nothing was written.
         SAVE_FLOW_ENQUEUE_MISSING_COUNT.load(Ordering::SeqCst),
     ));
-    // SAVE-DESTINATION oracles (save-game-flow WP3): the Box2-"No" browser and the scoped
+    // Save-destination oracles (save-game-flow WP3): the Box2-"No" browser and the scoped
     // write-open redirect that makes the chosen destination -- not the loaded save -- receive the
     // container the native writer emits. `redirect_hits` is one per dirty block (the native
     // in-place writer opens the container once per block), so any positive count is normal and
@@ -1610,7 +1610,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // Destination-commit SAFETY ORACLES (2026-07-29). Every one names a decision the commit
     // refused to guess at, or a fact it could not establish, so a run can report it instead of
     // leaving it to be inferred from a file that changed when it should not have:
-    //   * `identity_unknown_abort` / `no_writer_observer_abort` -- commits that did NOT fire;
+    //   * `identity_unknown_abort` / `no_writer_observer_abort` -- commits that did not fire;
     //   * `self_redirect_blocked` -- a destination proven to be the loaded save under a different
     //     spelling, which the old string compare would have redirected onto itself;
     //   * `foreign_open_passed` -- write-opens of a same-named save container elsewhere on the

@@ -2,7 +2,7 @@
 
 use super::*;
 
-// === SAVE-FLOW state machine (save-game-flow WP1 + WP2 + WP3, 2026-07-28) ===
+// === save-flow state machine (save-game-flow WP1 + WP2 + WP3, 2026-07-28) ===
 // Drives the System->Quit "Save Game" row's destination pick and close-then-fire commit.
 // Stage map lives on `er_telemetry_core::counters::SAVE_FLOW_STAGE` (oracle_save_flow_stage):
 // 0 idle, 3 DEST_BROWSE, 4 OVERWRITE_CONFIRM, 5 CLOSING_ABORT, 6 CLOSING_COMMIT,
@@ -606,7 +606,7 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
     let gates_green =
         dsm == 0 && b80 == 0 && bc4 != GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY as i32;
     if gates_green {
-        // DESTINATION COMMIT (save-game-flow WP3). DECIDE FIRST, WRITE LAST (2026-07-29): the plan
+        // Destination commit (save-game-flow WP3). Decide first, write last (2026-07-29): the plan
         // below performs no I/O on the destination, so every refusal -- an unprovable identity, a
         // missing writer observer, a token already pending -- happens while the user's chosen file
         // is still untouched. The seed, which is the first byte this flow writes anywhere, is only
@@ -1382,7 +1382,7 @@ mod save_flow_deadline_tests {
     /// and `SAVE_FLOW_STAGE_TICKS` is frozen for the dialog's own lifetime, so only that gap counts.
     const REOPEN_GAP_TICKS: usize = 3;
 
-    /// THE REOPEN LOOP, REPRODUCED (bd `er-effects-rs-rsxi`, measured 2026-07-30 on
+    /// The reopen loop, reproduced (bd `er-effects-rs-rsxi`, measured 2026-07-30 on
     /// `surface=save-as`: Opened -> `result=cancelled` -> opened again 57 ms later, over and over,
     /// each cancel logging "nothing staged" while the next pump re-asked).
     ///
@@ -1414,7 +1414,7 @@ mod save_flow_deadline_tests {
                     }
                 }
                 ticks += REOPEN_GAP_TICKS;
-                // SAVE-FLOW TICK: no dialog is up by now, nothing is committed or confirmed.
+                // Save-flow TICK: no dialog is up by now, nothing is committed or confirmed.
                 match dest_browse_verdict(false, false, false, false, false, armed, ticks) {
                     DestBrowseAction::WaitForUser => continue,
                     DestBrowseAction::Abandoned | DestBrowseAction::OpenTimeout => return shown,

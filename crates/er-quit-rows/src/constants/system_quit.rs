@@ -214,22 +214,6 @@ pub(crate) static START_SPLASH_SKIP: Once = Once::new();
 pub(crate) static START_ONLINE_DISABLE: Once = Once::new();
 // START_FOREGROUND_FORCE removed 2026-07-16 (foreground-force dropped from the product).
 pub(crate) static START_SOUND_POST_EVENT_OBSERVER: Once = Once::new();
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) static START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS: Once = Once::new();
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) static START_TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS: Once = Once::new();
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) static START_TITLE_LOGO_START_LOGIN_HIDE: Once = Once::new();
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) static START_TITLE_LOGO_FORCE_HIDDEN: Once = Once::new();
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) static START_TITLE_PAB_INFORMATION_COVER: Once = Once::new();
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) static START_TITLE_GFX_VALUE_SET_VISIBLE: Once = Once::new();
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) static START_TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND: Once = Once::new();
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) static START_TITLE_SCALEFORM_BIND_OBSERVER: Once = Once::new();
 pub(crate) static START_TITLE_MENU_RESOURCE_ACQUIRE_OBSERVER: Once = Once::new();
 pub(crate) static START_TITLE_FLOW_CONTEXT_RECORD_REGULATION: Once = Once::new();
 /// One-shot install guard for the stats-panel native-text hooks (named-child capture + SetText).

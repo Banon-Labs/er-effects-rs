@@ -46,13 +46,6 @@ pub(crate) fn title_anim_speedup_factor() -> f32 {
 pub(crate) fn title_anim_speedup_enabled() -> bool {
     title_anim_speedup_factor() > TITLE_ANIM_SPEEDUP_MIN
 }
-/// True when the branch is replacing the native `05_001_Title_Logo` GFX bytes through the
-/// Scaleform MemoryFile seam. This is not a vanilla/main restore switch: it means the branch now
-/// owns that TitleBack resource, so old hooks that hide TitleBack would hide our replacement.
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) fn title_resource_memory_gfx_enabled() -> bool {
-    false
-}
 
 /// Default-on product 05_000_title asset strip (er-effects-rs-dl0, runtime-derived since
 /// er-effects-rs-h7x): at Scaleform file-open the hook reads the vanilla movie payload out of the
@@ -72,18 +65,6 @@ pub(crate) fn title_resource_memory_gfx_enabled() -> bool {
 /// stays on (handled in `load_title_scaleform_memory_gfx`).
 pub(crate) fn title_05_000_strip_default_enabled() -> bool {
     !(autoload_disabled() || save_override_telemetry_only())
-}
-
-/// Default-on product masquerade cover Part A: suppress only the native `05_000_Title`
-/// MenuWindowJob visual wrapper while the zero-input autoload runs. If memory-GFX replacement is
-/// active, do not install the old TitleBack hide hooks: `05_001_Title_Logo` is the replacement
-/// surface on this branch, not a vanilla/main object to suppress.
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) fn title_native_menu_visual_suppression_enabled() -> bool {
-    if title_resource_memory_gfx_enabled() || autoload_disabled() {
-        return false;
-    }
-    !save_override_telemetry_only()
 }
 
 /// Passive, epilogue-neutral observer for native Scaleform menu-resource acquisition. This is

@@ -183,7 +183,7 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // `switch-trigger #1: PROGRAMMATIC arm slot 0 ... presses=0` -- which made every menu-bug repro
     // impossible: on br-20260905-041435-e8d0 it tore the world down while er-input-harness was still
     // navigating the pause menu, so the second load under test was always this code's, never the
-    // menu's. scripts/check-world-lost.py scored such runs INCONCLUSIVE then and FAILS them now.
+    // menu's. scripts/check-world-lost.py scored such runs inconclusive then and fails them now.
     // D3D12 present OVERLAY: once the GX device is up, find the game's live swapchain and hook
     // its real Present (the dummy-swapchain vtable differs under vkd3d-proton). Self-gated
     // (portrait path only, one-shot on success, bounded retries) so it's cheap every frame.

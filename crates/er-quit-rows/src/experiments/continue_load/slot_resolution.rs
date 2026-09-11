@@ -535,7 +535,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         // a configured file; it simply needs no staging because the game already reads that path.
         // But only `direct_save_file_source_active()` counted, so the floor stayed at 10 and slot 0
         // = "Hero" RL7 was refused: `guard c30_real=true fp_real=true level=7 level_real=false ->
-        // guard_pass=false`, `GUARD FAIL -- NO continue_confirm`, character never entered the world.
+        // guard_pass=false`, `guard fail -- No continue_confirm`, character never entered the world.
         //
         // This is not the weakening that was reverted below. That one dropped `c30_real && fp_real`
         // themselves; both stay required here and both were true in the measurement above. The

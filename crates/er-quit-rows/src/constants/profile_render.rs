@@ -295,7 +295,7 @@ pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT;
 /// commits (return_title.rs:1-7), bouncing the freshly-loaded world back to title.
 #[cfg(feature = "loading-cover")]
 pub(crate) use er_telemetry_core::counters::ENDING_REQUEST_SET;
-/// Runtime semaphore: >0 == the recovery fired (SET menuData+0x5d=1 at an mms18 stall) this run.
+/// Runtime semaphore: >0 == the recovery fired (set menuData+0x5d=1 at an mms18 stall) this run.
 pub(crate) use er_telemetry_core::counters::ENDING_REQUEST_SET_COUNT;
 /// The MoveMapStep pointer as resolved by write_oracle (the only resolution that reliably tracks
 /// load2's in-world step; the game-task's fresh title_owner scan reads a stale owner -> stale step).

@@ -99,34 +99,6 @@ pub(crate) use er_title_flow::LIVE_DIALOG_FACTORY_RVA;
 /// SceneProxy MenuWindow back-ref: the live MenuWindow* sits at proxy+0x20 (ctor 0x14074a735).
 #[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const SCENE_PROXY_MENU_WINDOW_20_OFFSET: usize = 0x20;
-pub(crate) use er_title_flow::SCENE_OBJ_PROXY_CONTEXT_20_OFFSET;
-pub(crate) use er_title_flow::TITLE_PRESS_START_SET_VISIBLE_RVA;
-/// Lower-level GFx visibility setter (`dump 0x140d84580 -> live/deobf 0x140d844d0`). It has one
-/// code caller, the SceneObjProxy wrapper above. The hook only forces false for the latched
-/// PressStart CSScaleformValue pointer, not globally.
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) const TITLE_GFX_VALUE_SET_VISIBLE_RVA: usize = 0xd844d0;
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) static TITLE_GFX_VALUE_SET_VISIBLE_ORIG: AtomicUsize =
-    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry_core::counters::TITLE_GFX_VALUE_SET_VISIBLE_INSTALLED;
-pub(crate) use er_telemetry_core::counters::TITLE_GFX_VISIBLE_TITLE_FADEIN_SEEN;
-pub(crate) use er_title_flow::TITLE_PRESS_START_GFX_VALUE;
-/// Small fixed set of title text CSScaleformValue pointers that must remain hidden while the
-/// branch-owned `05_001_Title_Logo` replacement surface is visible. One slot was insufficient:
-/// ProgressInfo/Install_ProgressInfo/CopyrightText can overwrite the original PressStart value.
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) static TITLE_TEXT_GFX_VALUES: [AtomicUsize; 8] = [
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS),
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS),
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS),
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS),
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS),
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS),
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS),
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS),
-];
-pub(crate) use er_telemetry_core::counters::TITLE_TEXT_GFX_VALUE_COUNT;
 pub(crate) use er_telemetry_core::counters::TITLE_PRESS_START_GFX_FORCE_FALSE_CALLS;
 pub(crate) static TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_VALUE: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
@@ -144,24 +116,6 @@ pub(crate) static TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG: AtomicUsize =
 /// whether to attempt one.
 pub(crate) static TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_INSTALLED: AtomicUsize =
     AtomicUsize::new(0);
-/// Someone has already attempted the install -- claimed with a `swap`, before any work.
-///
-/// The install has two independent owners (`install_title_visual_startup_hooks` calls it from the
-/// `START_PROFILE_STATS_TEXT` thread and from the `START_TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND`
-/// thread; two different `Once` gates cannot dedupe each other), and the `_INSTALLED` latch above
-/// is set only on success, so a check-then-act read of it let both threads through. Measured
-/// 2026-08-30: `MhHook::new` at +558 ms and again at +606 ms, the second returning
-/// `MH_ERROR_ALREADY_CREATED` and logging a `HOOK REGISTRY COLLISION` for an address that had no
-/// competing owner at all. Nothing was lost -- both registrations name the same detour, and the
-/// winner's hook fired (`named-child bind hid PressStart` at +17 323 ms) -- but the collision line
-/// is the DLL's signal for a genuinely contested address, and a duplicate that looks identical to
-/// one costs the next reader an investigation.
-///
-/// A claim is the right shape rather than a retry latch because both failures reachable here are
-/// permanent: `MH_ERROR_ALREADY_CREATED` (the registration is held for the life of the process) and
-/// a refused/unmapped address. Neither can succeed on a second attempt.
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) static TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_CLAIMED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) use er_telemetry_core::counters::TITLE_PROFILE_FACE_BIND_HITS;
 pub(crate) use er_telemetry_core::counters::TITLE_PROFILE_FACE_LAST_PROXY;
 pub(crate) use er_telemetry_core::counters::TITLE_PROFILE_FACE_LAST_VALUE;

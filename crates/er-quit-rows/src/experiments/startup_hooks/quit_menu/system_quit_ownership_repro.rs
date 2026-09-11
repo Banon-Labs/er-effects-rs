@@ -608,33 +608,6 @@ pub(crate) unsafe fn menu_window_doomed_event_index(
     Some((doomed, index))
 }
 
-/// OWNERSHIP: record a `MenuWindowJob*` our title-cover masquerade preserved past its native
-/// replacement point (er-effects-rs-j74t identity layer; see `MENU_WINDOW_JOB_DTOR_RVA`). Called by
-/// the part-a latches. Idempotent per pointer; on a full set the job just falls back to the legacy
-/// state heuristic at `~MenuWindowJob` (logged so the fallback is visible in the run evidence).
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) fn masquerade_preserved_job_note(job: usize) {
-    if job == 0 {
-        return;
-    }
-    for slot in MASQUERADE_PRESERVED_JOBS.iter() {
-        if slot.load(Ordering::SeqCst) == job {
-            return;
-        }
-    }
-    for slot in MASQUERADE_PRESERVED_JOBS.iter() {
-        if slot
-            .compare_exchange(0, job, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
-        {
-            return;
-        }
-    }
-    append_autoload_debug(format_args!(
-        "menu-window-job-guard: preserved-job identity set FULL ({MASQUERADE_PRESERVED_JOB_SLOTS} slots); job=0x{job:x} falls back to the state heuristic at ~MenuWindowJob"
-    ));
-}
-
 /// Remove `job` from the masquerade-preserved identity set, returning whether it was present. Called
 /// exactly once per destructor entry so the set self-cleans across title rebuilds.
 /// Non-consuming membership test for the masquerade-preserved identity set. The FINALIZE hook needs

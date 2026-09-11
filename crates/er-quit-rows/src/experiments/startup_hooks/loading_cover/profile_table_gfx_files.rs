@@ -263,42 +263,6 @@ pub(crate) unsafe fn maybe_register_stats_panel_textures(base: usize) {
     }
 }
 
-/// Parse the trailing 2-digit slot index (`00`..`09`) from a `systex_menu_profileNN` target DLString.
-/// Returns `Some(0..=9)` only for a target that actually looks like the profile SYSTEX key, else `None`
-/// (so we never redirect the status-face / kick-face / decorative binds).
-#[allow(dead_code)] // title-cover hide: call site commented out, pending the delete pass
-pub(crate) unsafe fn systex_profile_target_slot(target_ptr: usize) -> Option<usize> {
-    let mut buf = [0u8; 96];
-    let n = unsafe { copy_ascii_preview(target_ptr, &mut buf) };
-    if n < 2 {
-        return None;
-    }
-    let s = &buf[..n];
-    // Lowercase compare against the known prefix so casing never matters.
-    let mut lower = [0u8; 96];
-    for (i, b) in s.iter().enumerate() {
-        lower[i] = b.to_ascii_lowercase();
-    }
-    let lower = &lower[..n];
-    if !lower
-        .windows(b"systex_menu_profile".len())
-        .any(|w| w == b"systex_menu_profile")
-    {
-        return None;
-    }
-    let d1 = s[n - 2];
-    let d0 = s[n - 1];
-    if !d1.is_ascii_digit() || !d0.is_ascii_digit() {
-        return None;
-    }
-    let slot = ((d1 - b'0') as usize) * 10 + (d0 - b'0') as usize;
-    if slot < STATS_PANEL_SLOT_COUNT {
-        Some(slot)
-    } else {
-        None
-    }
-}
-
 pub(crate) unsafe extern "system" fn title_menu_resource_acquire_observer_hook(
     this: usize,
     load_params: usize,
