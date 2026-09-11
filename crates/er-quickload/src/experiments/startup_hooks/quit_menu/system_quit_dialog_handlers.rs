@@ -5,119 +5,16 @@ use super::*;
 // `er_quit_menu_core::row_text`; they touch no game state, so they crossed with no seam entry.
 pub(crate) use er_quit_menu_core::row_text::*;
 
-pub(crate) unsafe fn system_quit_open_profile_load_dialog(action_obj: usize) -> bool {
-    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    const HEAP_LO: usize = 0x10000;
-    let system_dialog =
-        unsafe { safe_read_usize(action_obj + SYSTEM_QUIT_ACTION_OBJECT_DIALOG_08_OFFSET) }
-            .unwrap_or(NULL);
-    if system_dialog < HEAP_LO {
-        append_autoload_debug(format_args!(
-            "system-quit-dup: profile-load route abort -- action=0x{action_obj:x} dialog=0x{system_dialog:x} is not heap-like"
-        ));
-        return false;
-    }
-    unsafe { system_quit_open_profile_load_dialog_on(system_dialog) }
-}
-
-/// Submit the native `05_010_ProfileSelect` window against an already-resolved System/Quit
-/// PropertyEditDialog. Split out of the action-object form (save-game-flow WP3) because the save
-/// flow opens the destination browser from the dialog it captured at the row press -- it never has
-/// a row action object of its own.
-pub(crate) unsafe fn system_quit_open_profile_load_dialog_on(system_dialog: usize) -> bool {
-    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    const HEAP_LO: usize = 0x10000;
-    let Ok(base) = game_module_base() else {
-        append_autoload_debug(format_args!(
-            "system-quit-dup: profile-load route abort -- module base unavailable"
-        ));
-        return false;
-    };
-    if system_dialog < HEAP_LO {
-        append_autoload_debug(format_args!(
-            "system-quit-dup: profile-load route abort -- dialog=0x{system_dialog:x} is not heap-like"
-        ));
-        return false;
-    }
-    let scene_proxy = system_dialog + SYSTEM_QUIT_DIALOG_SCENE_PROXY_1200_OFFSET;
-    let scene_proxy_vt = unsafe { safe_read_usize(scene_proxy) }.unwrap_or(NULL);
-    let want_scene_proxy_vt = er_game_base::mem::game_data_addr(
-        base,
-        SCENE_OBJ_PROXY_VTABLE_RVA,
-        "SCENE_OBJ_PROXY_VTABLE_RVA",
-    );
-    if scene_proxy_vt != want_scene_proxy_vt {
-        append_autoload_debug(format_args!(
-            "system-quit-dup: profile-load route abort -- dialog=0x{system_dialog:x} scene_proxy=dialog+0x{SYSTEM_QUIT_DIALOG_SCENE_PROXY_1200_OFFSET:x}=0x{scene_proxy:x} vt=0x{scene_proxy_vt:x} want=0x{want_scene_proxy_vt:x}"
-        ));
-        return false;
-    }
-    // Native title/menu route callers pass `owner + 0x50` as the MenuWindowJob's
-    // field2_0x50 list argument. MenuWindowJob::Run later appends the loaded
-    // owning MenuWindow to this DLFixedVector via FUN_140733ff0. Passing the
-    // SceneObjProxy backref here is wrong: it lets the resource load start, then
-    // asserts in DLFixedVector.inl line 0x296 when Run appends to a full/wrong
-    // object.
-    let menu_window_list = system_dialog + 0x50;
-    let menu_window_list_count = unsafe { safe_read_usize(menu_window_list + 0x48) }.unwrap_or(!0);
-    if menu_window_list_count >= 8 {
-        append_autoload_debug(format_args!(
-            "system-quit-dup: profile-load route abort -- candidate menu_window_list=dialog+0x50=0x{menu_window_list:x} count@+0x48={menu_window_list_count} would overflow DLFixedVector<8>"
-        ));
-        return false;
-    }
-    let Ok(wrapper_addr) = game_rva(PROFILE_SELECT_WRAPPER_RVA) else {
-        append_autoload_debug(format_args!(
-            "system-quit-dup: profile-load route abort -- failed to resolve ProfileSelect wrapper rva 0x{PROFILE_SELECT_WRAPPER_RVA:x}"
-        ));
-        return false;
-    };
-    let Ok(submit_addr) = game_rva(MENU_JOB_SUBMIT_RVA) else {
-        append_autoload_debug(format_args!(
-            "system-quit-dup: profile-load route abort -- failed to resolve menu-job submit rva 0x{MENU_JOB_SUBMIT_RVA:x}"
-        ));
-        return false;
-    };
-    let job_slot = &SYSTEM_QUIT_PROFILE_LOAD_JOB_SLOT as *const AtomicUsize as usize;
-    SYSTEM_QUIT_PROFILE_LOAD_JOB_SLOT.store(NULL, Ordering::SeqCst);
-    // Latch the profile-load flow as active now (before the ProfileSelect job/Run hook runs) so the native
-    // load-confirm MessageBox the own_stepper self-pump triggers is suppressed and cannot crash the game.
-    // Cleared on ProfileSelect reset (system_quit_reset_profile_select_state).
-    SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.store(1, Ordering::SeqCst);
-    let wrapper: unsafe extern "system" fn(usize, usize, usize) -> usize =
-        unsafe { std::mem::transmute(wrapper_addr) };
-    append_autoload_debug(format_args!(
-        "system-quit-dup: profile-load route FIRE 05_010_ProfileSelect wrapper 0x{wrapper_addr:x}(rcx=job_slot=0x{job_slot:x}, rdx=menu_window_list=dialog+0x50=0x{menu_window_list:x} count={menu_window_list_count}, r8=scene_proxy=0x{scene_proxy:x}) from system_dialog=0x{system_dialog:x}"
-    ));
-    let ret = unsafe { wrapper(job_slot, menu_window_list, scene_proxy) };
-    let job = SYSTEM_QUIT_PROFILE_LOAD_JOB_SLOT.load(Ordering::SeqCst);
-    let job_vt = if job >= HEAP_LO {
-        unsafe { safe_read_usize(job) }.unwrap_or(NULL)
-    } else {
-        NULL
-    };
-    if job < HEAP_LO {
-        append_autoload_debug(format_args!(
-            "system-quit-dup: profile-load route 05_010 wrapper returned=0x{ret:x} job_slot=0x{job_slot:x} job=0x{job:x} job_vt=0x{job_vt:x}; no job to submit"
-        ));
-        return false;
-    }
-    let submit: unsafe extern "system" fn(usize, usize) =
-        unsafe { std::mem::transmute(submit_addr) };
-    let submit_queue = system_dialog + 0x10;
-    SYSTEM_QUIT_TOP_HIDE_ARMED_LIST.store(menu_window_list, Ordering::SeqCst);
-    SYSTEM_QUIT_TOP_HIDE_ARMED_DIALOG.store(system_dialog, Ordering::SeqCst);
-    SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.store(system_dialog, Ordering::SeqCst);
-    append_autoload_debug(format_args!(
-        "system-quit-dup: profile-load route SUBMIT job=0x{job:x} job_vt=0x{job_vt:x} via 0x{submit_addr:x}(queue=dialog+0x10=0x{submit_queue:x}, job_slot=0x{job_slot:x}); armed ProfileSelect list observer=0x{menu_window_list:x} -- no slot activation/no load"
-    ));
-    unsafe { submit(submit_queue, job_slot) };
-    let job_after_submit = SYSTEM_QUIT_PROFILE_LOAD_JOB_SLOT.load(Ordering::SeqCst);
-    append_autoload_debug(format_args!(
-        "system-quit-dup: profile-load route submitted 05_010 wrapper job; job_slot_after=0x{job_after_submit:x}"
-    ));
-    true
-}
+// The two `05_010_ProfileSelect` openers moved to `er_quit_menu_core::profile_load_dialog`, which
+// the standalone character-row shell links. Pure code reorganization, no behavior change: every
+// symbol they read was already in a shared crate (`er-title-flow` for the three native addresses
+// and the two dialog offsets, `er-telemetry-core` for the four latches), so the move added no
+// `QuitMenuHost` field. Both product callers -- the Load Character row action and the save flow's
+// destination browser, which opens from a captured dialog and has no row action object -- keep the
+// names they always used.
+pub(crate) use er_quit_menu_core::profile_load_dialog::{
+    system_quit_open_profile_load_dialog, system_quit_open_profile_load_dialog_on,
+};
 
 pub(crate) unsafe extern "system" fn system_quit_menu_window_list_push_hook(
     list: usize,
