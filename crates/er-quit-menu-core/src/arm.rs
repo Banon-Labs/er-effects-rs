@@ -103,12 +103,21 @@ pub unsafe fn arm_standalone(rows: RowSet) -> StandaloneArm {
 pub fn append_build_row_oracle_line(reason: &str) {
     use er_telemetry_core::counters as c;
     let load = |counter: &'static core::sync::atomic::AtomicUsize| counter.load(Ordering::SeqCst);
+    // Each name says what its counter counts, because the first live run made the cost of not
+    // doing that concrete. `url_requests` was `..._REQUEST_COUNT`, which counts imports handed to
+    // the importer, while `link_requests` was the generate row's press. A cancelled link field
+    // therefore printed `url_requests=0 link_requests=1`, which reads as "the build-url row never
+    // fired" -- and the row had fired: it opened the field, the player backed out, and no import
+    // was ever requested. The press counter it should have been showing was in the same module
+    // and simply absent from the line.
     append_autoload_debug(format_args!(
         "system-quit-rows: oracle at={reason} \
-         url_requests={} url_editor_opens={} url_window_placed={} url_window_unplaced={} \
+         url_row_presses={} url_imports_requested={} url_editor_opens={} \
+         url_window_placed={} url_window_unplaced={} \
          url_accepted={} url_cancelled={} url_imported={} url_rejected={} url_failed={} \
-         link_requests={} link_encoded={} link_clipboard={} link_opened={} link_failed={} \
-         link_url_len={}",
+         link_row_presses={} link_exports_requested={} link_encoded={} link_clipboard={} \
+         link_opened={} link_failed={} link_url_len={}",
+        load(&c::SYSTEM_QUIT_LOAD_BUILD_URL_ACTION_COUNT),
         load(&c::SYSTEM_QUIT_LOAD_BUILD_URL_REQUEST_COUNT),
         load(&c::SYSTEM_QUIT_LOAD_BUILD_URL_EDITOR_OPEN_COUNT),
         load(&c::SYSTEM_QUIT_LOAD_BUILD_URL_WINDOW_PLACED),
@@ -118,6 +127,7 @@ pub fn append_build_row_oracle_line(reason: &str) {
         load(&c::SYSTEM_QUIT_LOAD_BUILD_URL_IMPORTED_COUNT),
         load(&c::SYSTEM_QUIT_LOAD_BUILD_URL_REJECTED_COUNT),
         load(&c::SYSTEM_QUIT_LOAD_BUILD_URL_FAILED_COUNT),
+        load(&c::SYSTEM_QUIT_GENERATE_BUILD_LINK_ACTION_COUNT),
         load(&c::SYSTEM_QUIT_GENERATE_BUILD_LINK_REQUEST_COUNT),
         load(&c::SYSTEM_QUIT_GENERATE_BUILD_LINK_ENCODED_COUNT),
         load(&c::SYSTEM_QUIT_GENERATE_BUILD_LINK_CLIPBOARD_COUNT),
