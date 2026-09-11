@@ -96,7 +96,34 @@ fi
 argv+=("${extra[@]+"${extra[@]}"}")
 
 mkdir -p "$artifacts"
+
+# A linked worktree cannot be the source, and the failure is not obvious when it happens. act does
+# not run `actions/checkout` against a remote; it copies the local tree into the container. In a
+# `git worktree` checkout `.git` is a one-line pointer file naming a directory under the main
+# checkout's `.git/worktrees/`, and that directory is not copied -- so every `git` command inside
+# the container exits 128. Measured on `--stage lint`: check-comment-caps.py died with
+# `CalledProcessError ... 'git' 'ls-files' '-z' ... exit status 128`, and so would every other gate
+# that reads the index. Stages whose gates never shell out to git (docs, for one) are unaffected,
+# which is what makes this confusing rather than obvious.
+#
+# So clone `HEAD` into a scratch directory and point act at that. A clone has a real `.git`, and
+# it is also closer to what CI does -- `actions/checkout` produces exactly this shape:
+# tracked files only, no gitignored game images, no vendor/. The cost is the thing to say out loud:
+# this runs the committed `HEAD`, not the working tree. Commit first, or set `ACT_SOURCE` to a
+# path of your own.
+source_dir=${ACT_SOURCE:-$repo_root}
+if [[ -z ${ACT_SOURCE:-} && -f "$repo_root/.git" ]]; then
+	source_dir=${ACT_CLONE_DIR:-${TMPDIR:-/tmp}/er-act-source}
+	rm -rf "$source_dir"
+	printf 'act-check: %s is a linked worktree, whose .git is a pointer act cannot copy.\n' "$repo_root" >&2
+	printf 'act-check: cloning HEAD into %s and running act there instead.\n' "$source_dir" >&2
+	printf 'act-check: that is the committed HEAD, not your working tree. Commit first.\n' >&2
+	git clone --quiet --no-hardlinks "$repo_root" "$source_dir" || exit 2
+	git -C "$source_dir" checkout --quiet "$(git -C "$repo_root" rev-parse HEAD)" || exit 2
+fi
+
 printf 'act-check: DOCKER_HOST=%s\n' "$DOCKER_HOST" >&2
+printf 'act-check: source=%s\n' "$source_dir" >&2
 printf 'act-check: %s\n' "${argv[*]}" >&2
-cd "$repo_root" || exit 2
+cd "$source_dir" || exit 2
 exec "${argv[@]}"

@@ -265,6 +265,19 @@ jobs:
               libwayland-dev libasound2-dev libudev-dev \
             || { sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld llvm wine \
               libwayland-dev libasound2-dev libudev-dev; }
+          # RUSTUP MAY NOT BE THERE. GitHub's `ubuntu-latest` image ships it, so this used to be
+          # two bare `rustup` lines -- and both of the other places this workflow can run do not:
+          # `catthehacker/ubuntu:act-latest`, which is what `act` uses, has no rustup (measured:
+          # exit 127, `rustup: command not found`, after the apt half had succeeded), and the
+          # self-hosted laptop `choose-runner` can route to is whatever that laptop happens to
+          # have. Bootstrapping it when absent costs nothing on a runner that already has it and
+          # is the difference between this job running and not running everywhere else.
+          command -v rustup >/dev/null 2>&1 || {
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --default-toolchain none --profile minimal --no-modify-path
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          }
           rustup toolchain install stable --profile minimal --component rustfmt
           rustup target add x86_64-pc-windows-msvc
       - uses: taiki-e/install-action@v2
@@ -339,6 +352,19 @@ jobs:
               libwayland-dev libasound2-dev libudev-dev \
             || { sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld llvm wine \
               libwayland-dev libasound2-dev libudev-dev; }
+          # RUSTUP MAY NOT BE THERE. GitHub's `ubuntu-latest` image ships it, so this used to be
+          # two bare `rustup` lines -- and both of the other places this workflow can run do not:
+          # `catthehacker/ubuntu:act-latest`, which is what `act` uses, has no rustup (measured:
+          # exit 127, `rustup: command not found`, after the apt half had succeeded), and the
+          # self-hosted laptop `choose-runner` can route to is whatever that laptop happens to
+          # have. Bootstrapping it when absent costs nothing on a runner that already has it and
+          # is the difference between this job running and not running everywhere else.
+          command -v rustup >/dev/null 2>&1 || {
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --default-toolchain none --profile minimal --no-modify-path
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          }
           rustup toolchain install stable --profile minimal --component rustfmt
           rustup target add x86_64-pc-windows-msvc
 
