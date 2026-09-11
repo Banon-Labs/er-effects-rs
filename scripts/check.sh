@@ -89,6 +89,11 @@ while [[ $# -gt 0 ]]; do
 		_check_jobs="${1#*=}"
 		shift
 		;;
+	--help | -h)
+		echo "usage: check.sh [--stage <name>] [--jobs <n>] [--list-stages]" >&2
+		echo "  no arguments: every stage, as child processes, ER_CHECK_JOBS at a time" >&2
+		exit 0
+		;;
 	--list-stages)
 		command python3 "$repo_root/scripts/check-stages.py" --counts
 		exit 0
@@ -100,6 +105,13 @@ while [[ $# -gt 0 ]]; do
 		;;
 	esac
 done
+# A jobs count that is not a positive integer would make the throttle below compare against a
+# string, which bash evaluates as 0 -- every stage launched at once, on a machine cpu-courtesy has
+# just finished making polite. Refuse instead.
+if [[ ! $_check_jobs =~ ^[1-9][0-9]*$ ]]; then
+	echo "check.sh: REFUSED -- --jobs/ER_CHECK_JOBS must be a positive integer, got '$_check_jobs'." >&2
+	exit 2
+fi
 
 
 # --- who may run this, and how many at once -------------------------------------------------
@@ -617,7 +629,15 @@ _check_summary() {
 	#
 	# Written unconditionally when the directory is set, including when this run went red: a red
 	# stage's step states are exactly what the report has to show.
-	if [[ -n ${ER_CHECK_RESULT_DIR:-} ]]; then
+	#
+	# The basename test keeps the accumulation fixture out of the results directory.
+	# scripts/test-check-sh-accumulates.py lifts this preamble into a `fixture.sh` in a temp
+	# directory and drives it over synthetic suites; those runs inherit the environment, so
+	# without this they would each write an `all.tsv` beside the real stages' files while the
+	# `suite` stage is running. The report ignores a file it has no stage for, so this is tidiness
+	# rather than a correctness fix -- but a results directory that contains a file from a
+	# synthetic suite is exactly the kind of thing someone later reads as evidence.
+	if [[ -n ${ER_CHECK_RESULT_DIR:-} && ${BASH_SOURCE[0]##*/} == check.sh ]]; then
 		local result_file="${ER_CHECK_RESULT_DIR}/${_check_stage:-all}.tsv"
 		mkdir -p "${ER_CHECK_RESULT_DIR}"
 		{
@@ -803,8 +823,12 @@ _check_fanout() {
 	fi
 
 	dir="${ER_CHECK_RESULT_DIR:-${XDG_RUNTIME_DIR:-/tmp}/er-mods-rs-check-stages}"
-	rm -rf "$dir"
 	mkdir -p "$dir"
+	# Only the files this run owns, never the directory. `ER_CHECK_RESULT_DIR` is a caller-supplied
+	# path and `rm -rf` on one of those is a loaded gun pointed at whatever the caller happened to
+	# name. Clearing the old `.tsv` files is what actually matters: a result left by a previous run
+	# under a different stage list would be joined into this run's verdict as if it were fresh.
+	rm -f "$dir"/*.tsv "$dir"/*.log
 	export ER_CHECK_RESULT_DIR="$dir"
 	# The children are this run's own stages, not a second run competing for the box, so they must
 	# not each refuse on the lock this process is holding. Same marker, same reason, as the one
