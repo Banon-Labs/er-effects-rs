@@ -17,6 +17,8 @@
 //! Each is installed by its own module and reported separately, because each fails differently and
 //! a run has to be able to say which one was missing.
 
+use core::sync::atomic::Ordering;
+
 use crate::host::append_autoload_debug;
 use crate::row_cloner::{ArmError, QuitRowActions, RowSet};
 
@@ -85,4 +87,42 @@ pub unsafe fn arm_standalone(rows: RowSet) -> StandaloneArm {
         arm.is_complete()
     ));
     arm
+}
+
+/// Emit the build rows' telemetry counters as one machine-readable line.
+///
+/// A standalone shell writes no `er-quickload-telemetry.json`, so until this existed the only
+/// record a shell run left behind was prose -- readable by a person, not assertable by a watcher,
+/// and the reason a row press could only ever be reported as "seen in the log" rather than
+/// measured. Every value here is a count the DLL derived from the game's own memory: a placement
+/// counted only when the root proxy accepted a transform, an open counted only when the field's
+/// window ran, an opened link counted only when `ShellExecuteW` said so.
+///
+/// Called at each row outcome rather than at teardown, because a shell has no teardown hook and a
+/// run that crashes still leaves the last outcome's line on disk.
+pub fn append_build_row_oracle_line(reason: &str) {
+    use er_telemetry_core::counters as c;
+    let load = |counter: &'static core::sync::atomic::AtomicUsize| counter.load(Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "system-quit-rows: oracle at={reason} \
+         url_requests={} url_editor_opens={} url_window_placed={} url_window_unplaced={} \
+         url_accepted={} url_cancelled={} url_imported={} url_rejected={} url_failed={} \
+         link_requests={} link_encoded={} link_clipboard={} link_opened={} link_failed={} \
+         link_url_len={}",
+        load(&c::SYSTEM_QUIT_LOAD_BUILD_URL_REQUEST_COUNT),
+        load(&c::SYSTEM_QUIT_LOAD_BUILD_URL_EDITOR_OPEN_COUNT),
+        load(&c::SYSTEM_QUIT_LOAD_BUILD_URL_WINDOW_PLACED),
+        load(&c::SYSTEM_QUIT_LOAD_BUILD_URL_WINDOW_UNPLACED),
+        load(&c::SYSTEM_QUIT_LOAD_BUILD_URL_ACCEPTED_COUNT),
+        load(&c::SYSTEM_QUIT_LOAD_BUILD_URL_CANCELLED_COUNT),
+        load(&c::SYSTEM_QUIT_LOAD_BUILD_URL_IMPORTED_COUNT),
+        load(&c::SYSTEM_QUIT_LOAD_BUILD_URL_REJECTED_COUNT),
+        load(&c::SYSTEM_QUIT_LOAD_BUILD_URL_FAILED_COUNT),
+        load(&c::SYSTEM_QUIT_GENERATE_BUILD_LINK_REQUEST_COUNT),
+        load(&c::SYSTEM_QUIT_GENERATE_BUILD_LINK_ENCODED_COUNT),
+        load(&c::SYSTEM_QUIT_GENERATE_BUILD_LINK_CLIPBOARD_COUNT),
+        load(&c::SYSTEM_QUIT_GENERATE_BUILD_LINK_OPENED_COUNT),
+        load(&c::SYSTEM_QUIT_GENERATE_BUILD_LINK_FAILED_COUNT),
+        load(&c::SYSTEM_QUIT_GENERATE_BUILD_LINK_LAST_URL_LEN),
+    ));
 }

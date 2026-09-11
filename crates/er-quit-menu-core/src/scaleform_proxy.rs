@@ -633,6 +633,9 @@ pub fn reset_build_url_field_latches() {
     BUILD_URL_CARET_RESOLVED.store(0, Ordering::SeqCst);
     BUILD_URL_WINDOW_POSITION_ATTEMPTS.store(0, Ordering::SeqCst);
     BUILD_URL_WINDOW_POSITION_SUCCESSES.store(0, Ordering::SeqCst);
+    // `SYSTEM_QUIT_LOAD_BUILD_URL_WINDOW_PLACED`/`_UNPLACED` are deliberately not cleared here.
+    // These two are per-open and gate the log window; those two are the run's total, which is what
+    // a watcher reads back after the game exits.
 }
 
 /// Count one placement pass without touching game memory, so a test can prove the per-open latch
@@ -685,6 +688,11 @@ pub unsafe fn apply_build_url_editor_window_position(base: usize, menu_window: u
         unsafe { apply_transform_to_proxy(base, proxy, &transform, "02_990 build-url window") };
     if applied > 0 {
         BUILD_URL_WINDOW_POSITION_SUCCESSES.fetch_add(1, Ordering::SeqCst);
+        er_telemetry_core::counters::SYSTEM_QUIT_LOAD_BUILD_URL_WINDOW_PLACED
+            .fetch_add(1, Ordering::SeqCst);
+    } else {
+        er_telemetry_core::counters::SYSTEM_QUIT_LOAD_BUILD_URL_WINDOW_UNPLACED
+            .fetch_add(1, Ordering::SeqCst);
     }
     if attempt <= 8 || (unsupported > 0 && attempt.is_power_of_two()) {
         append_autoload_debug(format_args!(

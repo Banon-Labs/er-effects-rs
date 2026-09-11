@@ -957,6 +957,18 @@ pub static SYSTEM_QUIT_LOAD_BUILD_URL_BACKDROP_RESOLVED: AtomicUsize = AtomicUsi
 /// Frames on which it did not resolve. Derived but never resolved is the controller-rebuild case.
 pub static SYSTEM_QUIT_LOAD_BUILD_URL_BACKDROP_UNRESOLVED: AtomicUsize = AtomicUsize::new(0);
 
+// ---- did the field land where we put it, and did anyone see it --------------------------------
+// The two counters below are the closest thing this repo has to "the link field RENDERED". Neither
+// is a pixel: what they read is that the movie's root proxy accepted a transform written through
+// the game's own setter, on a window the engine was still running. That is a memory read, so it
+// belongs here rather than in the module's own statics, where it was unreadable to any watcher and
+// the only evidence a run left behind was a prose log line.
+/// Frames of an open link field on which the placement wrote a transform through the root proxy.
+pub static SYSTEM_QUIT_LOAD_BUILD_URL_WINDOW_PLACED: AtomicUsize = AtomicUsize::new(0);
+/// Frames on which the placement wrote nothing. A field counted open with this at its attempt count
+/// and `PLACED` at zero is one the player saw at the movie's authored top-left origin, not centred.
+pub static SYSTEM_QUIT_LOAD_BUILD_URL_WINDOW_UNPLACED: AtomicUsize = AtomicUsize::new(0);
+
 // ---- the Generate Build Link row: the inverse of everything above -----------------------------
 // That row takes a link and rewrites the character; this one takes the character and writes a link.
 // It touches no game state at all, so it has no "applied" counter -- what it has instead is a

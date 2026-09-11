@@ -411,6 +411,9 @@ pub unsafe fn build_url_editor_menu_pump() {
     //    rather than a frame later.
     if let Some(outcome) = take_build_url_keyboard_outcome() {
         set_phase(EditorPhase::Idle);
+        // Every branch below is an outcome, so the oracle line goes here rather than being
+        // repeated in each: the counters it reads already distinguish which one happened.
+        crate::arm::append_build_row_oracle_line("build-url-outcome");
         match outcome {
             BuildUrlKeyboardOutcome::Accepted(text) => unsafe { on_accepted(text) },
             BuildUrlKeyboardOutcome::Cancelled => {
