@@ -8,6 +8,23 @@ on:
   # CRT/SDK, rust-cache) if GitHub evicts them after an idle week, without
   # having to push a commit.
   workflow_dispatch:
+    inputs:
+      stages:
+        description: >-
+          Comma-separated stage names to run, or empty for all of them. Names come from
+          `python3 scripts/check-stages.py --stages`. A stage left out is reported NOT RUN by
+          the report job, never passed.
+        required: false
+        default: ""
+      skip-unchanged:
+        description: >-
+          Let a stage whose inputs are byte-identical to a previous green run skip. It is
+          reported CACHED, which is not a pass. Off by default because a digest over files
+          cannot see git history, an installed toolchain, or a gitignored game image, and
+          three of these stages depend on one of those.
+        type: boolean
+        required: false
+        default: false
 
 # One live run per ref: superseded runs on the same PR/branch are cancelled
 # instead of running to completion. Runs on main are never cancelled.
@@ -173,61 +190,166 @@ jobs:
 
       - run: echo "runner choice -- ${{ steps.pick.outputs.reason }}"
 
-  check:
+  # WHICH STAGES EXIST, ASKED RATHER THAN TYPED.
+  #
+  # The matrix below is generated here instead of being written into this file, and that is the
+  # whole reason this job exists. `.github/workflows/check.yml` used to name nine gates by hand
+  # while scripts/check.sh ran 224, and nothing said so, because a hand-written list drifts
+  # silently the moment somebody adds a gate. The same disease would come straight back in a new
+  # shape if the eleven stage names were typed into a `matrix.stage` literal here.
+  #
+  # `scripts/check-stages.py --check` -- one of the steps of the suite itself -- refuses a check.sh
+  # step that belongs to no stage or to two, so the list this job emits provably covers every one
+  # of the 283 steps.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      stages: ${{ steps.plan.outputs.stages }}
+      selected: ${{ steps.plan.outputs.selected }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: plan
+        env:
+          # Through env, not `${{ }}` inside `run:` -- a workflow input is attacker-influenced in
+          # the general case and interpolation into a shell is the standard injection shape.
+          REQUESTED: ${{ inputs.stages }}
+        run: |
+          set -euo pipefail
+          all=$(python3 scripts/check-stages.py --matrix)
+          echo "stages=$all" >> "$GITHUB_OUTPUT"
+          if [ -z "${REQUESTED:-}" ]; then
+            echo "selected=$all" >> "$GITHUB_OUTPUT"
+          else
+            # Intersect with the real list, so a typo cannot invent a job that then fails on a
+            # missing stage; and keep the JSON shape the matrix needs.
+            selected=$(python3 - "$REQUESTED" <<'PY'
+          import json, subprocess, sys
+          want = [s.strip() for s in sys.argv[1].split(",") if s.strip()]
+          have = json.loads(subprocess.run(
+              ["python3", "scripts/check-stages.py", "--matrix"],
+              capture_output=True, text=True, check=True, timeout=30).stdout)
+          missing = [w for w in want if w not in have]
+          if missing:
+              raise SystemExit(f"no such stage(s): {missing}; have {have}")
+          print(json.dumps([h for h in have if h in want]))
+          PY
+            )
+            echo "selected=$selected" >> "$GITHUB_OUTPUT"
+          fi
+      - run: |
+          {
+            echo '## Stages'
+            echo
+            echo '```'
+            python3 scripts/check-stages.py --counts
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # DOES THE COMMITTED STATE COMPILE? Kept as its own job, ahead of and beside everything else,
+  # for the reason it was introduced: it is the most basic claim any gate makes, and on 2026-08-31
+  # it was false on the shared branch for hours while a dozen agents built on top of it. Stages
+  # made it MORE valuable, not less -- it is now a job that can go red on its own run-page row
+  # while eleven other jobs are still running, which is exactly the "know specific things faster"
+  # this split is for.
+  #
+  # --workspace IS THE LOAD-BEARING FLAG. The workspace sets
+  # `default-members = ["crates/er-quickload"]`, so a bare `cargo xwin check` selects that one
+  # package and exits 0 in a fraction of a second having compiled nothing else, which reads exactly
+  # like a successful incremental build. Both commits that broke the branch landed a CONSUMER
+  # without its PRODUCER outside er-quickload's closure, so the bare form had nothing to say.
+  #
+  # --all-targets so `#[cfg(test)]` modules, benches and examples compile too; measured at 100 s
+  # with it and 105 s without, so it costs nothing. --keep-going so one broken crate does not hide
+  # the state of the rest.
+  compiles:
     needs: choose-runner
     runs-on: ${{ fromJSON(needs.choose-runner.outputs.runs_on_json) }}
-    # NO `timeout-minutes` HERE, and that is enforced, not a preference: scripts/check-no-timeouts.py
-    # rejects any YAML `timeout-minutes` above its 30-second cap, on the grounds that a wall-clock
-    # bound is not a synchronisation primitive. The job's real bound is internal -- every gate is
-    # itself time-bounded, and check.sh reports a killed step as INCONCLUSIVE rather than as a pass.
     steps:
-      # fetch-depth: 0, NOT the default 1. Two gates need real history, not just the tip:
-      # scripts/er-dll-closure.py --selftest calls `git merge-base origin/main HEAD`, which on a
-      # shallow clone fails outright -- three of its --with/--without cases then report FAIL rather
-      # than skip, because the error is raised before the validation they are testing --  and
-      # scripts/check-no-local-main-commits.sh exits 2 without refs/remotes/origin/main to diff
-      # against. Fetching a ref alone is not enough; the merge base has to exist. Measured: this
-      # repo's whole history is 53 MB over 1812 commits, so full depth costs a few seconds.
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-
       - name: Check out fromsoftware-rs as sibling
         run: |
           git clone "$FROMSOFTWARE_RS_REMOTE" "$GITHUB_WORKSPACE/../fromsoftware-rs"
           git -C "$GITHUB_WORKSPACE/../fromsoftware-rs" checkout "$FROMSOFTWARE_RS_REV"
+      - name: Check out MinHook vendor source
+        run: git clone --depth 1 --branch v1.3.4 https://github.com/TsudaKageyu/minhook.git vendor/minhook
+      - name: Install Rust and the cross-compile system libraries
+        run: |
+          sudo apt-get install -y --no-install-recommends clang lld llvm wine \
+              libwayland-dev libasound2-dev libudev-dev \
+            || { sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld llvm wine \
+              libwayland-dev libasound2-dev libudev-dev; }
+          rustup toolchain install stable --profile minimal --component rustfmt
+          rustup target add x86_64-pc-windows-msvc
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-xwin@${{ env.CARGO_XWIN_VERSION }}
+      - name: Cache xwin Windows CRT/SDK
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/cargo-xwin
+          key: xwin-sdk-${{ runner.os }}-cargo-xwin-${{ env.CARGO_XWIN_VERSION }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo xwin check --workspace --all-targets --keep-going --target x86_64-pc-windows-msvc
 
+  # ONE JOB PER STAGE. This is the visible half of the user's request: "I would like to see them as
+  # discrete steps in github". A failure now lands on a row named for what broke -- `lint`,
+  # `policy`, `addresses` -- instead of inside a single 30-minute step called "check".
+  #
+  # fail-fast: false, because the whole point of scripts/check.sh accumulating rather than
+  # exiting is that a gate that never executed is indistinguishable from a gate that passed.
+  # Cancelling nine stages because a tenth went red would re-create that defect one level up.
+  #
+  # max-parallel: 4 is the same number as ER_CHECK_JOBS' default in scripts/check.sh, because the
+  # user asked for one default used in both places. Here it is not about cores -- each job gets its
+  # own runner -- but about the caches: seven of the eleven stages restore the ~1 GB xwin CRT/SDK
+  # and a rust-cache, and eleven simultaneous cold jobs would pull them eleven times. Raise it here
+  # and in scripts/check.sh together; they are one edit each.
+  stage:
+    needs: [choose-runner, plan]
+    runs-on: ${{ fromJSON(needs.choose-runner.outputs.runs_on_json) }}
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        stage: ${{ fromJSON(needs.plan.outputs.selected) }}
+    name: stage / ${{ matrix.stage }}
+    steps:
+      # fetch-depth: 0, NOT the default 1. Two gates need real history: er-dll-closure.py
+      # --selftest calls `git merge-base origin/main HEAD`, which fails outright on a shallow
+      # clone, and check-no-local-main-commits.sh exits 2 without refs/remotes/origin/main.
+      # This repo's whole history is 53 MB over 1812 commits, so full depth costs seconds.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # WHICH TOOLS THIS STAGE NEEDS, DERIVED. Not a map of stage to tools written into this file:
+      # that is the hand-written list this whole change exists to abolish, and it would go stale
+      # the first time a gate learned a new dependency. scripts/check-stages.py reads the stage's
+      # own steps AND the source of the gate scripts they invoke -- which is how it knows that
+      # `test-cupcake-policies.py`, a python3 step, needs the cupcake binary.
+      - id: tools
+        run: python3 scripts/check-stages.py --tools "${{ matrix.stage }}" >> "$GITHUB_OUTPUT"
+
+      # check.sh REFUSES without MinHook, in every stage, so this is unconditional.
       - name: Check out MinHook vendor source
         run: git clone --depth 1 --branch v1.3.4 https://github.com/TsudaKageyu/minhook.git vendor/minhook
 
-      - name: Install Rust (stable + windows target + wine)
+      - name: Check out fromsoftware-rs as sibling
+        if: steps.tools.outputs.cargo == '1'
         run: |
-          # Runner apt lists are usually fresh enough to install without an
-          # `apt-get update` (~20-60 s); fall back to updating only on a miss.
-          #
-          # THE THREE `lib*-dev` PACKAGES ARE THE er-shader-viewer GATE. check.sh ends with
-          # `cargo check -p er-shader-viewer`, a host-native Bevy 0.19 GUI, and on 2026-09-01
-          # that step was the one red gate in the first run that executed the whole suite: it
-          # died in wayland-sys's build script with "Package wayland-client was not found in
-          # the pkg-config search path".
-          #
-          # The set is MEASURED, not guessed from that one error. Two independent probes agree:
-          # `cargo tree -p er-shader-viewer -e normal,build --invert pkg-config` shows the
-          # `pkg-config` crate is a build-dependency of exactly three crates in the entire tree
-          # -- wayland-sys (via winit/smithay), alsa-sys (via bevy_audio/rodio/cpal) and
-          # libudev-sys (via bevy_gilrs) -- and a `cargo check --keep-going` with pkg-config
-          # blinded (PKG_CONFIG_LIBDIR pointed at an empty directory) fails in those same three
-          # build scripts and no others, probing `wayland-client`, `alsa` and `libudev`.
-          #
-          # Bevy's own docs/linux_dependencies.md additionally lists libx11-dev and
-          # libxkbcommon-dev; both are deliberately NOT here. This gate is a `cargo check`, so
-          # nothing is ever dlopen'd, and x11-dl / xkbcommon-dl / ash resolve their libraries at
-          # RUN time -- the blinded probe proves they need nothing at build time. Adding them
-          # would be padding for a gate that never opens a window.
-          #
-          # shellcheck is NOT installed from apt: see SHELLCHECK_VERSION above. apt ships 0.9.0,
-          # whose SC2317 false-positives on trap handlers made three gates red here and clean on
-          # the developer tree, so the pinned upstream release is fetched in the step below.
+          git clone "$FROMSOFTWARE_RS_REMOTE" "$GITHUB_WORKSPACE/../fromsoftware-rs"
+          git -C "$GITHUB_WORKSPACE/../fromsoftware-rs" checkout "$FROMSOFTWARE_RS_REV"
+
+      # THE THREE `lib*-dev` PACKAGES ARE THE er-shader-viewer GATE: `cargo check -p
+      # er-shader-viewer` is a host-native Bevy 0.19 GUI and dies in wayland-sys's build script
+      # without them. The set is measured, not guessed -- `cargo tree -e normal,build --invert
+      # pkg-config` shows exactly three crates build-depend on pkg-config (wayland-sys, alsa-sys,
+      # libudev-sys) and a check with pkg-config blinded fails in those three and no others.
+      - name: Install Rust and the cross-compile system libraries
+        if: steps.tools.outputs.cargo == '1'
+        run: |
           sudo apt-get install -y --no-install-recommends clang lld llvm wine \
               libwayland-dev libasound2-dev libudev-dev \
             || { sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld llvm wine \
@@ -235,66 +357,53 @@ jobs:
           rustup toolchain install stable --profile minimal --component rustfmt
           rustup target add x86_64-pc-windows-msvc
 
-      # PINNED shellcheck, replacing the apt one. scripts/check.sh runs 25 shellcheck steps and
-      # its `shellcheck()` wrapper SKIPS them when the tool is absent, so a runner image that
-      # stopped shipping it would quietly cost 25 gates -- and one that ships a DIFFERENT version
-      # costs correctness instead, which is worse because it is invisible. Both failure modes are
-      # closed by fetching one known build. Upstream ships a static binary, so this is a curl and
-      # a move, the same shape as the OPA step below; measured at a couple of seconds.
+      # PINNED shellcheck, replacing whatever the runner image ships. Measured on run 33468994945:
+      # ubuntu-latest's apt has 0.9.0, the developer tree runs 0.11.0, and three of the shellcheck
+      # steps were red here and clean locally -- every finding an SC2317 false positive about
+      # trap-invoked functions that later releases model correctly. An unpinned linter is a gate
+      # whose verdict drifts with the runner image.
       - name: Install shellcheck (pinned)
+        if: steps.tools.outputs.shellcheck == '1'
         run: |
           curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
             | tar -xJ -C /tmp
           sudo install -m 0755 "/tmp/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
-          # Fail loudly here rather than let 25 gates silently lint under the wrong version.
-          shellcheck --version
           shellcheck --version | grep -qx "version: ${SHELLCHECK_VERSION#v}"
 
-      # Prebuilt release binary; replaces a ~1 min `cargo install cargo-xwin`.
-      - name: Install cargo-xwin
-        uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@v2
+        if: steps.tools.outputs.xwin == '1'
         with:
           tool: cargo-xwin@${{ env.CARGO_XWIN_VERSION }}
 
-      # On first use cargo-xwin downloads + unpacks the MSVC CRT and Windows
-      # SDK into ~/.cache/cargo-xwin. That download comes from Microsoft's CDN
-      # and its duration is wildly variable -- observed 40 s on a good run and
-      # 12 m 44 s on a throttled one (run 28757404582) -- so restore it from
-      # the Actions cache instead of re-downloading every run. The content is
-      # fully determined by the pinned cargo-xwin version, so an exact-key hit
-      # is expected every run and the ~1 GB dir is only uploaded once per bump.
+      # On first use cargo-xwin downloads and unpacks the MSVC CRT and Windows SDK into
+      # ~/.cache/cargo-xwin. That download comes from Microsoft's CDN and its duration is wildly
+      # variable -- 40 s on a good run and 12 m 44 s on a throttled one (run 28757404582) -- so it
+      # is restored from the Actions cache instead. The content is fully determined by the pinned
+      # cargo-xwin version, so an exact-key hit is expected every run.
       - name: Cache xwin Windows CRT/SDK
+        if: steps.tools.outputs.xwin == '1'
         uses: actions/cache@v5
         with:
           path: ~/.cache/cargo-xwin
           key: xwin-sdk-${{ runner.os }}-cargo-xwin-${{ env.CARGO_XWIN_VERSION }}
 
-      # Pinned, from the release asset, and checked -- three things the previous line was not, each
-      # of which failed or could fail silently.
-      #
-      # It read `curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static`
-      # and that is what broke run 34313440919: `curl: (35) Recv failure: Connection reset by peer`,
-      # after the redirector had already returned an 86-byte body. Without `-f` a curl that receives
-      # an error page writes it to `opa`, `chmod +x` succeeds, and the failure surfaces later as
-      # every policy gate failing to parse -- so the loud network error was the good outcome.
-      #
-      # `latest` is also the wrong contract here. `opa test` and `opa build -t wasm` decide whether
-      # a cupcake guard fires, and one of this repo's guards was inert for hours because a builtin
-      # is missing from the WASM runtime (see check-cupcake-wasm-builtins.py) -- exactly the class
-      # of behaviour that moves between OPA releases. CI must run the version the developer tree
-      # runs, the way the shellcheck step above already does.
+      # Pinned, from the release asset, and checked. `latest` broke run 34313440919 with a
+      # connection reset after the redirector had already written an 86-byte error page over the
+      # binary; without `-f` that page becomes `opa` and every policy gate then fails to parse.
+      # `opa test` also decides whether a cupcake guard fires, so CI must run the developer tree's
+      # version rather than whatever moved this week.
       - name: Install OPA (pinned)
+        if: steps.tools.outputs.opa == '1'
         run: |
           curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 -o /tmp/opa \
             "https://github.com/open-policy-agent/opa/releases/download/${OPA_VERSION}/opa_linux_amd64_static"
           sudo install -m 0755 /tmp/opa /usr/local/bin/opa
-          # Fail here rather than let every policy gate lint under the wrong engine.
-          opa version
           opa version | grep -qx "Version: ${OPA_VERSION#v}"
 
-      # Cupcake has no prebuilt releases at our pinned rev, so cache the binary
-      # we build; the ~4.5 min source build then only runs when CUPCAKE_REV moves.
+      # Cupcake has no prebuilt release at the pinned rev, so the built binary is cached; the
+      # ~4.5 min source build then only runs when CUPCAKE_REV moves.
       - name: Cache Cupcake binary
+        if: steps.tools.outputs.cupcake == '1'
         id: cache-cupcake
         uses: actions/cache@v5
         with:
@@ -302,104 +411,124 @@ jobs:
           key: cupcake-${{ runner.os }}-${{ env.CUPCAKE_REV }}
 
       - name: Install Cupcake policy checker
-        if: steps.cache-cupcake.outputs.cache-hit != 'true'
+        if: steps.tools.outputs.cupcake == '1' && steps.cache-cupcake.outputs.cache-hit != 'true'
         run: cargo install --git https://github.com/eqtylab/cupcake.git --rev "$CUPCAKE_REV" cupcake-cli --locked
 
-      # uv provisions capstone. There is no system pip here on purpose (AGENTS.md), and three
-      # gates re-exec themselves through `uv run --with capstone`: check-singleton-field-offsets.py
-      # (both halves) and verify-prologue-masks-1170.py --selftest. Measured with uv off PATH, they
-      # do not print a skip -- they raise FileNotFoundError out of os.execvp before their first
-      # assertion, which reads like a real failure. The ledger marks uv `!`-fatal for them so a
-      # runner without uv gets a loud SKIP instead; installing it means they actually run.
+      # uv provisions capstone. There is no system pip here on purpose (AGENTS.md), and three gates
+      # re-exec themselves through `uv run --with capstone`. Measured with uv off PATH they do not
+      # print a skip -- they raise FileNotFoundError out of os.execvp before their first assertion,
+      # which reads like a real failure -- so the ledger marks uv `!`-fatal for them.
       - name: Install uv
+        if: steps.tools.outputs.uv == '1'
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - uses: Swatinem/rust-cache@v2
+        if: steps.tools.outputs.cargo == '1'
+        with:
+          # Per stage, so the two cargo stages do not overwrite each other's entry with a
+          # differently-warmed target directory.
+          key: ${{ matrix.stage }}
 
-      # DOES THE COMMITTED STATE COMPILE? Deliberately the FIRST Rust step: it is the most basic
-      # claim any gate below makes, and on 2026-08-31 it was false on the shared branch for hours
-      # while a dozen agents built on top of it.
-      #
-      # --workspace IS THE LOAD-BEARING FLAG. The workspace sets
-      # `default-members = ["crates/er-quickload"]`, so a bare `cargo xwin check`/`build` -- the
-      # form the pre-push path used to end with -- selects that one package and exits 0 in a
-      # fraction of a second having compiled nothing else, which reads exactly like a successful
-      # incremental build. Both commits that broke the branch landed a CONSUMER without its
-      # PRODUCER in crates outside er-quickload's dependency closure at that commit
-      # (er-save-suppress; er-quickload's own reference to two crates not yet in the tree), so the
-      # bare form had nothing to say about either.
-      #
-      # --all-targets so `#[cfg(test)]` modules, benches and examples compile too -- a lib-only
-      # check reports OK over a test module naming a helper the commit does not carry. Measured on
-      # a cold cache the same day: 100 s with it, 105 s without, so it costs nothing.
-      #
-      # --keep-going so one broken crate does not hide the state of the rest: without it the run
-      # stops at the first failure and the report understates the damage.
-      #
-      # KEPT SEPARATE FROM check.sh BELOW, which asks the same question through
-      # scripts/check-committed-compiles.sh -- in a temp worktree, and ~1400 lines in. This step
-      # answers it in 100 s at the top, so a branch that does not compile says so immediately
-      # instead of after the whole suite.
-      - name: Does the committed state compile (whole workspace, windows target)
-        run: cargo xwin check --workspace --all-targets --keep-going --target x86_64-pc-windows-msvc
+      # HAS THIS EXACT STAGE ALREADY PASSED ON THESE EXACT INPUTS? Off unless someone asks for it
+      # (workflow_dispatch's skip-unchanged), because a digest over files cannot see git history,
+      # an installed toolchain or a gitignored game image, and `suite`, `cargo-build` and
+      # `addresses` each depend on one of those. When it IS on, a hit reports CACHED, which the
+      # report job counts separately from `passed` and says out loud.
+      - id: stage-digest
+        if: inputs.skip-unchanged
+        run: echo "digest=$(python3 scripts/check-stages.py --inputs '${{ matrix.stage }}')" >> "$GITHUB_OUTPUT"
 
-      # THE WHOLE SUITE, NOT A HAND-COPIED SUBSET OF IT.
-      #
-      # This step replaces nine hand-named gate steps. Those nine were the entire CI surface while
-      # scripts/check.sh ran 224 -- so ~215 gates existed, passed locally, and were invisible here.
-      # That gap was not an oversight anyone could have noticed: the step list was written by hand,
-      # so it drifted silently every time a gate was added, and CI going green said only that nine
-      # named things were fine. The same disease was found the same day inside check.sh itself,
-      # whose shellcheck coverage is also a hand list and had silently dropped scripts/opa-query.sh.
-      #
-      # Running check.sh instead makes the CI set DERIVED: a gate appended to check.sh runs here
-      # from the moment it lands, with nothing to remember to update. Coverage now goes:
-      #
-      #   226 steps -- 203 run here, 23 SKIPPED for inputs a runner cannot hold.
-      #   Of the 226: 166 invoke a repo gate script and are classified in the ledger; 60 are
-      #   toolchain steps (cargo/shellcheck/rustfmt/opa/cupcake) whose only dependency is the tool
-      #   being installed, which check.sh resolves at run time rather than from a list.
-      #   Of the 166 ledgered: 131 portable, 8 partial (run, and say which half they lost),
-      #   27 blocked. The 23 skipped above are the blocked rows whose input is absent HERE --
-      #   fewer than 27 because this workflow installs uv and clones minhook.
-      #
-      # WHAT IT CANNOT RUN, AND WHY THAT IS SAFE. Two inputs are impossible on a runner: the
-      # de-Arxan'd game images (eldenring-deobf{,-1.17}.bin -- gitignored, ~100 MB, derived from
-      # the user's install) and things derived from them. A gate whose input is absent is SKIPPED,
-      # out loud, and check.sh's summary gives it its own state -- never `passed`. Before this
-      # change that failure mode was live and silent: measured in a runner-equivalent checkout,
-      # FOURTEEN gates printed a single line saying their input was absent and EXITED 0 -- so the
-      # summary wrote `passed` beside a gate that had asserted nothing at all -- and three more
-      # died with a raw FileNotFoundError out of os.execvp because uv was not there to fetch
-      # capstone, which reads like a real failure rather than a missing tool. The classification is
-      # docs/ci-gate-portability.tsv, measured rather than guessed, and enforced by
-      # ci-gate-portability.py --check, which is itself one of the steps below -- so a new gate
-      # cannot land without someone answering "does this run without the game image?".
-      #
-      # check.sh exits 0 with skips present, by design: a runner must not be permanently red for
-      # not holding a 100 MB game asset. It never says "all steps ran" in that case, and the step
-      # after this one puts the skip inventory in the run summary where it cannot rot unseen.
-      #
-      # NOT `set -e`. check.sh accumulates failures and prints a per-step table, so one red gate
-      # does not erase the verdict of the ~200 behind it.
-      - name: Run the whole gate suite (scripts/check.sh)
-        run: bash scripts/check.sh
+      - name: Restore this stage's green marker
+        id: stage-cache
+        if: inputs.skip-unchanged
+        uses: actions/cache/restore@v5
+        with:
+          path: .stage-green
+          key: stage-green-${{ runner.os }}-${{ matrix.stage }}-${{ steps.stage-digest.outputs.digest }}
 
-      # THE SKIP INVENTORY, ON THE RUN PAGE. `if: always()` because the interesting case is the run
-      # that went red: "which gates had nothing to say here" is exactly the question a red run
-      # provokes, and it must not require reading 224 lines of log to answer.
+      - name: THE STAGE
+        id: run
+        if: steps.stage-cache.outputs.cache-hit != 'true'
+        run: bash scripts/check.sh --stage "${{ matrix.stage }}"
+        env:
+          # Where check.sh writes the machine-readable copy of its per-step table. The report job
+          # joins these back into one verdict over the whole suite.
+          ER_CHECK_RESULT_DIR: ${{ github.workspace }}/.stage-results
+
+      # A cache HIT means this stage did not execute, and every one of its steps still owes the
+      # report a state. CACHED is that state, and it is not `passed`.
+      - name: Record that this stage was skipped, not passed
+        if: steps.stage-cache.outputs.cache-hit == 'true'
+        run: |
+          mkdir -p .stage-results
+          python3 scripts/check-stages.py --result-stub "${{ matrix.stage }}" --state CACHED \
+            --reason "inputs unchanged since a green run (${{ steps.stage-digest.outputs.digest }})" \
+            > ".stage-results/${{ matrix.stage }}.tsv"
+
+      # Written only on success, so a marker can never mean "this failed quickly last time".
+      - name: Save this stage's green marker
+        if: inputs.skip-unchanged && success() && steps.stage-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: .stage-results
+          key: stage-green-${{ runner.os }}-${{ matrix.stage }}-${{ steps.stage-digest.outputs.digest }}
+
+      # if: always() -- a red stage's per-step table is the most interesting one there is, and the
+      # report job cannot tell "this stage failed" from "this stage never started" without it.
+      - name: Upload this stage's per-step result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage-result-${{ matrix.stage }}
+          path: .stage-results/*.tsv
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: What this runner could not check
         if: always()
         run: |
           {
-            echo '## Gates this runner cannot execute'
+            echo "## Stage \`${{ matrix.stage }}\`"
             echo
-            echo 'Derived from `docs/ci-gate-portability.tsv` (measured, not guessed) --'
-            echo 'not from a hand-written list in this workflow.'
+            echo 'Gates this runner cannot execute, derived from `docs/ci-gate-portability.tsv`'
+            echo '(measured, not guessed) rather than from a list in this workflow.'
             echo
             echo '```'
             python3 scripts/ci-gate-portability.py --probe
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # ELEVEN GREEN JOBS ARE NOT A GREEN SUITE.
+  #
+  # Splitting the suite splits its verdict, and check.sh's whole discipline is that a step with no
+  # verdict must never be read as a passing one. A stage that was cancelled, crashed before its
+  # first gate, or never got a runner leaves its steps with nothing said about them -- and on a run
+  # page that looks like a grey square next to ten green ticks, which nobody reads as red.
+  #
+  # So the stages are joined back together, by the same program scripts/check.sh runs after its own
+  # fan-out, over the same files. A step whose stage produced no result file is NO REPORT, and
+  # NO REPORT is red.
+  report:
+    needs: [plan, stage]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: stage-result-*
+          merge-multiple: true
+          path: .stage-results
+      - name: Join every stage into one verdict
+        run: |
+          set -euo pipefail
+          {
+            echo '## Combined verdict'
+            echo
+            echo '```'
+            python3 scripts/check-stage-report.py .stage-results --quiet 2>&1 | tee /tmp/report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" || true
+          python3 scripts/check-stage-report.py .stage-results --quiet
