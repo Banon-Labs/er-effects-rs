@@ -38,7 +38,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 EXPERIMENTS = ROOT / "crates/er-quickload/src/experiments"
 SOURCE = ROOT / "crates/er-quickload/src"
-# Roots a partition function may legitimately be DEFINED in. The whole point of the roadmap is
+# Roots a partition function may legitimately be defined in. The whole point of the roadmap is
 # that code leaves `er-quickload/src`, so a required edge whose definition has already moved into
 # its extracted crate is the refactor working, not a missing function. The caller side is still
 # checked against `SOURCE` alone: an edge is only an edge while the product still drives it.

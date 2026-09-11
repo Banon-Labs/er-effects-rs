@@ -206,6 +206,8 @@ portable	-	er-moveset-coverage.py --check	measured 2026-09-03 in a tracked-files
 partial	chr-corpus	check-moveset-table.py	grammar and invariant half asserts on the committed table; the regenerate-and-diff half prints SKIP
 portable	-	check-me3-shell-coverage.py --selftest	source/AST/text analysis only
 portable	-	check-me3-shell-coverage.py	source/AST/text analysis only
+portable	-	check-union-hook-abi.py --selftest	source/AST/text analysis only
+portable	-	check-union-hook-abi.py	source/AST/text analysis only
 portable	-	check-me3-dll-conflicts.py --selftest	source/AST/text analysis only
 portable	-	check-me3-dll-conflicts.py	source/AST/text analysis only
 portable	-	check-shared-hook-rvas.py --selftest	source/AST/text analysis only

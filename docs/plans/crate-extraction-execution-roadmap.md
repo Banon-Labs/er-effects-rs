@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 76 | 47,389 |
+| all `experiments/**` | 76 | 47,395 |
 | excluding `startup_hooks/**` | 43 | 25,089 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 24,599 |
 | lifecycle S10 split | 5 | 2,275 |
@@ -283,12 +283,12 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `save_redirect/file_ops.rs` | 346 | save-file hook implementation | R32-R37 |
 | `save_redirect/path_hooks.rs` | 2,235 | save source/path policy and redirect adapters | R32-R37 |
 | `startup_hooks.rs` | 108 | product startup root and arming facade | `STAY` |
-| `startup_hooks/diagnostics/layout_global_hooks.rs` | 337 | mixed title, quit, and product diagnostics | R11 and R22 |
+| `startup_hooks/diagnostics/layout_global_hooks.rs` | 335 | mixed title, quit, and product diagnostics | R11 and R22 |
 | `startup_hooks/diagnostics/mod.rs` | 23 | diagnostics module facade | `STAY` |
 | `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 1,051 | save parsing, portrait, quit, telemetry, and product adapter families | R14-R18 |
 | `startup_hooks/loading_cover/mod.rs` | 71 | loading-cover module facade | R15-R16 |
 | `startup_hooks/loading_cover/portrait_equip_oracle.rs` | 10 | portrait oracle family | R16 |
-| `startup_hooks/loading_cover/profile_table_gfx_files.rs` | 1,058 | Scaleform resource and profile-table families | D2 and R24 |
+| `startup_hooks/loading_cover/profile_table_gfx_files.rs` | 1,066 | Scaleform resource and profile-table families | D2 and R24 |
 | `startup_hooks/loading_cover/scaleform_descriptor_guard.rs` | 39 | Scaleform descriptor guard | R8 |
 | `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,280 | title-flow and product modal families | R22 |
 | `startup_hooks/loading_cover/title_resources_stats_text.rs` | 2,590 | Scaleform resource, title, and product families | R22 and R24 |
