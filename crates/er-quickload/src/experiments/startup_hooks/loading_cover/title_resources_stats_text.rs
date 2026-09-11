@@ -1920,89 +1920,15 @@ pub(crate) unsafe fn apply_row_slot_info_visibility(
     (hidden, shown)
 }
 
-/// Point the row model's `PlayTime` `CS::MenuString` at `text` and return the pointer it displaced,
-/// so the caller can put it back the moment the native populate returns.
-///
-/// This is the write path for the last-saved line, and it is the native one: the populate reads
-/// `rawString` first and SetTexts whatever it finds, so the row's own draw writes our text. That
-/// matters more than convenience. A row clip is recycled across different files, so text pushed
-/// out-of-band could survive onto a row it does not describe; here there is nothing to survive --
-/// the text is read once, during the populate of the row it belongs to, from a pointer that exists
-/// only across that call. A row that stages nothing gets the native string, not a stale one.
-///
-/// `None` when the field is unreadable, in which case nothing is written and the row keeps the
-/// game's own playtime.
-unsafe fn stage_row_model_menu_string(
-    row_model: usize,
-    offset: usize,
-    text: *const u16,
-) -> Option<usize> {
-    let field = row_model + offset;
-    let displaced = unsafe { safe_read_usize(field) }?;
-    unsafe { (field as *mut usize).write_volatile(text as usize) };
-    Some(displaced)
-}
-
-unsafe fn restore_row_model_menu_string(row_model: usize, offset: usize, displaced: usize) {
-    let field = row_model + offset;
-    unsafe { (field as *mut usize).write_volatile(displaced) };
-}
-
-/// Point the row model's `PlayerName` `CS::MenuString` at `text` and return the pointer it displaced,
-/// so the caller can put it back the moment the native populate returns.
-///
-/// This is the product path for replacing the title/current-row character name: native row populate
-/// reads this field and writes the visible `PlayerName` object itself. Post-populate SetText is still
-/// useful for editor diagnostics, but it is not a reliable ownership path for the renderer.
-pub(crate) unsafe fn stage_row_model_player_name(
-    row_model: usize,
-    text: *const u16,
-) -> Option<usize> {
-    unsafe {
-        stage_row_model_menu_string(
-            row_model,
-            PROFILE_ROW_MODEL_PLAYER_NAME_MENUSTRING_50_OFFSET,
-            text,
-        )
-    }
-}
-
-/// Put back whatever [`stage_row_model_player_name`] displaced.
-pub(crate) unsafe fn restore_row_model_player_name(row_model: usize, displaced: usize) {
-    unsafe {
-        restore_row_model_menu_string(
-            row_model,
-            PROFILE_ROW_MODEL_PLAYER_NAME_MENUSTRING_50_OFFSET,
-            displaced,
-        )
-    };
-}
-
-/// Point the row model's `Location` `CS::MenuString` at `text` and return the pointer it displaced,
-/// so the caller can put it back the moment the native populate returns.
-///
-/// Browse save-file rows use this for the last-saved timestamp because `Location` is the top-right
-/// field, on the same visual line as `PlayerName`; `PlayTime` remains hidden for those rows.
-pub(crate) unsafe fn stage_row_model_location(row_model: usize, text: *const u16) -> Option<usize> {
-    unsafe {
-        stage_row_model_menu_string(
-            row_model,
-            PROFILE_ROW_MODEL_LOCATION_MENUSTRING_90_OFFSET,
-            text,
-        )
-    }
-}
-
-/// Put back whatever [`stage_row_model_location`] displaced.
-pub(crate) unsafe fn restore_row_model_location(row_model: usize, displaced: usize) {
-    unsafe {
-        restore_row_model_menu_string(
-            row_model,
-            PROFILE_ROW_MODEL_LOCATION_MENUSTRING_90_OFFSET,
-            displaced,
-        )
-    };
-}
+// The six staging primitives that stood here moved to `er_loading_portrait_core::profile_row_model`
+// on 2026-09-11, so the System>Quit save picker can stage a browse row's last-saved time with no
+// product DLL behind it. Both features write the same two fields of the same row model in the same
+// chained populate call, and one declaration of "put back what you displaced" is what keeps their
+// unwinds from disagreeing.
+pub(crate) use er_loading_portrait_core::profile_row_model::{
+    restore_row_model_location, restore_row_model_player_name, stage_row_model_location,
+    stage_row_model_player_name,
+};
 
 /// Hook of the ProfileSelect row-populate template `FUN_1408758d0(rowModel, rowProxy, ...)`. Runs once
 /// per visible list row with a per-slot row model, so it can push the correct slot's attributes (unlike

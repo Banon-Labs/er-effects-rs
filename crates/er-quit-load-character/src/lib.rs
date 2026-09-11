@@ -1,18 +1,19 @@
-//! Standalone ME3 shell for the System>Quit **Load Character** row, with no product DLL in the
+//! Standalone ME3 shell for the two System>Quit character rows, with no product DLL in the
 //! profile.
 //!
-//! The row is a cell of the same derived six-cell Quit grid `er-quit-menu` stands on, cloned by the
-//! same `er_quit_menu_core::row_cloner`. The difference between the two shells is one argument: this
-//! one passes a [`RowSet`](er_quit_menu_core::row_cloner::RowSet) whose only entry is
-//! `load_character`, and supplies the flow that row needs. A row that is not in the set is never
-//! cloned, so a press that could reach a flow this shell does not have never happens.
+//! Each row is a cell of the same derived six-cell Quit grid `er-quit-menu` stands on, cloned by
+//! the same `er_quit_menu_core::row_cloner`. The difference between the two shells is one argument:
+//! this one passes a [`RowSet`](er_quit_menu_core::row_cloner::RowSet) carrying the character pair
+//! and supplies the flows those rows need. A row that is not in the set is never cloned, so a press
+//! that could reach a flow this shell does not have never happens.
 //!
-//! # What the row does
+//! # What the rows do
 //!
-//! It submits the game's own `05_010_ProfileSelect` window over the System dialog the press came
-//! from -- the character picker the title screen uses, opened in-world. Everything after that is
-//! the game's: the cursor, the list, the confirm box and the load the confirm arms. This shell
-//! installs nothing on any of it.
+//! **Load Character** submits the game's own `05_010_ProfileSelect` window over the System dialog
+//! the press came from -- the character picker the title screen uses, opened in-world. Everything
+//! after that is the game's: the cursor, the list, the confirm box and the load the confirm arms.
+//! This shell installs nothing on any of it. **Load Character from File** opens the browse picker
+//! in `er_quit_menu_core::save_picker_menu` and hands the pick to the same window.
 //!
 //! That is the whole difference from the product. `er-quickload` detours
 //! `CS::ProfileLoadDialog::load_activate` and turns a pick into its own save-safe switch -- return
@@ -22,12 +23,14 @@
 //! **Whether it completes has not been observed**; see the pull request for what is and is not
 //! proven.
 //!
-//! # The second character row is deliberately absent
+//! # The second character row, and what it still does not carry
 //!
-//! **Load Character from File** needs a browse surface, an ingest and a save-swap ledger that are
-//! all still in `er-quickload`, and the host seam's `system_quit_ingest_picked_save` default
-//! refuses every pick. Arming it would give the player a row that opens a file browser and then
-//! rejects whatever they choose, which is worse than a tab without it.
+//! **Load Character from File** browses and opens, since the picker moved to
+//! `er_quit_menu_core::save_picker_menu` on 2026-09-11. What a standalone shell does not install is
+//! the product's nine picker steps -- the layout editor's font heights, the save-swap ledger's row
+//! records, the save-flow box, the intent router and the three passive nav-input reads. Each has a
+//! neutral default, so the surface is the game's own chrome rather than the product's, and a held
+//! direction is never seen: the edge-scroll and the drive strip answer only to activations.
 //!
 //! # Never in the same profile as the product, or as `er-quit-menu`
 //!
@@ -240,7 +243,7 @@ mod tests {
         assert!(actions.note_drive_strip_click_event.is_none());
     }
 
-    /// One row, and it is the character switch. The two build rows belong to the sibling shell
+    /// Both character rows, and neither build row. The build pair belongs to the sibling shell
     /// `er-quit-menu`, and a shell arming both halves of the tab would be the co-loading the
     /// conflict table exists to refuse, written into one DLL instead.
     #[test]
@@ -255,6 +258,6 @@ mod tests {
         .into_iter()
         .filter_map(|(label, armed)| armed.then_some(label))
         .collect();
-        assert_eq!(armed, vec!["Load Character"]);
+        assert_eq!(armed, vec!["Load Character", "Load Character from File"]);
     }
 }
