@@ -336,6 +336,30 @@ evidence = "crates/er-build-import/src/lib.rs:23; crates/er-quit-menu-core/src/g
 
 [[conflict]]
 a = "er-quickload"
+b = "er-quit-load-character"
+kind = "duplicate-owner"
+reason = """The same relation this table already records between `er-quickload` and `er-quit-menu`, for the same mechanism and one row further along. Both call `er_quit_menu_core::row_cloner::arm` with their own row set, and two arms in one process is two `AddCancelButton` registrations appending two sets of rows to one dialog, two row tables writing one set of telemetry counters, and two claims on the three routing prologues. The union makes the detours chain rather than trample, so the damage is the second set of rows, not a corrupted trampoline.
+
+The `02_040` grid settles it without needing that argument. Both derive the six-cell Quit panel from the game's own vanilla payload, and `er_gfx::options_02_040::quit6` fail-closes when its input is not vanilla -- whichever deriver runs second is handed already-derived bytes and correctly refuses, so co-loading cannot produce a working tab.
+
+They also disagree about what a Load Character press means, which is the part that makes co-loading worse than merely redundant rather than simply doubled. The product detours `CS::ProfileLoadDialog::load_activate` and turns a slot pick into its own save-safe switch: return to the title, tear the world down, reload the picked slot, with the native in-world load blocked at `RequestLoadSlot` for the duration. This shell installs none of that and leaves the native chain alone. In one process the product's detour would be the one that answers a press on either DLL's row, so the shell's row would silently acquire the product's flow -- a row that does something other than what its own DLL implements.
+
+The product DLL is the one to keep. This shell exists for a profile that does not load it."""
+evidence = "crates/er-quit-load-character/src/lib.rs; crates/er-quit-menu-core/src/row_cloner.rs; crates/er-quit-menu-core/src/gfx_swap.rs; crates/er-quickload/src/experiments/startup_hooks/diagnostics/layout_global_hooks.rs"
+
+[[conflict]]
+a = "er-quit-menu"
+b = "er-quit-load-character"
+kind = "duplicate-owner"
+reason = """Two standalone shells over one feature crate, each arming `er_quit_menu_core::row_cloner::arm` with a disjoint row set. The row sets not overlapping is exactly why this looks co-loadable and is not: the arm is a process-wide one-shot, so the second call returns `ArmError::AlreadyArmed` and its rows are never cloned. Whichever DLL the loader ran first decides which pair of rows the player gets, and the other writes one log line and goes inert.
+
+The `02_040` grid is the same single derivation both stand on, with the same fail-closed second deriver, so even a hypothetical two-arm build could not produce a tab carrying both shells' cells.
+
+Splitting the rows across two DLLs is not the way to ship them together: a profile that wants the build rows and the Load Character row at once wants one shell arming a wider `RowSet`, not two shells arming halves of one."""
+evidence = "crates/er-quit-menu/src/lib.rs; crates/er-quit-load-character/src/lib.rs; crates/er-quit-menu-core/src/arm.rs; crates/er-quit-menu-core/src/row_cloner.rs"
+
+[[conflict]]
+a = "er-quickload"
 b = "er-build-import"
 kind = "duplicate-owner"
 reason = """Both link `er-build-import-runtime`, and a statically linked crate's statics are \
