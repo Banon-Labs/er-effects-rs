@@ -53,7 +53,7 @@ use er_game_base::fnv1a::fnv1a64;
 /// -- exactly as the save picker's derivation handles the same pair of inputs.
 pub const CENTERED_LEN: usize = 1264;
 /// FNV-1a-64 of the [`CENTERED_LEN`]-byte derived movie.
-pub const CENTERED_FNV1A64: u64 = 0xfa32_98ad_09d9_d0dd;
+pub const CENTERED_FNV1A64: u64 = 0x6e6f_6ace_2a90_e0f7;
 
 /// `GFX_DefineExternalImage2`, the tag that declares an external bitmap's pixel size. The codec
 /// keeps it opaque, so the two fields this module needs are read straight out of the body: its
@@ -94,6 +94,18 @@ const NATIVE_PLATE_LEFT_TWIPS: i32 = -200;
 const NATIVE_PLATE_LEFT_PX: f32 = -10.0;
 const NATIVE_PLATE_RIGHT_PX: f32 = 390.0;
 const NATIVE_PLATE_HEIGHT_PX: f32 = 36.0;
+/// The bevel the frame art leaves outside the box, in `TextInput`-sprite twips, left and right.
+///
+/// The same two numbers [`VanillaChrome::frame_margins_twips`] measures, restated because
+/// [`build_url_window_position`] runs with no movie in hand: the runtime calls it to place a
+/// window, not to derive one. They are unequal by 128.73 twips, and that asymmetry is the whole
+/// reason the painted container cannot be centred by centring the plate.
+///
+/// Kept honest by `the_window_position_matches_the_movie_it_places`, which re-measures both off
+/// the real derived movie, so a change to the frame placement fails the gate instead of leaving
+/// this stale.
+const FRAME_MARGIN_LEFT_TWIPS: f32 = 710.0;
+const FRAME_MARGIN_RIGHT_TWIPS: f32 = 838.734_13;
 /// The ornament's bottom edge in sprite-local px, which is the composition's lowest painted edge.
 ///
 /// Both `MENU_FL_Arts_waku2` placements (character 6, depths 2 and 4) sit at `ty = -343` twips
@@ -182,6 +194,22 @@ fn width_scale() -> f64 {
     FIELD_WIDTH_PX as f64 / NATIVE_FIELD_WIDTH_PX as f64
 }
 
+/// Left and right of everything this movie paints, in sprite-local px.
+///
+/// The union of the widened plate and the re-placed frame art, and that union is the art: it
+/// overhangs the box on both sides, by [`FRAME_MARGIN_LEFT_TWIPS`] and
+/// [`FRAME_MARGIN_RIGHT_TWIPS`]. Those two are unequal by 6.44 px, so centring the plate leaves
+/// what the player actually sees 3.22 px right of where it was aimed. The caption box and the
+/// field box are the plate's own rectangle, so neither widens this.
+fn composition_extent_x() -> (f32, f32) {
+    let scale = width_scale() as f32;
+    let twips = TWIPS_PER_PIXEL as f32;
+    (
+        NATIVE_PLATE_LEFT_PX * scale - FRAME_MARGIN_LEFT_TWIPS / twips,
+        NATIVE_PLATE_RIGHT_PX * scale + FRAME_MARGIN_RIGHT_TWIPS / twips,
+    )
+}
+
 /// Top and bottom of everything this movie paints, in sprite-local px.
 ///
 /// The top is the caption box's own top edge; the bottom is whichever of the plate and the
@@ -204,27 +232,42 @@ fn composition_extent_y() -> (f32, f32) {
 /// the setter this placement reaches: the game's `FUN_140d83e20` writes both floats verbatim into
 /// the first two doubles of the `DisplayInfo` buffer and raises the `V_x|V_y` bits, with no unit
 /// conversion of any kind on the position path -- unlike its scale sibling `FUN_140d84090`, which
-/// multiplies by 100.0 for Scaleform's percent space. It is also the coordinate space the save
-/// picker's proven placement writes through the same `set_scaleform_value_position`.
+/// multiplies by 100.0 (`DAT_14329e698`, byte-read out of the image) for Scaleform's percent
+/// space, and whose paired getter `FUN_140d82c90` divides by the same constant. That pairing is
+/// what makes the runtime's `scale_x: 1.0` a unity scale rather than a content shift: it is stored
+/// as 100 percent, so it cannot displace this translate.
+///
+/// # What the save picker does and does not corroborate
+///
+/// It reaches the same setter through the same `set_scaleform_value_position`, so it is evidence
+/// for the coordinate space. It is not evidence for the offset below. Its own placement is a
+/// tuned dial, not a derivation: `path_editor.x = -77, y = 80` in the shipped
+/// `profile_05_010_layout.toml`, against `-180, -18` in the Rust fallback the schema would use if
+/// the file went missing. A constant error in the shared `(100, 100)` child-origin assumption
+/// would be absorbed by that dial and stay invisible over ProfileSelect, while this derivation --
+/// which has no dial -- would show it. So do not read "the picker works" as confirmation that the
+/// live `TextInput` child is still at its authored origin;
+/// [`crate::text_input_02_990::inline_current_path_editor`] records that the native controller
+/// re-places that child after GFx parsing, which is the one assumption here nothing offline has
+/// settled.
 ///
 /// So the translate is stage centre minus the composition's own centre inside the movie, and that
-/// centre is the sprite's authored `(100, 100)` origin plus the midpoint of what the movie paints.
-/// Horizontally that is the scaled plate, which the caption is centred over rather than flushed
-/// against; vertically it is [`composition_extent_y`], the caption box's top down to the
-/// ornament's bottom.
+/// centre is the sprite's authored `(100, 100)` origin plus the midpoint of what the movie paints
+/// -- [`composition_extent_x`] and [`composition_extent_y`], the frame art's own span and the
+/// caption box's top down to that art's bottom. Both are the union of what is painted rather than
+/// the plate, because the plate is not the thing the player sees the edges of.
 ///
 /// Centring the plate alone was the earlier rule, and it is what put the pair off centre in both
 /// axes: the caption hung above a centred box, so the block's own centre sat about 31 px above the
 /// stage's, and the caption's text was left-aligned in a box as wide as the field, so its 203.7 px
 /// ended more than 100 px short of the screen's midline while the plate straddled it.
 pub fn build_url_window_position() -> (f32, f32) {
-    let scale = width_scale() as f32;
-    let box_center_x =
-        NATIVE_TEXT_INPUT_ORIGIN_PX + (NATIVE_PLATE_LEFT_PX + NATIVE_PLATE_RIGHT_PX) * 0.5 * scale;
+    let (left, right) = composition_extent_x();
     let (top, bottom) = composition_extent_y();
+    let composition_center_x = NATIVE_TEXT_INPUT_ORIGIN_PX + (left + right) * 0.5;
     let composition_center_y = NATIVE_TEXT_INPUT_ORIGIN_PX + (top + bottom) * 0.5;
     (
-        STAGE_WIDTH_PX * 0.5 - box_center_x,
+        STAGE_WIDTH_PX * 0.5 - composition_center_x,
         STAGE_HEIGHT_PX * 0.5 - composition_center_y,
     )
 }
@@ -678,10 +721,27 @@ mod tests {
     fn the_composition_centre_lands_on_the_stage_centre() {
         let (window_x, window_y) = build_url_window_position();
         let scale = FIELD_WIDTH_PX as f32 / NATIVE_FIELD_WIDTH_PX as f32;
+
+        // Horizontally the union is the frame art: the box is inside it on both sides, by the
+        // authored bevel, and the bevel is the wider one on the right.
+        let (left, right) = composition_extent_x();
+        assert_eq!(left, NATIVE_PLATE_LEFT_PX * scale - 35.5);
+        assert_eq!(right, NATIVE_PLATE_RIGHT_PX * scale + 41.936_707);
+        let painted_left = window_x + NATIVE_TEXT_INPUT_ORIGIN_PX + left;
+        let painted_right = window_x + NATIVE_TEXT_INPUT_ORIGIN_PX + right;
+        assert!(
+            ((painted_left + painted_right) * 0.5 - STAGE_WIDTH_PX * 0.5).abs() < 0.01,
+            "the painted container centres, got {painted_left}..{painted_right}"
+        );
+        // The plate is what used to be centred, and it is 3.22 px off from that.
         let box_left = window_x + NATIVE_TEXT_INPUT_ORIGIN_PX + NATIVE_PLATE_LEFT_PX * scale;
         let box_right = window_x + NATIVE_TEXT_INPUT_ORIGIN_PX + NATIVE_PLATE_RIGHT_PX * scale;
-        assert_eq!((box_left + box_right) * 0.5, STAGE_WIDTH_PX * 0.5);
         assert_eq!(box_right - box_left, FIELD_WIDTH_PX as f32);
+        let plate_offset = (box_left + box_right) * 0.5 - STAGE_WIDTH_PX * 0.5;
+        assert!(
+            (plate_offset + 3.219_2).abs() < 0.01,
+            "the plate should sit 3.22 px left of centre so the art does not, got {plate_offset}"
+        );
 
         // The caption box ends 22 px above the sprite origin and is 40 px tall, so the block's top
         // edge is 62 px above it -- by hand, from the two constants that decide it.

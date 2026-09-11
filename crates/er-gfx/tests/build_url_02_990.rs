@@ -201,16 +201,123 @@ fn the_link_field_keeps_the_movies_own_chrome_and_is_wide_enough_for_a_planner_l
     );
 }
 
-/// The caption and the box land centred on the movie's own 1920x1080 stage as one block.
+/// Declared pixel width of an external bitmap, in twips.
+///
+/// `GFX_DefineExternalImage2` (code 1009) is opaque to the codec, so its body is read directly:
+/// `characterId`, a reserved `u16`, `bitmapFormat`, then `targetWidth`.
+fn image_width_twips(movie: &Movie, character: u16) -> f64 {
+    let le_u16 = |raw: &[u8], at: usize| u16::from_le_bytes([raw[at], raw[at + 1]]);
+    movie
+        .tags
+        .iter()
+        .find_map(|tag| match tag {
+            Tag::Unknown {
+                code: 1009, raw, ..
+            } if raw.len() >= 8 && le_u16(raw, 0) == character => {
+                Some(f64::from(le_u16(raw, 6)) * f64::from(TWIPS_PER_PIXEL))
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no external image {character}"))
+}
+
+/// Twips span of a character placed by `matrix`, given the character's own span.
+fn placed(matrix: &er_gfx::Matrix, local: (f64, f64)) -> (f64, f64) {
+    let scale = if matrix.has_scale {
+        f64::from(matrix.scale_x) / f64::from(1 << 16)
+    } else {
+        1.0
+    };
+    let translate = f64::from(matrix.translate_x);
+    (local.0 * scale + translate, local.1 * scale + translate)
+}
+
+/// The union of what the derived movie actually paints lands centred on the stage.
+///
+/// Measured off the derived bytes rather than restated from the constants, and that distinction is
+/// the point of this test: the assertion it replaces checked the plate, which centred perfectly
+/// while the screen was visibly wrong, because the plate is not what the player sees the edges of.
+/// The frame art overhangs it by an authored bevel that is 6.44 px wider on the right, so the two
+/// rectangles have different centres and only one of them is the container.
 #[test]
-fn the_window_translate_centres_the_caption_and_box_on_the_stage() {
+fn the_window_translate_centres_everything_the_movie_paints() {
+    let Some(vanilla) = vanilla() else {
+        return;
+    };
+    let out = centered_build_url_editor(&vanilla).expect("known 02_990 derives");
+    let movie = Movie::parse(&out).expect("derived movie parses");
+
+    // Every character's own horizontal span, in its own twips: the plate's shape bounds, the two
+    // text boxes' bounds, and -- through the movie's own two levels of indirection -- the frame
+    // sprite's single external image.
+    let local_span = |character: u16| -> (f64, f64) {
+        for tag in &movie.tags {
+            match tag {
+                Tag::DefineShape {
+                    shape_id,
+                    shape_bounds,
+                    ..
+                } if *shape_id == character => {
+                    return (f64::from(shape_bounds.x_min), f64::from(shape_bounds.x_max));
+                }
+                Tag::DefineEditText {
+                    character_id,
+                    bounds,
+                    ..
+                } if *character_id == character => {
+                    return (f64::from(bounds.x_min), f64::from(bounds.x_max));
+                }
+                Tag::DefineSprite { id, tags, .. } if *id == character => {
+                    for child in tags {
+                        if let Tag::PlaceObject3 {
+                            character_id: Some(image),
+                            matrix,
+                            ..
+                        } = child
+                        {
+                            let width = image_width_twips(&movie, *image);
+                            return match matrix {
+                                Some(matrix) => placed(matrix, (0.0, width)),
+                                None => (0.0, width),
+                            };
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("character {character} has no span");
+    };
+
     let (window_x, window_y) = build_url_window_position();
-    let scale = FIELD_WIDTH_PX as f32 / 400.0;
-    // sprite origin (100, 100) + the scaled plate rect (-10..390 px, 0..36 px).
-    let left = window_x + 100.0 - 10.0 * scale;
-    let right = window_x + 100.0 + 390.0 * scale;
-    assert_eq!((left + right) * 0.5, 960.0);
-    assert_eq!(right - left, FIELD_WIDTH_PX as f32);
+    let mut painted: Option<(f64, f64)> = None;
+    let mut placements = 0usize;
+    for tag in &sprite_children(&movie) {
+        let Tag::PlaceObject2 {
+            character_id: Some(character),
+            matrix: Some(matrix),
+            ..
+        } = tag
+        else {
+            continue;
+        };
+        let span = placed(matrix, local_span(*character));
+        placements += 1;
+        painted = Some(match painted {
+            Some((lo, hi)) => (lo.min(span.0), hi.max(span.1)),
+            None => span,
+        });
+    }
+    // Plate, two frame placements, the field and the caption.
+    assert_eq!(placements, 5, "every placement in the sprite is measured");
+
+    let (lo, hi) = painted.expect("the sprite paints something");
+    let left = f64::from(window_x) + 100.0 + lo / f64::from(TWIPS_PER_PIXEL);
+    let right = f64::from(window_x) + 100.0 + hi / f64::from(TWIPS_PER_PIXEL);
+    assert!(
+        ((left + right) * 0.5 - 960.0).abs() < 0.05,
+        "painted container {left}..{right} is not centred on 960"
+    );
 
     // Vertically the block runs from the caption box's top edge (22 px above the sprite origin,
     // 40 px tall) down to the ornament's bottom edge (100 px of art at scale_y 45889/65536, placed
@@ -221,10 +328,75 @@ fn the_window_translate_centres_the_caption_and_box_on_the_stage() {
         ((block_top + block_bottom) * 0.5 - 540.0).abs() < 0.01,
         "block {block_top}..{block_bottom} is not centred on 540"
     );
-    assert_eq!(window_x, 556.0);
+}
+
+/// The two bevel constants [`build_url_window_position`] carries match what the movie is actually
+/// derived with, so a change to the frame placement cannot leave the window placement stale.
+#[test]
+fn the_window_position_matches_the_movie_it_places() {
+    let Some(vanilla) = vanilla() else {
+        return;
+    };
+    let movie = Movie::parse(&vanilla).expect("vanilla movie parses");
+    let children = sprite_children(&movie);
+    let matrix_of = |character: u16| {
+        children
+            .iter()
+            .find_map(|tag| match tag {
+                Tag::PlaceObject2 {
+                    character_id: Some(id),
+                    matrix: Some(matrix),
+                    ..
+                } if *id == character => Some(matrix.clone()),
+                _ => None,
+            })
+            .expect("placement present")
+    };
+    let plate_bounds = movie
+        .tags
+        .iter()
+        .find_map(|tag| match tag {
+            Tag::DefineShape {
+                shape_id: PLATE_CHARACTER_ID,
+                shape_bounds,
+                ..
+            } => Some((f64::from(shape_bounds.x_min), f64::from(shape_bounds.x_max))),
+            _ => None,
+        })
+        .expect("plate shape present");
+    let frame_image = movie
+        .tags
+        .iter()
+        .find_map(|tag| match tag {
+            Tag::DefineSprite {
+                id: FRAME_CHARACTER_ID,
+                tags,
+                ..
+            } => tags.iter().find_map(|child| match child {
+                Tag::PlaceObject3 {
+                    character_id: Some(image),
+                    ..
+                } => Some(*image),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .expect("frame sprite holds an image");
+
+    let plate = placed(&matrix_of(PLATE_CHARACTER_ID), plate_bounds);
+    let frame = placed(
+        &matrix_of(FRAME_CHARACTER_ID),
+        (0.0, image_width_twips(&movie, frame_image)),
+    );
     assert!(
-        (window_y - 444.564_47).abs() < 0.001,
-        "window_y drifted to {window_y}"
+        (plate.0 - frame.0 - 710.0).abs() < 0.01,
+        "left bevel drifted to {}",
+        plate.0 - frame.0
+    );
+    assert!(
+        (frame.1 - plate.1 - 838.734_13).abs() < 0.01,
+        "right bevel drifted to {}",
+        frame.1 - plate.1
     );
 }
 
