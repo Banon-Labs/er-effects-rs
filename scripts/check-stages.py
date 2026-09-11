@@ -464,6 +464,13 @@ def main() -> int:
     ap.add_argument("--list", action="store_true", help="every step with its stage")
     ap.add_argument("--stages", action="store_true", help="stage names, one per line")
     ap.add_argument("--matrix", action="store_true", help="stage names as JSON for the CI matrix")
+    ap.add_argument(
+        "--only",
+        metavar="CSV",
+        default="",
+        help="restrict --matrix to these stage names. An empty value means all of them, so a "
+        "caller can pass a workflow input straight through without branching on it.",
+    )
     ap.add_argument("--lines", metavar="STAGE", help="check.sh line numbers in one stage")
     ap.add_argument("--skip-lines", metavar="STAGE", help="line numbers NOT in one stage")
     ap.add_argument("--inputs", metavar="STAGE", help="content digest of that stage's inputs")
@@ -511,7 +518,22 @@ def main() -> int:
         return 0
 
     if args.matrix:
-        print(json.dumps(list(STAGE_NAMES)))
+        # The intersection lives here rather than in shell inside .github/workflows/check.yml,
+        # where it was ten lines of python in a heredoc nested in a YAML block scalar -- correct
+        # only for as long as nobody re-indents the block, since a `<<PY` terminator has to land in
+        # column 1 and the block scalar is what puts it there. An unknown name is refused rather
+        # than dropped: a typo that silently narrows the matrix is a stage nobody notices is gone.
+        names = list(STAGE_NAMES)
+        if args.only:
+            want = [w.strip() for w in args.only.split(",") if w.strip()]
+            unknown = [w for w in want if w not in names]
+            if unknown:
+                print(
+                    f"check-stages: no such stage(s): {unknown}; have {names}", file=sys.stderr
+                )
+                return 2
+            names = [n for n in names if n in want]
+        print(json.dumps(names))
         return 0
 
     if args.lines:

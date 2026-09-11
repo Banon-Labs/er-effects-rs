@@ -215,27 +215,12 @@ jobs:
           REQUESTED: ${{ inputs.stages }}
         run: |
           set -euo pipefail
-          all=$(python3 scripts/check-stages.py --matrix)
-          echo "stages=$all" >> "$GITHUB_OUTPUT"
-          if [ -z "${REQUESTED:-}" ]; then
-            echo "selected=$all" >> "$GITHUB_OUTPUT"
-          else
-            # Intersect with the real list, so a typo cannot invent a job that then fails on a
-            # missing stage; and keep the JSON shape the matrix needs.
-            selected=$(python3 - "$REQUESTED" <<'PY'
-          import json, subprocess, sys
-          want = [s.strip() for s in sys.argv[1].split(",") if s.strip()]
-          have = json.loads(subprocess.run(
-              ["python3", "scripts/check-stages.py", "--matrix"],
-              capture_output=True, text=True, check=True, timeout=30).stdout)
-          missing = [w for w in want if w not in have]
-          if missing:
-              raise SystemExit(f"no such stage(s): {missing}; have {have}")
-          print(json.dumps([h for h in have if h in want]))
-          PY
-            )
-            echo "selected=$selected" >> "$GITHUB_OUTPUT"
-          fi
+          # `--only ""` means all of them, so the workflow input passes straight through with no
+          # branch here, and an unknown stage name is refused by the tool rather than silently
+          # narrowing the matrix to a set nobody asked for.
+          echo "stages=$(python3 scripts/check-stages.py --matrix)" >> "$GITHUB_OUTPUT"
+          echo "selected=$(python3 scripts/check-stages.py --matrix --only "$REQUESTED")" \
+            >> "$GITHUB_OUTPUT"
       - run: |
           {
             echo '## Stages'
