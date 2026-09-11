@@ -154,7 +154,26 @@ fn stamp_outcome(line: &str) {
 ///
 /// Armed from both attach-time entry points, whichever reaches it first.
 fn remember_crash_record_at_start() {
-    let _ = CRASH_RECORD_AT_START.set(read_crash_record().as_deref().and_then(identity));
+    let captured = read_crash_record().as_deref().and_then(identity);
+    if CRASH_RECORD_AT_START.set(captured).is_err() {
+        // The other attach-time entry point got here first; one capture is the whole point.
+        return;
+    }
+    // Logged because the capture is the half of this instrument a unit test cannot reach. The
+    // decision it feeds is tested on the host (`er_crash_logging_core::latest_record`), but whether
+    // a baseline was taken at all, and before the game could write a record, is only observable
+    // here. A run whose exit reads `clean-exit` proves nothing unless this line says what the
+    // comparison was made against.
+    match CRASH_RECORD_AT_START.get().and_then(Option::as_deref) {
+        Some(identity) => append_autoload_debug(format_args!(
+            "crash-oracle: baseline captured at attach -- a record already on disk, {identity}. \
+             An exit is only read as this run's crash if that identity changes first."
+        )),
+        None => append_autoload_debug(format_args!(
+            "crash-oracle: baseline captured at attach -- no readable crash record on disk, so any \
+             record found at exit belongs to this run."
+        )),
+    }
 }
 
 fn read_crash_record() -> Option<String> {
@@ -176,9 +195,35 @@ fn read_crash_record() -> Option<String> {
 /// the decision and is tested on the host; this function is the I/O around it.
 fn crash_record_says_fatal() -> bool {
     let Some(text) = read_crash_record() else {
+        append_autoload_debug(format_args!(
+            "crash-oracle: no crash record on disk at exit, so this run is not read as a crash"
+        ));
         return false;
     };
-    says_fatal_this_run(&text, CRASH_RECORD_AT_START.get().map(Option::as_deref))
+    let baseline = CRASH_RECORD_AT_START.get().map(Option::as_deref);
+    let verdict = says_fatal_this_run(&text, baseline);
+    // The comparison, written down on every exit that reaches here.
+    //
+    // The decision itself is tested on the host, and the baseline capture logs itself at attach.
+    // What neither can show is the two halves meeting: that the identity captured at attach is the
+    // one this comparison actually receives. Proving that needed a run exiting through the game's
+    // own quit path, which costs a menu drive -- so instead every exit now says what it compared
+    // and what it concluded, and the next ordinary quit answers it for free.
+    append_autoload_debug(format_args!(
+        "crash-oracle: exit comparison -- baseline {}, on disk now {}, verdict {}",
+        match baseline {
+            Some(Some(identity)) => identity,
+            Some(None) => "<no record at attach>",
+            None => "<never captured>",
+        },
+        identity(&text).as_deref().unwrap_or("<unidentifiable>"),
+        if verdict {
+            "this run crashed"
+        } else {
+            "not this run's crash"
+        }
+    ));
+    verdict
 }
 
 fn write_run_outcome(api: &str, code: u32) {
