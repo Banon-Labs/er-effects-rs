@@ -509,7 +509,10 @@ bash scripts/check.sh
 # ...which is now ELEVEN STAGES fanned out as child processes, not one long process. The step
 # list is unchanged and still lives in check.sh alone; what changed is that each step belongs to
 # a named stage, so a failure lands somewhere named and the fast stages answer first. Measured on
-# this tree: `lint` is 9s and `policy` 104s, against 695s for every non-cargo step.
+# this tree: `lint` is 14s and `policy` 104s, against 887s for the whole suite run one step at
+# a time. The fan-out at four jobs does the same work in 614s, and the number that really moved
+# is time-to-first-failure: a formatting mistake is red in 14s instead of after 121s of
+# unrelated gates.
 bash scripts/check.sh --list-stages         # the stages, and how many steps each holds
 bash scripts/check.sh --stage lint          # one stage, in this process, no children
 bash scripts/check.sh --jobs 1              # every stage, one at a time
