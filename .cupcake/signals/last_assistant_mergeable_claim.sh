@@ -22,7 +22,8 @@
 #   MERGEABLECLAIM:<claimed>:<verdict>
 #
 # claimed is 1 when the turn's closing prose called the pull request mergeable, 0 otherwise.
-# verdict is the measured CI state for the current branch -- PASS / PENDING / FAIL / NOPR / UNKNOWN
+# verdict is the measured CI state for the current branch -- `PASS` / `PENDING` / `FAIL` / `NOPR` /
+# `UNKNOWN`
 # -- computed the same way ci_state_for_branch computes it. Nothing is emitted when the transcript
 # cannot be read, so an absent signal asserts nothing.
 set -uo pipefail
@@ -31,7 +32,7 @@ export CUPCAKE_SIGNAL_REPO_ROOT
 
 # The CI half first, so the python below only has to read the transcript. `gh pr checks` exits
 # non-zero whenever anything is failing or pending, so the exit code is ignored and the verdict
-# comes from the rows. Every error path leaves UNKNOWN, which the policy treats as not-green.
+# comes from the rows. Every error path leaves `UNKNOWN`, which the policy treats as not-green.
 verdict="UNKNOWN"
 if command -v gh >/dev/null 2>&1 && command -v git >/dev/null 2>&1; then
 	branch="$(git branch --show-current 2>/dev/null || true)"
