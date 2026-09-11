@@ -25,6 +25,32 @@ fn nav_held() -> usize {
     crate::experiments::save_picker_user_nav_held()
 }
 
+/// The live editor's font/align hot-reload, wrapped around a row text push.
+///
+/// `push_stats_text_on_row` hands the text it was given when this is not installed, which is what a
+/// shell with no editor wants.
+fn live_text_for_field(field_name_nul: &str, text: &[u16]) -> Vec<u16> {
+    crate::experiments::startup_hooks::loading_cover::profile_editor_live_text_for_field(
+        field_name_nul,
+        text,
+    )
+    .into_owned()
+}
+
+fn remember_field_target(
+    field_name_nul: &str,
+    component: usize,
+    utf16: &[u16],
+    active_surface: &'static str,
+) {
+    crate::experiments::startup_hooks::remember_profile_editor_field_target(
+        field_name_nul,
+        component,
+        utf16,
+        active_surface,
+    );
+}
+
 /// The product's own steps around a pick. Installed once, from the quit-menu arm.
 pub(crate) fn install_product_save_picker_hooks() {
     er_quit_menu_core::save_picker_menu::install_hooks(
@@ -38,6 +64,12 @@ pub(crate) fn install_product_save_picker_hooks() {
             ensure_nav_input_hooks: Some(install_nav_input_hooks),
             take_nav_edges_for: Some(take_nav_edges_for),
             nav_held: Some(nav_held),
+        },
+    );
+    er_quit_menu_core::scaleform_proxy::install_row_text_hooks(
+        er_quit_menu_core::scaleform_proxy::RowTextHooks {
+            live_text_for_field: Some(live_text_for_field),
+            remember_field_target: Some(remember_field_target),
         },
     );
 }

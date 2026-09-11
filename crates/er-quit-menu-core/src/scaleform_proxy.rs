@@ -232,6 +232,160 @@ pub unsafe fn set_row_field_visible(
     vtable_ok
 }
 
+/// The two steps around a text push that only a host with a live layout editor can perform.
+///
+/// A standalone shell installs neither and the push still lands -- it simply writes the text it was
+/// handed, with no font/align hot-reload wrapped around it and no field-target cache behind it.
+#[derive(Clone, Copy, Default)]
+pub struct RowTextHooks {
+    /// Wrap the text in Scaleform HTML for the live editor's current font and alignment. Returning
+    /// the input unchanged is the neutral answer.
+    pub live_text_for_field: Option<fn(&str, &[u16]) -> Vec<u16>>,
+    /// Record which component a field's text last went to, so the editor can re-drive it between
+    /// populates.
+    pub remember_field_target: Option<fn(&str, usize, &[u16], &'static str)>,
+}
+
+static ROW_TEXT_HOOKS: std::sync::OnceLock<RowTextHooks> = std::sync::OnceLock::new();
+
+/// Install the host's row-text steps. First caller wins, as every seam in this crate does.
+pub fn install_row_text_hooks(hooks: RowTextHooks) -> bool {
+    ROW_TEXT_HOOKS.set(hooks).is_ok()
+}
+
+fn row_text_hooks() -> RowTextHooks {
+    ROW_TEXT_HOOKS.get().copied().unwrap_or_default()
+}
+
+/// Push `utf16` onto the row's `name` field with the game's own machinery, exactly as the native
+/// row-populate does per field: resolve the named child (`assignComponentWithName`, via the
+/// installed hook's trampoline when there is one so the resolve is not double-instrumented),
+/// SetText through the null-guarded wrapper `FUN_14074a0f0`, then release the resolved value with
+/// `CSScaleformValue::~CSScaleformValue` on the proxy's embedded value at `+0x28` -- mirroring the
+/// native `~CSScaleformValue(&SStack_70.scaleformValue)`. Returns whether SetText was accepted.
+///
+/// # Two guards, each of which was a crash or a lie
+///
+/// The SetText wrapper's first act is `rcx = *(proxy+0x8); call *0x8(*rcx)` -- an unvalidated
+/// virtual dispatch on the linked component. On the first in-world ProfileSelect open the component
+/// linked for the injected `ErStats` field was a stale menu-arena object with a garbage heap
+/// vtable, and that dispatch jumped into `.rdata`. So component, vtable and slot target are all
+/// checked game-image-plausible, `_purecall` included, before the wrapper is allowed to dispatch
+/// (er-effects-rs-7e7).
+///
+/// And the component checks cannot answer whether the name resolved at all: on a miss the
+/// named-child ctor leaves the out proxy's component slot pointing at itself, so the component is
+/// non-null and its vtable is the game's own `CS::SceneObjProxy` -- live by every test here. Only
+/// the GFx value type separates a hit from a miss, and without that check every push reported
+/// success on every movie: 109,035 "successful" `ErCharStats` writes were logged against the
+/// System>Quit panel, which has no such field, while the visibility hides that travelled with them
+/// landed for real.
+///
+/// # Safety
+///
+/// As [`row_child_gfx_value_type`], and `utf16` must be nul-terminated.
+pub unsafe fn push_stats_text_on_row(
+    base: usize,
+    row_proxy: usize,
+    name: &str,
+    utf16: &[u16],
+) -> bool {
+    debug_assert!(name.ends_with('\0'), "field name must be nul-terminated");
+    let assign = named_child_bind(base);
+    let Some(settext) = gated_game_fn(
+        er_game_base::rva::PROFILE_SETTEXT_RVA,
+        "PROFILE_SETTEXT_RVA",
+    ) else {
+        return false;
+    };
+    let settext: unsafe extern "system" fn(usize, usize) = unsafe { std::mem::transmute(settext) };
+    let Some(dtor) = gated_game_fn(
+        er_game_base::rva::CSSCALEFORMVALUE_DTOR_RVA,
+        "CSSCALEFORMVALUE_DTOR_RVA",
+    ) else {
+        return false;
+    };
+    let dtor: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(dtor) };
+    // The binder fully constructs the out proxy without reading it (both its ctor-or-resolve paths
+    // initialise before use); a zeroed buffer mirrors the native uninitialised 0x70-byte stack slot
+    // with headroom. The name is a plain string -- the binder treats it as a printf format, and no
+    // field name here carries a `%`.
+    let mut proxy_buf = [0u8; SCENE_OBJ_PROXY_STACK_BYTES];
+    let out = unsafe {
+        assign(
+            row_proxy,
+            proxy_buf.as_mut_ptr() as usize,
+            name.as_ptr() as usize,
+        )
+    };
+    if out == 0 || out == NULL_POINTER {
+        return false;
+    }
+    let component_slot = out + SCENE_OBJ_PROXY_COMPONENT_SLOT_OFFSET;
+    let comp = unsafe { safe_read_usize(component_slot) }.unwrap_or(0);
+    let comp_vt = if comp != 0 && comp != NULL_POINTER {
+        unsafe { safe_read_usize(comp) }.unwrap_or(0)
+    } else {
+        0
+    };
+    let slot_fn = if comp_vt != 0 {
+        unsafe { safe_read_usize(comp_vt + COMPONENT_GET_VALUE_VTABLE_SLOT_OFFSET) }.unwrap_or(0)
+    } else {
+        0
+    };
+    if !unsafe { resolved_value_type(out) }.is_some_and(gfx_value_type_is_resolved) {
+        let n = er_telemetry_core::counters::PROFILE_STATS_PUSH_MISSING_FIELD
+            .fetch_add(1, Ordering::SeqCst)
+            + 1;
+        if n <= 4 || n.is_power_of_two() {
+            append_autoload_debug(format_args!(
+                "stats-text: push refused -- the movie has no child '{}' on row=0x{row_proxy:x} (missing_field={n})",
+                name.trim_end_matches('\0')
+            ));
+        }
+        unsafe { dtor(out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET) };
+        return false;
+    }
+    let component_live = comp_vt != 0
+        && vtable_in_game_image(comp_vt, base)
+        && vtable_in_game_image(slot_fn, base)
+        && !dispatch_target_is_purecall(slot_fn, base);
+    let accepted = if component_live {
+        let hooks = row_text_hooks();
+        // The wrapper copies the UTF-16 into a DLString synchronously. Under a live editor the
+        // font/align hot-reload rides this same guarded path by wrapping the text in Scaleform
+        // HTML; field width stays a movie-definition edit either way.
+        let live_text = match hooks.live_text_for_field {
+            Some(wrap) => wrap(name, utf16),
+            None => utf16.to_vec(),
+        };
+        unsafe { settext(component_slot, live_text.as_ptr() as usize) };
+        if let Some(remember) = hooks.remember_field_target {
+            remember(name, comp, utf16, "last-row-settext");
+        }
+        true
+    } else {
+        let skips = er_telemetry_core::counters::PROFILE_STATS_PUSH_STALE_SKIPS
+            .fetch_add(1, Ordering::SeqCst)
+            + 1;
+        er_telemetry_core::counters::PROFILE_STATS_PUSH_STALE_LAST_COMP
+            .store(comp, Ordering::SeqCst);
+        er_telemetry_core::counters::PROFILE_STATS_PUSH_STALE_LAST_VT
+            .store(comp_vt, Ordering::SeqCst);
+        if skips <= 8 {
+            append_autoload_debug(format_args!(
+                "stats-text: push skipped fail-closed (er-effects-rs-7e7 guard): the resolved component is not live -- comp=0x{comp:x} vt=0x{comp_vt:x} slot_fn=0x{slot_fn:x} row=0x{row_proxy:x} (skips={skips})"
+            ));
+        }
+        false
+    };
+    // Destroy the proxy's embedded `CSScaleformValue` exactly like the native populate. An earlier
+    // version ran the dtor on `+0x8`, the component slot, corrupting the link node and
+    // mis-releasing `proxy+0x20` -- a second latent use-after-free even when SetText succeeded.
+    unsafe { dtor(out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET) };
+    accepted
+}
+
 /// `SceneObjProxy::assignComponentWithName`, preferring the trampoline when this process detoured
 /// it -- calling the detour from inside it would recurse.
 fn named_child_bind(base: usize) -> unsafe extern "system" fn(usize, usize, usize) -> usize {
