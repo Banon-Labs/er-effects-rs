@@ -932,6 +932,49 @@ pub static SYSTEM_QUIT_LOAD_BUILD_URL_BACKDROP_MISSING: AtomicUsize = AtomicUsiz
 pub static SYSTEM_QUIT_LOAD_BUILD_URL_BACKDROP_RESOLVED: AtomicUsize = AtomicUsize::new(0);
 /// Frames on which it did not resolve. Derived but never resolved is the controller-rebuild case.
 pub static SYSTEM_QUIT_LOAD_BUILD_URL_BACKDROP_UNRESOLVED: AtomicUsize = AtomicUsize::new(0);
+
+// ---- the character panel's portrait, after an import ------------------------------------------
+// A build import mutates `PlayerGameData` and writes no save. The panel's portrait is the game's
+// own `CSMenuProfModelRend`, dressed from a `CS::ProfileSummary` record, and the record only
+// re-derives from the live character inside the two native save lanes -- so the portrait keeps
+// showing the previous loadout until the dialog is rebuilt. These count the repair and, more
+// importantly, measure whether it took: `_equip_verdict` compares the record's own equipment
+// fingerprint against the renderer stage the model build actually reads.
+/// Imports that reached the portrait refresh at all (one per applied import).
+pub static BUILD_URL_PORTRAIT_REFRESH_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+/// `LiveSync::code()` of the most recent record sync: 0 never attempted, 1 synced, 2 no summary,
+/// 3 slot out of range, 4 the native has no verified mapping for this build. Tri-plus-state on
+/// purpose -- a counter that was never written must not read as a successful sync.
+pub static BUILD_URL_PORTRAIT_RECORD_SYNC_STATE: AtomicUsize = AtomicUsize::new(0);
+/// Syncs whose equipment fingerprint actually moved. Lower than the attempt count is not a
+/// failure: re-importing the build already worn changes nothing, and neither does a sync that
+/// follows the game's own save by a frame.
+pub static BUILD_URL_PORTRAIT_RECORD_SYNCS: AtomicUsize = AtomicUsize::new(0);
+/// The slot whose record was synced, plus one (`0` = none yet). Plus one because slot 0 is both a
+/// real slot and the natural "nothing recorded" value.
+pub static BUILD_URL_PORTRAIT_RECORD_SLOT_PLUS1: AtomicUsize = AtomicUsize::new(0);
+/// The Rune Level the record carried after the sync. Compared against the import's own reported
+/// level, this says the record now describes the imported character rather than the previous one.
+pub static BUILD_URL_PORTRAIT_RECORD_LEVEL: AtomicUsize = AtomicUsize::new(0);
+/// FNV-1a over the record's `ChrAsm::equipment_param_ids` after the sync (`0` = never read).
+pub static BUILD_URL_PORTRAIT_RECORD_FINGERPRINT: AtomicU64 = AtomicU64::new(0);
+/// The same fingerprint taken from the renderer's live stage-0 `ChrAsm` -- the block the per-frame
+/// model-resource request reads, not the inbox the feed writes (`0` = never read).
+pub static BUILD_URL_PORTRAIT_RENDERER_FINGERPRINT: AtomicU64 = AtomicU64::new(0);
+/// `PortraitEquipmentVerdict::code()`: 0 unmeasured, 1 the renderer is dressing the model in the
+/// record's gear, 2 it is still on the previous loadout. This is the field that says whether the
+/// portrait re-rendered with the imported equipment; the kick count only says one was requested.
+pub static BUILD_URL_PORTRAIT_EQUIP_VERDICT: AtomicUsize = AtomicUsize::new(0);
+/// Model rebuilds this path actually kicked.
+pub static BUILD_URL_PORTRAIT_KICKS: AtomicUsize = AtomicUsize::new(0);
+/// Rebuilds it asked for and did not get -- no renderer for the slot, a renderer whose vtable is
+/// not the profile renderer's, or a build already in flight. Counted apart from the kicks because
+/// "nothing happened" and "it happened and did not help" are different defects.
+pub static BUILD_URL_PORTRAIT_KICK_REFUSALS: AtomicUsize = AtomicUsize::new(0);
+/// Ticks left in the bounded window that re-reads the renderer stage after a kick. The rebuild is
+/// asynchronous (measured ~94ms, i.e. a handful of frames), so the verdict cannot be taken on the
+/// frame the kick fires; the window is what keeps that from becoming an open-ended per-frame read.
+pub static BUILD_URL_PORTRAIT_VERIFY_TICKS: AtomicUsize = AtomicUsize::new(0);
 // ---- the Generate Build Link row: the inverse of everything above -----------------------------
 // That row takes a link and rewrites the character; this one takes the character and writes a link.
 // It touches no game state at all, so it has no "applied" counter -- what it has instead is a

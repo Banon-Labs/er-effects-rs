@@ -484,6 +484,26 @@ This repo must be a sibling of a `fromsoftware-rs` checkout (the root crate uses
 ```bash
 # Full quality gate: lossy-UTF8 lint, cargo fmt --all -- --check,
 # and a windows-target cargo check (cross-compiled from Linux via cargo-xwin).
+#
+# ORCHESTRATOR-ONLY, IN THE MAIN TREE. check.sh fails closed inside an agent
+# worktree -- `repo_root == */.claude/worktrees/agent-*` exits 2 with
+# "REFUSED -- this is an agent worktree" before the summary trap installs -- and
+# it refuses a second concurrent run anywhere. So do NOT write `bash
+# scripts/check.sh` into a subagent brief when that agent has worktree
+# isolation: the instruction is unrunnable, and an agent that reaches for the
+# ER_CHECK_FORCE=1 override burns the ~30 minutes of sleep-polling the guard
+# exists to prevent (bd subagent-full-check-sh-sleep-poll-is-the-hour-long-tax-2026-09-02,
+# bd never-tell-a-worktree-subagent-to-run-check-sh-2026-09-10).
+#
+# Give a worktree subagent the SCOPED list instead, naming its crates and the
+# gates its edit actually touches:
+#   cargo test -p <crate>
+#   cargo fmt -p <crate> -- --check
+#   python3 scripts/check-comment-caps.py <files it touched>
+#   python3 scripts/check-no-lossy-utf8.py
+#   python3 scripts/check-shared-hook-rvas.py      # whenever a detour moves
+#   python3 scripts/check-me3-dll-conflicts.py     # whenever the conflict table moves
+# The whole-workspace verdict is the orchestrator's, run once at integration.
 bash scripts/check.sh
 
 # Host-buildable workspace members (no game dependencies):

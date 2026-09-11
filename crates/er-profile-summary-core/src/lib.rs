@@ -50,6 +50,10 @@ pub use refresh_policy::*;
 pub mod reassert_policy;
 pub use reassert_policy::*;
 
+/// Pure, host-testable: did a record's equipment change, and is a portrait wearing it?
+pub mod equip_fingerprint;
+pub use equip_fingerprint::*;
+
 #[cfg(windows)]
 pub mod face_data;
 #[cfg(windows)]
@@ -74,3 +78,13 @@ pub use save_bytes_records::*;
 pub mod picked_refresh;
 #[cfg(windows)]
 pub use picked_refresh::*;
+
+#[cfg(windows)]
+pub mod live_player_sync;
+#[cfg(windows)]
+pub use live_player_sync::*;
+
+#[cfg(windows)]
+pub mod portrait_refresh;
+#[cfg(windows)]
+pub use portrait_refresh::*;

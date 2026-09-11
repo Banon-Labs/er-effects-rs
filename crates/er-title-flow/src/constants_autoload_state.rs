@@ -1081,6 +1081,16 @@ pub use er_telemetry_core::counters::{
     SYSTEM_QUIT_LOAD_BUILD_URL_REFUSED_COUNT, SYSTEM_QUIT_LOAD_BUILD_URL_REJECTED_COUNT,
     SYSTEM_QUIT_LOAD_BUILD_URL_REQUEST_COUNT,
 };
+/// The character panel's portrait after an import: the record re-derived from the live player, the
+/// rebuild asked of its profile renderer, and the fingerprint comparison that says whether the
+/// model is actually being built from the imported gear.
+pub use er_telemetry_core::counters::{
+    BUILD_URL_PORTRAIT_EQUIP_VERDICT, BUILD_URL_PORTRAIT_KICKS, BUILD_URL_PORTRAIT_KICK_REFUSALS,
+    BUILD_URL_PORTRAIT_RECORD_FINGERPRINT, BUILD_URL_PORTRAIT_RECORD_LEVEL,
+    BUILD_URL_PORTRAIT_RECORD_SLOT_PLUS1, BUILD_URL_PORTRAIT_RECORD_SYNCS,
+    BUILD_URL_PORTRAIT_RECORD_SYNC_STATE, BUILD_URL_PORTRAIT_REFRESH_ATTEMPTS,
+    BUILD_URL_PORTRAIT_RENDERER_FINGERPRINT, BUILD_URL_PORTRAIT_VERIFY_TICKS,
+};
 // ---- System->Quit row identity table + resolution oracles (see system_quit_row_identity.rs) ----
 pub use er_telemetry_core::counters::SYSTEM_QUIT_NATIVE_RETURN_DESKTOP_CONTROLLER_LAST_OBJECT;
 pub use er_telemetry_core::counters::SYSTEM_QUIT_NATIVE_SAVE_GAME_CONTROLLER_LAST_OBJECT;

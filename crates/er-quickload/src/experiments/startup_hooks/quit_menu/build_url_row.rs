@@ -165,6 +165,11 @@ fn drain_build_import_failure() {
 /// Game task thread only -- the context every mutation inside the runtime requires.
 pub(crate) unsafe fn system_quit_build_import_tick() {
     drain_build_import_failure();
+    // The portrait verify window outlives the frame the import landed on, so it is polled before
+    // the early return below rather than after it. Safety: the caller's game-task contract; the
+    // tick costs one lock-free load while the window is closed, which is every frame but the few
+    // after an import.
+    unsafe { er_profile_summary_core::portrait_verify_tick() };
     // Safety: the caller's contract (FrameBegin game task) carries through.
     let Some(report) = (unsafe { er_build_import_runtime::tick() }) else {
         return;
@@ -175,4 +180,47 @@ pub(crate) unsafe fn system_quit_build_import_tick() {
         report.build_name,
         report.summary()
     ));
+    // The character changed; the panel's portrait does not know yet. Safety: same game-task
+    // contract, and the import has just finished mutating `PlayerGameData`.
+    unsafe { build_url_refresh_character_portrait() };
+}
+
+// ---- the character panel's portrait --------------------------------------------------------
+//
+// Everything about why this is needed, which slot it may touch, and what it measures lives in
+// `er_profile_summary_core::portrait_refresh`. What has to stay here is the one step that cannot:
+// `kick_target_profile_slot` is the per-slot replica of the engine's data-change sequence and it
+// belongs beside the loading-cover pipeline that also drives it.
+
+/// Re-derive the live character's own record and ask its portrait to rebuild from it.
+///
+/// # Safety
+///
+/// Game task thread, character in the world, called once per applied import.
+unsafe fn build_url_refresh_character_portrait() {
+    let Some(slot) = portrait_loaded_slot_confirmed() else {
+        er_profile_summary_core::note_unattributable_slot();
+        return;
+    };
+    // Step one, the record. Safety: game task thread and a live character, which is what the
+    // native's own save-lane callers hold.
+    if !matches!(
+        unsafe { er_profile_summary_core::sync_record_for_import(slot) },
+        er_profile_summary_core::LiveSync::Synced { .. }
+    ) {
+        return;
+    }
+    // Step two, the model. Safety: same context; the target is vtable-checked before it is used.
+    let Some(target) = (unsafe { er_profile_summary_core::portrait_rebuild_target(slot) }) else {
+        return;
+    };
+    // The kick refuses a slot it has already kicked on this renderer. That latch paces a per-frame
+    // cadence; an import is an edge, so the one rebuild it rations is exactly the one owed here.
+    PORTRAIT_KICK_SLOT_KEY.store(0, Ordering::SeqCst);
+    PORTRAIT_KICK_RENDERER.store(0, Ordering::SeqCst);
+    // Safety: live summary and a renderer whose vtable was just checked against the profile
+    // renderer's, on the game task thread.
+    let fired =
+        unsafe { kick_target_profile_slot(target.base, target.summary, target.renderer, slot) };
+    er_profile_summary_core::note_portrait_rebuild(slot, target.renderer, fired);
 }
