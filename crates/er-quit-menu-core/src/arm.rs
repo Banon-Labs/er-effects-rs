@@ -96,11 +96,9 @@ pub unsafe fn arm_standalone(rows: RowSet, actions: QuitRowActions) -> Standalon
             false
         }
     };
-    // The link field and the importer are the only reasons either of these exists, so a row set
-    // without a build row neither installs nor needs them.
+    // The link field and the importer are the only reasons the game task exists, so a row set
+    // without a build row neither installs nor needs it.
     let build_rows = rows.load_build_from_url || rows.generate_build_link;
-    let menu_pump =
-        build_rows.then(|| unsafe { crate::menu_pump::install_quit_menu_window_run_hook() });
     let game_task = build_rows.then(crate::game_task::install_build_row_game_task);
     // Both character rows open `05_010_ProfileSelect`, and that window renders a character model
     // per slot. The native refresh that draws them walks the renderer table without a null check,
@@ -110,6 +108,13 @@ pub unsafe fn arm_standalone(rows: RowSet, actions: QuitRowActions) -> Standalon
     let character_rows = rows.load_character || rows.load_character_from_file;
     let profile_table_guard = character_rows
         .then(|| unsafe { crate::profile_table_guard::install_profile_table_guard() });
+    // One detour, two reasons to want it. The link field needs a menu pump to submit its keyboard
+    // job; a character row needs the same post-run moment to hide the pause menu behind the picker
+    // it just opened and to put it back when the picker closes. Neither is the product's hook --
+    // this is the shell's own, chained onto the same address through the union.
+    crate::menu_pump::set_character_rows_armed(character_rows);
+    let menu_pump = (build_rows || character_rows)
+        .then(|| unsafe { crate::menu_pump::install_quit_menu_window_run_hook() });
     let arm = StandaloneArm {
         gfx_served,
         rows_armed,

@@ -45,8 +45,6 @@ pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_SELECT_WINDOW;
 /// while that var is still 0 -- the confirm then escapes msgbox suppression and crashes the game (2026-07-15).
 /// This flag spans the whole flow so `switch_active` in the msgbox builder hook covers that gap.
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE;
-pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_HIDE_REAL_WINDOWS_COUNT;
-pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_RESTORE_REAL_WINDOWS_COUNT;
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_SKIP_RESTORE_AFTER_QUICKLOAD_COUNT;
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_REAL_WINDOWS_HIDDEN;
 pub(crate) static SYSTEM_QUIT_WINDOW_LIST_PUSH_ORIG: AtomicUsize =

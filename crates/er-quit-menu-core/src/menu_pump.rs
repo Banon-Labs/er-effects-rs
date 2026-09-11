@@ -26,6 +26,7 @@ use crate::software_keyboard::{
     BUILD_URL_TEXT_INPUT_RESOURCE_NAME, build_url_note_editor_window_state,
     text_input_02_990_window_is_live,
 };
+use crate::system_windows::{self, SystemWindowHooks};
 
 /// `CS::MenuWindowJob::Run`. Declared once in `er-title-flow`, where the product's own detour on the
 /// same address reads it, and derived here.
@@ -38,6 +39,72 @@ const MSGBOX_JOB_RESULT_STATE_1E8_OFFSET: usize = er_title_flow::MSGBOX_JOB_RESU
 
 static RUN_ORIG: AtomicUsize = AtomicUsize::new(0);
 static RUN_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Whether this host armed a character row, which is what makes the ProfileSelect work below its
+/// business. A build-rows-only shell leaves it 0 and the hook behaves exactly as it did before.
+static CHARACTER_ROWS_ARMED: AtomicUsize = AtomicUsize::new(0);
+
+/// Tell the pump a character row is armed, so it owns the System-window hide behind ProfileSelect.
+pub fn set_character_rows_armed(armed: bool) {
+    CHARACTER_ROWS_ARMED.store(usize::from(armed), Ordering::SeqCst);
+}
+
+/// The windows the hide/restore has to know about, by the game's own resource name.
+const INGAME_TOP_RESOURCE_NAME: &str = "02_000_IngameTop";
+const OPTION_SETTING_RESOURCE_NAME: &str = "02_040_OptionSetting";
+const OPTION_SETTING_TRIAL_RESOURCE_NAME: &str = "02_041_OptionSetting_Trial";
+const PROFILE_SELECT_RESOURCE_NAME: &str = "05_010_ProfileSelect";
+/// `MenuWindowJob.owningWindow` for the System windows, which is a different field from the one the
+/// software-keyboard windows are read through.
+const MENU_WINDOW_JOB_WINDOW_130_OFFSET: usize = 0x130;
+
+/// The System-window half of the post-run body, for a host that armed a character row.
+///
+/// This is the work that makes a standalone **Load Character** press produce a picker the player
+/// can actually use. Without it the pause menu the picker opened over stays drawn and keeps taking
+/// input, because nothing in a shell was ever told those windows exist.
+///
+/// # Safety
+///
+/// Menu-pump context, with `job` a live `MenuWindowJob`.
+unsafe fn profile_select_window_run(job: usize, filename: &str) {
+    let owner = unsafe { safe_read_usize(job + MENU_WINDOW_JOB_WINDOW_130_OFFSET) }.unwrap_or(0);
+    match filename {
+        INGAME_TOP_RESOURCE_NAME => {
+            er_telemetry_core::counters::SYSTEM_QUIT_INGAME_TOP_WINDOW
+                .store(owner, Ordering::SeqCst);
+        }
+        OPTION_SETTING_RESOURCE_NAME | OPTION_SETTING_TRIAL_RESOURCE_NAME => {
+            er_telemetry_core::counters::SYSTEM_QUIT_OPTION_SETTING_WINDOW
+                .store(owner, Ordering::SeqCst);
+        }
+        PROFILE_SELECT_RESOURCE_NAME => {
+            er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_SELECT_WINDOW
+                .store(owner, Ordering::SeqCst);
+            er_telemetry_core::counters::PROFILE_SELECT_WINDOW_RUN_TICKS
+                .fetch_add(1, Ordering::SeqCst);
+            let Ok(base) = game_module_base() else {
+                return;
+            };
+            if owner == 0 {
+                unsafe {
+                    system_windows::restore_real_system_windows(
+                        base,
+                        "standalone-profile-owner-cleared",
+                        &SystemWindowHooks::NONE,
+                    )
+                };
+            } else {
+                unsafe {
+                    system_windows::hide_real_system_windows(
+                        base,
+                        "standalone-hide-after-profile-select-run",
+                    )
+                };
+            }
+        }
+        _ => {}
+    }
+}
 
 /// Read a NUL-terminated UTF-16 resource name, bounded.
 fn read_wide_resource_name(ptr: usize) -> String {
@@ -100,6 +167,24 @@ unsafe extern "system" fn quit_menu_window_job_run_hook(
                 }
             }
         }
+    }
+    if CHARACTER_ROWS_ARMED.load(Ordering::SeqCst) != 0 {
+        // The native finalizer for a ProfileSelect window runs inside the original call above, so
+        // this is the first moment its teardown is complete and a GFx call is safe again.
+        let finalized = system_windows::take_finalized_profile_select();
+        if finalized != 0
+            && let Ok(base) = game_module_base()
+        {
+            unsafe {
+                system_windows::restore_real_system_windows(
+                    base,
+                    "standalone-profile-finalized",
+                    &SystemWindowHooks::NONE,
+                )
+            };
+        }
+        let filename = read_wide_resource_name(filename_ptr);
+        unsafe { profile_select_window_run(job, filename.as_str()) };
     }
     // Menu-pump-owned: this is where a queued field is submitted and a finished one consumed.
     // Safety: this hook is the menu pump.

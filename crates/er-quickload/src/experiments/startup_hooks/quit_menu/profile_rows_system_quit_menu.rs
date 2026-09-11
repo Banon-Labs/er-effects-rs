@@ -622,101 +622,75 @@ pub(crate) fn install_title_native_menu_visual_render_suppression_hook() {
     }
 }
 
-#[repr(C, align(8))]
-pub(crate) struct SystemQuitRootProxyScratch {
-    bytes: [u8; MENU_WINDOW_ROOT_PROXY_SCRATCH_SIZE],
-}
-
 pub(crate) fn system_quit_list_slot_addr(list: usize, slot: usize) -> usize {
     list.wrapping_add((0usize.wrapping_sub(list)) & 7)
         .wrapping_add(slot * std::mem::size_of::<usize>())
 }
 
-pub(crate) unsafe fn system_quit_menu_window_set_visible_and_flags(
-    base: usize,
-    window: usize,
-    visible: bool,
-    source: &str,
-) -> bool {
-    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    const HEAP_LO: usize = 0x10000;
-    if window < HEAP_LO {
-        append_autoload_debug(format_args!(
-            "system-quit-dup: {source} top-window visibility skipped -- window=0x{window:x} not heap-like"
-        ));
-        return false;
-    }
-    let window_vt = unsafe { safe_read_usize(window) }.unwrap_or(NULL);
-    if window_vt < HEAP_LO {
-        append_autoload_debug(format_args!(
-            "system-quit-dup: {source} top-window visibility skipped -- window=0x{window:x} vt=0x{window_vt:x} invalid"
-        ));
-        return false;
-    }
-    let mut scratch = SystemQuitRootProxyScratch {
-        bytes: [0; MENU_WINDOW_ROOT_PROXY_SCRATCH_SIZE],
-    };
-    let Ok(root_proxy_ctor_addr) = game_rva(MENU_WINDOW_ROOT_PROXY_CTOR_RVA) else {
-        append_autoload_debug(format_args!(
-            "system-quit-dup: {source} top-window visibility skipped -- failed to resolve root proxy ctor rva 0x{MENU_WINDOW_ROOT_PROXY_CTOR_RVA:x}"
-        ));
-        return false;
-    };
-    let Ok(set_visible_addr) = game_rva(TITLE_PRESS_START_SET_VISIBLE_RVA as u32) else {
-        append_autoload_debug(format_args!(
-            "system-quit-dup: {source} top-window visibility skipped -- failed to resolve SetVisible rva 0x{TITLE_PRESS_START_SET_VISIBLE_RVA:x}"
-        ));
-        return false;
-    };
-    let Ok(dtor_addr) = game_rva(MENU_WINDOW_ROOT_PROXY_SCRATCH_DTOR_RVA) else {
-        append_autoload_debug(format_args!(
-            "system-quit-dup: {source} top-window visibility skipped -- failed to resolve root proxy scratch dtor rva 0x{MENU_WINDOW_ROOT_PROXY_SCRATCH_DTOR_RVA:x}"
-        ));
-        return false;
-    };
-    let root_proxy_ctor: unsafe extern "system" fn(usize, usize) -> usize =
-        unsafe { std::mem::transmute(root_proxy_ctor_addr) };
-    let set_visible: unsafe extern "system" fn(usize, u8) =
-        unsafe { std::mem::transmute(set_visible_addr) };
-    let dtor: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(dtor_addr) };
-    let scratch_ptr = scratch.bytes.as_mut_ptr() as usize;
-    let root_proxy = unsafe { root_proxy_ctor(window, scratch_ptr) };
-    if root_proxy != scratch_ptr {
-        append_autoload_debug(format_args!(
-            "system-quit-dup: {source} top-window root-proxy ctor returned unexpected 0x{root_proxy:x} scratch=0x{scratch_ptr:x}; still using returned proxy"
-        ));
-    }
-    unsafe { set_visible(root_proxy, u8::from(visible)) };
-    unsafe { dtor(scratch_ptr + 0x28) };
+// The System-window hide/restore now lives in `er-quit-menu-core`, so a standalone quit-menu
+// shell can put the pause menu behind its ProfileSelect overlay and take it back afterwards. These
+// wrappers keep this crate's call sites unchanged and supply the steps only a host with a character
+// switch behind it can perform.
+use er_quit_menu_core::system_windows::{self, SystemWindowHooks};
 
-    let menu_id = unsafe { safe_read_u16(window + 0x180) }.unwrap_or(u16::MAX);
-    let cs_menu_man = unsafe {
-        safe_read_usize(er_game_base::mem::game_data_addr(
-            base,
-            CS_MENU_MAN_GLOBAL_RVA,
-            "CS_MENU_MAN_GLOBAL_RVA",
-        ))
+pub(crate) use er_quit_menu_core::system_windows::{
+    hide_real_system_windows as system_quit_hide_real_system_windows,
+    note_profile_select_finalized as system_quit_note_profile_select_finalized,
+};
+
+/// Whether a character switch is mid-flight, which is what makes a restore the wrong move.
+fn switch_in_flight() -> bool {
+    SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
+}
+
+/// The switch's own restore-time work. Answers whether the return-title chain was submitted.
+///
+/// # Safety
+///
+/// Menu-pump context, the same one the restore runs in.
+unsafe fn switch_restore(base: usize, source: &str) -> bool {
+    // Keep the native quit-save unblocked every frame the switch is active. On a 2nd in-process
+    // switch a stale `CSMenuMan->disableSaveMenu` aborts the quit-save so `bc4` freezes at 1 and the
+    // world never tears down; clearing it once at the request can be re-set before the save
+    // orchestrator polls, so it is cleared here too (a no-op once it is 0).
+    unsafe { system_quit_clear_disable_save_menu(base, source) };
+    // Diagnostic: name which of the save orchestrator's three gates is freezing `bc4` at 1.
+    unsafe { system_quit_log_save_gates(base, source) };
+    let system_dialog = SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.load(Ordering::SeqCst);
+    let submitted =
+        unsafe { system_quit_submit_direct_return_title_chain(base, system_dialog, source) };
+    SYSTEM_QUIT_SKIP_RESTORE_AFTER_QUICKLOAD_COUNT.fetch_add(1, Ordering::SeqCst);
+    if submitted {
+        SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.store(0, Ordering::SeqCst);
     }
-    .unwrap_or(NULL);
-    let mut flags_before = NULL;
-    let mut flags_after = NULL;
-    if menu_id < 0x47 && cs_menu_man >= HEAP_LO {
-        let flags_addr = cs_menu_man + 0x90 + menu_id as usize;
-        if let Some(flags) = unsafe { safe_read_u8(flags_addr) } {
-            flags_before = flags as usize;
-            let new_flags = if visible {
-                flags | TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK
-            } else {
-                flags & 1
-            };
-            unsafe { (flags_addr as *mut u8).write_volatile(new_flags) };
-            flags_after = new_flags as usize;
-        }
+    submitted
+}
+
+/// The product's full set: it owns the picker, the editor field targets and the switch.
+fn product_hooks() -> SystemWindowHooks {
+    SystemWindowHooks {
+        save_picker_reset: Some(save_picker_reset),
+        forget_profile_editor_field_targets: Some(|source| {
+            super::forget_profile_editor_field_targets(source)
+        }),
+        switch_in_flight: Some(switch_in_flight),
+        switch_restore: Some(switch_restore),
+        save_swap_restore_profile_summary: Some(system_quit_save_swap_restore_profile_summary),
     }
-    append_autoload_debug(format_args!(
-        "system-quit-dup: {source} top-window visibility window=0x{window:x} vt=0x{window_vt:x} visible={visible} root_proxy=0x{root_proxy:x} menu_id=0x{menu_id:x} flags=0x{flags_before:x}->0x{flags_after:x}"
-    ));
-    true
+}
+
+/// # Safety
+///
+/// Menu-pump context.
+pub(crate) unsafe fn system_quit_reset_profile_select_state(source: &str) {
+    unsafe { system_windows::reset_profile_select_state(source, &product_hooks()) };
+}
+
+/// # Safety
+///
+/// Menu-pump context.
+pub(crate) unsafe fn system_quit_restore_real_system_windows(base: usize, source: &str) {
+    unsafe { system_windows::restore_real_system_windows(base, source, &product_hooks()) };
 }
 
 pub(crate) fn system_quit_read_wide_resource_name(ptr: usize) -> String {
@@ -733,216 +707,6 @@ pub(crate) fn system_quit_read_wide_resource_name(ptr: usize) -> String {
         units.push(unit);
     }
     String::from_utf16_lossy(&units)
-}
-
-pub(crate) unsafe fn system_quit_hide_real_system_windows(base: usize, source: &str) {
-    let top = SYSTEM_QUIT_INGAME_TOP_WINDOW.load(Ordering::SeqCst);
-    let option = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
-    let profile = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
-    if profile == 0 || SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0 {
-        return;
-    }
-    let hid_top = if top != 0 && top != profile {
-        unsafe { system_quit_menu_window_set_visible_and_flags(base, top, false, source) }
-    } else {
-        false
-    };
-    let hid_option = if option != 0 && option != profile && option != top {
-        unsafe { system_quit_menu_window_set_visible_and_flags(base, option, false, source) }
-    } else {
-        false
-    };
-    if hid_top || hid_option {
-        SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.store(1, Ordering::SeqCst);
-        SYSTEM_QUIT_HIDE_REAL_WINDOWS_COUNT.fetch_add(1, Ordering::SeqCst);
-    }
-    append_autoload_debug(format_args!(
-        "system-quit-dup: real-system-window hide source={source} top=0x{top:x} option=0x{option:x} profile=0x{profile:x} hid_top={hid_top} hid_option={hid_option}"
-    ));
-}
-
-/// Re-apply OptionSetting active-pane visibility without calling the native tab-select helper.
-///
-/// Important: `FUN_14093b850` is not visibility-only. Static RE shows it first copies state from the
-/// old `composite+0xb8` pane into the newly selected pane (`FUN_14093b1b0(lVar2+0x1b38,
-/// lVar1+0x1b38)`) and then toggles pane visibility. After our System->Quit ProfileSelect overlay,
-/// `composite+0xb8` can be stale; calling the native helper there can copy Quit/Profile/Display row
-/// table state into the wrong tab. That exactly matches the cross-populated Game Options/Quit tabs.
-///
-/// This restore path is therefore intentionally narrower: derive the user's selected tab from the tab
-/// view, correct `composite+0xb8` to that cached pane, and call only the native GFx `SetVisible` on
-/// each cached pane's embedded proxy. No row/table copy, no rebuild, no upsert into a shared table.
-/// Runs on the menu thread (the restore path is menu-pump owned). Read-guarded; no-ops if the
-/// composite / selected tab / cached pane can't be resolved.
-pub(crate) unsafe fn system_quit_reapply_optionsetting_pane_visibility(
-    _base: usize,
-    option_window: usize,
-    forced_tab: Option<usize>,
-    source: &str,
-) {
-    const HEAP_LO: usize = 0x10000;
-    if option_window < HEAP_LO {
-        return;
-    }
-    let menu_id = unsafe { safe_read_u16(option_window + 0x180) }.unwrap_or(u16::MAX);
-    if menu_id != OPTIONSETTING_MENU_ID {
-        // Not the OptionSetting window (e.g. the IngameTop top-menu, menu_id 0xffff) -- this composite
-        // layout is OptionSetting-specific; skip.
-        return;
-    }
-    let composite = option_window + OPTIONSETTING_COMPOSITE_OFFSET;
-    let current =
-        unsafe { safe_read_usize(composite + OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET) }
-            .unwrap_or(0);
-    if current < HEAP_LO {
-        return;
-    }
-    // The real selected tab the user is viewing: SettingTabControl at window+0x1870, its tab view at
-    // +0x10, selected index at view+0xd4 (`FUN_140739f20` = `*(view+0xd4)`). Use this, not the composite's
-    // `current` pane pointer -- after our detour `current` (composite+0xb8) is stale (observed: it matched
-    // cache slot 9 while the user was on the Game tab), so re-applying its index re-shows the wrong pane.
-    // When restoring after Back from our child ProfileSelect, the previous menu is always the Quit tab:
-    // write the tab view's selected index to Quit before the self-copy native refresh so the tab strip,
-    // current-pane pointer, and visible pane all agree with the parent the user came from.
-    let tab_view = unsafe {
-        safe_read_usize(
-            option_window + OPTIONSETTING_TAB_CONTROL_OFFSET + OPTIONSETTING_TAB_VIEW_OFFSET,
-        )
-    }
-    .unwrap_or(0);
-    let live_tab = if tab_view >= HEAP_LO {
-        unsafe { safe_read_i32(tab_view + OPTIONSETTING_TAB_VIEW_SELECTED_INDEX_OFFSET) }
-            .map(|v| v as usize)
-            .filter(|&t| t < OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT)
-    } else {
-        None
-    };
-    let real_tab = forced_tab
-        .filter(|&t| t < OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT)
-        .or(live_tab);
-    // The forced tab is written only after its backing pane is proven present, further down. Writing
-    // it here (as this did until 2026-08-12) wedges the menu whenever the pane is absent: the tab
-    // strip commits to Quit, the pane reapply below bails, and OptionSetting stays actively_shown
-    // with no visible pane -- input captured, nothing drawn, no way out. Reproduced by opening the
-    // picker twice: the second close lands on a recreated OptionSetting window (composite address
-    // changes) whose cache slots 8/9 were never built, so slot 9 reads null.
-    // Diagnostic: which cache slot the (possibly stale) current pane pointer matches.
-    let mut cache_tab: Option<usize> = None;
-    for i in 0..OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT {
-        let cached = unsafe {
-            safe_read_usize(composite + OPTIONSETTING_COMPOSITE_PANE_CACHE_OFFSET + i * 8)
-        }
-        .unwrap_or(0);
-        if cached == current {
-            cache_tab = Some(i);
-            break;
-        }
-    }
-    let Some(tab_index) = real_tab else {
-        append_autoload_debug(format_args!(
-            "system-quit-dup: optionsetting pane-reapply skipped source={source} -- no real tab index (tab_view=0x{tab_view:x} current=0x{current:x} live_tab={live_tab:?} forced_tab={forced_tab:?} cache_tab={cache_tab:?} composite=0x{composite:x})"
-        ));
-        return;
-    };
-    // OptionSetting has one extra cached pane before the visible tab panes: natural telemetry showed
-    // visual tab 8 (Quit) backed by cache slot 9, while cache slot 8 is the tab immediately to its
-    // left. Use the visual tab for the tab strip, but the +1 cache slot for the composite current pane
-    // and native SetVisible pass; otherwise Back returns to the Quit tab label with the left tab's rows.
-    let pane_index = (tab_index + 1).min(OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT - 1);
-    let Ok(set_visible_addr) = game_rva(TITLE_PRESS_START_SET_VISIBLE_RVA as u32) else {
-        append_autoload_debug(format_args!(
-            "system-quit-dup: optionsetting pane-reapply skipped source={source} -- SetVisible rva 0x{TITLE_PRESS_START_SET_VISIBLE_RVA:x} unresolved"
-        ));
-        return;
-    };
-    let selected = unsafe {
-        safe_read_usize(composite + OPTIONSETTING_COMPOSITE_PANE_CACHE_OFFSET + pane_index * 8)
-    }
-    .unwrap_or(0);
-    if selected < HEAP_LO {
-        // Leave the native tab selection alone. Forcing it here would point the tab strip at a tab
-        // with no pane, which reads to the player as a menu that owns input but draws nothing.
-        append_autoload_debug(format_args!(
-            "system-quit-dup: optionsetting pane-reapply skipped source={source} -- selected cached pane missing tab_index={tab_index} composite=0x{composite:x}"
-        ));
-        return;
-    }
-    // The backing pane is now proven present, so committing the tab strip to it cannot strand the
-    // menu without a pane. This write is deliberately downstream of the check above.
-    if let (Some(tab), true) = (
-        forced_tab.filter(|&t| t < OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT),
-        tab_view >= HEAP_LO,
-    ) {
-        unsafe {
-            *((tab_view + OPTIONSETTING_TAB_VIEW_SELECTED_INDEX_OFFSET) as *mut i32) = tab as i32;
-        }
-        OPTIONSETTING_CURRENT_TAB.store(tab, Ordering::SeqCst);
-    }
-    unsafe {
-        *((composite + OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET) as *mut usize) = selected;
-    }
-    let mut refreshed = false;
-    if let Ok(refresh_addr) = game_rva(OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA) {
-        let select_tab: unsafe extern "system" fn(usize, i32) =
-            unsafe { std::mem::transmute(refresh_addr) };
-        // Native tab-select copies old current pane state into the new pane before refreshing. Because
-        // we pre-set current=selected above, the copy is selected->selected (safe), but the helper still
-        // runs the internal Scaleform/row refresh that manual SetVisible did not reproduce. It indexes
-        // the composite pane cache, not the visual tab strip, so pass pane_index.
-        unsafe { select_tab(composite, pane_index as i32) };
-        SYSTEM_QUIT_OPTIONSETTING_DIRECT_REFRESH_COUNT.fetch_add(1, Ordering::SeqCst);
-        SYSTEM_QUIT_OPTIONSETTING_DIRECT_REFRESH_LAST_SELECTED.store(selected, Ordering::SeqCst);
-        refreshed = true;
-    } else {
-        append_autoload_debug(format_args!(
-            "system-quit-dup: optionsetting pane-reapply native select skipped source={source} -- refresh rva 0x{OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA:x} unresolved"
-        ));
-    }
-    SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_REAPPLY_COUNT.fetch_add(1, Ordering::SeqCst);
-    SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_LAST_TAB.store(tab_index, Ordering::SeqCst);
-    SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_LAST_OLD_CURRENT.store(current, Ordering::SeqCst);
-    SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_LAST_SELECTED.store(selected, Ordering::SeqCst);
-    let set_visible: unsafe extern "system" fn(usize, u8) =
-        unsafe { std::mem::transmute(set_visible_addr) };
-    let mut visible_mask: usize = 0;
-    for i in 0..OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT {
-        let cached = unsafe {
-            safe_read_usize(composite + OPTIONSETTING_COMPOSITE_PANE_CACHE_OFFSET + i * 8)
-        }
-        .unwrap_or(0);
-        if cached >= HEAP_LO {
-            let visible = (i == pane_index) as u8;
-            unsafe { set_visible(cached + OPTIONSETTING_DIALOG_PANE_PROXY_OFFSET, visible) };
-            if visible != 0 {
-                visible_mask |= 1usize << i;
-            }
-        }
-    }
-    append_autoload_debug(format_args!(
-        "system-quit-dup: optionsetting pane-reapply native-select source={source} composite=0x{composite:x} old_current=0x{current:x} selected=0x{selected:x} tab_index={tab_index} pane_index={pane_index} live_tab={live_tab:?} forced_tab={forced_tab:?} cache_tab={cache_tab:?} visible_mask=0x{visible_mask:x} refreshed={refreshed} select_addr=0x{:x} set_visible=0x{set_visible_addr:x} (pre-repaired self-copy)",
-        game_rva(OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA).unwrap_or(0)
-    ));
-}
-
-pub(crate) unsafe fn system_quit_reset_profile_select_state(source: &str) {
-    save_picker_reset(source);
-    SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.store(0, Ordering::SeqCst);
-    SYSTEM_QUIT_PROFILE_SELECT_WINDOW.store(0, Ordering::SeqCst);
-    // The 05_010 rows are going away, so the live-layout editor must stop believing it can still
-    // write to their text fields. Only the profile-row surface is dropped: the title-load current
-    // row is owned by the title screen and outlives this teardown.
-    super::forget_profile_editor_field_targets("profile-row-populate");
-    // End the profile-load flow so the legit Quit-Game/Return-to-Desktop confirm MessageBox is no longer
-    // suppressed once ProfileSelect is gone (the flag was set at the Load-Profile click).
-    SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.store(0, Ordering::SeqCst);
-    SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_FIRED.store(0, Ordering::SeqCst);
-    SYSTEM_QUIT_TOP_HIDE_TOP_WINDOW.store(0, Ordering::SeqCst);
-    SYSTEM_QUIT_TOP_HIDE_PROFILE_WINDOW.store(0, Ordering::SeqCst);
-    SYSTEM_QUIT_TOP_HIDE_LIST.store(0, Ordering::SeqCst);
-    SYSTEM_QUIT_TOP_HIDE_TOP_MENU_ID.store(usize::MAX, Ordering::SeqCst);
-    append_autoload_debug(format_args!(
-        "system-quit-dup: reset ProfileSelect hide state source={source}"
-    ));
 }
 
 /// Clear a stale `CSMenuMan->disableSaveMenu` (BOOL @ +0x13c) so the native quit-save can run during a
@@ -1203,66 +967,6 @@ pub(crate) unsafe fn system_quit_submit_direct_return_title_chain(
         "system-quit-quickload: direct return-title chain ARMED source={source} dialog=0x{system_dialog:x} queue=0x{queue:x} list=0x{list:x} -- native confirm chain 0x{SYSTEM_QUIT_RETURN_TITLE_CHAIN_BUILDER_RVA:x} deliberately NOT submitted (its head is the GR_Dialogues(110000) return-to-title MessageBox); the final functor fires from the bc4==READY path"
     ));
     true
-}
-
-pub(crate) unsafe fn system_quit_restore_real_system_windows(base: usize, source: &str) {
-    if SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) == 0 {
-        unsafe { system_quit_reset_profile_select_state(source) };
-        return;
-    }
-    let top = SYSTEM_QUIT_INGAME_TOP_WINDOW.load(Ordering::SeqCst);
-    let option = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
-    let profile = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
-    let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
-    if phase != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE {
-        // Keep the native quit-save unblocked every frame the switch is active. On a 2nd in-process switch a
-        // stale CSMenuMan->disableSaveMenu aborts the quit-save so bc4 freezes at 1 and the world never tears
-        // down; clearing it once at the request can be re-set before the save orchestrator polls, so we also
-        // clear it here on the per-frame switch-active path (no-op once it is 0). See RE note on the offset.
-        unsafe { system_quit_clear_disable_save_menu(base, source) };
-        // Diagnostic: name which of the save orchestrator's three gates is freezing bc4 at 1 on switch 2.
-        unsafe { system_quit_log_save_gates(base, source) };
-        let system_dialog = SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.load(Ordering::SeqCst);
-        let submitted =
-            unsafe { system_quit_submit_direct_return_title_chain(base, system_dialog, source) };
-        SYSTEM_QUIT_SKIP_RESTORE_AFTER_QUICKLOAD_COUNT.fetch_add(1, Ordering::SeqCst);
-        append_autoload_debug(format_args!(
-            "system-quit-dup: skip restore real windows after quickload handoff source={source} phase={phase} profile=0x{profile:x} top=0x{top:x} option=0x{option:x} direct_chain_submitted={submitted}; leaving old System UI hidden during native transition"
-        ));
-        if submitted {
-            SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.store(0, Ordering::SeqCst);
-            unsafe { system_quit_reset_profile_select_state(source) };
-        }
-        return;
-    }
-    let restored_top = if top != 0 {
-        unsafe { system_quit_menu_window_set_visible_and_flags(base, top, true, source) }
-    } else {
-        false
-    };
-    let restored_option = if option != 0 && option != top {
-        let restored =
-            unsafe { system_quit_menu_window_set_visible_and_flags(base, option, true, source) };
-        unsafe {
-            system_quit_reapply_optionsetting_pane_visibility(
-                base,
-                option,
-                Some(OPTIONSETTING_QUIT_TAB_INDEX),
-                source,
-            )
-        };
-        restored
-    } else {
-        false
-    };
-    append_autoload_debug(format_args!(
-        "system-quit-dup: restore real windows source={source} profile=0x{profile:x} top=0x{top:x} option=0x{option:x} restored_top={restored_top} restored_option={restored_option}"
-    ));
-    unsafe { system_quit_save_swap_restore_profile_summary(source) };
-    unsafe { system_quit_reset_profile_select_state(source) };
-    if restored_top || restored_option {
-        SYSTEM_QUIT_RESTORE_REAL_WINDOWS_COUNT.fetch_add(1, Ordering::SeqCst);
-    }
 }
 
 pub(crate) unsafe fn system_quit_profile_select_top_menu_tick() {
@@ -1809,34 +1513,6 @@ pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_wi
     }
 }
 
-/// ProfileSelect window whose native `MenuWindowJob` finalizer has completed. The finalizer runs
-/// inside the original `MenuWindowJob::Run`; restoration waits for this post-original hook so no
-/// GFx/menu calls are made from inside native teardown.
-static SYSTEM_QUIT_PROFILE_SELECT_FINALIZED_PENDING: AtomicUsize = AtomicUsize::new(0);
-
-pub(crate) fn system_quit_note_profile_select_finalized(window: usize) {
-    if window == 0 {
-        return;
-    }
-    if SYSTEM_QUIT_PROFILE_SELECT_WINDOW
-        .compare_exchange(window, 0, Ordering::SeqCst, Ordering::SeqCst)
-        .is_ok()
-    {
-        SYSTEM_QUIT_PROFILE_SELECT_FINALIZED_PENDING.store(window, Ordering::SeqCst);
-        // A cancel/path-label refresh may have queued a records-changed rebuild immediately before
-        // outer Back finalized this exact dialog. It is obsolete now and would target freed memory.
-        let _ = SAVE_PICKER_REBUILD_PENDING_DIALOG.compare_exchange(
-            window,
-            0,
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-        );
-        append_autoload_debug(format_args!(
-            "system-quit-dup: native ProfileSelect finalizer completed window=0x{window:x}; queued post-Run restore and cleared matching stale rebuild"
-        ));
-    }
-}
-
 /// Post-original MenuWindowJob::Run work for System->Quit: System/ProfileSelect resource mapping + the
 /// real-system-window hide, the in-world-load abort + return-title submit that actually complete a profile
 /// switch, and save-picker pump maintenance. Extracted from the hook body so the winning MenuWindowJob::Run
@@ -1845,7 +1521,7 @@ pub(crate) fn system_quit_note_profile_select_finalized(window: usize) {
 /// would otherwise run (2026-07-15 root cause: dead hook -> profile load never completes + System menu never
 /// hidden). `title_custom_cover_menu_window_run_hook` calls this after it runs the original.
 pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
-    let finalized_profile = SYSTEM_QUIT_PROFILE_SELECT_FINALIZED_PENDING.swap(0, Ordering::SeqCst);
+    let finalized_profile = system_windows::take_finalized_profile_select();
     if finalized_profile != 0
         && let Ok(base) = game_module_base()
     {

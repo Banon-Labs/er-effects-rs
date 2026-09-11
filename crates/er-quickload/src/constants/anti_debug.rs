@@ -375,15 +375,12 @@ pub(crate) const CS_MENU_MAN_GLOBAL_RVA: usize = er_game_base::rva::CS_MENU_MAN_
 /// that our hide/restore left with DisplayInfo.Visible=0 (the blank Game Options pane).
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const OPTIONSETTING_TAB_SELECT_VISIBILITY_RVA: usize = 0x93b760;
-/// OptionSettingTopDialog (menu_id 0x25) -> embedded CS::CompositeOptionSettingDialog.
-pub(crate) const OPTIONSETTING_COMPOSITE_OFFSET: usize = 0x1768;
-/// Composite -> current pane dialog ptr (`+0xb8`) and the 10-entry per-tab pane-dialog cache (`+0x68`).
-pub(crate) const OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET: usize = 0xb8;
-pub(crate) const OPTIONSETTING_COMPOSITE_PANE_CACHE_OFFSET: usize = 0x68;
-pub(crate) const OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT: usize = 10;
-/// OptionSetting/OptionSetting_Trial window menu_id (indexes CSMenuMan flag byte; gates the pane-reapply).
-pub(crate) const OPTIONSETTING_MENU_ID: u16 = 0x25;
-pub(crate) const TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK: u8 = 0x3;
+// The OptionSetting composite layout now lives in `er-title-flow`, so the standalone quit-menu
+// shells can read the same offsets the product does rather than keeping a second copy.
+pub(crate) use er_title_flow::{
+    OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET, OPTIONSETTING_COMPOSITE_OFFSET,
+    OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT, TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK,
+};
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_NOT_INSTALLED: usize = 0;
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED_YES: usize = 1;
 pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_ORIG: AtomicUsize =

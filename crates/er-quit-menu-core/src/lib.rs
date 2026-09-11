@@ -95,6 +95,9 @@ pub mod save_dest_commit_runtime;
 pub mod scaleform_proxy;
 #[cfg(windows)]
 pub mod software_keyboard;
+/// The `02_000_IngameTop` / `02_040_OptionSetting` hide and restore a ProfileSelect overlay needs.
+#[cfg(windows)]
+pub mod system_windows;
 #[cfg(windows)]
 pub use dim::*;
 #[cfg(windows)]
