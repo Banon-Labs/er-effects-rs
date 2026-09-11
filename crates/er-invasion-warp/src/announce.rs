@@ -451,14 +451,12 @@ pub fn install() -> bool {
     // SAFETY: applies the queue this function just added to.
     match unsafe { er_hook::MH_ApplyQueued() } {
         er_hook::MH_STATUS::MH_OK => {
-            // No statement here releases `hook`, and none is needed: `MhHook` is three raw
-            // pointers with no `Drop` impl, so it neither reverts the patch nor frees anything
-            // when it falls out of scope at the end of this function.
-            //
-            // It carried `core::mem::forget(hook)` until clippy's `forget_non_drop` rejected it,
-            // and then `drop(hook)` until `drop_non_drop` rejected that. Both lints say the same
-            // thing from opposite directions -- on a non-`Drop` type the two calls are identical
-            // and neither does anything -- so the honest spelling is the absence of a call.
+            // The handle is deliberately let go here without ceremony: `MhHook` is three raw
+            // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
+            // address, so dropping the handle neither uninstalls the hook nor frees anything. The
+            // `core::mem::forget` that used to sit here was a no-op saying otherwise, which is
+            // what `clippy::forget_non_drop` flags; an explicit `drop` would be the same no-op
+            // under `clippy::drop_non_drop`.
             crate::standalone_log(format_args!(
                 "announce: watching CS::FeSystemAnnounceView::Update at {address:#x} to learn the \
                  live view -- this is the game's own auto-closing notice, not a dialog. Bare \

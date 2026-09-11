@@ -1093,11 +1093,12 @@ pub unsafe fn install_title_update_hook(base: usize) {
             ));
         }
     }
-    // No statement here releases `hook`, and none is needed: `MhHook` is three raw pointers with
-    // no `Drop` impl, so it neither reverts the patch nor frees anything when it falls out of
-    // scope at the end of this function. `std::mem::forget` and `drop` are both rejected on such a
-    // type, by `forget_non_drop` and `drop_non_drop` respectively, and the two lints agree: on a
-    // non-`Drop` type those calls are identical and neither does anything.
+    // The handle is deliberately dropped here without ceremony: `MhHook` is three raw pointers
+    // with no `Drop`, and MinHook owns the installed detour keyed by target address -- so letting
+    // the handle go does not uninstall the hook. The `std::mem::forget` that used to sit here was
+    // a no-op that said otherwise, which is what `clippy::forget_non_drop` flags. An explicit
+    // `drop(hook)` would be the same no-op under a different lint (`clippy::drop_non_drop`), so
+    // the binding simply ends with the function.
 }
 /// Gated, fail-closed, one-shot readiness advance past press-any-button. Reads the built job at
 /// `[step+0x130]`; once it is a valid in-image job (we are at press-any-button) and has settled, sets

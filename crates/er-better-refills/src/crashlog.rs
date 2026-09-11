@@ -190,14 +190,13 @@ fn install_exit_hook(
             } else {
                 append_crash_log(format_args!("install: queued exit hook {name}"));
             }
-            // The detour must outlive this scope for the process lifetime; the `forget` states that
-            // even though `MhHook` is currently plain pointers, so a future `Drop` that unhooks
-            // cannot silently retire the crash-log exit hook here.
-            #[allow(
-                clippy::forget_non_drop,
-                reason = "intent marker: the installed detour must never be released"
-            )]
-            std::mem::forget(hook);
+            // The handle is deliberately let go here without ceremony: `MhHook` is three raw
+            // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
+            // address, so dropping the handle does not retire the crash-log exit hook. The
+            // `std::mem::forget` and its `clippy::forget_non_drop` waiver that used to sit here
+            // claimed to protect against a future `Drop` that unhooks, but every other install
+            // site in this workspace already hands its handle to a by-value sink or lets it fall
+            // out of scope, so the waiver bought an inconsistency rather than a guarantee.
         }
         Err(status) => append_crash_log(format_args!("install: hook {name} failed: {status:?}")),
     }
