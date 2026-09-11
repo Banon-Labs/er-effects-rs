@@ -681,21 +681,34 @@ unsafe fn read_quick_position(
 /// What a hand reads back as once it holds nothing: the Unarmed fist.
 ///
 /// `GetDefaultUnarmedParamId` (`0x140248270`) is a three-instruction leaf whose whole body is
-/// `mov dword ptr [rcx], 0x1adb0 ; mov rax, rcx ; ret`, so the value is the function. It is
-/// written here as a constant rather than resolved as an eleventh native because an address that
-/// has to be carried across game builds to fetch a compile-time constant is a liability with no
-/// upside: clearing a hand does not put nothing in it, it puts the fist in it, and this is the id
-/// that says so.
-const UNARMED_PARAM_ID: i32 = 0x1adb0;
+/// `mov dword ptr [rcx], 0x1adb0 ; mov rax, rcx ; ret`, so the value is the function. It is a
+/// constant rather than an eleventh resolved native because an address that has to be carried
+/// across game builds to fetch a compile-time constant is a liability with no upside: clearing a
+/// hand does not put nothing in it, it puts the fist in it, and this is the id that says so.
+///
+/// Derived from the core crate's tagged id rather than written out again. The same five values
+/// were spelled three different ways in three modules -- tagged here, untagged there, a lone fist
+/// in the grant pass -- which is three chances for one engine fact to drift.
+const UNARMED_PARAM_ID: i32 = (er_build_import_core::sweep::UNARMED_ITEM_ID
+    & er_build_import_core::sweep::ITEM_ID_ROW_MASK) as i32;
 
 /// What each armour slot reads back as once it holds nothing, in `ChrAsmSlot` order from
 /// [`CHR_ASM_SLOT_PROTECTOR_HEAD`]: head, chest, arms, legs.
 ///
-/// `GetDefaultItemIdForEmptyProtectorSlot` (`0x140d473d0`) is a four-way constant switch
-/// returning the category-tagged item ids `0x10002710`, `0x10002774`, `0x100027d8`, `0x1000283c`.
-/// `GetParamIdInSlot` answers with the param row rather than the tagged id, so the category
-/// nibble is dropped here and the rows are what remain.
-const EMPTY_PROTECTOR_PARAM_IDS: [i32; 4] = [10000, 10100, 10200, 10300];
+/// `GetDefaultItemIdForEmptyProtectorSlot` (`0x140d473d0`) is a four-way constant switch returning
+/// the category-tagged item ids the core crate holds. `GetParamIdInSlot` answers with the param
+/// row rather than the tagged id, so the category nibble comes off here and the rows are what
+/// remain: `10000`, `10100`, `10200`, `10300`.
+const EMPTY_PROTECTOR_PARAM_IDS: [i32; 4] = {
+    let tagged = er_build_import_core::sweep::EMPTY_PROTECTOR_ITEM_IDS;
+    let mask = er_build_import_core::sweep::ITEM_ID_ROW_MASK;
+    [
+        (tagged[0] & mask) as i32,
+        (tagged[1] & mask) as i32,
+        (tagged[2] & mask) as i32,
+        (tagged[3] & mask) as i32,
+    ]
+};
 
 /// The value a vacated position of this kind reads back as.
 ///
@@ -1384,6 +1397,173 @@ fn verdict(
         outcome.mismatches.push((slot, expected, actual));
     }
     PositionResult::Mismatch { expected, actual }
+}
+
+/// What the final independent read of the character's equipment found.
+///
+/// Every number here is a read-back taken after the whole import, not a count of calls made. The
+/// per-position verdicts inside the equip pass can only prove their own write landed at the
+/// moment it landed; this is the pass that says what the character is wearing once the import is
+/// over.
+#[derive(Debug, Default)]
+pub struct PlacementAudit {
+    /// Positions the plan has an opinion about: the ones it fills plus the ones it clears.
+    pub examined: usize,
+    /// Positions holding exactly what the plan named for them, empty ones included.
+    pub correct: usize,
+    /// `(kind, slot, expected, actual)` for a position holding something the build did not put
+    /// there.
+    ///
+    /// The counter the report needs, and the one number that answers "an imported item landed in
+    /// the wrong place". A leftover in a position the build wanted bare is the same fault from
+    /// the character's side, so both land here.
+    pub misplaced: Vec<(PositionKind, i32, i32, i32)>,
+    /// `(kind, slot)` for a position nothing on this build can read back, so whether it is right
+    /// is unknown. Never counted as correct.
+    pub unreadable: Vec<(PositionKind, i32)>,
+    /// `(slot, mirror id, equipment id)` for an armament whose two readers disagree.
+    ///
+    /// `ChrAsm.equipmentGaItemHandles` and `EquipGameData`'s equipment entries describe the same
+    /// slot through different structures, and the mirror lags. Measured 2026-09-11: the ash
+    /// read-back walked the mirror immediately after the equip and reported all three armaments
+    /// as the wrong weapon, while `GetParamIdInSlot` reported all three correct and a portrait
+    /// record taken seven milliseconds later agreed with `GetParamIdInSlot`. A check that reports
+    /// a correct import as `0/3 correct` is worse than no check, so the disagreement is named as
+    /// itself rather than as a wrong weapon.
+    pub mirror_disagreements: Vec<(i32, i32, i32)>,
+    /// Why nothing was read, when that is the answer.
+    pub unavailable: Option<&'static str>,
+}
+
+impl PlacementAudit {
+    /// One line for the import log.
+    pub fn summary(&self) -> String {
+        match self.unavailable {
+            Some(why) => format!("PLACEMENT: nothing could be read back -- {why}"),
+            None => format!(
+                "PLACEMENT: {}/{} position(s) hold what the build asks for on a final \
+                 independent read; {} hold something the build did not put there, {} could not \
+                 be read back{}",
+                self.correct,
+                self.examined,
+                self.misplaced.len(),
+                self.unreadable.len(),
+                if self.mirror_disagreements.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        ". {} armament slot(s) read differently through `ChrAsm` than through \
+                         the equipment entries, which is the mirror lagging rather than a wrong \
+                         weapon",
+                        self.mirror_disagreements.len()
+                    )
+                }
+            ),
+        }
+    }
+
+    /// Whether every position the plan has an opinion about holds what it asked for.
+    pub fn reconciles(&self) -> bool {
+        self.unavailable.is_none()
+            && self.misplaced.is_empty()
+            && self.unreadable.is_empty()
+            && self.correct == self.examined
+    }
+}
+
+/// Read every position the plan has an opinion about, and say what it holds.
+///
+/// # Why this exists separately from the ledger
+///
+/// The ledger records what each write saw immediately after making it, which is the only thing a
+/// per-position read can prove. It cannot see a later write that displaced an earlier one, and it
+/// has nothing at all to say about the positions the build leaves empty -- those belong to the
+/// vacate pass, which runs before the equip and therefore before anything that could refill them.
+///
+/// So the two halves of "is the character wearing the build" were measured by two passes at two
+/// different times and neither was measured last. This is measured last, over both halves, from
+/// the plan rather than from either pass's own record of what it attempted.
+///
+/// A vacancy is expected to hold [`empty_value`]; a filled position is expected to hold the id
+/// the equip writes for its kind, which is the bare param id for a `ChrAsm` slot and the
+/// category-tagged id for a quick, pouch or rune one.
+///
+/// # Safety
+///
+/// Game thread, `egd` a live `EquipGameData*`, player in the world.
+pub unsafe fn audit_placement(
+    module_base: usize,
+    egd: usize,
+    positions: &[PlannedPosition],
+    vacancies: &[PlannedVacancy],
+) -> PlacementAudit {
+    let mut audit = PlacementAudit {
+        examined: positions.len() + vacancies.len(),
+        ..PlacementAudit::default()
+    };
+    let natives = match EquipNatives::resolve(module_base) {
+        Ok(natives) => natives,
+        Err(_) => {
+            audit.unavailable =
+                Some("the equip natives have no verified mapping for the running build");
+            return audit;
+        }
+    };
+
+    for position in positions {
+        let Some(slot) = position.slot else {
+            // The physick is a field rather than a slot and is read back by `read_physick`, which
+            // the caller already reports on its own line.
+            audit.examined -= 1;
+            continue;
+        };
+        let expected = if position.kind.is_quick_dispatch() {
+            position.item.item_id as i32
+        } else {
+            position.item.param_id as i32
+        };
+        // Safety: game thread, `egd` live, natives resolved above.
+        let Some(actual) = (unsafe { read_position(&natives, egd, position.kind, slot) }) else {
+            audit.unreadable.push((position.kind, slot));
+            continue;
+        };
+        if holds_expected(position.kind, expected, actual) {
+            audit.correct += 1;
+        } else {
+            audit
+                .misplaced
+                .push((position.kind, slot, expected, actual));
+        }
+        if position.kind == PositionKind::Armament {
+            // Safety: game thread, player in the world -- the caller's own precondition.
+            let mirror = unsafe { crate::read_character::worn_armament(module_base, slot) };
+            if let Some(worn) = mirror
+                && let Ok(mirror_id) = i32::try_from(worn.item_id)
+                && !holds_expected(position.kind, actual, mirror_id)
+            {
+                audit.mirror_disagreements.push((slot, mirror_id, actual));
+            }
+        }
+    }
+
+    for vacancy in vacancies {
+        let empty = empty_value(vacancy.kind, vacancy.index);
+        // Safety: as above.
+        let Some(actual) = (unsafe { read_position(&natives, egd, vacancy.kind, vacancy.slot) })
+        else {
+            audit.unreadable.push((vacancy.kind, vacancy.slot));
+            continue;
+        };
+        if actual == empty {
+            audit.correct += 1;
+        } else {
+            audit
+                .misplaced
+                .push((vacancy.kind, vacancy.slot, empty, actual));
+        }
+    }
+
+    audit
 }
 
 /// Fill the Flask of Wondrous Physick.

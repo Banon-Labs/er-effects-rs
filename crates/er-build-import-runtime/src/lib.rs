@@ -155,6 +155,20 @@ pub struct Report {
     pub discarded: u32,
     /// Armaments, armour and talismans the build does not name that went to the storage box.
     pub evicted: u32,
+    /// Gear the build does not name that is still on the character when the import is over.
+    ///
+    /// Read back out of the inventory rather than inferred from what the sweep attempted, and in
+    /// the summary because it is the thing the player counts. A run that deposits eighty-eight
+    /// entries and leaves five behind is a run that did not do what it says.
+    pub left_behind: usize,
+    /// Equipment positions holding something the build did not put there, on a final independent
+    /// read of every position the plan has an opinion about.
+    ///
+    /// Separate from [`Report::equipped`], which is the equip pass scoring its own writes at the
+    /// moment it made them. This is measured last and covers the positions the build leaves empty
+    /// as well as the ones it fills, so an item in the wrong place has a number rather than
+    /// needing somebody to notice it on screen.
+    pub misplaced: usize,
 }
 
 impl Report {
@@ -176,7 +190,7 @@ impl Report {
     /// One line for a menu help field or a log: what a player wants to know is whether it worked.
     pub fn summary(&self) -> String {
         format!(
-            "{}/{} items, {}/{} gear, {}/{} spells, RL{}{}{}",
+            "{}/{} items, {}/{} gear, {}/{} spells, RL{}{}{}{}",
             self.granted.0,
             self.granted.1,
             self.equipped.0,
@@ -188,6 +202,16 @@ impl Report {
                 String::new()
             } else {
                 format!(", {} attributes WRONG", self.attributes_wrong)
+            },
+            // The two failures a player sees and the counters could not previously name: gear the
+            // import did not take off them, and gear it put somewhere they did not ask for. Both
+            // are silent when zero, so a clean import reads exactly as it did before.
+            match (self.left_behind, self.misplaced) {
+                (0, 0) => String::new(),
+                (left, 0) => format!(", {left} item(s) LEFT BEHIND"),
+                (0, wrong) => format!(", {wrong} position(s) MISPLACED"),
+                (left, wrong) =>
+                    format!(", {left} item(s) LEFT BEHIND and {wrong} position(s) MISPLACED"),
             },
             // Only when the import changed it. A character that already had the build's name is
             // not a result, and printing it every time would read as a rename that did not happen.
@@ -803,14 +827,38 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         // An allowance, not a list of ids. The build asks for a count of each thing -- one
         // Serpent Crest Shield, five Crimson Seed Talismans -- and a set of ids cannot say five,
         // so every copy of a named id survived and the sweep left 168 entries alone for a build
-        // with 24 gear positions. `evict::Keep` spends one slot per copy and sweeps the rest, and
-        // it takes `outcome.armaments` as well as the plan because the copies this import minted
-        // are named by gaitem handle: an ash lives on the instance, so the item id cannot tell
-        // the new shield from the old one it replaces.
-        let mut keep = evict::Keep::new(&planned.grants, &outcome.armaments);
+        // with 24 gear positions. `er_build_import_core::sweep::Allowance` spends one item of the
+        // build's count per copy and sweeps the rest, and it takes `outcome.armaments` as well as
+        // the plan because the copies this import minted are named by gaitem handle: an ash lives
+        // on the instance, so the item id cannot tell the new shield from the old one it replaces.
+        // The classification itself is host-tested against the invariant over generated
+        // inventories, so the runtime half below is the part that moves things and says what it
+        // failed to move.
+        let allowance = evict::allowance_for(&planned.grants, &outcome.armaments);
         // Safety: game thread, character in the world, and the vacate above has run.
-        let evicted = unsafe { evict::unlisted_gear(module_base, egd, &mut keep) };
+        let evicted = unsafe { evict::unlisted_gear(module_base, egd, &allowance) };
         log_line(&format!("[build-import] {}", evicted.summary()));
+        // First, and one line each however many there are. This is the list the complaint is
+        // about -- gear the build does not name that is still on the character -- and it is the
+        // one thing in this report that must never be capped, sampled, or folded into a count.
+        for (item, why) in &evicted.left_behind_names {
+            log_line(&format!("[build-import]   LEFT BEHIND {item}: {why}"));
+        }
+        // The other direction, and the one that costs the player something: the sweep deposited or
+        // destroyed the copy this import had just made, because the natives that move an entry
+        // resolve it by item id and two copies of one id are not distinguishable to them.
+        for item in &evicted.pinned_lost_names {
+            log_line(&format!(
+                "[build-import]   EVICTED THE BUILD'S OWN {item}: this import made or adopted this \
+                 exact copy and it is no longer in the inventory"
+            ));
+        }
+        if evicted.reconciles() {
+            log_line(
+                "[build-import] EVICT RECONCILED: the character holds no gear the build does not \
+                 ask for",
+            );
+        }
         // Named one by one and never folded into the summary's count, because this is the second
         // irreversible thing the importer does and the player is owed the list.
         for (item, quantity, ash) in &evicted.discarded {
@@ -830,11 +878,10 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         // The other half of "why is this still on my character": the build asked for it. Without
         // this line a kept item and a stuck item look identical from the outside.
         for item in &evicted.kept_names {
-            log_line(&format!(
-                "[build-import]   KEPT {item}: the build names this item, so it stays"
-            ));
+            log_line(&format!("[build-import]   KEPT {item}"));
         }
         report.evicted = evicted.deposited_items;
+        report.left_behind = evicted.left_behind;
     }
 
     // What each armament slot should be holding, computed before the equip rather than after it,
@@ -1192,6 +1239,58 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         ));
         for failure in ledger.failures() {
             log_line(&format!("[build-import]   NOT EQUIPPED: {failure}"));
+        }
+
+        // Measured last, over both halves, and from the plan rather than from either pass's own
+        // record of what it attempted.
+        //
+        // Every number above this line is a pass scoring itself. The ledger reads each position
+        // back at the instant it writes it, so it cannot see a later write that displaced an
+        // earlier one; the vacate pass runs before the equip, so its read-backs predate everything
+        // that could have refilled a position it cleared. Neither of them is the last word, and
+        // "one imported item landed in the wrong place" is a complaint neither can answer.
+        //
+        // Safety: game thread, character in the world, `egd` live -- the same preconditions every
+        // pass in this block runs under.
+        let placement = unsafe {
+            equip_native::audit_placement(
+                module_base,
+                egd,
+                &equips.positions(),
+                &equips.vacancies(),
+            )
+        };
+        log_line(&format!("[build-import] {}", placement.summary()));
+        for (kind, slot, expected, actual) in &placement.misplaced {
+            log_line(&format!(
+                "[build-import]   MISPLACED {} (slot {slot}): the build asks for {expected} and \
+                 the position holds {actual}",
+                kind.label()
+            ));
+        }
+        for (kind, slot) in &placement.unreadable {
+            log_line(&format!(
+                "[build-import]   PLACEMENT UNPROVEN {} (slot {slot}): nothing on this build can \
+                 read the position back, so whether it holds the build's item is unknown",
+                kind.label()
+            ));
+        }
+        // Named rather than counted, and named as a disagreement rather than as a wrong weapon.
+        // The ash read-back below walks `ChrAsm`, which lags the equipment entries by some number
+        // of frames, and on 2026-09-11 it called three correctly equipped armaments wrong.
+        for (slot, mirror, equipment) in &placement.mirror_disagreements {
+            log_line(&format!(
+                "[build-import]   MIRROR LAG slot {slot}: `ChrAsm` still reports {mirror} while \
+                 the equipment entries report {equipment}. The equipment entries are what the \
+                 equip wrote, so an ash read-back for this slot is reading a stale weapon"
+            ));
+        }
+        report.misplaced = placement.misplaced.len() + placement.unreadable.len();
+        if placement.reconciles() {
+            log_line(
+                "[build-import] PLACEMENT RECONCILED: every position the build has an opinion \
+                 about holds what it asks for",
+            );
         }
     }
 

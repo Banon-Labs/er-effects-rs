@@ -34,6 +34,7 @@ pub mod model;
 pub mod name;
 pub mod plan;
 pub mod stats;
+pub mod sweep;
 
 pub use catalog::{Catalog, Entry, Kind};
 pub use equip::{

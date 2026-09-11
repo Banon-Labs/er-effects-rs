@@ -1,5 +1,16 @@
 //! Sending the gear the build does not name back to the storage box.
 //!
+//! # The invariant this pass owes
+//!
+//! Every gear entry the character holds when this pass finishes is a copy the build's grant list
+//! names, in no more items of it than that list asks for, and every copy that is not appears by
+//! name in this pass's report with the reason it could not be moved.
+//!
+//! The first two thirds of that are decided by [`er_build_import_core::sweep`], which is host
+//! testable and is held to the invariant over generated inventories rather than chosen ones. The
+//! last third is this module's own job and is the part that used to be missing: the pass counted
+//! what it had attempted and never asked the game what was still there afterwards.
+//!
 //! # The complaint this answers
 //!
 //! Reported 2026-09-10, twice: "loading a build from URL doesn't appear to send the previous
@@ -11,211 +22,124 @@
 //! That reasoning holds for crafting materials and consumables. It does not hold for the three
 //! categories the report names. A build is a statement about what the character wears and carries
 //! to fight with, and a hundred armaments the build never mentions are not context -- they are the
-//! previous build, still in the pockets. So those three categories are swept and nothing else is.
+//! previous build, still in the pockets.
 //!
-//! # What is never touched
+//! # What is never touched, and why that is a property rather than a list
 //!
-//! Only the weapon, protector and accessory categories, decided by the item id's top nibble.
-//! Goods keep their category `0x4`, so every consumable, crafting material, key item, spell and
-//! remembrance is outside this pass by construction rather than by an exception list.
+//! [`Category::is_gear`] answers it from the item id's top nibble, so every consumable, crafting
+//! material, key item, spell and remembrance is outside this pass by construction. The engine's
+//! own empty-slot rows -- the Unarmed fist in a bare hand, the empty-piece row in a bare armour
+//! slot -- are outside it by [`er_build_import_core::sweep::is_engine_placeholder`], which is a
+//! statement about what those ids mean rather than a list this module maintains. Both live in the
+//! core crate, where the property
+//! test can hold the classification to being total.
 //!
-//! # When the box is full, a third copy is destroyed
+//! # When the box is full, a surplus copy is destroyed
 //!
-//! An armament does not always have somewhere else to go. Measured on this character 2026-09-10:
-//! the storage box was at `1920 of 1920` entries, so 68 pieces of gear were refused for no reason
-//! to do with the gear at all, and a Frenzied Flame Seal and three shields stayed in the pockets.
+//! An armament does not always have somewhere else to go. Measured 2026-09-10 and again
+//! 2026-09-11: the storage box was at `1920 of 1920` entries, so the box refused gear for no
+//! reason to do with the gear at all.
 //!
-//! So, by user directive the same day: when the box will not take an entry **and** the character
-//! would still own [`REDUNDANT_COPIES`] or more of the same item without it, the carried copy is
-//! destroyed instead. That count is the shelf's holding kept live as this pass deposits into it,
-//! plus the copies this pass keeps in the inventory -- see [`is_redundant`] for the two measured
-//! cases that each half exists for. Same item means same item *by name* -- [`shelf_identity`] strips the affinity and the
-//! upgrade level off an armament id, so an Occult Longsword +25 counts against two plain
-//! Longswords on the shelf.
+//! So, by user directive: when the box will not take an entry **and** the character would still
+//! own [`REDUNDANT_COPIES`] or more of the same item without it, the carried copy is destroyed
+//! instead. That count is measured rather than accumulated -- see [`retained_after`] -- because
+//! three separate live failures were all the same failure: a running total of the character's
+//! holdings that the loop keeping it was itself mutating.
 //!
 //! The Ash of War comes off first, through the engine's own remove action
 //! ([`er_game_base::rva::REMOVE_GEM_FROM_WEAPON_RVA`]), because an ash is an item consumed into
-//! one specific instance and destroying the weapon with it mounted destroys the ash too. It is
-//! returned to the inventory, and the entry count rising by one is what proves it.
+//! one specific instance and destroying the weapon with it mounted destroys the ash too.
 //!
-//! Nothing else here destroys anything. A refusal the box makes about the *item* -- it will not
-//! take that kind at all -- leaves it exactly where it was, and so does an entry still on the
-//! character.
+//! A refusal the box makes about the *item* -- it will not take that kind at all -- leaves it
+//! exactly where it was, and so does an entry still on the character.
 //!
 //! # The trap that would have deposited the build's own weapons
 //!
 //! An armament's upgrade level lives in the last two digits of its item id, so the id the plan
-//! names (+0) and the id the character carries (+25) are different numbers. A keep-set built from
-//! the plan alone therefore does not recognise the very armaments the grant just minted, and the
-//! sweep would put them straight in the box. The keep-set is built from both: the planned ids and
-//! the ids the grant reports actually landing, which is what [`GrantOutcome::armaments`] carries.
+//! names (+0) and the id the character carries (+25) are different numbers. An allowance built
+//! from the plan alone therefore does not recognise the very armaments the grant just minted. It
+//! is built from both: the planned ids and the `GaItemHandle`s the grant reports actually landing,
+//! which is what [`GrantOutcome::armaments`] carries and what
+//! [`er_build_import_core::sweep::Kept::Pinned`] is named for.
 //!
 //! [`GrantOutcome::armaments`]: crate::grant::GrantOutcome::armaments
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use er_build_import_core::catalog::Kind;
-use er_build_import_core::plan::{Grant, split_armament_id};
+use er_build_import_core::plan::Grant;
+use er_build_import_core::sweep::{
+    Allowance, Category, Disposition, Held, ITEM_ID_ROW_MASK, apply, held_by_identity, identity,
+    plan_sweep, survivors,
+};
 
 use crate::grant::ArmamentOutcome;
 
 use crate::equip_native::SlotClearer;
 use crate::storage::{InventoryEntry, Storage};
 
-/// The three item categories this pass may move, as the top nibble of a category-tagged item id.
-///
-/// `0x0` weapons (ammunition included -- an arrow is an `EquipParamWeapon` row), `0x1` protectors,
-/// `0x2` accessories. Goods are `0x4` and gems `0x8`, so both are excluded by not being listed.
-const SWEPT_CATEGORIES: [u32; 3] = [0x0000_0000, 0x1000_0000, 0x2000_0000];
-const ITEM_CATEGORY_MASK: u32 = 0xF000_0000;
-
-/// The engine's own "this slot is empty" placeholders, which are gear-shaped and are not gear.
-///
-/// Clearing a hand does not leave it holding nothing -- `FUN_140247160` puts the Unarmed fist in
-/// it -- and clearing a piece of armour puts that slot's empty-piece row in it. Both are ordinary
-/// inventory entries in the weapon and protector categories, so a sweep that only looks at the
-/// category nibble finds them, tries to deposit them, and is refused because they are worn.
-///
-/// Measured on the first live run of this pass, 2026-09-10: six of sixteen refusals were these,
-/// five of them the fist alone. They are noise the vacate pass creates immediately before this
-/// one runs, and reporting them as gear that could not be evicted buries the real refusals.
-///
-/// `0x1ADB0` is `GetDefaultUnarmedParamId`'s constant, category 0 so the tagged id is the param
-/// row itself. The four protectors are `GetDefaultItemIdForEmptyProtectorSlot`'s constants,
-/// already category-tagged as the game returns them.
-const EMPTY_SLOT_PLACEHOLDERS: [u32; 5] = [
-    0x0001_ADB0,
-    0x1000_2710,
-    0x1000_2774,
-    0x1000_27D8,
-    0x1000_283C,
-];
-
-/// How many of an item the box must already hold before a copy the box will not take is
+/// How many of an item the character must still own before a copy the box will not take is
 /// destroyed instead of carried.
 ///
-/// Two, by user directive 2026-09-10. The player keeps a pair on the shelf; a third copy that the
-/// box has no room for is redundant, and carrying it defeats the whole point of the sweep. One
-/// would be too thin -- an item held once is the only one there is.
+/// Two, by user directive 2026-09-10. The player keeps a pair; a third copy that the box has no
+/// room for is redundant, and carrying it defeats the whole point of the sweep. One would be too
+/// thin -- an item held once is the only one there is, and the five armaments that survived the
+/// 2026-09-11 import were each the only one of themselves. That is this threshold working, not
+/// failing, and the report now says so on its own line instead of inside a sentence about
+/// something else.
 const REDUNDANT_COPIES: i64 = 2;
 
 /// Whether a copy the box will not take can be destroyed, given how many the character keeps.
 ///
-/// `owned_elsewhere` is the shelf's holding plus what this pass keeps in the inventory, because
-/// the question is what the character still owns once this copy is gone -- and a copy on the
-/// character counts exactly as much as one on the shelf. Both halves were learned from a single
-/// measurement on 2026-09-10, and each spared an item the player wanted gone:
-///
-/// * the shelf count was a snapshot taken before the pass, so a character carrying two Spiralhorn
-///   Shields deposited the first into the last free slot and then spared the second against a
-///   count of one, while the box already held two;
-/// * a Serpent Crest Shield in Magic that the build kept sat beside its Standard twin with one on
-///   the shelf, and the twin survived on a count of one rather than the two it really came to.
+/// `owned_elsewhere` is what the character still owns once this copy is gone: the box's holding,
+/// plus what this pass has already deposited, plus every copy the plan keeps. A copy on the
+/// character counts exactly as much as one on the shelf.
 fn is_redundant(owned_elsewhere: i64) -> bool {
     owned_elsewhere >= REDUNDANT_COPIES
 }
 
 /// Whether an item id is an armament, which is the only category with an ash of war on it.
 fn is_armament(item_id: u32) -> bool {
-    item_id & ITEM_CATEGORY_MASK == 0x0000_0000
+    Category::of(item_id) == Category::Armament
 }
 
-/// The identity two copies share when they are the same item to a player reading the menu.
+/// Build the allowance from the plan's grants and the instances the grant pass produced.
 ///
-/// An armament's id carries three things: the base row, the affinity, and the upgrade level. A
-/// Heavy Longsword +25 and a plain Longsword +0 are both a Longsword on the shelf, and the
-/// directive this implements says so explicitly -- compare by name, ignoring the ash of war and
-/// the infusion. [`split_armament_id`] is the arithmetic the exporter already runs for exactly
-/// this, so the affinity table lives in one place.
-///
-/// Everything else is its own identity. Armour cannot be upgraded and a talisman's `+1` is a
-/// different item with a different name, so folding those together would destroy something the
-/// player does not have a second of.
-fn shelf_identity(item_id: u32) -> u32 {
-    if is_armament(item_id) {
-        split_armament_id(item_id).row
-    } else {
-        item_id
+/// The handles matter as much as the ids. An ash lives on the gaitem instance, so the item id
+/// cannot tell the copy this import just made from the older one it replaces, and a sweep working
+/// from ids alone will pick whichever the inventory filed lowest.
+pub fn allowance_for(grants: &[Grant], armaments: &[ArmamentOutcome]) -> Allowance {
+    Allowance::new(grants, armaments.iter().map(|arm| arm.handle))
+}
+
+/// One inventory entry, as the classifier wants it.
+fn as_held(entry: &InventoryEntry) -> Held {
+    Held {
+        handle: entry.handle,
+        item_id: entry.item_id,
+        quantity: entry.quantity,
     }
 }
 
-/// How many copies of one item the build asked for, and which ids count as that item.
+/// How many items of each identity the character will still hold once this pass has done what the
+/// plan says.
 ///
-/// One bucket per grant rather than a map keyed by id, because a name can resolve to more than
-/// one row (`Grant::also_known_as`) and those rows have to draw on the same allowance. Keyed by
-/// [`shelf_identity`] so the plan's `+0` and the character's `+25` land in the same bucket without
-/// anyone having to join them up.
-struct KeepBudget {
-    ids: Vec<u32>,
-    remaining: u32,
+/// Computed once, from the plan, before anything moves. That is the whole correction: the count
+/// this feeds -- whether a copy the box refuses is redundant -- was previously accumulated inside
+/// the loop that was changing the thing being counted, and every one of the three fixes made to
+/// it on 2026-09-10 was a place the accumulation had missed an update. A total taken from the
+/// plan cannot miss one, because it is not accumulated at all.
+fn retained_after(
+    entries: &[Held],
+    plan: &er_build_import_core::sweep::SweepPlan,
+) -> BTreeMap<u32, i64> {
+    held_by_identity(&apply(entries, plan))
 }
 
-/// What the build entitles the character to keep, and the copies it already minted.
-///
-/// # Why a budget and not a set of ids
-///
-/// It was a set until 2026-09-10, and a set cannot express "one". A build naming one Serpent
-/// Crest Shield kept every Serpent Crest Shield in the inventory, because they all share an item
-/// id -- so the copy this import had just minted and the copy the previous build left behind both
-/// survived, and the sweep reported 168 entries left alone for a build with 24 gear positions.
-/// Five Crimson Seed Talismans were kept the same way.
-pub struct Keep {
-    budgets: Vec<KeepBudget>,
-    /// `GaItemHandle`s the grant minted this import. These are the build's own copies and are
-    /// never swept, whatever the budget says -- an ash lives on the instance, so the item id
-    /// cannot tell this copy from the old one it is replacing.
-    minted: BTreeSet<u32>,
-}
-
-impl Keep {
-    /// Build the allowance from the plan and from what the grant actually minted.
-    pub fn new(grants: &[Grant], armaments: &[ArmamentOutcome]) -> Self {
-        let budgets = grants
-            .iter()
-            .map(|grant| KeepBudget {
-                ids: std::iter::once(grant.item_id)
-                    .chain(grant.also_known_as.iter().copied())
-                    .map(shelf_identity)
-                    .collect(),
-                remaining: grant.quantity,
-            })
-            .collect();
-        let minted = armaments
-            .iter()
-            .map(|arm| arm.handle)
-            .filter(|handle| *handle != 0)
-            .collect();
-        Self { budgets, minted }
-    }
-
-    /// Whether this exact copy is one the grant minted.
-    fn is_minted(&self, handle: u32) -> bool {
-        handle != 0 && self.minted.contains(&handle)
-    }
-
-    /// Spend one of the build's allowance on this item, if any is left.
-    fn take(&mut self, item_id: u32) -> bool {
-        let identity = shelf_identity(item_id);
-        for budget in &mut self.budgets {
-            if budget.remaining > 0 && budget.ids.contains(&identity) {
-                budget.remaining -= 1;
-                return true;
-            }
-        }
-        false
-    }
-}
-
-/// Total quantity per [`shelf_identity`], from one walk of an inventory.
+/// Total quantity per identity, from one walk of an inventory.
 fn shelf_counts(entries: Vec<InventoryEntry>) -> BTreeMap<u32, i64> {
-    let mut counts: BTreeMap<u32, i64> = BTreeMap::new();
-    for entry in entries {
-        if entry.quantity <= 0 {
-            continue;
-        }
-        *counts.entry(shelf_identity(entry.item_id)).or_default() += i64::from(entry.quantity);
-    }
-    counts
+    let held: Vec<Held> = entries.iter().map(as_held).collect();
+    held_by_identity(&held)
 }
 
 /// Why one deposit was refused.
@@ -273,18 +197,15 @@ impl Refusal {
     }
 }
 
-/// The row id under which the category masks off, for the name getters.
-const ITEM_ID_ROW_MASK: u32 = 0x0FFF_FFFF;
-
 /// What the game calls this item, with the raw id kept beside it.
 ///
 /// A log line reading `item 0x100FDE80` cannot answer the only question anyone asks of this pass
 /// -- which of my things went where -- so every line names the item. The id stays because it is
 /// what a follow-up query needs.
 ///
-/// An armament is named by [`shelf_identity`], the same base row the exporter names it by: the
-/// upgrade level has no `EquipParamWeapon` row of its own, so a levelled id has no name at all,
-/// and the affinity is a prefix the menu shows separately.
+/// An armament is named by its base row, the same row the exporter names it by: the upgrade level
+/// has no `EquipParamWeapon` row of its own, so a levelled id has no name at all, and the
+/// affinity is a prefix the menu shows separately.
 ///
 /// # Safety
 ///
@@ -294,12 +215,10 @@ unsafe fn label_for(msg: Option<usize>, module_base: usize, item_id: u32) -> Str
     let Some(msg) = msg else {
         return hex;
     };
-    let (kind, row) = if is_armament(item_id) {
-        (Kind::Weapon, shelf_identity(item_id))
-    } else if item_id & ITEM_CATEGORY_MASK == 0x1000_0000 {
-        (Kind::Protector, item_id & ITEM_ID_ROW_MASK)
-    } else {
-        (Kind::Talisman, item_id & ITEM_ID_ROW_MASK)
+    let (kind, row) = match Category::of(item_id) {
+        Category::Armament => (Kind::Weapon, identity(item_id)),
+        Category::Protector => (Kind::Protector, item_id & ITEM_ID_ROW_MASK),
+        _ => (Kind::Talisman, item_id & ITEM_ID_ROW_MASK),
     };
     // Safety: delegated -- `name_for` resolves its getter for the running build and answers `None`
     // rather than faulting on a row the repository does not carry.
@@ -309,25 +228,20 @@ unsafe fn label_for(msg: Option<usize>, module_base: usize, item_id: u32) -> Str
     }
 }
 
-/// Which of the three swept categories an id belongs to, as an index.
+/// Which of the three swept categories an id belongs to, as an index into the per-category log
+/// caps.
 fn category_of(item_id: u32) -> usize {
-    match item_id & ITEM_CATEGORY_MASK {
-        0x0000_0000 => 0,
-        0x1000_0000 => 1,
+    match Category::of(item_id) {
+        Category::Armament => 0,
+        Category::Protector => 1,
         _ => 2,
     }
-}
-
-/// Whether an item id is one of the three categories this pass sweeps.
-fn is_swept(item_id: u32) -> bool {
-    SWEPT_CATEGORIES.contains(&(item_id & ITEM_CATEGORY_MASK))
-        && !EMPTY_SLOT_PLACEHOLDERS.contains(&item_id)
 }
 
 /// What one eviction pass did.
 #[derive(Debug, Default)]
 pub struct EvictOutcome {
-    /// Distinct gear entries the build does not name.
+    /// Gear entries the build does not entitle the character to, in whole or in part.
     pub found: usize,
     /// Entries the box accepted, and how many items that came to.
     pub deposited_entries: usize,
@@ -339,29 +253,23 @@ pub struct EvictOutcome {
     /// the build wants bare. So this pass takes off what it is about to deposit, exactly as
     /// [`crate::reorder`] does, and leaves the equip that follows to dress the character.
     pub unequipped: usize,
-    /// Entries left alone because the build names them -- the character keeps wearing these.
-    ///
-    /// Reported because "my shield survived" has two completely different causes and the log
-    /// could not tell them apart: the build asked for it, or the box had no room. One is the
-    /// pass working and the other is the pass stuck.
+    /// Entries left alone because the build names them -- the character keeps these.
     pub kept: usize,
+    /// Entries the pass has no business with at all: not gear, or an engine placeholder, or an
+    /// entry holding nothing.
+    ///
+    /// Counted separately from [`Self::kept`] because they are not a decision. Folding them in
+    /// inflated the numerator of a ratio that is supposed to say how much of the character the
+    /// build accounts for, and the five empty-slot rows the vacate pass creates immediately
+    /// before this one runs were being counted as five things the build asked for.
+    pub untouchable: usize,
     /// Names of the kept entries, capped like the rest.
     pub kept_names: Vec<String>,
     /// `(item, why)` for gear the box would not take, sampled per category for the log.
     pub refused: Vec<(String, String)>,
     /// How many were refused in total, which is not the same as `refused.len()`.
-    ///
-    /// The list is capped so a character with a full box does not write a thousand lines, and
-    /// that cap is exactly what hid the scale of the first live failure: the summary read
-    /// `41 of 181 ... 16 refused` while 124 entries had quietly done nothing. A denominator that
-    /// does not add up is the one thing a report of this shape must never print.
     pub refused_total: usize,
     /// Refusals split by reason, which the capped list cannot carry.
-    ///
-    /// The cap is what hid the failure this pass was rebuilt for: sixteen printed refusals were
-    /// all ammunition the box was already full of, while the gear the report was about sat
-    /// silently in the other hundred and fifteen. A reason that only appears in a list the log
-    /// truncates is a reason nobody reads.
     pub refused_worn: usize,
     pub refused_box_full: usize,
     pub refused_kind: usize,
@@ -373,14 +281,43 @@ pub struct EvictOutcome {
     /// the inventory does not hold under that id, which is how a copy survives while every count
     /// says it should not.
     pub destroy_failed: usize,
-    /// Entries destroyed because the box would not take them and the shelf already had a pair.
+    /// Entries destroyed because the box would not take them and the character still owns a pair.
     pub discarded_entries: usize,
     /// How many items that came to.
     pub discarded_items: u32,
-    /// Ashes of War taken off a doomed armament and given back, measured by the entry count.
+    /// Ashes of War taken off a doomed armament and given back.
     pub ashes_recovered: usize,
     /// `(item, how many, whether an ash came back)` for the log, capped like the refusals.
     pub discarded: Vec<(String, u32, bool)>,
+    /// Gear the character still holds that the build does not entitle it to, measured by reading
+    /// the inventory back after the pass rather than by counting what the pass attempted.
+    ///
+    /// The number this pass exists to drive to zero, and the number it could not previously
+    /// report at all. A pass that says what it tried is a pass that cannot be wrong about the
+    /// result; this one says what is there.
+    pub left_behind: usize,
+    /// How many items those entries come to.
+    pub left_behind_items: i64,
+    /// Of those, the ones this pass has no recorded reason for.
+    ///
+    /// Every survivor should be a refusal this pass decided and logged. One that is not means a
+    /// deposit or a discard reported a number the inventory does not agree with -- which is
+    /// exactly what a sweep acting on "whichever copy has this item id" can do when several
+    /// copies share one -- and it is the failure that has no other symptom.
+    pub left_behind_unexplained: usize,
+    /// `(item, why)` for every survivor. Uncapped on purpose: there should be none, and when
+    /// there are, they are the whole content of the report.
+    pub left_behind_names: Vec<(String, String)>,
+    /// Instances this import produced that are no longer in the inventory when the pass ends.
+    ///
+    /// The over-removal direction, and the expensive one: this is the sweep having deposited or
+    /// destroyed the build's own copy. It happens because the natives that move an entry resolve
+    /// it by item id and `carried_index` names the lowest-indexed copy rather than the one the
+    /// decision was about, so two copies of one id are not distinguishable to the call that moves
+    /// them. Nothing else in this pass can see it: the counts all say the surplus copy left.
+    pub pinned_lost: usize,
+    /// Names of those instances. Uncapped, for the same reason the survivors are.
+    pub pinned_lost_names: Vec<String>,
     /// `(entries used, entries the box holds)` after the pass, when both could be read.
     pub box_slots: Option<(i32, i32)>,
     /// Why nothing was attempted, when that is the answer.
@@ -388,23 +325,57 @@ pub struct EvictOutcome {
 }
 
 impl EvictOutcome {
-    /// One line for the import log.
+    /// Whether the character ended up holding no more than the build asks for.
+    ///
+    /// The pass's own verdict on itself, and the one a caller should score. `deposited` and
+    /// `discarded` are work done; this is work finished.
+    pub fn reconciles(&self) -> bool {
+        self.unavailable.is_none()
+            && self.left_behind == 0
+            && self.destroy_failed == 0
+            && self.pinned_lost == 0
+    }
+
+    /// One line for the import log, leading with what is still on the character.
+    ///
+    /// The order is deliberate. The previous line opened with how many entries were examined and
+    /// buried the survivors between a refusal breakdown and a destroyed count in the thousands,
+    /// so five weapons the pass had failed to move read as a footnote. What the pass failed to do
+    /// goes first.
     pub fn summary(&self) -> String {
         match self.unavailable {
             Some(why) => format!("EVICT: nothing was moved -- {why}"),
             None => format!(
-                "EVICT: of {} carried armament/armour/talisman entr(ies), {} are within what the \
-                 build asks for and stay. Of the other {}, {} went to the storage box ({} items, \
-                 {} taken off the character first); {} refused -- \
+                "EVICT: {} gear entr(ies) ({} item(s)) the build does not ask for are STILL ON \
+                 THE CHARACTER after this pass{}. Of {} gear entr(ies) examined, {} are within \
+                 what the build asks for and stay and {} were surplus; {} went to the storage \
+                 box ({} items, {} taken off the character first), {} entr(ies) ({} item(s)) \
+                 were destroyed because the box would not take them and the character still owns \
+                 {REDUNDANT_COPIES} or more ({} Ash(es) of War recovered first), {} refused -- \
                  {} still worn, {} the box had no room for, {} the box already holds at its \
-                 maximum stack, {} the box will not take{}{}. Consumables, materials and key \
-                 items were not touched",
+                 maximum stack, {} the box will not take{}{}{}. {} entr(ies) were outside this \
+                 pass entirely: consumables, materials, key items and the engine's own \
+                 empty-slot rows",
+                self.left_behind,
+                self.left_behind_items,
+                if self.left_behind_unexplained == 0 {
+                    String::new()
+                } else {
+                    format!(
+                        ", {} of them with no refusal this pass recorded, which should never \
+                         happen and is named one by one below",
+                        self.left_behind_unexplained
+                    )
+                },
                 self.found + self.kept,
                 self.kept,
                 self.found,
                 self.deposited_entries,
                 self.deposited_items,
                 self.unequipped,
+                self.discarded_entries,
+                self.discarded_items,
+                self.ashes_recovered,
                 self.refused_total,
                 self.refused_worn,
                 self.refused_box_no_room,
@@ -415,24 +386,26 @@ impl EvictOutcome {
                         format!(". The storage box holds {used} of {capacity} entries"),
                     None => String::new(),
                 },
-                if self.discarded_entries == 0 && self.destroy_failed == 0 {
+                if self.destroy_failed == 0 {
                     String::new()
-                } else if self.destroy_failed > 0 {
-                    format!(
-                        ". {} entr(ies) ({} item(s)) were DESTROYED instead; {} more were judged \
-                         redundant and the destroy did nothing at all, which should never happen \
-                         and is named one by one above",
-                        self.discarded_entries, self.discarded_items, self.destroy_failed
-                    )
                 } else {
                     format!(
-                        ". {} entr(ies) ({} item(s)) were DESTROYED instead, because the box \
-                         would not take them and already holds {REDUNDANT_COPIES} or more of the \
-                         same item; {} Ash(es) of War were taken off first and returned to the \
-                         inventory",
-                        self.discarded_entries, self.discarded_items, self.ashes_recovered
+                        ". {} more were judged redundant and the destroy did nothing at all, \
+                         which should never happen",
+                        self.destroy_failed
                     )
-                }
+                },
+                if self.pinned_lost == 0 {
+                    String::new()
+                } else {
+                    format!(
+                        ". {} copy(ies) this import had just made are GONE from the inventory, \
+                         which means a deposit or a discard moved the build's own item instead of \
+                         the surplus one it was asked about",
+                        self.pinned_lost
+                    )
+                },
+                self.untouchable,
             ),
         }
     }
@@ -449,17 +422,19 @@ impl EvictOutcome {
 /// [`crate::equip_native::vacate_all`] runs first but takes off only part of it: the positions
 /// the build leaves empty. The previous build's weapon in a hand the new build also names stays
 /// on, because the pass that replaces it -- the equip -- has not run yet, and cannot run first
-/// (it resolves inventory indices, which every deposit here shifts). Reported 2026-09-10:
-/// "Bloodfiend's Blood Arm was still not evicted among some others", and it was worn.
+/// (it resolves inventory indices, which every deposit here shifts).
 ///
-/// So each entry is taken off immediately before its deposit, the same way [`crate::reorder`]
-/// does it, and left off. The equip that follows is what dresses the character, and it writes
-/// every position the build names anyway.
+/// # It reads the inventory back before it reports
+///
+/// The last thing it does is walk the carried inventory again and run the same classification
+/// over what it finds. Anything still surplus is a survivor, is named, and carries either the
+/// refusal this pass recorded for it or the fact that this pass has no reason for it at all.
+/// Without that, the report is a list of intentions.
 ///
 /// # Safety
 ///
 /// Game thread, character in the world, grants and equips already applied.
-pub unsafe fn unlisted_gear(module_base: usize, egd: usize, keep: &mut Keep) -> EvictOutcome {
+pub unsafe fn unlisted_gear(module_base: usize, egd: usize, allowance: &Allowance) -> EvictOutcome {
     let mut outcome = EvictOutcome::default();
 
     let Some(get_inventory) = crate::native::resolve(
@@ -489,30 +464,25 @@ pub unsafe fn unlisted_gear(module_base: usize, egd: usize, keep: &mut Keep) -> 
     // rebuilt for: worn gear is refused rather than moved, and says so.
     let clearer = SlotClearer::open(module_base);
 
-    // Snapshot first, move second. Every deposit reindexes the inventory, so walking and
-    // depositing in one pass would read entries that have shifted under it.
+    // Snapshot first, decide second, move third. Every deposit reindexes the inventory, so walking
+    // and depositing in one pass would read entries that have shifted under it.
     // Safety: game thread, read only.
-    let mut entries: Vec<InventoryEntry> = unsafe { storage.carried_entries() }
-        .into_iter()
-        .filter(|entry| is_swept(entry.item_id))
-        .collect();
-    // Copies the grant minted go first, so they spend the build's allowance before an older twin
-    // sharing their item id can. A stable sort keeps inventory order inside each group, which is
-    // the order the equip pass resolves a repeated id in.
-    entries.sort_by_key(|entry| !keep.is_minted(entry.handle));
+    let entries = unsafe { storage.carried_entries() };
+    let held: Vec<Held> = entries.iter().map(as_held).collect();
+    let plan = plan_sweep(&held, allowance);
+    let counts = plan.counts();
+    outcome.untouchable = counts.untouchable;
+    outcome.kept = counts.kept();
+    outcome.found = counts.surplus;
 
     // What the storage box already holds, keyed by item rather than by exact id, and read once.
-    // Deposits during the loop only ever add to it, so a stale count under-reports -- which errs
-    // toward keeping an item rather than destroying one, the right direction for the only thing
-    // in this pass that cannot be undone.
+    // The box on a well-played character holds close to two thousand entries and each one costs a
+    // call, so this is the one walk it gets.
     // Safety: game thread, read only.
     let mut shelf = shelf_counts(unsafe { storage.box_entries() });
-    // What this pass keeps in the inventory, per item. It counts toward the same total as the
-    // shelf: the question the threshold asks is how many of this item the character still owns
-    // once the surplus copy is gone, and a copy kept on the character is owned exactly as much
-    // as one on the shelf. Measured 2026-09-10: a Serpent Crest Shield the build kept in Magic
-    // sat beside its Standard twin, the box held one, and the twin survived on a count of 1.
-    let mut kept_here: BTreeMap<u32, i64> = BTreeMap::new();
+    // What the character will still hold when the plan has been carried out, taken from the plan
+    // rather than accumulated while carrying it out. See `retained_after`.
+    let retained = retained_after(&held, &plan);
 
     // Resolved once. Absent only before the params stream in, which cannot be the case here --
     // the pass runs on a character in the world -- so the hex fallback is a belt, not a plan.
@@ -524,33 +494,31 @@ pub unsafe fn unlisted_gear(module_base: usize, egd: usize, keep: &mut Keep) -> 
     let mut refused_shown = [0usize; 3];
     let mut destroyed_shown = [0usize; 3];
 
-    for entry in entries {
+    // Why each surplus entry did not leave, keyed by the handle of the copy it was decided about.
+    // The verify pass reads this to say whether a survivor is one this pass knew about.
+    let mut reasons: BTreeMap<u32, String> = BTreeMap::new();
+
+    for (index_in_plan, entry) in entries.iter().enumerate() {
+        let disposition = plan.disposition(index_in_plan);
+        if outcome.kept_names.len() < KEPT_NAMED
+            && let Some(Disposition::Kept(why)) = disposition
+        {
+            // Safety: game thread, `msg` live.
+            let label = unsafe { label_for(msg, module_base, entry.item_id) };
+            // The reason, not just the name. A kept item and a stuck item look identical from the
+            // outside, and so do "the build named this" and "this import made this copy" -- which
+            // are different answers to the only question a reader asks of this list.
+            outcome
+                .kept_names
+                .push(format!("{label}: {}", why.explain()));
+        }
+        let Some(Disposition::Surplus { shed, .. }) = disposition else {
+            continue;
+        };
         let InventoryEntry {
-            handle,
-            item_id,
-            quantity,
-            ..
-        } = entry;
-        // A minted copy is kept whatever the allowance says -- it is the item this import just
-        // made, and its ash lives on this instance and no other. It still spends a slot, so the
-        // old copy it replaces is not also kept.
-        let minted = keep.is_minted(handle);
-        let allowed = keep.take(item_id);
-        if minted || allowed {
-            outcome.kept += 1;
-            *kept_here.entry(shelf_identity(item_id)).or_default() += i64::from(quantity.max(1));
-            if outcome.kept_names.len() < KEPT_NAMED {
-                // Safety: game thread, `msg` live.
-                outcome
-                    .kept_names
-                    .push(unsafe { label_for(msg, module_base, item_id) });
-            }
-            continue;
-        }
-        outcome.found += 1;
-        if quantity <= 0 {
-            continue;
-        }
+            handle, item_id, ..
+        } = *entry;
+
         // Take it off first. `deposit` re-resolves the entry by item id and refuses a worn one,
         // so the index asked about here is the one it will act on -- and for several copies of an
         // id, the lowest-index copy being worn is what blocks every other copy from moving too.
@@ -565,30 +533,24 @@ pub unsafe fn unlisted_gear(module_base: usize, egd: usize, keep: &mut Keep) -> 
             unsafe { clearer.clear(slot) };
             outcome.unequipped += 1;
         }
-        // The entry's own quantity, never `carried_quantity`. For a non-stackable that helper
-        // counts the matching entries rather than reading a quantity -- eleven Longswords answer
-        // `11` while each entry holds one -- and `TransferItemBetweenInventoryDatas` rejects a
-        // move of eleven against an entry of one through its own `quantity <= entry quantity`
-        // guard. The result is a deposit that silently does nothing, once per copy.
-        //
-        // Measured on the first live run, 2026-09-10: `EVICT: 41 of 181 ... 16 refused` left 124
-        // entries in neither column, and they were all this. Walking entries and using each
-        // entry's own quantity is right for gear (one per entry) and for the one stackable family
-        // in these categories, ammunition (the stack size, which is what the box takes).
+        // The plan's own number, never `carried_quantity`. For a non-stackable that helper counts
+        // the matching entries rather than reading a quantity -- eleven Longswords answer `11`
+        // while each entry holds one -- and `TransferItemBetweenInventoryDatas` rejects a move of
+        // eleven against an entry of one through its own `quantity <= entry quantity` guard. The
+        // result is a deposit that silently does nothing, once per copy.
         //
         // Safety: `deposit` asks the box what it will take, refuses a worn entry, re-resolves the
         // index immediately before the transfer and measures what actually moved.
-        let moved = unsafe { storage.deposit(item_id, quantity) }.max(0) as u32;
+        let moved = unsafe { storage.deposit(item_id, shed) }.max(0) as u32;
         if moved > 0 {
             outcome.deposited_entries += 1;
             outcome.deposited_items += moved;
             // The shelf now holds one more, and the next copy of this item has to be judged
-            // against that rather than against the count taken before the pass began. Measured
-            // 2026-09-10: a character carrying two Spiralhorn Shields deposited the first into
-            // the last free slot and then spared the second on a stale count of one, while the
-            // box it was being compared against already held two.
-            *shelf.entry(shelf_identity(item_id)).or_default() += i64::from(moved);
-            continue;
+            // against that rather than against the count taken before the pass began.
+            *shelf.entry(identity(item_id)).or_default() += i64::from(moved);
+            if i32::try_from(moved).unwrap_or(i32::MAX) >= shed {
+                continue;
+            }
         }
         // Safety: a bounded read of 22 ints inside a live `EquipGameData`.
         let index = unsafe { storage.carried_index(item_id) };
@@ -613,14 +575,14 @@ pub unsafe fn unlisted_gear(module_base: usize, egd: usize, keep: &mut Keep) -> 
             Refusal::WrongKind
         };
 
-        // The box would not take it. If the player already has two or more of the same item on
-        // the shelf -- the same item by name, so a different ash or infusion is still the same
-        // item -- this copy is redundant and is destroyed instead of being carried around
+        // The box would not take it. If the character would still own two or more of the same
+        // item without it -- the same item by name, so a different ash or infusion is still the
+        // same item -- this copy is redundant and is destroyed instead of being carried around
         // forever. See the module header for why the threshold is two and why the ash comes off
         // first.
-        let identity = shelf_identity(item_id);
-        let owned_elsewhere = shelf.get(&identity).copied().unwrap_or(0)
-            + kept_here.get(&identity).copied().unwrap_or(0);
+        let id = identity(item_id);
+        let owned_elsewhere =
+            shelf.get(&id).copied().unwrap_or(0) + retained.get(&id).copied().unwrap_or(0);
         let mut destroy_failed_here = false;
         if why.is_the_box_being_full() && is_redundant(owned_elsewhere) && storage.can_discard() {
             // The ash first, and on the index `discard` will actually take -- `carried_index`
@@ -632,14 +594,12 @@ pub unsafe fn unlisted_gear(module_base: usize, egd: usize, keep: &mut Keep) -> 
             // armament's affinity and the affinity is part of the item id, so a Magic Spiralhorn
             // Shield comes back as the Standard one -- and `discard`, which resolves by id, then
             // looks up a row the inventory no longer holds, destroys nothing and reports nothing.
-            // Measured 2026-09-10: `NOT EVICTED Spiralhorn Shield (0x01CCACE9)` in the log, with
-            // `0x01CCA9C9` sitting in the inventory afterwards. The index survives the strip; the
-            // id does not.
+            // The index survives the strip; the id does not.
             // Safety: game thread, read only.
             let doomed = unsafe { storage.carried_item_id_at(index) }.unwrap_or(item_id);
             // Safety: game thread; `discard` re-resolves the index immediately before the
             // destructive call and refuses when the pair has no mapping for this build.
-            let destroyed = unsafe { storage.discard(doomed, quantity) }.max(0) as u32;
+            let destroyed = unsafe { storage.discard(doomed, shed) }.max(0) as u32;
             if destroyed == 0 {
                 // Judged redundant, and nothing happened. That is a different failure from the
                 // box being full and it must not print as one: it read as an ordinary box-full
@@ -669,32 +629,81 @@ pub unsafe fn unlisted_gear(module_base: usize, egd: usize, keep: &mut Keep) -> 
         // destroyed is not also counted as one the box refused. It is one or the other.
         why.record(&mut outcome);
         outcome.refused_total += 1;
+        // How many the character would still own, spelled out. A refusal that says only "the box
+        // is full" does not say whether the copy was spared by the threshold or was never
+        // eligible, and those are the two different things a reader has to tell apart before
+        // deciding whether the threshold is the thing to change.
+        let held = owned_elsewhere;
+        let sentence = match why {
+            _ if destroy_failed_here => format!(
+                "it was judged redundant ({held} owned elsewhere) and the destroy did nothing -- \
+                 the inventory holds no entry under that item id"
+            ),
+            Refusal::BoxHasNoRoom | Refusal::StackAtMaximum if held < REDUNDANT_COPIES => format!(
+                "{}, and the character would still own only {held} of this item -- fewer than \
+                 the {REDUNDANT_COPIES} needed before a copy is destroyed instead",
+                why.explain()
+            ),
+            why => why.explain().to_owned(),
+        };
+        reasons.insert(handle, sentence.clone());
         let category = category_of(item_id);
         if refused_shown[category] < LINES_PER_CATEGORY {
             refused_shown[category] += 1;
             // Safety: game thread, `msg` live.
             let label = unsafe { label_for(msg, module_base, item_id) };
-            // How many the shelf holds, spelled out. A refusal that says only "the box is full"
-            // does not say whether the copy was spared by the threshold or was never eligible,
-            // and those are the two different things a reader has to tell apart before deciding
-            // whether the threshold is the thing to change.
-            let held = owned_elsewhere;
-            let why = match why {
-                _ if destroy_failed_here => format!(
-                    "it was judged redundant ({held} owned elsewhere) and the destroy did \
-                     nothing -- the inventory holds no entry under that item id"
-                ),
-                Refusal::BoxHasNoRoom | Refusal::StackAtMaximum if held < REDUNDANT_COPIES => {
-                    format!(
-                        "{}, and the character would still own only {held} of this item -- \
-                         fewer than the {REDUNDANT_COPIES} needed before a copy is destroyed \
-                         instead",
-                        why.explain()
-                    )
-                }
-                why => why.explain().to_owned(),
-            };
-            outcome.refused.push((label, why));
+            outcome.refused.push((label, sentence));
+        }
+    }
+
+    // The pass is over. Ask the game what is actually there.
+    //
+    // Everything above is a record of what this pass attempted; this is the only part that knows
+    // what it achieved. The same classification, over the inventory as it now stands: anything
+    // still surplus was left behind, whatever the counts above say.
+    // Safety: game thread, read only.
+    let after = unsafe { storage.carried_entries() };
+    let held_after: Vec<Held> = after.iter().map(as_held).collect();
+    for index in survivors(&held_after, allowance) {
+        let entry = &after[index];
+        outcome.left_behind += 1;
+        outcome.left_behind_items += i64::from(entry.quantity.max(0));
+        // Safety: game thread, `msg` live.
+        let label = unsafe { label_for(msg, module_base, entry.item_id) };
+        match reasons.get(&entry.handle) {
+            Some(sentence) => outcome.left_behind_names.push((label, sentence.clone())),
+            None => {
+                outcome.left_behind_unexplained += 1;
+                outcome.left_behind_names.push((
+                    label,
+                    "this pass recorded no refusal for this copy, so a deposit or a discard \
+                     reported a number the inventory does not agree with"
+                        .to_owned(),
+                ));
+            }
+        }
+    }
+
+    // The other direction, and the one with no other symptom at all.
+    //
+    // `Storage::deposit` and `Storage::discard` both resolve the entry they act on by item id, and
+    // `carried_index` names the lowest-indexed copy rather than the copy the decision was made
+    // about. Two entries sharing an id -- the copy this import just minted and the older one it
+    // replaces -- are therefore not distinguishable to the call, so a surplus entry can be
+    // deposited by moving the kept one instead. The surplus copy then shows up above as a survivor
+    // with no recorded reason; this is the same event seen from the side that costs the player
+    // something, and it is the only thing here that says the build's own item went into the box.
+    let handles_now: std::collections::BTreeSet<u32> =
+        after.iter().map(|entry| entry.handle).collect();
+    for entry in &entries {
+        if allowance.is_pinned(entry.handle)
+            && entry.quantity > 0
+            && !handles_now.contains(&entry.handle)
+        {
+            outcome.pinned_lost += 1;
+            // Safety: game thread, `msg` live.
+            let label = unsafe { label_for(msg, module_base, entry.item_id) };
+            outcome.pinned_lost_names.push(label);
         }
     }
 
@@ -715,181 +724,157 @@ const KEPT_NAMED: usize = 32;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use er_build_import_core::plan::NO_SKILL;
+    use er_build_import_core::sweep::{EMPTY_PROTECTOR_ITEM_IDS, Kept, UNARMED_ITEM_ID};
 
-    /// Every refusal reaches the summary line, whatever the printed list is capped at.
-    ///
-    /// The regression this guards is not a wrong number, it is an invisible one: the run that
-    /// left worn gear behind printed sixteen refusals, all of them ammunition, and the fourteen
-    /// worn armaments underneath never appeared anywhere in the log.
-    #[test]
-    fn the_summary_carries_each_refusal_reason() {
-        let outcome = EvictOutcome {
-            found: 172,
-            deposited_entries: 41,
-            deposited_items: 41,
-            unequipped: 14,
-            refused_total: 131,
-            refused_worn: 3,
-            refused_box_no_room: 100,
-            refused_box_full: 15,
-            refused_kind: 13,
-            box_slots: Some((2000, 2000)),
-            discarded_entries: 0,
-            discarded_items: 0,
-            ashes_recovered: 0,
-            discarded: Vec::new(),
-            destroy_failed: 0,
-            kept: 4,
-            kept_names: Vec::new(),
-            refused: Vec::new(),
-            unavailable: None,
-        };
-        let summary = outcome.summary();
-        assert!(
-            summary.contains("14 taken off the character first"),
-            "{summary}"
-        );
-        // The denominator has to account for every swept entry, kept ones included. Reporting
-        // "41 of 172" beside "168 left alone" invites the reader to add them to 340 or to assume
-        // the 168 came from somewhere else; neither is what happened.
-        assert!(
-            summary.contains("of 176 carried armament/armour/talisman entr(ies), 4 are within"),
-            "{summary}"
-        );
-        assert!(summary.contains("Of the other 172,"), "{summary}");
-        assert!(summary.contains("3 still worn"), "{summary}");
-        assert!(summary.contains("100 the box had no room for"), "{summary}");
-        assert!(summary.contains("15 the box already holds"), "{summary}");
-        assert!(summary.contains("13 the box will not take"), "{summary}");
-        assert!(summary.contains("holds 2000 of 2000 entries"), "{summary}");
-        assert_eq!(
-            outcome.refused_worn
-                + outcome.refused_box_no_room
-                + outcome.refused_box_full
-                + outcome.refused_kind,
-            outcome.refused_total,
-            "the four reasons are the whole of the refusals, so a reader can check the \
-             denominator without the truncated list"
-        );
-    }
-
-    /// A grant for one item, with everything else at a value the allowance does not read.
     fn grant_of(item_id: u32, quantity: u32, also: &[u32]) -> Grant {
         Grant {
             item_id,
             also_known_as: also.to_vec(),
             quantity,
             reinforce_lv: 0,
-            upgrade_is_character_default: false,
-            weapon_skill: er_build_import_core::plan::NO_SKILL,
-            label: String::new(),
+            upgrade_is_character_default: true,
+            weapon_skill: NO_SKILL,
+            label: format!("item 0x{item_id:08X}"),
             pot_group: None,
             armament: false,
         }
     }
 
-    /// A build asking for five keeps five, and the sixth is an extra.
-    ///
-    /// The case that made the allowance necessary: a set of ids kept every copy of a named id, so
-    /// a build wanting five Crimson Seed Talismans and a character holding ten kept all ten.
-    #[test]
-    fn the_allowance_is_a_count_not_a_set() {
-        let talisman = 0x2000_1BE4u32;
-        let mut keep = Keep::new(&[grant_of(talisman, 5, &[])], &[]);
-        for copy in 1..=5 {
-            assert!(
-                keep.take(talisman),
-                "copy {copy} is within the build's five"
-            );
-        }
-        assert!(!keep.take(talisman), "the sixth copy is an extra");
-    }
-
-    /// The plan names an armament at `+0` and the character carries it at `+25`.
-    #[test]
-    fn the_allowance_ignores_the_upgrade_level_and_the_infusion() {
-        // Serpent Crest Shield: the plan's row, and the id the character actually holds.
-        let planned = 0x01E0_F500u32;
-        let carried = 0x01E0_F519u32;
-        let mut keep = Keep::new(&[grant_of(planned, 1, &[])], &[]);
-        assert!(
-            keep.take(carried),
-            "the +25 copy is the item the build named"
-        );
-        assert!(!keep.take(carried), "and the build named exactly one");
-    }
-
-    /// Rows sharing a name draw on one allowance rather than one each.
-    #[test]
-    fn alternates_share_the_build_s_allowance() {
-        let row = 0x4000_2AFFu32;
-        let other_row = 0x4000_2B03u32;
-        let mut keep = Keep::new(&[grant_of(row, 1, &[other_row])], &[]);
-        assert!(keep.take(other_row), "the copy the character holds counts");
-        assert!(
-            !keep.take(row),
-            "and having counted it, the allowance is spent -- this is the duplicate flask"
-        );
-    }
-
-    /// Two copies of one armament are the same item however they are infused or upgraded.
-    #[test]
-    fn the_shelf_ignores_the_ash_and_the_infusion() {
-        // Misericorde: plain +0, Occult +0, Occult +9. One item on the shelf.
-        let plain = 1_070_000u32;
-        let occult = 1_071_200u32;
-        let occult_nine = 1_071_209u32;
-        assert_eq!(shelf_identity(plain), plain);
-        assert_eq!(shelf_identity(occult), plain);
-        assert_eq!(shelf_identity(occult_nine), plain);
-        // A somber armament has no affinity block, so its own row is the identity.
-        assert_eq!(shelf_identity(1_010_007), 1_010_000);
-    }
-
-    /// Armour and talismans are folded together with nothing, because their `+1` is another item.
-    #[test]
-    fn armour_and_talismans_keep_their_own_identity() {
-        let head = 0x1001_86A0u32;
-        assert_eq!(shelf_identity(head), head);
-        let talisman = 0x2000_0FA0u32;
-        assert_eq!(shelf_identity(talisman), talisman);
-        assert_ne!(shelf_identity(talisman), shelf_identity(talisman + 1));
-    }
-
-    /// The shelf counts quantities, so one stack of thirty is thirty and not one.
-    #[test]
-    fn the_shelf_sums_quantities_per_item() {
-        let entry = |index: i32, item_id: u32, quantity: i32| InventoryEntry {
+    fn entry(index: i32, handle: u32, item_id: u32, quantity: i32) -> InventoryEntry {
+        InventoryEntry {
             index,
-            handle: 0,
+            handle,
             item_id,
             quantity,
+        }
+    }
+
+    /// A survivor is the headline, and the summary says so before it says anything else.
+    #[test]
+    fn the_summary_leads_with_what_is_still_on_the_character() {
+        let outcome = EvictOutcome {
+            left_behind: 5,
+            left_behind_items: 5,
+            left_behind_unexplained: 1,
+            found: 94,
+            kept: 204,
+            ..EvictOutcome::default()
         };
-        let counts = shelf_counts(vec![
-            entry(0, 1_071_200, 1),
-            entry(1, 1_070_000, 1),
-            entry(2, 0x1001_86A0, 1),
-            entry(3, 0x0300_20A0, 30),
-            // A freed entry contributes nothing.
-            entry(4, 1_070_000, 0),
-        ]);
-        assert_eq!(counts.get(&1_070_000), Some(&2));
-        assert_eq!(counts.get(&0x1001_86A0), Some(&1));
-        assert_eq!(counts.get(&0x0300_20A0), Some(&30));
+        let summary = outcome.summary();
+        let headline = summary.find("STILL ON").expect("the survivors are named");
+        let examined = summary.find("examined").expect("the denominator is there");
+        assert!(
+            headline < examined,
+            "the survivors have to come before the work: {summary}"
+        );
+        assert!(summary.contains("no refusal this pass recorded"));
+    }
+
+    /// A pass that moved a great deal and still left something behind has not reconciled, and
+    /// neither has one that moved the build's own copy by mistake.
+    #[test]
+    fn work_done_is_not_work_finished() {
+        assert!(EvictOutcome::default().reconciles());
+        assert!(
+            !EvictOutcome {
+                deposited_entries: 88,
+                left_behind: 5,
+                ..EvictOutcome::default()
+            }
+            .reconciles()
+        );
+        assert!(
+            !EvictOutcome {
+                destroy_failed: 1,
+                ..EvictOutcome::default()
+            }
+            .reconciles()
+        );
+        assert!(
+            !EvictOutcome {
+                deposited_entries: 94,
+                pinned_lost: 1,
+                ..EvictOutcome::default()
+            }
+            .reconciles(),
+            "a pass that evicted the build's own item has not finished, however much it moved"
+        );
     }
 
     /// The threshold counts everything the character still owns, not just the shelf.
     #[test]
     fn a_copy_is_redundant_only_when_two_survive_it() {
-        // The Spiralhorn case: one on the shelf at the start of the pass, one deposited into the
-        // last free slot during it. The live count is two and the third copy goes.
-        assert!(is_redundant(1 + 1));
-        // The Serpent Crest case: one on the shelf, one kept on the character because the build
-        // names it. Also two.
         assert!(is_redundant(2));
-        // One anywhere is not a spare, and neither is none.
         assert!(!is_redundant(1));
         assert!(!is_redundant(0));
+    }
+
+    /// The count the threshold reads is taken from the plan, over every entry the plan keeps, so
+    /// it cannot miss an update the way an accumulated total can.
+    #[test]
+    fn the_retained_count_comes_from_the_plan_not_from_the_loop() {
+        let shield = 0x2000_0BB8;
+        let held = [
+            Held::one(1, shield),
+            Held::one(2, shield),
+            Held::one(3, shield),
+        ];
+        let allowance = Allowance::new(&[grant_of(shield, 2, &[])], []);
+        let plan = plan_sweep(&held, &allowance);
+        // Two are kept, so the third is judged against a count of two before anything moves --
+        // which is the answer the accumulated version only reached after the fact, or not at all.
+        assert_eq!(retained_after(&held, &plan).get(&shield), Some(&2));
+    }
+
+    /// The engine's empty-slot rows are not gear the pass keeps, and are not gear it moves.
+    #[test]
+    fn the_empty_slot_rows_are_outside_the_pass_rather_than_kept() {
+        let mut entries = vec![entry(0, 1, UNARMED_ITEM_ID, 1)];
+        for (n, id) in EMPTY_PROTECTOR_ITEM_IDS.iter().enumerate() {
+            entries.push(entry(n as i32 + 1, n as u32 + 2, *id, 1));
+        }
+        let held: Vec<Held> = entries.iter().map(as_held).collect();
+        let plan = plan_sweep(&held, &Allowance::default());
+        assert_eq!(plan.counts().untouchable, 5);
+        assert_eq!(plan.counts().kept(), 0);
+        assert_eq!(plan.counts().surplus, 0);
+    }
+
+    /// Goods, gems and spells never reach this pass.
+    #[test]
+    fn goods_gems_and_spells_are_outside_this_pass() {
+        let entries = [
+            entry(0, 1, 0x4000_0084, 99),
+            entry(1, 2, 0x8000_2AF8, 1),
+            entry(2, 3, 0x4000_00C8, 3),
+        ];
+        let held: Vec<Held> = entries.iter().map(as_held).collect();
+        assert!(survivors(&held, &Allowance::default()).is_empty());
+    }
+
+    /// A build naming one shield keeps one shield, whatever the upgrade level or infusion.
+    #[test]
+    fn an_upgraded_armament_spends_the_allowance_the_plan_wrote_at_plus_zero() {
+        let bare = 1_010_000;
+        let entries = [entry(0, 9, bare + 1_200 + 25, 1), entry(1, 0, bare, 1)];
+        let held: Vec<Held> = entries.iter().map(as_held).collect();
+        let allowance = Allowance::new(&[grant_of(bare, 1, &[])], [9]);
+        let plan = plan_sweep(&held, &allowance);
+        assert_eq!(plan.disposition(0), Some(Disposition::Kept(Kept::Pinned)));
+        assert!(plan.disposition(1).expect("classified").is_surplus());
+    }
+
+    /// The shelf walk sums quantities per identity and ignores a freed entry.
+    #[test]
+    fn the_shelf_sums_quantities_per_item() {
+        let counts = shelf_counts(vec![
+            entry(0, 1, 0x0300_20A0, 10),
+            entry(1, 2, 0x0300_20A0, 20),
+            entry(2, 3, 0x2000_0BB8, 0),
+        ]);
+        assert_eq!(counts.get(&identity(0x0300_20A0)), Some(&30));
+        assert_eq!(counts.get(&0x2000_0BB8), None);
     }
 
     /// Only a box that is out of space justifies destroying a copy.
@@ -897,52 +882,7 @@ mod tests {
     fn a_refusal_about_the_item_never_destroys_it() {
         assert!(Refusal::BoxHasNoRoom.is_the_box_being_full());
         assert!(Refusal::StackAtMaximum.is_the_box_being_full());
-        // The pass could not take it off, so it has no business destroying it.
         assert!(!Refusal::Worn.is_the_box_being_full());
-        // A copy the box would never hold is not redundant with anything.
         assert!(!Refusal::WrongKind.is_the_box_being_full());
-    }
-
-    /// The vacate pass's own placeholders are not gear and are never swept.
-    #[test]
-    fn the_empty_slot_placeholders_are_skipped() {
-        // The Unarmed fist, which a cleared hand holds.
-        assert!(!is_swept(0x0001_ADB0));
-        // The four empty-armour rows, which cleared protector slots hold.
-        for empty in [0x1000_2710u32, 0x1000_2774, 0x1000_27D8, 0x1000_283C] {
-            assert!(!is_swept(empty), "0x{empty:08X}");
-        }
-        // A real weapon whose id happens to sit near the fist's is still swept.
-        assert!(is_swept(0x0001_ADB1));
-    }
-
-    /// Only three categories are swept, and goods are not one of them.
-    #[test]
-    fn goods_gems_and_spells_are_outside_this_pass() {
-        assert!(is_swept(0x0000_0000));
-        assert!(is_swept(0x002F_0409));
-        // A real piece of armour, deliberately not `0x10002710` -- that is the empty head row and
-        // is skipped as a placeholder, and picking it here is what made this test contradict
-        // `the_empty_slot_placeholders_are_skipped`.
-        assert!(is_swept(0x1001_86A0));
-        assert!(is_swept(0x2000_0000));
-        // Goods: consumables, crafting materials, key items, spells, remembrances.
-        assert!(!is_swept(0x4000_0384));
-        // Gems, i.e. ashes of war.
-        assert!(!is_swept(0x8000_0000));
-    }
-
-    /// The upgrade level rides in the id, which is what the keep-set has to account for.
-    #[test]
-    fn an_upgraded_armament_is_a_different_id_from_the_one_the_plan_names() {
-        let planned = 0x002F_0400u32;
-        let carried = planned + 25;
-        let keep: BTreeSet<u32> = [planned].into_iter().collect();
-        assert!(is_swept(carried));
-        assert!(
-            !keep.contains(&carried),
-            "a keep-set of planned ids alone does not recognise the granted armament, which is \
-             why `unlisted_gear` is given the grant's own ids too"
-        );
     }
 }

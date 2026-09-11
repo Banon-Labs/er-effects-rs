@@ -1093,7 +1093,10 @@ impl CarriedArmaments {
 }
 
 /// The Unarmed fist, which a cleared hand holds and which is never a build's armament.
-const UNARMED_ITEM_ID: u32 = 0x0001_ADB0;
+///
+/// Taken from the core crate rather than written out again: this is the same engine fact the
+/// vacate pass and the sweep both depend on, and it used to be a separate literal in each.
+const UNARMED_ITEM_ID: u32 = er_build_import_core::sweep::UNARMED_ITEM_ID;
 
 unsafe fn grant_armament(
     module_base: usize,
