@@ -278,7 +278,8 @@ def _crate_const_value(source: Path, ident: str) -> str | None:
     below used to `continue` past an unresolved identifier, so an undiscovered knob and a knob that
     does not exist were the same outcome. That is how `ER_QUICKLOAD_LOCKON_FILTER_LOG_PATH` could be
     added to the Rust, added to the shared table, and still fail the completeness check with no
-    line anywhere naming it.
+    line anywhere naming it. That knob is gone -- er-lockon-filter was deleted on 2026-09-11 -- so
+    it survives here only as the worked example of the defect this function fixes.
     """
     crate = _crate_of(source)
     if crate is None:

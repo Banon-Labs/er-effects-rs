@@ -173,7 +173,6 @@ echo "======================================================================"
 	ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH="$ARTIFACT_DIR/er-crash-latest.txt" \
 	ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH="$ARTIFACT_DIR/er-crash-breadcrumb-latest.txt" \
 	ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH="$ARTIFACT_DIR/er-crash-modules.txt" \
-	ER_QUICKLOAD_LOCKON_FILTER_LOG_PATH="$ARTIFACT_DIR/er-lockon-filter.log" \
 	"$ME3" --steam-dir "$ME3_STEAM_DIR" launch -p "$PROFILE" -g eldenring -e "$GAME_DIR/eldenring.exe") \
 	>"$ARTIFACT_DIR/me3-live.log" 2>&1 &
 LAUNCHER_PID=$!
