@@ -96,7 +96,6 @@ pub(crate) const FIELD_SCAN_STRIDE: usize = 8;
 
 pub(crate) use er_title_flow::DIALOG_SCENE_PROXY_CAPTURE_A38_OFFSET;
 pub(crate) use er_title_flow::LIVE_DIALOG_FACTORY_RVA;
-pub(crate) use er_title_flow::SCENE_OBJ_PROXY_VTABLE_RVA;
 /// SceneProxy MenuWindow back-ref: the live MenuWindow* sits at proxy+0x20 (ctor 0x14074a735).
 #[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const SCENE_PROXY_MENU_WINDOW_20_OFFSET: usize = 0x20;
