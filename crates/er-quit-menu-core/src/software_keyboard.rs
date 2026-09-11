@@ -439,12 +439,6 @@ pub fn build_url_note_editor_window_state(window: usize, state: i32) -> bool {
     false
 }
 
-/// Release a link-field keyboard whose window has closed without either detour firing.
-///
-/// Deposits `Cancelled` only if no outcome is already waiting: an accept records its text from the
-/// terminal callback and its window goes terminal immediately afterwards, so overwriting here would
-/// turn every accepted link into a cancel.
-
 /// The bound used before a frame has been measured. See [`build_url_unseen_limit`].
 const BUILD_URL_UNCALIBRATED_UNSEEN_LIMIT: usize = 256;
 
@@ -502,6 +496,11 @@ pub fn release_abandoned_build_url_keyboard() {
     release_build_url_keyboard_on_window_close(window);
 }
 
+/// Release a link-field keyboard whose window has closed without either detour firing.
+///
+/// Deposits `Cancelled` only if no outcome is already waiting: an accept records its text from the
+/// terminal callback and its window goes terminal immediately afterwards, so overwriting here would
+/// turn every accepted link into a cancel.
 fn release_build_url_keyboard_on_window_close(window: usize) {
     let job = keyboard_active_job_slot(KeyboardPurpose::BuildUrl).swap(0, Ordering::SeqCst);
     if job == 0 {
