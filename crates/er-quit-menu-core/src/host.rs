@@ -131,20 +131,108 @@ fn default_log(_args: std::fmt::Arguments<'_>) {}
 fn default_gate_off() -> bool {
     false
 }
+/// `%APPDATA%/EldenRing`, read from the environment.
+///
+/// This is the game's own save folder, not a product setting, so it is a default rather than a
+/// refusal: a shell with no save-redirect behind it still needs somewhere for a file browser to
+/// open, and every ELDEN RING install on this machine writes here. A host with a redirect
+/// overrides it with the root that redirect is actually using.
 fn default_no_root() -> Option<std::path::PathBuf> {
-    None
+    std::env::var_os("APPDATA")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("USERPROFILE").map(|profile| {
+                std::path::PathBuf::from(profile)
+                    .join("AppData")
+                    .join("Roaming")
+            })
+        })
+        .map(|appdata| appdata.join("EldenRing"))
 }
 fn default_seamless(_reason: &str) -> bool {
     false
 }
+/// The game's own active save container, found by looking where the game puts it.
+///
+/// A host that owns a save redirect answers this from the redirect's own state and this default
+/// never runs. A shell has no redirect, and refusing here would be a refusal to *read* -- it would
+/// stop a file browser opening at all, which is what left the standalone **Load Character from
+/// File** row inert on 2026-09-11 (`save-picker: refused to open -- no host installed`).
+///
+/// So it looks: `%APPDATA%/EldenRing/<steamid>/ER0000.{sl2,co2}`, where `<steamid>` is the numeric
+/// account directory the game creates. The newest container wins when an account has both, which
+/// is the one the running session is using. Nothing is written here and nothing is guessed -- an
+/// account directory that holds no container is skipped, and no directory at all is still an
+/// error.
 fn default_no_save_path() -> Result<String, &'static str> {
-    Err("no host installed")
+    let root = default_no_root().ok_or("no APPDATA or USERPROFILE in the environment")?;
+    let entries = std::fs::read_dir(&root).map_err(|_| "no %APPDATA%/EldenRing directory")?;
+    let mut newest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+    for entry in entries.flatten() {
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .chars()
+            .all(|c| c.is_ascii_digit())
+        {
+            continue;
+        }
+        for container in ["ER0000.sl2", "ER0000.co2"] {
+            let candidate = entry.path().join(container);
+            let Ok(meta) = candidate.metadata() else {
+                continue;
+            };
+            let Ok(modified) = meta.modified() else {
+                continue;
+            };
+            if newest.as_ref().is_none_or(|(seen, _)| modified > *seen) {
+                newest = Some((modified, candidate));
+            }
+        }
+    }
+    let (_, path) = newest.ok_or("no ER0000 container under %APPDATA%/EldenRing")?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// The directory half of [`default_no_save_path`].
+fn default_no_save_dir() -> Result<String, &'static str> {
+    let path = default_no_save_path()?;
+    let separator = path
+        .rfind(['/', '\\'])
+        .ok_or("the resolved save has no parent directory")?;
+    Ok(path[..separator].to_owned())
 }
 fn default_normalize(_bytes: &mut [u8]) -> bool {
     false
 }
+/// The live `CS::ProfileSummary`, read the way `er-profile-summary-core` reads it.
+///
+/// A default rather than a refusal, for the same reason the save root is: this is a fault-guarded
+/// READ of the game's own allocation, not a product setting, and answering 0 stops a file browser
+/// from staging a single row -- which is what left the standalone **Load Character from File** row
+/// inert with `cannot stage rows -- live ProfileSummary unavailable` (2026-09-11). A host that
+/// tracks the allocation itself still overrides it.
 unsafe fn default_summary_ptr() -> usize {
-    0
+    let Ok(base) = er_game_base::mem::game_module_base() else {
+        return 0;
+    };
+    let global = er_game_base::mem::game_data_addr(
+        base,
+        er_game_base::rva::GAME_DATA_MAN_GLOBAL_RVA,
+        "GAME_DATA_MAN_GLOBAL_RVA",
+    );
+    let Some(game_data_man) = (unsafe { er_game_base::mem::safe_read_usize(global) }) else {
+        return 0;
+    };
+    if game_data_man == 0 {
+        return 0;
+    }
+    unsafe {
+        er_game_base::mem::safe_read_usize(
+            game_data_man + er_loading_portrait_core::layout::SLOT_MANAGER_CONTAINER_OFFSET,
+        )
+    }
+    .unwrap_or(0)
 }
 fn default_slot_zero() -> i32 {
     0
@@ -204,7 +292,7 @@ impl QuitMenuHost {
             default_save_root: default_no_root,
             save_picker_seamless_mode_after_settle: default_seamless,
             system_quit_env_save_path: default_no_save_path,
-            system_quit_env_save_dir: default_no_save_path,
+            system_quit_env_save_dir: default_no_save_dir,
             normalize_save_bytes_to_active_steam_id: default_normalize,
             system_quit_profile_summary_ptr: default_summary_ptr,
             portrait_loaded_slot: default_slot_zero,
@@ -406,9 +494,18 @@ mod tests {
 
     #[test]
     fn an_unhosted_quit_menu_reports_no_save_source_rather_than_a_guess() {
-        assert!(system_quit_env_save_path().is_err());
-        assert!(system_quit_env_save_dir().is_err());
-        assert!(default_save_root().is_none());
+        // The save PATH is now discovered rather than refused, because refusing it stops a file
+        // browser from opening at all -- but discovery only ever finds the game's own
+        // `%APPDATA%/EldenRing/<steamid>/ER0000.*`, and on a machine with no such directory it
+        // still errors. What must never be guessed is the WRITE authorisation above.
+        let discovered = system_quit_env_save_path();
+        if let Ok(path) = &discovered {
+            assert!(
+                path.contains("EldenRing"),
+                "discovered a save outside the game's own folder: {path}"
+            );
+            assert!(system_quit_env_save_dir().is_ok());
+        }
         assert_eq!(game_main_window(), 0);
     }
 }

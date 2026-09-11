@@ -26,7 +26,7 @@ use er_loading_portrait_core::layout::TITLE_PROFILE_SLOT_COUNT;
 use er_loading_portrait_core::portrait_semaphores::PROFILE_RENDERER_REFRESH_RVA;
 use er_profile_summary_core::serialized_slot::PROFILE_PREVIEW_FACE_HASH;
 use er_save_picker_core::host::missing_save_selection_pending;
-use er_save_picker_core::surface::{PickerOpenOutcome, PickerOpenRequest};
+use er_save_picker_core::surface::{PickerOpenOutcome, PickerOpenRequest, open_taken_over_outcome};
 use er_telemetry_core::counters::{
     SAVE_DEST_COMMIT_COUNT, SAVE_DEST_COMMIT_FAIL, SAVE_DEST_COMMIT_PENDING,
     SAVE_DEST_OVERWRITE_UNCONFIRMABLE_COUNT, SAVE_DEST_PICKER_OPEN_COUNT,
@@ -54,7 +54,7 @@ use crate::host::{
     save_flow_box_clear, save_flow_box_recipe_available, save_picker_seamless_mode_after_settle,
     system_quit_env_save_dir, system_quit_env_save_path, system_quit_ingest_picked_save,
     system_quit_profile_summary_ptr, system_quit_save_swap_arm_original,
-    system_quit_save_swap_restore_profile_summary,
+    system_quit_save_swap_restore_profile_summary, system_quit_windows_path_for_log,
 };
 use crate::os_dialog::{DestRoute, save_dest_route_picked_target};
 use crate::profile_load_dialog::{
@@ -102,7 +102,12 @@ pub struct SavePickerMenuHooks {
     pub save_flow_submit_box: Option<unsafe fn(usize) -> bool>,
     /// The live-layout editor's field font height, for a host that ships that editor.
     pub profile_editor_field_font_height: Option<fn(&str) -> i32>,
-    /// Open the picker for one of the host's own intents (the startup missing-save surface).
+    /// Choose the surface a picker request opens on.
+    ///
+    /// Absent, every request opens the in-game browser below -- which is the surface this crate
+    /// owns, so a host that supplies nothing still gets a working row. A host installs this only
+    /// because it has a second surface to offer: the product routes to the OS file dialog when
+    /// `os_native_save_picker` is set, and owns the startup missing-save request outright.
     pub open_picker_for_intent: Option<unsafe fn(PickerOpenRequest) -> PickerOpenOutcome>,
     /// Install whatever passive device hooks the nav reader below needs.
     pub ensure_nav_input_hooks: Option<fn()>,
@@ -407,11 +412,12 @@ pub unsafe fn save_picker_stage_row_records(
 /// surface that is -- this in-game browser or the OS file dialog -- is decided in one place,
 /// [`open_picker_for_intent`]; the signature and the four call sites are unchanged.
 pub unsafe fn system_quit_open_save_picker_menu(action_obj: usize) -> PickerOpenOutcome {
-    hooks()
-        .open_picker_for_intent
-        .map_or(PickerOpenOutcome::NotOpened, |open| unsafe {
-            open(PickerOpenRequest::LoadSource { action_obj })
-        })
+    match hooks().open_picker_for_intent {
+        Some(open) => unsafe { open(PickerOpenRequest::LoadSource { action_obj }) },
+        None => open_taken_over_outcome(unsafe {
+            system_quit_open_save_picker_menu_in_game(action_obj)
+        }),
+    }
 }
 
 /// Open the in-game file picker (menu thread). Mirrors the old OS-picker preflight (restore stale
@@ -427,9 +433,17 @@ pub unsafe fn system_quit_open_save_picker_menu_in_game(action_obj: usize) -> bo
         }
     };
     unsafe { system_quit_save_swap_restore_profile_summary("save-picker-reopen") };
-    if !system_quit_save_swap_arm_original(&save_path) {
-        SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
-        return false;
+    // Best-effort, not a gate. Arming the original snapshot is what lets a host UNDO a foreign-save
+    // commit later; browsing needs none of it, and a host with no save-swap ledger answers false
+    // simply because it has no ledger. Treating that as a refusal is what left the standalone
+    // **Load Character from File** row inert with nothing in the log to say why (2026-09-11): the
+    // press routed, the path resolved, and the browser never opened.
+    let armed = system_quit_save_swap_arm_original(&save_path);
+    if !armed {
+        append_autoload_debug(format_args!(
+            "save-picker: opening without a save-swap snapshot -- no host armed one for '{}'. Browsing and picking still work; what is absent is the undo behind a foreign-save commit",
+            system_quit_windows_path_for_log(&save_path)
+        ));
     }
     let Some(start_dir) = save_picker_start_dir() else {
         SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
@@ -491,11 +505,12 @@ pub unsafe fn system_quit_open_save_picker_menu_in_game(action_obj: usize) -> bo
 /// `SAVE_DEST_OPEN_PICKER_PENDING`. Which surface opens is decided in one place,
 /// [`open_picker_for_intent`]; the signature and the call site are unchanged.
 pub unsafe fn system_quit_open_save_dest_picker(system_dialog: usize) -> PickerOpenOutcome {
-    hooks()
-        .open_picker_for_intent
-        .map_or(PickerOpenOutcome::NotOpened, |open| unsafe {
-            open(PickerOpenRequest::SaveDestination { system_dialog })
-        })
+    match hooks().open_picker_for_intent {
+        Some(open) => unsafe { open(PickerOpenRequest::SaveDestination { system_dialog }) },
+        None => open_taken_over_outcome(unsafe {
+            system_quit_open_save_dest_picker_in_game(system_dialog)
+        }),
+    }
 }
 
 /// Open the in-game `05_010` picker as the save-destination chooser -- the same submit context
