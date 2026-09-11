@@ -397,7 +397,27 @@ impl QuitRowFacts {
         .index(row)
     }
 
+    /// Whether the captured table can identify a row at all.
+    ///
+    /// A `-1` is "this row was never captured", and for a cloned row that is a legitimate state,
+    /// not a broken table: a shell arming only the two build rows never clones Load Character or
+    /// Load Character from File, so their indices stay `-1` for the life of the dialog. This
+    /// predicate used to require all six to be present, which made every activation in such a
+    /// profile `RowTableIncomplete` -- the refusal forwards the native activation, so both build
+    /// rows ran Save Game and Return to Desktop instead. Measured on the shell-only profile,
+    /// 2026-09-10: `row=AMBIGUOUS reason=row-table-incomplete` on every press.
+    ///
+    /// What has to hold is narrower, and it is what the guard was always for. The two native rows
+    /// are on the tab whether or not anything is cloned, so they must be captured. Every captured
+    /// row must be in range and must claim an index no other row claims -- absent rows are skipped
+    /// rather than compared, since several `-1`s are not a collision. An absent row can then never
+    /// be the cursor's answer: `cursor_candidate` matches `index_of(row) == cursor` against a
+    /// non-negative cursor, and `-1` matches nothing.
     fn table_complete_and_distinct(&self) -> bool {
+        let in_range = |index: i32| index >= 0 && index < self.row_count;
+        if !in_range(self.save_game_index) || !in_range(self.return_desktop_index) {
+            return false;
+        }
         let idx = [
             self.save_game_index,
             self.return_desktop_index,
@@ -406,10 +426,13 @@ impl QuitRowFacts {
             self.load_build_from_url_index,
             self.generate_build_link_index,
         ];
-        if idx.iter().any(|i| *i < 0 || *i >= self.row_count) {
+        if idx.iter().any(|index| *index >= self.row_count) {
             return false;
         }
         for (a, first) in idx.iter().enumerate() {
+            if *first < 0 {
+                continue;
+            }
             for second in idx.iter().skip(a + 1) {
                 if first == second {
                     return false;
@@ -651,14 +674,7 @@ mod system_quit_row_identity_tests {
     }
 
     #[test]
-    fn an_incomplete_or_colliding_row_table_never_quits() {
-        let mut f = facts();
-        f.load_save_profiles_index = -1;
-        assert_eq!(
-            resolve_quit_row(&f),
-            QuitRowVerdict::Ambiguous(QuitRowAmbiguity::RowTableIncomplete)
-        );
-
+    fn a_colliding_or_out_of_range_row_table_never_quits() {
         let mut f = facts();
         f.load_profile_index = 1;
         assert_eq!(
@@ -671,6 +687,52 @@ mod system_quit_row_identity_tests {
         assert_eq!(
             resolve_quit_row(&f),
             QuitRowVerdict::Ambiguous(QuitRowAmbiguity::RowTableIncomplete)
+        );
+
+        // A native row that was never captured is still a broken table: both are on the tab
+        // whatever is cloned, so a `-1` there means the capture itself failed.
+        for absent in [0, 1] {
+            let mut f = facts();
+            if absent == 0 {
+                f.save_game_index = -1;
+            } else {
+                f.return_desktop_index = -1;
+            }
+            assert_eq!(
+                resolve_quit_row(&f),
+                QuitRowVerdict::Ambiguous(QuitRowAmbiguity::RowTableIncomplete)
+            );
+        }
+    }
+
+    /// A cloned row that was never cloned is absent, not broken.
+    ///
+    /// This is the shell case: `er_quit_menu.dll` arming `RowSet::BUILD_ROWS_ONLY` never clones
+    /// Load Character or Load Character from File, so those two indices stay `-1` for the life of
+    /// the dialog. Requiring all six made every activation in that profile `RowTableIncomplete`,
+    /// and the refusal forwards the native activation -- so both build rows ran Save Game and
+    /// Return to Desktop. Measured on the shell-only profile 2026-09-10.
+    #[test]
+    fn an_uncloned_row_does_not_refuse_the_rows_that_were_cloned() {
+        let mut f = facts();
+        f.load_profile_index = -1;
+        f.load_save_profiles_index = -1;
+        assert_eq!(
+            resolve_quit_row(&f),
+            QuitRowVerdict::Resolved {
+                row: QuitRow::ReturnToDesktop,
+                by: QuitRowDiscriminator::CursorRow,
+            }
+        );
+
+        // And the absent row can never be answered, because `-1` matches no cursor.
+        let mut f = facts();
+        f.load_profile_index = -1;
+        f.cursor = 2;
+        f.cursor_row_label = Some(QuitRowLabel::Ours(QuitRow::LoadProfile));
+        assert_eq!(
+            resolve_quit_row(&f),
+            QuitRowVerdict::Ambiguous(QuitRowAmbiguity::CursorRowLabelMismatch)
         );
     }
 
