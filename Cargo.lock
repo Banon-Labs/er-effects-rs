@@ -3202,6 +3202,7 @@ dependencies = [
  "er-gfx",
  "er-hook",
  "er-loading-portrait-core",
+ "er-profile-summary-core",
  "er-save-loader",
  "er-save-picker-core",
  "er-telemetry-core",
