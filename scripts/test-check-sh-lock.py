@@ -32,6 +32,7 @@ from __future__ import annotations
 import os
 import pathlib
 import re
+import select
 import subprocess
 import sys
 import tempfile
@@ -54,6 +55,21 @@ def lift_block() -> str:
         + '\texport ER_CHECK_LOCK_HELD=1\nfi\necho "ACQUIRED by $$"\n'
         + 'sleep "${2:-0}"\n'
     )
+
+
+def announcement(process: subprocess.Popen, seconds: float = 30.0) -> str:
+    """The probe's first line, or "" if it never arrives inside `seconds`.
+
+    A bare `readline()` on a pipe blocks with no bound, and a gate that hangs is worse than a gate
+    that fails: it reaches no verdict and stalls every step after it. `select` waits on the
+    descriptor itself, so this stays event-driven rather than polling -- which is also what
+    `check-no-timeouts.py` requires -- while refusing to wait forever on a probe that died before
+    printing anything.
+    """
+    ready, _, _ = select.select([process.stdout], [], [], seconds)
+    if not ready:
+        return ""
+    return process.stdout.readline()
 
 
 def run(probe: pathlib.Path, lock: pathlib.Path, hold: str = "0") -> subprocess.CompletedProcess:
@@ -95,7 +111,7 @@ def main() -> int:
         # The probe announces itself on stdout once it holds the lock, and a refusal goes to the
         # same merged stream -- so one blocking read is a deterministic readiness signal and can
         # never hang on a probe that failed. Polling the lock file would be neither.
-        announced = holder.stdout.readline()
+        announced = announcement(holder)
         check(
             announced.startswith("ACQUIRED by "),
             "the winner writes its pid where a contender can read it",
@@ -135,7 +151,10 @@ def main() -> int:
             text=True,
             start_new_session=True,
         )
-        holder2.stdout.readline()
+        check(
+            announcement(holder2).startswith("ACQUIRED by "),
+            "the second holder takes its own lock before the pid is falsified",
+        )
         # A pid that is certainly gone: this process ran, printed its own, and has been reaped.
         dead = subprocess.run(
             ["bash", "-c", "echo $$"], capture_output=True, text=True, timeout=30
