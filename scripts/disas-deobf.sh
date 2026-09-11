@@ -16,8 +16,17 @@ IMG="${ER_DEOBF_IMAGE:-${ER_DEOBF_BIN:-$SCRIPT_DIR/../eldenring-deobf.bin}}"
 if [[ "$IMG" != /* && ! -f "$IMG" && -f "$SCRIPT_DIR/../$IMG" ]]; then
   IMG="$SCRIPT_DIR/../$IMG"
 fi
+# The images are gitignored, and git never copies a gitignored file into a linked worktree -- so
+# from `.claude/worktrees/agent-*` the repo-root path above does not exist and the main checkout
+# has to be reached through the shared git dir.
+#
+# This fallback used to hard-code the basename `eldenring-deobf.bin`, which silently reinstated the
+# exact bug the comment above was written to kill: a worktree caller asking for
+# ER_DEOBF_BIN=eldenring-deobf-1.17.1.bin got the main tree's 1.16.2 image and no warning, because
+# 1.16.2 has a real function at most 1.17 addresses and the output is plausible rather than empty.
+# Carry the caller's own basename across instead; only a caller who named nothing gets the default.
 if [[ ! -f "$IMG" ]] && GIT_COMMON_DIR="$(git -C "$SCRIPT_DIR/.." rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"; then
-  WORKSPACE_IMAGE="$(dirname "$GIT_COMMON_DIR")/eldenring-deobf.bin"
+  WORKSPACE_IMAGE="$(dirname "$GIT_COMMON_DIR")/$(basename "$IMG")"
   if [[ -f "$WORKSPACE_IMAGE" ]]; then
     IMG="$WORKSPACE_IMAGE"
   fi
