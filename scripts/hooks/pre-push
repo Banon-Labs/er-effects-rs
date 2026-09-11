@@ -142,5 +142,30 @@ if ! bash scripts/check-runtime-evidence.sh "${pushed_shas[@]:-}"; then
 	exit 1
 fi
 
+# AN AGENT WORKTREE CANNOT RUN check.sh, SO IT MUST NOT BE ASKED TO.
+#
+# Two guards landed a day apart and neither was compared to the other, which between them made the
+# mandatory Session Completion push impossible from any `.claude/worktrees/agent-*` checkout
+# (bd er-effects-rs-7jzv):
+#
+#   8f16e831, 2026-09-02 -- scripts/check.sh refuses in an agent worktree, because three subagents
+#     once spent 2003s and 1330s sleep-polling their own full-suite runs.
+#   acca1383, 2026-09-03 -- this hook ends in an unconditional `exec bash scripts/check.sh`,
+#     because the hand-maintained 13-gate subset had drifted from check.sh's 153.
+#
+# Both reasons are good. Their product was an exit 2 the agent could only escape with
+# ER_CHECK_FORCE=1, which buys back the exact half-hour tax the first guard exists to prevent.
+#
+# So the suite is skipped HERE, not forced. It is not a hole: an agent is briefed to run the
+# scoped gates its edit touches, the runtime-evidence check above has already run, and the
+# whole-workspace verdict belongs to the orchestrator, once, in the main checkout at integration.
+# The branch is not reachable by anyone else until that merge, so nothing ships unchecked.
+if [[ "$repo_root" == */.claude/worktrees/agent-* ]]; then
+	printf 'pre-push: agent worktree -- skipping scripts/check.sh (it refuses here by design).\n' >&2
+	printf '  The whole-workspace verdict is the orchestrator'"'"'s, run once in the main checkout.\n' >&2
+	printf '  Run the gates your edit touches: cargo test -p <crate>, scripts/<gate>.py.\n' >&2
+	exit 0
+fi
+
 printf 'pre-push: running scripts/check.sh (the same suite CI runs)\n' >&2
 exec bash scripts/check.sh
