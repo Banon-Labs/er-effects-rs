@@ -44,6 +44,11 @@ menu-trace = []
 
 [dependencies]
 # Shared cross-platform telemetry counters used by host checks and the Windows DLL.
+# The crash record's own format, read back. `crashlog/veh_exit_hooks.rs` decides whether the
+# newest `er-crash-latest.txt` describes THIS run, and the field spellings it needs -- `fatal=`,
+# `record_index=`, `utc=` -- belong to the crate that writes them. Depending on the writer for the
+# parse keeps one owner of the format and puts the decision somewhere the host can test it.
+er-crash-logging-core = { path = "../er-crash-logging-core" }
 er-telemetry-core = { path = "../er-telemetry-core" }
 er-title-flow = { path = "../er-title-flow" }
 

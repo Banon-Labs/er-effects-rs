@@ -17,6 +17,57 @@ use std::{
 
 mod hang;
 
+/// Reading `er-crash-latest.txt` back: whose crash was it, and was it this run's?
+///
+/// The file is written by [`exception_report`] above and read by other DLLs, so the field
+/// spellings live here rather than being repeated at each reader. It is pure string work with no
+/// I/O, which is the point -- the decision it encodes is the kind that is wrong for months in
+/// silence, and here it is tested on the host with no game involved.
+pub mod latest_record {
+    /// The fields that together name one record.
+    ///
+    /// `utc` carries the weight. `record_index` is a per-process counter, so two separate runs both
+    /// write `record_index=1` and it can never identify a record on its own; it is included only
+    /// because it separates two records within one process that a coarse clock might tie.
+    const IDENTITY_FIELDS: [&str; 2] = ["record_index=", "utc="];
+
+    /// A record's identity, or `None` when the text carries none of the naming fields.
+    pub fn identity(text: &str) -> Option<String> {
+        let named: Vec<&str> = text
+            .lines()
+            .map(str::trim)
+            .filter(|line| IDENTITY_FIELDS.iter().any(|field| line.starts_with(field)))
+            .collect();
+        (!named.is_empty()).then(|| named.join("|"))
+    }
+
+    /// Whether `text` records a fatal exception **that this run produced**.
+    ///
+    /// `at_start` is the identity the file carried when the calling process started:
+    /// * `Some(identity)` -- compared. Equal means the file has not been written since, so whatever
+    ///   it says belongs to an earlier run and this answers `false`.
+    /// * `Some(None)`, spelled here as `Some(None::<&str>)` by the caller -- there was no readable
+    ///   record at start, so any record now is this run's.
+    /// * `None` -- nothing captured a baseline, so there is no evidence either way and the flag is
+    ///   taken at face value. That is the pre-2026-09-11 behaviour, kept deliberately: the identity
+    ///   test may only subtract a false positive, never add one.
+    ///
+    /// The failure this closes, measured 2026-09-11: a record stamped
+    /// `utc=2026-09-11T19:51:06.652Z` was still on disk three and a half hours later when a run
+    /// quit deliberately through the mod's own Return-to-Desktop row, and the run was reported
+    /// `outcome=fatal-exception`. Nothing rotates this file between launches, so one crash marked
+    /// every later exit fatal for as long as it survived.
+    pub fn says_fatal_this_run(text: &str, at_start: Option<Option<&str>>) -> bool {
+        if !text.lines().any(|line| line.trim() == "fatal=true") {
+            return false;
+        }
+        match at_start {
+            Some(baseline) => baseline != identity(text).as_deref(),
+            None => true,
+        }
+    }
+}
+
 /// Publish the live `CS::LoadingScreenData*` for the hang watchdog's loading-screen oracle.
 ///
 /// Re-exported because `mod hang` is private: the function is documented as the entry point for a
@@ -2400,5 +2451,83 @@ mod tests {
             exception_code_label(EXCEPTION_ACCESS_VIOLATION),
             "STATUS_ACCESS_VIOLATION"
         );
+    }
+}
+
+#[cfg(test)]
+mod latest_record_tests {
+    use super::latest_record::{identity, says_fatal_this_run};
+
+    /// The real shape, trimmed to the fields that matter -- copied from a record this repo actually
+    /// produced on 2026-09-11, so the parser is tested against the writer's output and not against
+    /// a guess at it.
+    const FATAL: &str = "\
+reason=unhandled-exception-fatal
+module=er-crash-logging
+record_index=1
+utc=2026-09-11T19:51:06.652Z
+ms_since_install=410686
+record_class=fault
+fatal=true
+exception_code=0xc0000005
+";
+    const LATER_FATAL: &str = "\
+reason=unhandled-exception-fatal
+module=er-crash-logging
+record_index=1
+utc=2026-09-11T23:30:00.000Z
+fatal=true
+";
+    const FIRST_CHANCE: &str = "\
+reason=first-chance
+record_index=2
+utc=2026-09-11T19:51:06.700Z
+fatal=false
+";
+
+    #[test]
+    fn a_record_untouched_since_start_is_not_this_runs_crash() {
+        let baseline = identity(FATAL);
+        assert!(!says_fatal_this_run(FATAL, Some(baseline.as_deref())));
+    }
+
+    #[test]
+    fn a_record_written_since_start_is_this_runs_crash() {
+        let baseline = identity(FATAL);
+        assert!(says_fatal_this_run(LATER_FATAL, Some(baseline.as_deref())));
+    }
+
+    #[test]
+    fn a_first_crash_on_a_clean_install_still_reads_fatal() {
+        // No record existed at start, so there is nothing to be confused with.
+        assert!(says_fatal_this_run(FATAL, Some(None)));
+    }
+
+    #[test]
+    fn a_non_fatal_record_is_never_a_crash_whatever_the_baseline() {
+        assert!(!says_fatal_this_run(FIRST_CHANCE, Some(None)));
+        assert!(!says_fatal_this_run(FIRST_CHANCE, None));
+        assert!(!says_fatal_this_run("", Some(None)));
+    }
+
+    #[test]
+    fn an_uncaptured_baseline_takes_the_flag_at_face_value() {
+        // The identity test may only subtract a false positive, so an unarmed reader behaves
+        // exactly as it did before the test existed.
+        assert!(says_fatal_this_run(FATAL, None));
+    }
+
+    #[test]
+    fn two_runs_that_share_a_record_index_are_still_told_apart_by_utc() {
+        // `record_index` is a per-process counter: both records below carry `record_index=1`.
+        assert_ne!(identity(FATAL), identity(LATER_FATAL));
+    }
+
+    #[test]
+    fn text_carrying_no_naming_field_has_no_identity() {
+        assert_eq!(identity("fatal=true\n"), None);
+        // ...and such a record is then indistinguishable from the one at start, which is `None`
+        // too, so it does not get read as new.
+        assert!(!says_fatal_this_run("fatal=true\n", Some(None)));
     }
 }

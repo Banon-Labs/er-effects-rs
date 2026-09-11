@@ -7,6 +7,7 @@ use std::{
 };
 
 use crate::mh::{MH_Initialize, MH_STATUS};
+use er_crash_logging_core::latest_record::{identity, says_fatal_this_run};
 use fromsoftware_shared::Program;
 use pelite::pe64::Pe;
 // `GetModuleHandleA` and `PCSTR` left with the two stack readers that moved to
@@ -148,29 +149,17 @@ fn stamp_outcome(line: &str) {
     }
 }
 
-/// The newest crash record's identity, or `None` when there is no readable record.
-///
-/// `record_index` and `utc` together are enough: the logger bumps the index per record and stamps
-/// a fresh timestamp, so two records are never spelled the same. Nothing else in the file is read
-/// -- the register dump underneath changes for reasons that have nothing to do with which run
-/// wrote it.
-fn crash_record_identity() -> Option<String> {
-    let directory = er_game_base::log::game_directory_path()?;
-    let text = std::fs::read_to_string(directory.join(CRASH_LATEST_FILE_NAME)).ok()?;
-    let identity: Vec<&str> = text
-        .lines()
-        .map(str::trim)
-        .filter(|line| line.starts_with("record_index=") || line.starts_with("utc="))
-        .collect();
-    (!identity.is_empty()).then(|| identity.join("|"))
-}
-
 /// Remember which crash record already existed when this process started, so a later read can tell
 /// this run's crash from somebody else's.
 ///
 /// Armed from both attach-time entry points, whichever reaches it first.
 fn remember_crash_record_at_start() {
-    let _ = CRASH_RECORD_AT_START.set(crash_record_identity());
+    let _ = CRASH_RECORD_AT_START.set(read_crash_record().as_deref().and_then(identity));
+}
+
+fn read_crash_record() -> Option<String> {
+    let directory = er_game_base::log::game_directory_path()?;
+    std::fs::read_to_string(directory.join(CRASH_LATEST_FILE_NAME)).ok()
 }
 
 /// Whether the crash log's newest record says an exception reached a top-level filter **in this
@@ -180,35 +169,16 @@ fn remember_crash_record_at_start() {
 /// and nowhere else, so the flag means exactly what this instrument wants to know, independently of
 /// which DLL's filter ended up owning the top-level slot.
 ///
-/// The flag alone was not enough, and the failure is worse than the one this reader was added to
+/// The flag alone was not enough, and the failure was worse than the one this reader was added to
 /// close. `er-crash-latest.txt` is the newest record on disk, not this run's, and nothing rotates it
 /// between launches -- so one crash marked every later exit fatal for as long as the file survived.
-/// Measured 2026-09-11: a record stamped `utc=2026-09-11T19:51:06Z` was still on disk when a run
-/// three and a half hours later quit deliberately through the mod's own Return-to-Desktop row
-/// (`INSTANT ExitProcess(0)`), and `er-teardown.py --status` reported
-/// `outcome=fatal-exception api=crash-record`. The instrument built to answer "did it crash" had
-/// been answering "yes" since lunchtime.
-///
-/// So the record must also be new. An identity captured at attach is compared with the one on disk
-/// at exit: equal means the file has not been written since this process started, whatever it says.
-/// A run that genuinely crashes writes a new record first, so the true case still reads true.
+/// The measurement is in [`er_crash_logging_core::latest_record::says_fatal_this_run`], which owns
+/// the decision and is tested on the host; this function is the I/O around it.
 fn crash_record_says_fatal() -> bool {
-    let Some(directory) = er_game_base::log::game_directory_path() else {
+    let Some(text) = read_crash_record() else {
         return false;
     };
-    let Ok(text) = std::fs::read_to_string(directory.join(CRASH_LATEST_FILE_NAME)) else {
-        return false;
-    };
-    if !text.lines().any(|line| line.trim() == "fatal=true") {
-        return false;
-    }
-    // An absent baseline means nothing armed this instrument, so there is no evidence either way
-    // and the record is read as it was before -- the identity check can only subtract a false
-    // positive, never add one.
-    match CRASH_RECORD_AT_START.get() {
-        Some(at_start) => at_start.as_deref() != crash_record_identity().as_deref(),
-        None => true,
-    }
+    says_fatal_this_run(&text, CRASH_RECORD_AT_START.get().map(Option::as_deref))
 }
 
 fn write_run_outcome(api: &str, code: u32) {
