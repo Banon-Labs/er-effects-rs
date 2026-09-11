@@ -55,13 +55,13 @@ pub extern "system" fn DllMain(module: HINSTANCE, reason: u32, _reserved: *mut (
 /// Small and duplicated per shell on purpose: the hook is installed per DLL because every cdylib
 /// statically links its own `er-game-base`, so there is no shared place this could live and still
 /// be the thing that runs in this module.
+///
+/// The path comes from `er_build_import_runtime::log_path` rather than being rebuilt here, so the
+/// panic record follows the launcher's `ER_QUICKLOAD_BUILD_IMPORT_LOG_PATH` redirect into this
+/// run's artifact directory. Resolving the game-directory name a second time in this file would
+/// file the crash away from the log that explains it, which is the one pairing that matters.
 fn panic_log_sink(args: core::fmt::Arguments<'_>) {
-    er_game_base::log::append_line(
-        &er_game_base::log::game_directory_path()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("er-build-import.log"),
-        args,
-    );
+    er_game_base::log::append_line(&er_build_import_runtime::log_path(), args);
 }
 
 /// This DLL's own path, for finding the sidecar beside it.

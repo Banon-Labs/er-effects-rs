@@ -20,12 +20,12 @@
 //! Fires from a CSTaskImp FrameBegin task (title-active). Telemetry-only native boot+reload for the
 //! vanilla FPS comparison.
 
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 use crate::game_mem::{
-    OPTIONSETTING_QUIT_TAB_INDEX, flip_fixed_spf, flip_mode_current, menu_data_ptr, menu_flags,
-    now_loading, optionsetting_tab_index, pause_menu_open, read_drive_mode_flag,
-    return_title_requested, save_state, top_menu_id, top_menu_job_ptr, world_simulating,
+    flip_fixed_spf, flip_mode_current, menu_data_ptr, menu_flags, now_loading,
+    optionsetting_tab_index, pause_menu_open, read_drive_mode_flag, return_title_requested,
+    save_state, top_menu_id, top_menu_job_ptr, world_simulating,
 };
 use crate::input_inject::{
     MenuEvent, advance_press_any_button, input_manager, keep_input_active, native_open_equip_menu,
@@ -61,6 +61,17 @@ const QUIT_BUDGET: u64 = 600;
 /// renders (fade-in settles), and the oracle can capture + process before teardown. 3s at 60fps
 /// (user 2026-07-23: reduced 9s -> 3s teardown delay).
 const EQUIP_DWELL_FRAMES: u64 = 180;
+/// How long the carried inventory's acquisition counter has to sit still before a build import is
+/// called finished: two seconds at 60fps.
+///
+/// The importer moves that counter continuously while it works -- a grant per item, then a deposit
+/// and a retrieve per item in the reorder pass -- so a gap this long is the pass having stopped
+/// rather than a lull inside it.
+const IMPORT_SETTLE_FRAMES: u64 = 120;
+/// Backstop for an import that never settles: one minute at 60fps, well inside the runtime cap in
+/// `.auto/runtime_timeout_cap_seconds`. Reaching it derails the phase, which is the right verdict
+/// for an import that is still adding items a minute after the row was pressed.
+const IMPORT_DWELL_BUDGET: u64 = 3600;
 
 // ---- diagnostic probe (mode `probe`): sweep the DLUID virtual-key id space and log the menu response,
 // to discover which id (1000..1080) is up/down/confirm/cancel/tab (bd menu-input-layer-virtual-key). ----
@@ -298,6 +309,12 @@ enum Phase {
     /// Native open of the Inventory menu (02_020_Inventory) whose item cells carry the bottom-left
     /// ArtsIcon child. EFFECT: top-job replaced or the submit serial bumped.
     OpenInventoryMenu,
+    /// In-world keystate: MoveDown to the **Load Build from URL** row, then Confirm. EFFECT: the
+    /// carried inventory's acquisition counter rose, which is the importer having run.
+    ActivateLoadBuildFromUrl,
+    /// No input: hold until the import stops adding to the inventory. EFFECT: the acquisition
+    /// counter has been unchanged for [`IMPORT_SETTLE_FRAMES`].
+    DwellBuildImport,
 }
 
 impl Phase {
@@ -319,6 +336,8 @@ impl Phase {
             Phase::OpenEquipMenu => "open_equip_menu",
             Phase::DwellEquip => "dwell_equip",
             Phase::OpenInventoryMenu => "open_inventory_menu",
+            Phase::ActivateLoadBuildFromUrl => "activate_load_build_from_url",
+            Phase::DwellBuildImport => "dwell_build_import",
         }
     }
 
@@ -337,10 +356,17 @@ impl Phase {
             | Phase::DumpMenuBindings
             | Phase::ActivateLoadFromFile
             | Phase::OpenEquipMenu
-            | Phase::OpenInventoryMenu => NAV_BUDGET,
+            | Phase::OpenInventoryMenu
+            // Wider than the other nav phases for two reasons the others do not have: this one
+            // holds until the pane reports the row, like ActivateLoadFromFile, and then the effect
+            // it waits for is a whole build import -- a network fetch that was already in flight
+            // before the press, a catalog build off the message repository, and a few hundred
+            // inventory transfers -- rather than a menu opening.
+            | Phase::ActivateLoadBuildFromUrl => NAV_BUDGET,
             Phase::Quit | Phase::QuitTeardown | Phase::NativeQuit => QUIT_BUDGET,
             Phase::ProbeMenu => PROBE_TOTAL_FRAMES,
             Phase::DwellEquip => EQUIP_DWELL_FRAMES,
+            Phase::DwellBuildImport => IMPORT_DWELL_BUDGET,
         }
     }
 
@@ -409,6 +435,23 @@ impl Phase {
                 }
             }
             Phase::NavToOptionSetting => {
+                // Install the reader detours here, not only in `Phase::DumpMenuBindings`.
+                //
+                // They are the input channel and nothing else is: `set_menu_scroll` and
+                // `set_menu_buttons` below only
+                // arm a value, and `menu_scroll_reader_hook` / `menu_button_hook` are what hand it
+                // to the game when it reads. With them uninstalled every tap this phase issues goes
+                // nowhere, silently, and the phase spends its whole budget pressing into a menu
+                // that never hears it.
+                //
+                // Until now the only call site was the diagnostic phase, so a mode table that did
+                // not list `DumpMenuBindings` produced exactly that. Measured on run
+                // br-20260910-200831-c1cb: eight nav attempts over 480 frames, every one reporting
+                // `axis_reader_calls=0 button_calls=0` with the gate open (`+0x19=1 +0x798=0x0`)
+                // and the escape menu up -- an input phase that had no input path at all. The
+                // install is idempotent and guarded, so calling it from the phase that depends on
+                // it costs one atomic load per frame and makes the dependency impossible to forget.
+                crate::pad_inject::install_menu_scroll_hook(base);
                 // TAP, do not hold -- and press one candidate button per attempt (rewritten
                 // 2026-09-05 after br-20260905-234626-ce9a).
                 //
@@ -521,10 +564,38 @@ impl Phase {
                 // (tab-left) and +0x31 -> 0x80000 (tab-right); the OptionSetting GridControl pager consumes
                 // it (bd menu-gaps-closed-tabswitch-0x30L-0x31R / menu-eventid-set-enumerated). Not
                 // mouse-only -- the 2026-07-17 "mouse-only" verdict was an OS-layer (SendInput) artifact.
-                // Effect (passive verify): the OptionSetting selected tab index == the Quit tab (8),
-                // read at option_window+0x1870+0x10[deref]+0xd4.
+                // Effect: the Quit tab's own rows are readable, not the tab index.
+                //
+                // `optionsetting_tab_index` reads `option_window+0x1870+0x10[deref]+0xd4`, a 1.16.2
+                // offset chain that has drifted on 1.17 exactly as `top_menu_id` did. Measured on
+                // run br-20260910-202228-f312: `tab=-1` on every frame of this phase's 480-frame
+                // budget while `pause_menu=1` and the phase before it had advanced cleanly. Waiting
+                // for it to equal 8 waits forever, and the run derails on a tab switch that may
+                // well have happened -- the same false negative `NavToOptionSetting` was moved off
+                // a year of runs ago.
+                //
+                // The replacement is not another offset to be wrong about. Our three cloned rows
+                // exist only on the Quit tab and are built when that pane is first shown, so the
+                // row walk answering at all is the game saying the Quit tab is up and its rows are
+                // ready. It is also precisely the question the next phase asks, which means this
+                // phase can no longer advance into a pane the next one cannot read.
                 issue_menu_taps_once(im, &[MenuEvent::TabLeft], frame);
-                optionsetting_tab_index() == OPTIONSETTING_QUIT_TAB_INDEX
+                let row = crate::game_mem::optionsetting_load_build_url_row();
+                if row >= 0 {
+                    true
+                } else {
+                    // Keep the drifted read in the log as a diagnostic, once per tap cycle. It
+                    // costs nothing and it is the only line that would show the offset coming back
+                    // to life on a future patch.
+                    if frame.is_multiple_of(TAP_CYCLE_FRAMES) {
+                        harness_log!(
+                            "tab: rows not readable at f{frame} (drifted tab index reads {}, pause_menu={})",
+                            optionsetting_tab_index(),
+                            pause_menu_open() as u8
+                        );
+                    }
+                    false
+                }
             }
             Phase::DumpMenuBindings => {
                 // One-shot evidence, no input. Menu navigation reads the FD4 pad device through
@@ -667,6 +738,64 @@ impl Phase {
                 (job != 0 && job != INGAMETOP_JOB.load(Ordering::SeqCst))
                     || serial > EQUIP_SERIAL.load(Ordering::SeqCst)
             }
+            Phase::ActivateLoadBuildFromUrl => {
+                // The same input-driven row activation as `ActivateLoadFromFile`, with a different
+                // row and a different effect -- and the effect is why this is its own phase rather
+                // than a parameter.
+                //
+                // Every other row on this tab opens a pane, so `currentTopMenuJob` changing is the
+                // game saying the press landed. This row opens nothing: it grants, equips and
+                // re-orders the character where they stand. A job-pointer check would therefore sit
+                // at its budget and report the press as never having happened, on a run in which
+                // the import ran perfectly.
+                //
+                // `carried_next_sort_id` is the counter the import moves. `InsertItem` stamps
+                // `entry.sortId` from it on every insert, so a grant raises it and the reorder pass
+                // -- which deposits and retrieves every item the build names -- raises it by
+                // roughly the size of the build. Reading it before the first tap and requiring it
+                // to rise is the narrowest true statement available: something added items to this
+                // character's inventory, and nothing else in a driven run does.
+                if ACTIVATE_BASELINE_SORT_ID.load(Ordering::Relaxed) == 0 {
+                    ACTIVATE_BASELINE_SORT_ID.store(
+                        crate::game_mem::carried_next_sort_id().max(0) as usize + 1,
+                        Ordering::Relaxed,
+                    );
+                }
+                let row = crate::game_mem::optionsetting_load_build_url_row();
+                if row < 0 {
+                    false
+                } else {
+                    let mut events = [MenuEvent::MoveDown; MAX_QUIT_ROWS + 1];
+                    let taps = (row as usize).min(MAX_QUIT_ROWS);
+                    events[taps] = MenuEvent::Confirm;
+                    issue_menu_taps_once(im, &events[..=taps], frame);
+                    // The baseline is stored `+1` so that zero keeps meaning "not taken yet"; the
+                    // comparison undoes that rather than the store, so an inventory that really is
+                    // at counter 0 is not mistaken for an unset baseline.
+                    let baseline = ACTIVATE_BASELINE_SORT_ID.load(Ordering::Relaxed) as i64 - 1;
+                    let now = crate::game_mem::carried_next_sort_id();
+                    now >= 0 && baseline >= 0 && now > baseline
+                }
+            }
+            Phase::DwellBuildImport => {
+                // A settle oracle, not a timer. A fixed dwell has to be long enough for the worst
+                // import and is then wasted on every other one, and it cannot tell a finished
+                // import from one that died half way -- both end when the clock does.
+                //
+                // The acquisition counter is already the thing the import moves, so holding until
+                // it stops moving is the same measurement run backwards. `IMPORT_DWELL_BUDGET` is
+                // a backstop for an import that never settles, and reaching it is a derail, which
+                // is the correct verdict for one.
+                let now = crate::game_mem::carried_next_sort_id();
+                let last = IMPORT_LAST_SORT_ID.swap(now, Ordering::Relaxed);
+                let streak = if now >= 0 && now == last {
+                    IMPORT_SETTLE_STREAK.fetch_add(1, Ordering::Relaxed) + 1
+                } else {
+                    IMPORT_SETTLE_STREAK.store(0, Ordering::Relaxed);
+                    0
+                };
+                streak >= IMPORT_SETTLE_FRAMES
+            }
             Phase::DwellEquip => frame >= EQUIP_DWELL_FRAMES,
             Phase::OpenInventoryMenu => {
                 // Native open of the Inventory menu (same factory+submit path as EquipTop; the
@@ -760,6 +889,14 @@ enum DriveMode {
     /// Boot to in-world, open the pause menu, native-open the Inventory menu (02_020_Inventory --
     /// the Melee/Ranged/Shields tabs with bottom-left ArtsIcon cells), then dwell.
     InventoryMenu,
+    /// The product autoloads; the harness drives the escape menu to the Quit tab and presses
+    /// **Load Build from URL**, then dwells while the import runs.
+    ///
+    /// The mode to reach for when the question is "did the build importer do what it says", which
+    /// until now had no answer that was not a human pressing the row. It is deliberately shaped
+    /// like `MenuReload` rather than `FullBootReload`: it has no title phases, so it cannot race
+    /// the product's own autoload for the same Continue.
+    BuildImport,
 }
 
 impl DriveMode {
@@ -786,6 +923,7 @@ impl DriveMode {
             "passive" => DriveMode::Passive,
             "equip" => DriveMode::EquipMenu,
             "inv" => DriveMode::InventoryMenu,
+            "buildimport" => DriveMode::BuildImport,
             _ => DriveMode::FullBootReload,
         }
     }
@@ -801,6 +939,7 @@ impl DriveMode {
             DriveMode::Passive => "passive",
             DriveMode::EquipMenu => "equip",
             DriveMode::InventoryMenu => "inv",
+            DriveMode::BuildImport => "buildimport",
         }
     }
     fn phases(self) -> &'static [Phase] {
@@ -963,7 +1102,26 @@ impl DriveMode {
             Phase::OpenInventoryMenu,
             Phase::DwellEquip,
         ];
+        // buildimport: the product autoloads (no title phases -- see `MenuReload` for the race
+        // that adding them causes), then the real menu nav to the Quit tab, then the row press,
+        // then a dwell so the import finishes writing its log before anything tears the run down.
+        // The import is not a load: nothing returns to the title, so there is no trailing
+        // WaitLoadIn here and a `QuitTeardown` would be actively wrong.
+        const BUILD_IMPORT: &[Phase] = &[
+            Phase::WaitLoadIn,
+            // Same second entry as `menureload` and `menuchain`, and not only for its evidence:
+            // it is where the menu reader detours were installed, so a menu-driving table that
+            // omitted it drove nothing. `NavToOptionSetting` now installs them itself, which makes
+            // this entry the diagnostic it was always described as rather than a load-bearing one.
+            Phase::DumpMenuBindings,
+            MENU_QUIT_FLOW[0],
+            MENU_QUIT_FLOW[1],
+            MENU_QUIT_FLOW[2],
+            Phase::ActivateLoadBuildFromUrl,
+            Phase::DwellBuildImport,
+        ];
         match self {
+            DriveMode::BuildImport => BUILD_IMPORT,
             DriveMode::BootContinueOnly => BOOT,
             DriveMode::NativeReloadOnly => RELOAD,
             DriveMode::NativeReloadTwice => RELOAD2,
@@ -1021,6 +1179,14 @@ static PHASE_PAUSE_LOGGED: AtomicBool = AtomicBool::new(false);
 /// `currentTopMenuJob` as it stood on the OptionSetting pane, recorded when
 /// `Phase::ActivateLoadFromFile` starts. Its replacement is that phase's effect.
 static ACTIVATE_BASELINE_JOB: AtomicUsize = AtomicUsize::new(0);
+/// The carried inventory's acquisition counter as it stood before the first tap of
+/// `Phase::ActivateLoadBuildFromUrl`, stored `+1` so that zero still means "not taken yet". Its
+/// rise is that phase's effect, because the row it presses opens no pane to watch.
+static ACTIVATE_BASELINE_SORT_ID: AtomicUsize = AtomicUsize::new(0);
+/// The acquisition counter as `Phase::DwellBuildImport` last saw it, and how many consecutive
+/// frames it has been unchanged. `-1` is "not read yet", which never counts as unchanged.
+static IMPORT_LAST_SORT_ID: AtomicI64 = AtomicI64::new(-1);
+static IMPORT_SETTLE_STREAK: AtomicU64 = AtomicU64::new(0);
 /// Every bit `getShownMenuFlags` raised at any point during the current phase (CSMenuManImp+0x1c,
 /// or-accumulated). The POINT: a phase that derails tells you the effect was not seen, but not
 /// whether the input was consumed -- and those are different defects with different fixes. This word
@@ -1033,6 +1199,10 @@ static PHASE_FRAME: AtomicU64 = AtomicU64::new(0);
 static PHASE_START_TICK: AtomicU64 = AtomicU64::new(0);
 static POPUP_FRAME: AtomicU64 = AtomicU64::new(0);
 static MODE_IDX: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// How many [`DriveMode`] variants there are, and therefore how long the index table that
+/// round-trips one through [`MODE_IDX`] must be. Declared once so the two halves of that round
+/// trip cannot be extended independently.
+const DRIVE_MODE_COUNT: usize = 11;
 /// Set once the local player has existed this session. Gates the Passive-mode title advance so it
 /// can never touch the boot title -- only a title reached after a world, i.e. the post-switch one.
 static WORLD_HAS_EXISTED: AtomicBool = AtomicBool::new(false);
@@ -1072,7 +1242,7 @@ fn resolve_mode() -> DriveMode {
     // Must stay index-aligned with the `idx` match below (bd reload2-crash-modes-oob): every DriveMode
     // needs a slot here or modes[cached] panics. NativeReloadTwice=5 was added to the match but not here,
     // so the 2nd per-frame resolve_mode() indexed modes[5] out-of-bounds -> crash ~after boot (run64/65/67).
-    const MODES: [DriveMode; 10] = [
+    const MODES: [DriveMode; DRIVE_MODE_COUNT] = [
         DriveMode::BootContinueOnly,  // 0
         DriveMode::NativeReloadOnly,  // 1
         DriveMode::FullBootReload,    // 2
@@ -1083,7 +1253,14 @@ fn resolve_mode() -> DriveMode {
         DriveMode::InventoryMenu,     // 7
         DriveMode::MenuReload,        // 8
         DriveMode::MenuReloadChain,   // 9
+        DriveMode::BuildImport,       // 10
     ];
+    // The two tables above and below are one table written twice, and the index that joins them is
+    // a bare integer, so adding a variant to one and not the other compiles and then panics inside
+    // a game-owned callback -- which is what happened on run br-20260910-200656-e888, at frame ~3s:
+    // `index out of bounds: the len is 10 but the index is 10`, and the process died. This assert
+    // makes the halves disagree at compile time instead.
+    const _: () = assert!(MODES.len() == DRIVE_MODE_COUNT);
     let cached = MODE_IDX.load(Ordering::SeqCst);
     if cached != usize::MAX {
         return MODES[cached];
@@ -1120,7 +1297,9 @@ fn resolve_mode() -> DriveMode {
         DriveMode::InventoryMenu => 7,
         DriveMode::MenuReload => 8,
         DriveMode::MenuReloadChain => 9,
+        DriveMode::BuildImport => 10,
     };
+    debug_assert!(idx < DRIVE_MODE_COUNT);
     MODE_IDX.store(idx, Ordering::SeqCst);
     harness_log!(
         "drive: mode='{}' phases={}",
@@ -1254,6 +1433,9 @@ pub fn on_frame(base: usize) {
         NAV_MENU_CLOSED_LOGGED.store(false, Ordering::Relaxed);
         PHASE_PAUSE_LOGGED.store(false, Ordering::Relaxed);
         ACTIVATE_BASELINE_JOB.store(0, Ordering::Relaxed);
+        ACTIVATE_BASELINE_SORT_ID.store(0, Ordering::Relaxed);
+        IMPORT_LAST_SORT_ID.store(-1, Ordering::Relaxed);
+        IMPORT_SETTLE_STREAK.store(0, Ordering::Relaxed);
         harness_log!("phase[{idx}] {} ENTER at +{tick}ms", phase.name());
     }
     let start_tick = PHASE_START_TICK.load(Ordering::SeqCst);

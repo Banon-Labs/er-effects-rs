@@ -8,13 +8,9 @@ use std::{
 use crate::mh::{MH_Initialize, MH_STATUS};
 use fromsoftware_shared::Program;
 use pelite::pe64::Pe;
-use windows::{
-    Win32::System::{
-            LibraryLoader::GetModuleHandleA,
-            Threading::GetCurrentProcessId,
-        },
-    core::PCSTR,
-};
+// `GetModuleHandleA` and `PCSTR` left with the two stack readers that moved to
+// `er_game_base::stack`; they were this include-tree's only users.
+use windows::Win32::System::Threading::GetCurrentProcessId;
 
 #[allow(unused_imports)]
 use crate::*;

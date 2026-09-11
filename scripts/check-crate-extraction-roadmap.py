@@ -38,6 +38,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 EXPERIMENTS = ROOT / "crates/er-quickload/src/experiments"
 SOURCE = ROOT / "crates/er-quickload/src"
+# Roots a partition function may legitimately be defined in. The whole point of the roadmap is
+# that code leaves `er-quickload/src`, so a required edge whose definition has already moved into
+# its extracted crate is the refactor working, not a missing function. The caller side is still
+# checked against `SOURCE` alone: an edge is only an edge while the product still drives it.
+DEFINITION_ROOTS = (SOURCE, ROOT / "crates/er-quit-menu-core/src")
 ROADMAP = ROOT / "docs/plans/crate-extraction-execution-roadmap.md"
 ROW = re.compile(r"^\| `([^`]+\.rs)` \| ([0-9,]+) \|", re.MULTILINE)
 TOTAL = re.compile(r"^\| all `experiments/\*\*` \| ([0-9,]+) \| ([0-9,]+) \|$", re.MULTILINE)
@@ -98,7 +103,11 @@ def current_inventory(root: Path = EXPERIMENTS) -> dict[str, int]:
 
 def source_has_function(function: str) -> bool:
     pattern = re.compile(rf"\bfn\s+{re.escape(function)}\s*[<(]")
-    return any(pattern.search(path.read_text(encoding="utf-8", errors="replace")) for path in SOURCE.rglob("*.rs"))
+    return any(
+        pattern.search(path.read_text(encoding="utf-8", errors="replace"))
+        for root in DEFINITION_ROOTS
+        for path in root.rglob("*.rs")
+    )
 
 
 def source_has_call(caller: str, function: str) -> bool:

@@ -836,6 +836,7 @@ python3 "$repo_root/scripts/test-stall-on-friction-signal.py"
 python3 "$repo_root/scripts/test-wall-of-text-signal.py"
 python3 "$repo_root/scripts/test-deferred-evidence-read-signal.py"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement_reminder.rego" "$repo_root/.cupcake/tests/no_authority_agreement_test.rego" "$repo_root/.cupcake/tests/no_authority_agreement_reminder_test.rego" "$repo_root/.cupcake/policies/claude/idle_hold.rego" "$repo_root/.cupcake/policies/claude/idle_hold_reminder.rego" "$repo_root/.cupcake/tests/idle_hold_test.rego" "$repo_root/.cupcake/tests/idle_hold_reminder_test.rego" "$repo_root/.cupcake/policies/claude/native_ownership_vocab_reminder.rego" "$repo_root/.cupcake/tests/native_ownership_vocab_reminder_test.rego" "$repo_root/.cupcake/policies/claude/block_manual_pgrep.rego" "$repo_root/.cupcake/tests/block_manual_pgrep_test.rego" "$repo_root/.cupcake/policies/claude/bash_elden_ring_launch_guard.rego" "$repo_root/.cupcake/tests/bash_elden_ring_launch_guard_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion.rego" "$repo_root/.cupcake/tests/block_askuserquestion_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion_reminder.rego" "$repo_root/.cupcake/tests/block_askuserquestion_reminder_test.rego" "$repo_root/.cupcake/policies/claude/no_stall_on_friction.rego" "$repo_root/.cupcake/tests/no_stall_on_friction_test.rego" "$repo_root/.cupcake/policies/claude/no_unexecuted_promise.rego" "$repo_root/.cupcake/tests/no_unexecuted_promise_test.rego" "$repo_root/.cupcake/policies/claude/wall_of_text.rego" "$repo_root/.cupcake/tests/wall_of_text_test.rego"
+opa test "$repo_root/.cupcake/policies/claude/no_mergeable_without_green_ci.rego" "$repo_root/.cupcake/tests/no_mergeable_without_green_ci_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_push.rego" "$repo_root/.cupcake/tests/git_block_main_push_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_commit.rego" "$repo_root/.cupcake/tests/git_block_main_commit_test.rego"
 # The shared executed-text decomposition every git guard now reads (bd
@@ -2011,6 +2012,18 @@ python3 "$repo_root/scripts/check-me3-dll-conflicts.py"
 # 2026-08-23 before an A/B against a one-DLL profile named it.
 python3 "$repo_root/scripts/check-shared-hook-rvas.py" --selftest
 python3 "$repo_root/scripts/check-shared-hook-rvas.py"
+
+# Sharing one MinHook instance is only half of sharing a prologue; the other half is that every
+# handler on it agrees with the dispatcher about the ABI. The union dispatchers forward integer
+# registers only and at a fixed width, so a handler declaring a float gets `xmm1` from nowhere,
+# and a handler declaring fewer arguments than its dispatcher cannot forward the ones it never
+# received -- which matters because its `orig` slot holds the next handler as often as it holds
+# the game trampoline. Both had shipped: `TitleTopDialog::update` and
+# `CS::FeSystemAnnounceView::Update` are float targets that reached the union through a helper
+# that took `*mut c_void` and transmuted, so the type checker never saw the declaration it would
+# have refused. That erasure is why this is a source gate rather than a compile error.
+python3 "$repo_root/scripts/check-union-hook-abi.py" --selftest
+python3 "$repo_root/scripts/check-union-hook-abi.py"
 
 # The branch-launch pipeline. Each stage refuses rather than guessing, and each carries its own
 # selftest for the refusal it exists to make -- a stale DLL, an unrankable conflict, a save with

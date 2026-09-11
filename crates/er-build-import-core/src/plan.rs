@@ -620,10 +620,12 @@ fn plan_weapon(doc: &BuildDoc, catalog: &dyn Catalog, slot: &Slot, out: &mut Pla
         None => (doc.weapon_upgrade, true),
     };
 
+    // `No Skill` is not the absence of an ash. It is an Ash of War in its own right, the one that
+    // strips a weapon of its innate skill, and it used to be filtered out here and left as
+    // `NO_SKILL` -- which means "mount nothing", the opposite outcome. A Serpent Crest Shield the
+    // build asked to carry it came out of the import still holding its own skill.
     let mut weapon_skill = NO_SKILL;
-    if let Some(art) = slot.weapon_art.as_deref()
-        && !art.eq_ignore_ascii_case("No Skill")
-    {
+    if let Some(art) = slot.weapon_art.as_deref() {
         match catalog.lookup(Kind::AshOfWar, art) {
             Some(ash) => weapon_skill = GEM_ITEM_CATEGORY | ash.param_id(),
             None => {
@@ -706,10 +708,8 @@ pub fn equipped_armament_skills(doc: &BuildDoc, catalog: &dyn Catalog) -> Vec<Ar
         let Some(chr_asm_slot) = crate::equip::armament_slot(index) else {
             continue;
         };
-        let art = slot
-            .weapon_art
-            .as_deref()
-            .filter(|art| !art.eq_ignore_ascii_case("No Skill"));
+        // Looked up like any other ash; see the note in the grant path above.
+        let art = slot.weapon_art.as_deref();
         let weapon_skill = art
             .and_then(|art| catalog.lookup(Kind::AshOfWar, art))
             .map_or(NO_SKILL, |ash| GEM_ITEM_CATEGORY | ash.param_id());

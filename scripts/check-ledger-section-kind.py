@@ -79,8 +79,47 @@ import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD_RS = os.path.join(REPO, "crates", "er-game-base", "build.rs")
-IMAGE_1170 = os.path.join(REPO, "eldenring-deobf-1.17.bin")
 BASE = 0x140000000
+
+
+def _resolve_image(env_var, filename):
+    """Locate a deobf image: explicit env override, then this checkout, then the main worktree.
+
+    Same resolution `scripts/map-rvas-1162-to-1170.py` uses, and here for the same reason. The
+    image is a gitignored multi-hundred-MB reverse engineering input that lives beside the primary
+    checkout and is never copied per worktree, so an agent adding a ledger row from a `git
+    worktree` saw R1/R2 skip -- a gate reporting that it did not run, on the one edit it exists to
+    check. `ER_DEOBF_BIN_1170` is the spelling the mapper already takes for this file.
+    """
+    override = os.environ.get(env_var)
+    if override:
+        return override
+    local = os.path.join(REPO, filename)
+    if os.path.exists(local):
+        return local
+    # `git rev-parse --git-common-dir` resolves to the primary checkout's `.git` from inside a
+    # linked worktree, and to our own otherwise, so its parent is the main working tree.
+    try:
+        import subprocess
+
+        common = subprocess.run(
+            ["git", "-C", REPO, "rev-parse", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if common.returncode == 0:
+            main_root = os.path.dirname(os.path.abspath(os.path.join(REPO, common.stdout.strip())))
+            candidate = os.path.join(main_root, filename)
+            if os.path.exists(candidate):
+                return candidate
+    except Exception:
+        pass
+    return local
+
+
+IMAGE_1170 = _resolve_image("ER_DEOBF_BIN_1170", "eldenring-deobf-1.17.bin")
 
 # What kind of memory a ledger's destination column is allowed to name.
 CODE = "code"  # rows that can license a five-byte patch: must be executable

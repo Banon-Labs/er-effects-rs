@@ -407,6 +407,136 @@ impl EquipPlan {
 
         out
     }
+
+    /// Every position this plan deliberately leaves empty, in the order they are cleared.
+    ///
+    /// # Why a build has to say "nothing here", and why it could not until now
+    ///
+    /// [`EquipPlan::positions`] yields only the occupied entries, so a `None` was indistinguishable
+    /// from a position the plan had no opinion about. Importing build B onto a character that had
+    /// imported build A therefore produced the union of the two: B's talisman in slot 1, A's
+    /// leftover talisman still in slot 2, and nothing anywhere saying the character no longer
+    /// matched the page it was imported from. The same held for a quickbar the new build fills
+    /// three of, a great rune it does not use, and an off-hand it leaves bare.
+    ///
+    /// A build document is a statement about the whole character -- `equipSet` carries a hole for
+    /// every position the author left empty, exactly as it carries an index for every one they
+    /// filled -- so an empty position is an instruction, not an absence of one.
+    ///
+    /// # What this does not touch
+    ///
+    /// The physick. Its two tear slots are written by a different native and a build that names no
+    /// tear is far more often a build authored before the planner modelled the flask than a
+    /// deliberate "empty the flask", so clearing it would break more builds than it fixed. The
+    /// asymmetry is deliberate and is the one place this method is not the complement of
+    /// [`EquipPlan::positions`].
+    ///
+    /// Clearing a position does not destroy anything: the item stays in the inventory and only
+    /// stops being worn.
+    pub fn vacancies(&self) -> Vec<PlannedVacancy> {
+        let mut out = Vec::new();
+        let mut vacate = |kind: PositionKind, slot: Option<i32>, index: usize| {
+            if let Some(slot) = slot {
+                out.push(PlannedVacancy { kind, slot, index });
+            }
+        };
+
+        for (index, entry) in self.armaments.iter().enumerate() {
+            if entry.is_none() {
+                vacate(
+                    PositionKind::Armament,
+                    u32::try_from(index).ok().and_then(armament_slot),
+                    index,
+                );
+            }
+        }
+        for (index, entry) in self.ammo.iter().enumerate() {
+            if entry.is_none() {
+                vacate(
+                    PositionKind::Ammo,
+                    i32::try_from(index)
+                        .ok()
+                        .map(|index| CHR_ASM_SLOT_AMMO_1 + index),
+                    index,
+                );
+            }
+        }
+        for (offset, entry) in [&self.head, &self.body, &self.arms, &self.legs]
+            .into_iter()
+            .enumerate()
+        {
+            if entry.is_none() {
+                vacate(
+                    PositionKind::Protector,
+                    i32::try_from(offset)
+                        .ok()
+                        .map(|offset| CHR_ASM_SLOT_PROTECTOR_HEAD + offset),
+                    offset,
+                );
+            }
+        }
+        for (index, entry) in self.talismans.iter().enumerate() {
+            if entry.is_none() {
+                vacate(
+                    PositionKind::Talisman,
+                    i32::try_from(index)
+                        .ok()
+                        .map(|index| CHR_ASM_SLOT_ACCESSORY_1 + index),
+                    index,
+                );
+            }
+        }
+        for (index, entry) in self.quickbar.iter().enumerate() {
+            if entry.is_none() {
+                vacate(
+                    PositionKind::Quickbar,
+                    i32::try_from(index)
+                        .ok()
+                        .map(|index| CHR_ASM_SLOT_QUICK_BASE + index),
+                    index,
+                );
+            }
+        }
+        for (index, entry) in self.pouch.iter().enumerate() {
+            if entry.is_none() {
+                vacate(
+                    PositionKind::Pouch,
+                    i32::try_from(index + QUICKBAR_SLOTS)
+                        .ok()
+                        .map(|index| CHR_ASM_SLOT_QUICK_BASE + index),
+                    index,
+                );
+            }
+        }
+        if self.great_rune.is_none() {
+            vacate(PositionKind::GreatRune, Some(CHR_ASM_SLOT_GREAT_RUNE), 0);
+        }
+
+        out
+    }
+}
+
+/// One position the plan deliberately leaves empty, and the slot that has to be cleared to make
+/// it so.
+///
+/// Deliberately not a [`PlannedPosition`] with an absent item: the two are written by different
+/// calls, counted against different denominators, and a type that can express both is a type a
+/// caller can pass to the wrong one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlannedVacancy {
+    /// Which family of position this is. Decides which native clears it.
+    pub kind: PositionKind,
+    /// Native `ChrAsmSlot`. Every vacancy has one -- the physick, which does not, is excluded.
+    pub slot: i32,
+    /// Position within its own kind, for the log line.
+    pub index: usize,
+}
+
+impl PlannedVacancy {
+    /// A short identification for a log line.
+    pub fn describe(&self) -> String {
+        format!("{} {} (slot {})", self.kind.label(), self.index, self.slot)
+    }
 }
 
 /// What kind of equip position a plan entry targets.
@@ -780,11 +910,29 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
     // Armour carries a set membership, not a position: the planner writes a
     // constant `1` for every worn piece and resolves the part by which list the
     // row lives in, so the value is deliberately not read here.
+    //
+    // Two rows of one part can both carry that membership, and then the `equipIndex` cache is
+    // the only thing that separates them. Measured on the payload for build `1fb907af574a44`,
+    // 2026-09-10: every part listed the worn piece with `equipSet: [1]` and `equipIndex: 1`, and
+    // a second row at `order 0` with `equipSet: [1]` and `equipIndex: null`. Sorting by `order`
+    // under `FirstWins` handed all four parts to the phantom, so the character came out in
+    // Circlet of Light and Beast Champion Armor instead of the Verdigris set the build asks for.
+    // The same author's `e316f03a794492` lists exactly one row per part, carrying both keys, and
+    // imported correctly -- which is what identifies the cache as the discriminator rather than
+    // the order.
     let active_protectors = doc.sets.active_protectors();
     for (part, list) in &doc.protectors {
+        let worn: Vec<&crate::model::Slot> = list
+            .slots
+            .iter()
+            .filter(|slot| slot.equip_index_in_set(active_protectors).is_some())
+            .collect();
+        // Only when the two kinds coexist. A payload whose worn row carries no cache -- anything
+        // written before the planner kept one -- is left exactly as it was.
+        let cached = worn.iter().any(|slot| slot.equip_index.is_some());
         let mut claims = Vec::new();
-        for slot in &list.slots {
-            if slot.equip_index_in_set(active_protectors).is_none() {
+        for slot in worn {
+            if cached && slot.equip_index.is_none() {
                 continue;
             }
             let Some(found) = catalog.lookup(Kind::Protector, &slot.name) else {

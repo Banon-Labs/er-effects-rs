@@ -836,7 +836,12 @@ pub(crate) unsafe extern "system" fn cap_menu_deser_hook(
 /// `state = this->vtable[0](this); return (state->flags_20 & 0x8f) != 0`. Re-implement that tiny
 /// body exactly so the hook can record the returned state object/flags without making a second
 /// native getter call or changing success semantics.
-pub(crate) unsafe extern "system" fn title_native_ready_predicate_hook(this: usize) -> usize {
+pub(crate) unsafe extern "system" fn title_native_ready_predicate_hook(
+    this: usize,
+    _b: usize,
+    _c: usize,
+    _d: usize,
+) -> usize {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const STATE_FLAGS_20_OFFSET: usize = 0x20;
     const READY_MASK_8F: usize = 0x8f;

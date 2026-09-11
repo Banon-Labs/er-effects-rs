@@ -250,9 +250,21 @@ def resolve_conflicts(
             }
         )
 
-    for conflict in find_conflicts(kept, table):
+    # Product-ranked conflicts first, and a pair whose members are already gone is no longer a
+    # pair. The single pass this replaced evaluated every conflict against the set as it stood
+    # before any exclusion, so two shells that conflict with each other were reported
+    # unresolvable even when the product had already displaced both of them -- a refusal to emit
+    # any profile at all, over two DLLs the profile was never going to carry. Measured on
+    # 2026-09-11 with `er-build-import` and `er-quit-menu`, which conflict with the product and,
+    # since that day, with each other.
+    ranked = [c for c in find_conflicts(kept, table) if PRODUCT_PACKAGE in (c["a"], c["b"])]
+    unranked = [c for c in find_conflicts(kept, table) if PRODUCT_PACKAGE not in (c["a"], c["b"])]
+    for conflict in ranked + unranked:
         a, b = conflict["a"], conflict["b"]
         if PRODUCT_PACKAGE not in (a, b):
+            # Both sides still standing, or there is nothing left to rank.
+            if a not in kept or b not in kept:
+                continue
             unresolvable.append({**conflict, "why": "neither side is the product; nothing ranks them"})
             continue
         loser = b if a == PRODUCT_PACKAGE else a

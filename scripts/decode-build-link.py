@@ -202,17 +202,24 @@ def summarise(doc: dict) -> str:
     tears = [t for t in (doc.get("items", {}).get("crystalTears") or []) if t]
     lines.append(f"physick       {', '.join(tears) if tears else '(empty)'}")
     lines.append(f"great rune    {doc.get('greatRune') or '(none)'}")
-    # The appearance, which is ours and not the planner's: the site has no such key, so a link that
-    # carries one was written by this repository's exporter. Printed as a length plus the magic
-    # rather than 576 characters of hex, with the whole AOB one line further down so it can still
-    # be copied into a save editor.
-    face = doc.get("faceData")
-    if face:
-        magic = bytes.fromhex(face[:8]).decode("ascii", "replace") if len(face) >= 8 else "?"
-        lines.append(f"face data     {len(face) // 2} bytes, magic {magic!r}")
-        lines.append(f"    {face}")
+    # The appearance, under the planner's own key. This used to be an invented `faceData` holding
+    # the game's whole 288-byte buffer as hex, which nothing on the site read; it is now
+    # `sliders`, the shape its Cosmetics tab renders. A handful of named values is printed rather
+    # than all two hundred, with the count so a truncated set is still visible.
+    cosmetics = doc.get("sliders") or {}
+    sliders = cosmetics.get("sliders") or {}
+    if sliders:
+        named = ", ".join(
+            f"{key}={sliders[key]}"
+            for key in ("age", "boneStructure", "musculature", "hairModelId", "eyeModelId")
+            if key in sliders
+        )
+        body = cosmetics.get("bodyType", "?")
+        lines.append(f"appearance    body {body}, {len(sliders)} sliders")
+        if named:
+            lines.append(f"    {named}")
     else:
-        lines.append("face data     (none)")
+        lines.append("appearance    (none)")
     return "\n".join(lines)
 
 

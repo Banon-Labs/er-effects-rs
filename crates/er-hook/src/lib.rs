@@ -72,10 +72,93 @@ pub(crate) fn hook_log(args: std::fmt::Arguments<'_>) {
 //
 // Constraint: the shared signature is `extern "system" fn(usize,usize,usize,usize)->usize`
 // -- correct for the integer/pointer <=4-arg game functions we contend on (menu/dialog
-// Run/activate/build). A handler using fewer args just ignores the extras; unused
-// register args are harmless. Not for float-arg or >4-stack-arg targets.
+// Run/activate/build). Not for float-arg targets at any arity: an integer dispatcher
+// receives and forwards no `xmm` register, so a target taking a float is handed whatever the
+// caller happened to leave in `xmm1`. That exclusion is unchanged by the five-argument path
+// below, and `dlstring_lookat_math.rs`, `er-npc-possess/src/hud/detour.rs`,
+// `er-invasion-warp/src/announce.rs` and `install_title_update_hook` record the hooks that stay
+// on a bare `MhHook` because of it.
+//
+// # A handler is the dispatcher's arity exactly, not at most it
+//
+// This paragraph used to read "a handler using fewer args just ignores the extras; unused
+// register args are harmless", and that is true only of a handler that is alone on its address
+// -- which is the one case the union does not exist for. Chaining is what breaks it:
+// `register_union_hook_resolved` stores the new handler's address into the previous handler's
+// `orig` slot, so a narrow handler calling its orig through the game's own narrower signature
+// leaves `r8`/`r9` unset for the next handler and returns nothing for one whose return the game
+// uses. Twenty-seven handlers were written to the old sentence and twenty-three addresses ended
+// up carrying handlers that disagreed about arity, four of them inside `er_quickload.dll` alone
+// (`0x746e80`, `0x67b200`, `0x67b290`, `0xb0d960`) where no second module is needed to chain.
+// The safety contract on [`register_shared_hook`] already stated the rule; this is the same rule
+// stated where a handler author reads it first, and `scripts/check-union-hook-abi.py` enforces
+// it. A game function that genuinely takes fewer arguments is unharmed: the extra registers are
+// the caller's own, forwarded verbatim instead of left as the handler's scratch.
+//
+// # Five arguments, added 2026-09-10, as a parallel path rather than a widening
+//
+// [`UnionFn`] is four arguments, and where a target really takes five that alias is a silent
+// lie. In the Microsoft x64 convention the fifth argument is a stack slot the caller writes
+// at `[rsp+0x20]`; a four-argument dispatcher never allocates or writes it, so a
+// five-argument callee reached through one reads whatever the caller happened to leave above
+// its 32-byte home area. Worse than a wrong integer: for `AddCancelButton` the fifth argument
+// is a function pointer the game calls. This is the same failure class as the world block
+// ctor at `0x62ec00`, which `menu_trace_hooks.rs` records as runtime-proven on 2026-07-17 --
+// stack args lost by a four-register forwarding hook, access violation.
+//
+// The `AddCancelButton` row cloner (`system_quit_duplicate_add_cancel_button_hook`, five
+// arguments) is the concrete case, and it is why that hook could not use the union at all and
+// installed a bare [`MhHook`] instead -- which is the trampoline-corruption hazard the union
+// exists to remove.
+//
+// Widening [`UnionFn`] in place was rejected: 270 references across 39 files would have to be
+// re-typed for one caller, putting every shipped cdylib in the blast radius. So [`UnionFn5`]
+// is a second signature with its own dispatcher pool, and the four-argument handlers compile
+// untouched.
+//
+// One address is one arity, enforced rather than raced. Both pools index the same slot table,
+// so a target already union-owned at one arity is refused at the other by [`union_admission`]
+// before MinHook is touched. Two dispatchers on one prologue is not a contest worth having:
+// MinHook binds one detour per address, so the second `MH_CreateHook` would come back
+// `MH_ERROR_ALREADY_CREATED` and one arity's handlers would silently never run -- the exact
+// failure mode this whole module was built to delete.
 // ============================================================================
 pub type UnionFn = unsafe extern "system" fn(usize, usize, usize, usize) -> usize;
+/// The five-argument shape, for a target whose fifth integer/pointer argument arrives at
+/// `[rsp+0x20]`. Same chaining contract as [`UnionFn`]: what a handler finds in its `orig` slot
+/// may be the next handler rather than the game trampoline, so it must call through this
+/// signature and not through the game's own narrower one.
+pub type UnionFn5 = unsafe extern "system" fn(usize, usize, usize, usize, usize) -> usize;
+
+/// How many arguments a union slot's dispatcher forwards.
+///
+/// Recorded per entry because it is the one property two registrations on one address may not
+/// disagree about. It also picks the dispatcher pool, so the tag and the installed detour cannot
+/// drift apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnionArity {
+    Four,
+    Five,
+}
+
+impl UnionArity {
+    /// The pooled dispatcher for `slot` at this arity. Both pools are `MAX_UNION_SLOTS` long and
+    /// share the slot index space, so one slot is one address at one arity.
+    fn dispatcher(self, slot: usize) -> *mut c_void {
+        match self {
+            UnionArity::Four => DISPATCHERS[slot] as *mut c_void,
+            UnionArity::Five => DISPATCHERS5[slot] as *mut c_void,
+        }
+    }
+
+    /// How the arity reads in a log line.
+    fn label(self) -> &'static str {
+        match self {
+            UnionArity::Four => "4-argument",
+            UnionArity::Five => "5-argument",
+        }
+    }
+}
 // 96 slots: this DLL's own union targets plus a companion DLL's (the log-only
 // er-reload-trace routes its ~40 native load/menu hooks through this DLL's union via
 // the `er_effects_union_register` export, so a single MinHook instance owns every shared
@@ -86,6 +169,9 @@ const MAX_UNION_SLOTS: usize = 96;
 struct UnionEntry {
     target: usize,
     trampoline: usize,
+    /// Which dispatcher pool holds this slot, and therefore how many arguments every handler on
+    /// this address is called with. A registration at the other arity is refused.
+    arity: UnionArity,
     /// handler fn ptr + its caller-owned `orig` slot, in chain order.
     handlers: Vec<(usize, &'static AtomicUsize)>,
 }
@@ -109,15 +195,110 @@ unsafe extern "system" fn union_dispatch<const N: usize>(
     unsafe { f(a, b, c, d) }
 }
 
-macro_rules! union_dispatchers {
-    ($($n:literal)*) => { [ $( union_dispatch::<$n> as UnionFn ),* ] };
+/// The five-argument dispatcher. Same slot table and same head as [`union_dispatch`]; only the
+/// signature differs, so the fifth argument the caller wrote at `[rsp+0x20]` is forwarded to the
+/// head handler instead of being dropped on the floor.
+unsafe extern "system" fn union_dispatch5<const N: usize>(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+    e: usize,
+) -> usize {
+    let head = UNION_HEADS[N].load(Ordering::Acquire);
+    if head == 0 {
+        return 0;
+    }
+    let f: UnionFn5 = unsafe { std::mem::transmute::<usize, UnionFn5>(head) };
+    unsafe { f(a, b, c, d, e) }
 }
-static DISPATCHERS: [UnionFn; MAX_UNION_SLOTS] = union_dispatchers!(
+
+/// Both dispatcher pools from one slot list, so they cannot come out different lengths and a slot
+/// index cannot mean one thing in one pool and another in the other.
+macro_rules! union_dispatcher_pools {
+    ($($n:literal)*) => {
+        static DISPATCHERS: [UnionFn; MAX_UNION_SLOTS] =
+            [ $( union_dispatch::<$n> as UnionFn ),* ];
+        static DISPATCHERS5: [UnionFn5; MAX_UNION_SLOTS] =
+            [ $( union_dispatch5::<$n> as UnionFn5 ),* ];
+    };
+}
+union_dispatcher_pools!(
     0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23
     24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47
     48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71
     72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95
 );
+
+/// What a registration means for the union table, decided before MinHook is touched.
+///
+/// Split out of [`register_union_hook_resolved_with`] for the reason [`registry_verdict`] is split
+/// out of [`registry_record`]: the effects need `MH_CreateHook`, which does not exist on the host,
+/// while the rule -- and in particular the arity refusal -- is pure and can be pinned by a test.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnionAdmission {
+    /// Nothing owns this address yet. This registrant installs the dispatcher and owns the
+    /// trampoline; the `usize` is the slot it takes.
+    Create(usize),
+    /// This address is already union-owned at the same arity; chain onto the entry at this index.
+    Chain(usize),
+    /// This exact handler is already on this address -- an install that ran twice. Nothing to do.
+    AlreadyPresent,
+    /// This address is union-owned at the other arity. Two dispatchers on one prologue means one
+    /// arity's handlers never run, so the newcomer is refused instead.
+    ArityConflict(UnionArity),
+    /// Every slot in the pool is taken.
+    Exhausted,
+}
+
+/// Classify a registration against the union table.
+fn union_admission(
+    unions: &[UnionEntry],
+    target: usize,
+    handler_addr: usize,
+    arity: UnionArity,
+) -> UnionAdmission {
+    if let Some((index, entry)) = unions
+        .iter()
+        .enumerate()
+        .find(|(_, entry)| entry.target == target)
+    {
+        if entry.arity != arity {
+            return UnionAdmission::ArityConflict(entry.arity);
+        }
+        // A duplicate registration of the same handler is an idempotent retry, not a second
+        // handler: appending it would chain the handler to itself and spin on the first dispatch.
+        if entry.handlers.iter().any(|(h, _)| *h == handler_addr) {
+            return UnionAdmission::AlreadyPresent;
+        }
+        return UnionAdmission::Chain(index);
+    }
+    let slot = unions.len();
+    if slot >= MAX_UNION_SLOTS {
+        return UnionAdmission::Exhausted;
+    }
+    UnionAdmission::Create(slot)
+}
+
+/// Append `handler_addr` to `entry`'s chain and wire the two `orig` slots it changes: the previous
+/// last handler now calls this one, and this one calls the game trampoline. Returns the new chain
+/// length.
+///
+/// The first registrant and the fifth take the same two stores, which is what makes the chain
+/// strictly nested with the first registrant outermost. Writing it once is also what lets a host
+/// test drive the real wiring: the effects around it need `MH_CreateHook`, this does not.
+fn chain_append(
+    entry: &mut UnionEntry,
+    handler_addr: usize,
+    orig_slot: &'static AtomicUsize,
+) -> usize {
+    if let Some((_, prev_orig)) = entry.handlers.last() {
+        prev_orig.store(handler_addr, Ordering::Release); // prev -> new
+    }
+    orig_slot.store(entry.trampoline, Ordering::Release); // new -> game orig
+    entry.handlers.push((handler_addr, orig_slot));
+    entry.handlers.len()
+}
 
 /// Register `handler` on `target`, chaining through `orig_slot`. First registrant installs
 /// the dispatcher + owns the trampoline; later ones append and no handler is ever dropped.
@@ -179,6 +360,55 @@ pub unsafe fn register_union_hook_runtime_derived(
     unsafe { register_union_hook_resolved(target, handler, orig_slot) }
 }
 
+/// [`register_union_hook`] for a target whose fifth integer/pointer argument arrives at
+/// `[rsp+0x20]`.
+///
+/// Everything about the chain is the same -- first registrant outermost, each handler's `orig`
+/// slot pointing at the next, the last one at the game trampoline -- and it draws its slot from
+/// the same table, so an address is one arity or the other and never both. The difference is the
+/// dispatcher, which forwards five arguments instead of four.
+///
+/// # Safety
+/// `handler` must be a valid [`UnionFn5`] matching the target's ABI (exactly five
+/// integer/pointer arguments, no floats); `orig_slot` must be the static the handler reads to
+/// call its original, and the handler must call that value through [`UnionFn5`] rather than
+/// through the game's own signature, because it may be the next handler in the chain.
+pub unsafe fn register_union_hook5(
+    target: usize,
+    handler: UnionFn5,
+    orig_slot: &'static AtomicUsize,
+) -> Result<(), MH_STATUS> {
+    let target = match resolve_target(target, &format!("register_union_hook5 0x{target:x}")) {
+        Some(resolved) => resolved,
+        None => return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION),
+    };
+    unsafe { register_union_hook5_resolved(target, handler, orig_slot) }
+}
+
+/// [`register_union_hook5`] for an address the caller derived at runtime on the running build.
+///
+/// The precondition and the audit that replaces the version gate are
+/// [`register_union_hook_runtime_derived`]'s, unchanged -- read that one for why a scanned address
+/// is refused by the translating entry point and what `.pdata` is asked instead.
+///
+/// # Safety
+/// Same contract as [`register_union_hook5`], plus: `target` must have been derived from the
+/// running image. Passing a constant here is a bug this cannot detect.
+pub unsafe fn register_union_hook5_runtime_derived(
+    target: usize,
+    handler: UnionFn5,
+    orig_slot: &'static AtomicUsize,
+) -> Result<(), MH_STATUS> {
+    #[cfg(windows)]
+    {
+        let what = format!("register_union_hook5_runtime_derived 0x{target:x}");
+        if !detour_site::write_site_is_sound(target, detour_site::DETOUR_PATCH_BYTES, &what) {
+            return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION);
+        }
+    }
+    unsafe { register_union_hook5_resolved(target, handler, orig_slot) }
+}
+
 /// [`register_union_hook`] on an address that has already been resolved for the running build.
 ///
 /// Resolution is not IDEMPOTENT, and assuming it was is what made this split necessary. The
@@ -214,42 +444,96 @@ unsafe fn register_union_hook_resolved(
     handler: UnionFn,
     orig_slot: &'static AtomicUsize,
 ) -> Result<(), MH_STATUS> {
+    unsafe {
+        register_union_hook_resolved_with(target, handler as usize, orig_slot, UnionArity::Four)
+    }
+}
+
+/// [`register_union_hook_resolved`] for a [`UnionFn5`] handler.
+///
+/// # Safety
+/// Same contract as [`register_union_hook_resolved`], with `handler` a [`UnionFn5`] and `target` a
+/// five-argument function.
+unsafe fn register_union_hook5_resolved(
+    target: usize,
+    handler: UnionFn5,
+    orig_slot: &'static AtomicUsize,
+) -> Result<(), MH_STATUS> {
+    unsafe {
+        register_union_hook_resolved_with(target, handler as usize, orig_slot, UnionArity::Five)
+    }
+}
+
+/// The registration body both arities share, with `handler` already erased to its address.
+///
+/// Erased rather than generic on purpose: the table stores handlers as `usize` already, and the
+/// only thing the arity decides here is which dispatcher pool `slot` is drawn from. One body means
+/// the store orderings, the failure rollback and the log lines cannot come out different for the
+/// two paths.
+///
+/// # Safety
+/// `handler_addr` must be a live function of exactly `arity` arguments matching the target's ABI,
+/// `orig_slot` must be the static that handler reads to call its original, and `target` must
+/// already be correct for the running build.
+unsafe fn register_union_hook_resolved_with(
+    target: usize,
+    handler_addr: usize,
+    orig_slot: &'static AtomicUsize,
+    arity: UnionArity,
+) -> Result<(), MH_STATUS> {
     match unsafe { MH_Initialize() } {
         MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
         s => return Err(s),
     }
-    let handler_addr = handler as usize;
     let mut unions = UNIONS.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(entry) = unions.iter_mut().find(|e| e.target == target) {
-        // already skip a duplicate registration of the same handler (idempotent retries).
-        if entry.handlers.iter().any(|(h, _)| *h == handler_addr) {
+    let slot = match union_admission(&unions, target, handler_addr, arity) {
+        UnionAdmission::AlreadyPresent => return Ok(()),
+        UnionAdmission::Exhausted => return Err(MH_STATUS::MH_ERROR_MEMORY_ALLOC),
+        UnionAdmission::ArityConflict(existing) => {
+            // Refused before any MinHook call, so nothing is patched and the incumbent keeps
+            // working. Loud, because the two candidate causes -- a handler declared at the wrong
+            // arity, and two features that genuinely disagree about a game signature -- are both
+            // bugs a reader has to be told about rather than left to infer from a missing feature.
+            hook_log(format_args!(
+                "HOOK UNION ARITY CONFLICT: game addr 0x{target:x} is union-owned as {}, so the \
+                 {} registration by {} is refused -- one prologue holds one dispatcher, and \
+                 installing a second would leave one arity's handlers unreachable with nothing \
+                 logged. One of the two has the target's signature wrong.",
+                existing.label(),
+                arity.label(),
+                as_dll_off(handler_addr)
+            ));
+            // Routed through the registry as well, so it lands in the same collision channel a
+            // reader already scans for a contested address. Nothing is recorded as an owner: the
+            // status is not `MH_OK`, so no row is pushed.
+            registry_record(
+                target,
+                handler_addr,
+                MH_STATUS::MH_ERROR_ALREADY_CREATED,
+                HookOwner::Union,
+            );
+            return Err(MH_STATUS::MH_ERROR_ALREADY_CREATED);
+        }
+        UnionAdmission::Chain(index) => {
+            let chained = chain_append(&mut unions[index], handler_addr, orig_slot);
+            // The registry has to see chained handlers too, or the union looks like it owns an
+            // address through exactly one handler no matter how many are on it -- and a later bare
+            // `MhHook` collision would name only the first.
+            registry_note_union_chain(target, handler_addr);
+            hook_log(format_args!(
+                "HOOK UNION: game addr 0x{target:x} now chains {chained} handlers (added {}, {})",
+                as_dll_off(handler_addr),
+                arity.label()
+            ));
             return Ok(());
         }
-        if let Some((_, prev_orig)) = entry.handlers.last() {
-            prev_orig.store(handler_addr, Ordering::Release); // prev -> new
-        }
-        orig_slot.store(entry.trampoline, Ordering::Release); // new -> game orig
-        entry.handlers.push((handler_addr, orig_slot));
-        // The registry has to see chained handlers too, or the union looks like it owns an address
-        // through exactly one handler no matter how many are on it -- and a later bare `MhHook`
-        // collision would name only the first.
-        registry_note_union_chain(target, handler_addr);
-        hook_log(format_args!(
-            "HOOK UNION: game addr 0x{target:x} now chains {} handlers (added {})",
-            entry.handlers.len(),
-            as_dll_off(handler_addr)
-        ));
-        return Ok(());
-    }
-    let slot = unions.len();
-    if slot >= MAX_UNION_SLOTS {
-        return Err(MH_STATUS::MH_ERROR_MEMORY_ALLOC);
-    }
+        UnionAdmission::Create(slot) => slot,
+    };
     let mut trampoline = null_mut();
     let create_status = unsafe {
         MH_CreateHook(
             target as *mut c_void,
-            DISPATCHERS[slot] as *mut c_void,
+            arity.dispatcher(slot),
             &mut trampoline,
         )
     };
@@ -269,7 +553,13 @@ unsafe fn register_union_hook_resolved(
     // asset it asked for. The dispatcher is unreachable until the detour is enabled, so publishing
     // the head first is free.
     UNION_HEADS[slot].store(handler_addr, Ordering::Release);
-    orig_slot.store(trampoline as usize, Ordering::Release); // sole handler -> game orig
+    let mut entry = UnionEntry {
+        target,
+        trampoline: trampoline as usize,
+        arity,
+        handlers: Vec::new(),
+    };
+    chain_append(&mut entry, handler_addr, orig_slot); // sole handler -> game orig
     match unsafe { MH_EnableHook(target as *mut c_void) } {
         MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ENABLED => {}
         s => {
@@ -279,11 +569,7 @@ unsafe fn register_union_hook_resolved(
             return Err(s);
         }
     }
-    unions.push(UnionEntry {
-        target,
-        trampoline: trampoline as usize,
-        handlers: vec![(handler_addr, orig_slot)],
-    });
+    unions.push(entry);
     Ok(())
 }
 
@@ -315,6 +601,24 @@ unsafe fn register_union_hook_resolved(
 /// positive `MH_STATUS` on MinHook failure`.
 pub type UnionRegisterFn = unsafe extern "system" fn(usize, UnionFn, *mut usize) -> i32;
 
+/// C-ABI shape of the product DLL's `er_effects_union_register5` export: the same contract with a
+/// [`UnionFn5`] handler.
+///
+/// # Why the arity is in the export name and not in an argument
+///
+/// A companion resolves this by string through `GetProcAddress`, and users install these DLLs one
+/// at a time from separate releases, so a new companion routinely meets an older product. If arity
+/// were an extra parameter on the one export, an older product would decode the call by its own
+/// signature: it would read the five-argument handler as a [`UnionFn`], install a four-argument
+/// dispatcher, and call a handler that expects a fifth stack argument without ever writing one. No
+/// error, no log line, and garbage in the fifth parameter -- which for `AddCancelButton` is a
+/// function pointer the game will call.
+///
+/// A distinct name cannot fail that way. `GetProcAddress` returns null on the older product,
+/// [`resolve_product_union_register5`] answers `None`, and the caller takes the documented local
+/// fallback with a line saying so.
+pub type UnionRegister5Fn = unsafe extern "system" fn(usize, UnionFn5, *mut usize) -> i32;
+
 /// Which MinHook instance a [`register_shared_hook`] call ended up on. Worth logging: it is the
 /// difference between "chained onto the product's detour" and "installed a second instance that
 /// may be about to lose a trampoline race".
@@ -338,6 +642,10 @@ const PRODUCT_DLL_NAME: &[u8] = b"er_quickload.dll\0";
 // move (`er_quickload_loading_screen_data`) have exactly one consumer, built in the same pass.
 #[cfg(windows)]
 const UNION_REGISTER_EXPORT: &[u8] = b"er_effects_union_register\0";
+/// The five-argument sibling of [`UNION_REGISTER_EXPORT`]. Same `er_effects_` prefix and the same
+/// reasoning: it is an ABI other images resolve by string, not branding.
+#[cfg(windows)]
+const UNION_REGISTER5_EXPORT: &[u8] = b"er_effects_union_register5\0";
 
 /// Default poll budget for [`register_shared_hook`]: ~1s at 25ms.
 ///
@@ -368,17 +676,39 @@ unsafe extern "system" {
 /// Pass `tries = 1, sleep_ms = 0` for a non-blocking probe.
 #[cfg(windows)]
 pub fn resolve_product_union_register(tries: u32, sleep_ms: u32) -> Option<UnionRegisterFn> {
+    let proc = resolve_product_export(UNION_REGISTER_EXPORT, tries, sleep_ms)?;
+    // SAFETY: the export's C-ABI shape is fixed by the product DLL, and both images stay mapped
+    // for the process lifetime, so the pointer stays valid.
+    Some(unsafe { std::mem::transmute::<*mut c_void, UnionRegisterFn>(proc) })
+}
+
+/// [`resolve_product_union_register`] for the five-argument export.
+///
+/// `None` also covers a product that predates the export, which is the point of giving it its own
+/// name -- see [`UnionRegister5Fn`].
+#[cfg(windows)]
+pub fn resolve_product_union_register5(tries: u32, sleep_ms: u32) -> Option<UnionRegister5Fn> {
+    let proc = resolve_product_export(UNION_REGISTER5_EXPORT, tries, sleep_ms)?;
+    // SAFETY: as above, for the five-argument shape.
+    Some(unsafe { std::mem::transmute::<*mut c_void, UnionRegister5Fn>(proc) })
+}
+
+/// The polling `GetProcAddress` both resolvers share: find `er_quickload.dll`, ask it for `name`.
+///
+/// Factored so the self-resolution guard and the retry budget are written once. Two copies of that
+/// guard is one copy too many: dropping it in either would send the product's own registration out
+/// through a C-ABI round trip back into the table it was already holding the lock on.
+#[cfg(windows)]
+fn resolve_product_export(name: &[u8], tries: u32, sleep_ms: u32) -> Option<*mut c_void> {
     for attempt in 0..tries.max(1) {
         let hmod = unsafe { GetModuleHandleA(PRODUCT_DLL_NAME.as_ptr()) };
         // Resolving our own export would route right back into the local union through a C-ABI
         // round trip. Same outcome, so this is a clarity guard rather than a correctness one --
         // but it also means the product can call `register_shared_hook` without special-casing.
         if !hmod.is_null() && hmod as usize != dll_base() {
-            let proc = unsafe { GetProcAddress(hmod, UNION_REGISTER_EXPORT.as_ptr()) };
+            let proc = unsafe { GetProcAddress(hmod, name.as_ptr()) };
             if !proc.is_null() {
-                // SAFETY: the export's C-ABI shape is fixed by the product DLL, and both images
-                // stay mapped for the process lifetime, so the pointer stays valid.
-                return Some(unsafe { std::mem::transmute::<*mut c_void, UnionRegisterFn>(proc) });
+                return Some(proc);
             }
         }
         if attempt + 1 < tries.max(1) && sleep_ms > 0 {
@@ -482,6 +812,91 @@ pub unsafe fn register_shared_hook_with_budget(
         None => return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION),
     };
     unsafe { register_union_hook_resolved(target, handler, orig_slot) }
+        .map(|()| HookRoute::LocalUnion)
+}
+
+/// [`register_shared_hook`] for a [`UnionFn5`] handler.
+///
+/// # Safety
+/// Same contract as [`register_union_hook5`], and the same note about the `orig` slot: what it
+/// holds may be the next handler in the chain, so the handler must call it through [`UnionFn5`].
+#[cfg(windows)]
+pub unsafe fn register_shared_hook5(
+    target: usize,
+    handler: UnionFn5,
+    orig_slot: &'static AtomicUsize,
+) -> Result<HookRoute, MH_STATUS> {
+    unsafe {
+        register_shared_hook5_with_budget(
+            target,
+            handler,
+            orig_slot,
+            PRODUCT_RESOLVE_TRIES,
+            PRODUCT_RESOLVE_SLEEP_MS,
+        )
+    }
+}
+
+/// [`register_shared_hook5`] with an explicit resolve budget.
+///
+/// The single resolve happens after the branch, in the image that will own the detour, for the
+/// reason spelled out in full on [`register_shared_hook_with_budget`]: an address can be both a
+/// 1.17 destination and some other row's 1.16.2 source, so resolving twice can translate it again
+/// into a third, unrelated function.
+///
+/// A product that does not export `er_effects_union_register5` sends this down the local branch,
+/// which is a real downgrade rather than a neutral fallback -- two MinHook instances on one
+/// prologue is the trampoline corruption this API exists to avoid -- so it gets its own line. It
+/// is still the better failure: the alternative, one export carrying an arity argument, is the
+/// wrong dispatcher arity and no line at all.
+///
+/// # Safety
+/// Same contract as [`register_shared_hook5`].
+#[cfg(windows)]
+pub unsafe fn register_shared_hook5_with_budget(
+    target: usize,
+    handler: UnionFn5,
+    orig_slot: &'static AtomicUsize,
+    tries: u32,
+    sleep_ms: u32,
+) -> Result<HookRoute, MH_STATUS> {
+    if let Some(register) = resolve_product_union_register5(tries, sleep_ms) {
+        hook_log(format_args!(
+            "HOOK SHARED 5-ARG (0x{target:x}): handing the UNRESOLVED address to \
+             er_quickload.dll's union, which owns the single resolve for this branch"
+        ));
+        // AtomicUsize is a repr(transparent) usize, so handing the product a `*mut usize` into our
+        // own static is sound; our image outlives every dispatch.
+        let slot_ptr = orig_slot.as_ptr();
+        return match unsafe { register(target, handler, slot_ptr) } {
+            0 => Ok(HookRoute::ProductUnion),
+            // -1 is the export's null-slot rejection, which cannot happen here (the pointer comes
+            // from a live static) -- reported as unknown rather than silently mapped to a status.
+            code if code < 0 => Err(MH_STATUS::MH_UNKNOWN),
+            code => Err(mh_status_from_i32(code)),
+        };
+    }
+    if resolve_product_union_register(1, 0).is_some() {
+        // The product is here and publishes the four-argument export but not the five-argument
+        // one, so it predates this path. Worth its own line: the resulting local install is the
+        // two-instance hazard, and the fix is a matching product build rather than anything at
+        // this call site.
+        hook_log(format_args!(
+            "HOOK SHARED 5-ARG (0x{target:x}): er_quickload.dll is loaded but exports no \
+             er_effects_union_register5, so this handler takes its own MinHook instance -- if the \
+             product also detours this prologue the two instances will corrupt each other's \
+             trampolines. Rebuild the product from the same tree as this shell."
+        ));
+    }
+    // The product is absent, so this image owns the one resolve.
+    let target = match resolve_target(
+        target,
+        &format!("register_shared_hook5_with_budget 0x{target:x}"),
+    ) {
+        Some(resolved) => resolved,
+        None => return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION),
+    };
+    unsafe { register_union_hook5_resolved(target, handler, orig_slot) }
         .map(|()| HookRoute::LocalUnion)
 }
 
@@ -1670,5 +2085,275 @@ mod tests {
             ),
             RegistryVerdict::Collision
         );
+    }
+
+    // ------------------------------------------------------------------
+    // The five-argument union. Everything below runs on the host, where `MH_CreateHook` does not
+    // exist, so it drives the two halves that do not need it: [`union_admission`] (the decision,
+    // including the arity refusal) and [`union_dispatch5`] + [`chain_append`] (the wiring and the
+    // call itself). What no host test can prove is the Microsoft x64 stack forwarding of the fifth
+    // argument -- `extern "system"` on this host is SysV, which passes five arguments entirely in
+    // registers. The protection against getting that wrong is not a test but the type: the
+    // dispatcher and the handler are both declared `fn(usize, usize, usize, usize, usize)`, so
+    // rustc emits the caller side, and there is no hand-written `[rsp+0x20]` anywhere to be wrong.
+    //
+    // `UNION_HEADS` is process-wide and the harness runs tests in parallel threads, so each test
+    // below owns a distinct slot index and its own statics.
+    // ------------------------------------------------------------------
+
+    /// A test handler's address, taken the way the registrar takes one: through the fn-pointer
+    /// type the union will call it by. A direct fn-item cast is a lint error, and rightly -- it is
+    /// the step at which an arity could be lost with no diagnostic at all.
+    fn addr_of(f: UnionFn5) -> usize {
+        f as usize
+    }
+
+    // Deliberately not a real game address. This used to be `0x1_4092_0c90`, the Quit row
+    // cloner's `AddCancelButton` -- flavour, since these tests only manipulate the admission
+    // table and never hook anything. It was also a second literal declaration of an address
+    // `er-title-flow` already owns, which `scripts/check-rva-alias-drift.py` reads as two claims
+    // about one function. A value below the image's `.text` cannot be either.
+    const FAKE_TARGET: usize = 0x1_4000_0c90;
+    const OTHER_TARGET: usize = 0x1_4074_6e80;
+    const HANDLER_A: usize = 0xaaa0;
+    const HANDLER_B: usize = 0xbbb0;
+    const FAKE_TRAMPOLINE: usize = 0x7ffe_0000;
+
+    /// A table entry as `register_union_hook_resolved_with` would have left it after one
+    /// registration, without the `MH_CreateHook` that produced the trampoline.
+    fn entry_with(target: usize, arity: UnionArity, handler: usize) -> UnionEntry {
+        static SOLE_ORIG: AtomicUsize = AtomicUsize::new(0);
+        let mut entry = UnionEntry {
+            target,
+            trampoline: FAKE_TRAMPOLINE,
+            arity,
+            handlers: Vec::new(),
+        };
+        chain_append(&mut entry, handler, &SOLE_ORIG);
+        entry
+    }
+
+    #[test]
+    fn an_unclaimed_address_takes_the_next_slot_at_either_arity() {
+        assert_eq!(
+            union_admission(&[], FAKE_TARGET, HANDLER_A, UnionArity::Five),
+            UnionAdmission::Create(0)
+        );
+        let taken = [entry_with(OTHER_TARGET, UnionArity::Four, HANDLER_B)];
+        assert_eq!(
+            union_admission(&taken, FAKE_TARGET, HANDLER_A, UnionArity::Five),
+            UnionAdmission::Create(1),
+            "a five-argument target draws from the same slot index space as a four-argument one"
+        );
+    }
+
+    #[test]
+    fn a_second_handler_at_the_same_arity_chains() {
+        let unions = [entry_with(FAKE_TARGET, UnionArity::Five, HANDLER_A)];
+        assert_eq!(
+            union_admission(&unions, FAKE_TARGET, HANDLER_B, UnionArity::Five),
+            UnionAdmission::Chain(0)
+        );
+    }
+
+    #[test]
+    fn the_same_five_argument_handler_registering_twice_is_a_no_op() {
+        let unions = [entry_with(FAKE_TARGET, UnionArity::Five, HANDLER_A)];
+        assert_eq!(
+            union_admission(&unions, FAKE_TARGET, HANDLER_A, UnionArity::Five),
+            UnionAdmission::AlreadyPresent,
+            "appending a handler to its own chain would make it call itself"
+        );
+    }
+
+    /// The rule this whole arity split exists to hold: one prologue, one dispatcher. A second
+    /// arity on a claimed address must be refused where it can still be reported, not discovered
+    /// as an `MH_ERROR_ALREADY_CREATED` after one of the two has already lost.
+    #[test]
+    fn a_target_claimed_at_one_arity_is_refused_at_the_other() {
+        let four = [entry_with(FAKE_TARGET, UnionArity::Four, HANDLER_A)];
+        assert_eq!(
+            union_admission(&four, FAKE_TARGET, HANDLER_B, UnionArity::Five),
+            UnionAdmission::ArityConflict(UnionArity::Four)
+        );
+        let five = [entry_with(FAKE_TARGET, UnionArity::Five, HANDLER_A)];
+        assert_eq!(
+            union_admission(&five, FAKE_TARGET, HANDLER_B, UnionArity::Four),
+            UnionAdmission::ArityConflict(UnionArity::Five),
+            "the refusal has to run in both directions or it is just install-order luck"
+        );
+    }
+
+    #[test]
+    fn a_full_table_is_exhausted_rather_than_indexing_past_the_pool() {
+        let unions: Vec<UnionEntry> = (0..MAX_UNION_SLOTS)
+            .map(|i| entry_with(FAKE_TARGET + i, UnionArity::Four, HANDLER_A))
+            .collect();
+        assert_eq!(
+            union_admission(&unions, OTHER_TARGET, HANDLER_B, UnionArity::Five),
+            UnionAdmission::Exhausted
+        );
+    }
+
+    // -------- the dispatcher, called for real --------
+
+    /// Slot 95 belongs to `forwards_all_five_arguments`, 94 to `a_null_head_returns_zero`, 93 to
+    /// the chaining test. Production never reaches them in a test binary, which installs no hooks.
+    const DISPATCH_SLOT: usize = 95;
+    const NULL_HEAD_SLOT: usize = 94;
+    const CHAIN_SLOT: usize = 93;
+
+    static SEEN: [AtomicUsize; 5] = [const { AtomicUsize::new(0) }; 5];
+    const SOLE_HANDLER_RETURN: usize = 0x5011;
+
+    unsafe extern "system" fn record_five(
+        a: usize,
+        b: usize,
+        c: usize,
+        d: usize,
+        e: usize,
+    ) -> usize {
+        for (cell, value) in SEEN.iter().zip([a, b, c, d, e]) {
+            cell.store(value, Ordering::SeqCst);
+        }
+        SOLE_HANDLER_RETURN
+    }
+
+    /// The fifth argument is the whole point: a four-argument dispatcher drops it, and for
+    /// `AddCancelButton` the dropped value is the keyguide function pointer the game then calls.
+    #[test]
+    fn the_five_argument_dispatcher_forwards_all_five_arguments() {
+        UNION_HEADS[DISPATCH_SLOT].store(addr_of(record_five), Ordering::Release);
+
+        let returned = unsafe { union_dispatch5::<DISPATCH_SLOT>(11, 22, 33, 44, 55) };
+
+        assert_eq!(returned, SOLE_HANDLER_RETURN);
+        let seen: Vec<usize> = SEEN.iter().map(|c| c.load(Ordering::SeqCst)).collect();
+        assert_eq!(seen, vec![11, 22, 33, 44, 55]);
+        UNION_HEADS[DISPATCH_SLOT].store(0, Ordering::Release);
+    }
+
+    /// An unarmed slot returns 0 without calling anything, exactly as [`union_dispatch`] does.
+    #[test]
+    fn a_null_five_argument_head_returns_zero() {
+        UNION_HEADS[NULL_HEAD_SLOT].store(0, Ordering::Release);
+        assert_eq!(
+            unsafe { union_dispatch5::<NULL_HEAD_SLOT>(1, 2, 3, 4, 5) },
+            0
+        );
+    }
+
+    // -------- two handlers on one five-argument target --------
+
+    static OUTER_ORIG: AtomicUsize = AtomicUsize::new(0);
+    static INNER_ORIG: AtomicUsize = AtomicUsize::new(0);
+    static CALL_ORDER: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+    static GAME_SAW: [AtomicUsize; 5] = [const { AtomicUsize::new(0) }; 5];
+
+    const GAME_RETURN: usize = 0x6a3e;
+
+    unsafe extern "system" fn fake_game(a: usize, b: usize, c: usize, d: usize, e: usize) -> usize {
+        CALL_ORDER.lock().unwrap().push("game");
+        for (cell, value) in GAME_SAW.iter().zip([a, b, c, d, e]) {
+            cell.store(value, Ordering::SeqCst);
+        }
+        GAME_RETURN
+    }
+
+    unsafe extern "system" fn inner_handler(
+        a: usize,
+        b: usize,
+        c: usize,
+        d: usize,
+        e: usize,
+    ) -> usize {
+        CALL_ORDER.lock().unwrap().push("inner");
+        let orig: UnionFn5 =
+            unsafe { std::mem::transmute::<usize, UnionFn5>(INNER_ORIG.load(Ordering::SeqCst)) };
+        unsafe { orig(a, b, c, d, e) }
+    }
+
+    unsafe extern "system" fn outer_handler(
+        a: usize,
+        b: usize,
+        c: usize,
+        d: usize,
+        e: usize,
+    ) -> usize {
+        CALL_ORDER.lock().unwrap().push("outer");
+        let orig: UnionFn5 =
+            unsafe { std::mem::transmute::<usize, UnionFn5>(OUTER_ORIG.load(Ordering::SeqCst)) };
+        let from_chain = unsafe { orig(a, b, c, d, e) };
+        CALL_ORDER
+            .lock()
+            .unwrap()
+            .push(if from_chain == GAME_RETURN {
+                "outer-saw-game-return"
+            } else {
+                "outer-saw-something-else"
+            });
+        // The outermost handler writes the return value last, so this is what the game's caller
+        // gets. Deliberately not `from_chain`, or the assertion below could not tell the two apart.
+        OUTER_RETURN
+    }
+
+    const OUTER_RETURN: usize = 0x0075e4;
+
+    /// Two handlers on one five-argument address: strictly nested, first registrant outermost,
+    /// every argument reaching the game unchanged, and the outermost handler's return value the
+    /// one that survives.
+    ///
+    /// The wiring is done by [`chain_append`], the same function the registrar calls -- only the
+    /// `MH_CreateHook` that would have produced the trampoline is stood in for.
+    #[test]
+    fn two_handlers_on_one_five_argument_target_nest_with_the_first_outermost() {
+        let mut entry = UnionEntry {
+            target: FAKE_TARGET,
+            trampoline: addr_of(fake_game),
+            arity: UnionArity::Five,
+            handlers: Vec::new(),
+        };
+        // First registrant: becomes the head, and its orig is the game.
+        assert_eq!(
+            chain_append(&mut entry, addr_of(outer_handler), &OUTER_ORIG),
+            1
+        );
+        UNION_HEADS[CHAIN_SLOT].store(addr_of(outer_handler), Ordering::Release);
+        // Second registrant: the first now calls it, and its own orig becomes the game.
+        assert_eq!(
+            chain_append(&mut entry, addr_of(inner_handler), &INNER_ORIG),
+            2
+        );
+
+        assert_eq!(
+            OUTER_ORIG.load(Ordering::SeqCst),
+            addr_of(inner_handler),
+            "the first registrant must now call the second, not the game"
+        );
+        assert_eq!(INNER_ORIG.load(Ordering::SeqCst), addr_of(fake_game));
+        assert_eq!(
+            UNION_HEADS[CHAIN_SLOT].load(Ordering::SeqCst),
+            addr_of(outer_handler),
+            "chaining must not move the head off the first registrant"
+        );
+
+        let returned = unsafe { union_dispatch5::<CHAIN_SLOT>(0x11, 0x22, 0x33, 0x44, 0x55) };
+
+        assert_eq!(
+            *CALL_ORDER.lock().unwrap(),
+            vec!["outer", "inner", "game", "outer-saw-game-return"],
+            "the chain must be strictly nested, not a fan-out"
+        );
+        let game_saw: Vec<usize> = GAME_SAW.iter().map(|c| c.load(Ordering::SeqCst)).collect();
+        assert_eq!(
+            game_saw,
+            vec![0x11, 0x22, 0x33, 0x44, 0x55],
+            "all five arguments must survive two handlers"
+        );
+        assert_eq!(
+            returned, OUTER_RETURN,
+            "the first registrant writes the return value last"
+        );
+        UNION_HEADS[CHAIN_SLOT].store(0, Ordering::Release);
     }
 }

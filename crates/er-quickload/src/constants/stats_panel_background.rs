@@ -106,10 +106,6 @@ pub(crate) use er_title_flow::TITLE_PRESS_START_SET_VISIBLE_RVA;
 /// code caller, the SceneObjProxy wrapper above. The hook only forces false for the latched
 /// PressStart CSScaleformValue pointer, not globally.
 pub(crate) const TITLE_GFX_VALUE_SET_VISIBLE_RVA: usize = 0xd844d0;
-/// Lower-level GFx display-info setters for CSScaleformValue position(x,y) and scale(x,y).
-/// Dump 0x140d83ed0 / 0x140d84140 -> deobf/live 0x140d83e20 / 0x140d84090.
-pub(crate) const TITLE_GFX_VALUE_SET_POSITION_RVA: usize = 0xd83e20;
-pub(crate) const TITLE_GFX_VALUE_SET_SCALE_RVA: usize = 0xd84090;
 pub(crate) static TITLE_GFX_VALUE_SET_VISIBLE_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry_core::counters::TITLE_GFX_VALUE_SET_VISIBLE_INSTALLED;
@@ -137,7 +133,8 @@ pub(crate) static TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_REQUESTED: AtomicUsize 
 /// Named child SceneObjProxy binder (`live/deobf 0x14074a2f0`). TitleTopDialog ctor calls it with
 /// r8="PressStart" and output `dialog+0xb78`; hook it to identify the actual bound display object(s)
 /// and hide PAB immediately after native binding.
-pub(crate) const TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA: usize = 0x74a2f0;
+pub(crate) const TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA: usize =
+    er_game_base::rva::TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA;
 pub(crate) static TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 /// The hook is live. Set only after `MH_ApplyQueued` succeeds, so the oracle that reports it stays

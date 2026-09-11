@@ -34,6 +34,78 @@ fn parses_the_real_payload() {
     assert_eq!(doc.talismans.slots.len(), 4);
 }
 
+/// `No Skill` is mounted, not skipped.
+///
+/// It is an Ash of War in its own right -- the one that takes a weapon's innate skill away -- and
+/// the plan used to filter the string out and leave `NO_SKILL`, which means "mount nothing". Those
+/// are opposite outcomes: a Serpent Crest Shield asked to carry `No Skill` came out of a live
+/// import still reporting its own skill, `arts 10`. This payload asks for it four times.
+#[test]
+fn the_no_skill_ash_is_an_ash_and_is_mounted() {
+    let (_, result) = planned();
+    let asked = result
+        .grants
+        .iter()
+        .filter(|grant| grant.armament && grant.weapon_skill != NO_SKILL)
+        .count();
+    assert!(asked > 0, "the fixture mounts ashes at all");
+    let no_skill = GEM_ITEM_CATEGORY | 10;
+    assert!(
+        result
+            .grants
+            .iter()
+            .any(|grant| grant.weapon_skill == no_skill),
+        "at least one armament carries the No Skill gem rather than the mount-nothing sentinel"
+    );
+}
+
+/// Two rows of one armour part can both claim to be worn; the `equipIndex` cache decides.
+///
+/// The payload for `1fb907af574a44` lists, for every part, the piece the build wears with both
+/// `equipSet: [1]` and `equipIndex: 1`, plus a second row at `order 0` carrying `equipSet: [1]`
+/// and no cache. Claims are settled `FirstWins` in `order`, so the phantom took all four parts
+/// and the character came out in the wrong armour entirely.
+#[test]
+fn a_second_armour_row_without_the_equip_index_cache_does_not_win() {
+    let doc = model::parse(
+        r#"{"protectors":{"head":{"slots":[
+             {"name":"High Priest Hat","order":0,"equipSet":[1]},
+             {"name":"Divine Beast Helm","order":4,"equipSet":[1],"equipIndex":1}
+           ]}}}"#,
+    )
+    .expect("parses");
+    let plan = er_build_import_core::equip::equip_plan(
+        &doc,
+        &fixture_catalog::catalog(),
+        er_build_import_core::equip::Capacity::default(),
+    );
+    assert_eq!(
+        plan.head.as_ref().map(|worn| worn.name.as_str()),
+        Some("Divine Beast Helm"),
+        "the row carrying the active set's equipIndex is the one the build wears"
+    );
+}
+
+/// A payload whose only worn row has no cache is untouched by that preference.
+#[test]
+fn one_armour_row_without_a_cache_is_still_worn() {
+    let doc = model::parse(
+        r#"{"protectors":{"head":{"slots":[
+             {"name":"High Priest Hat","order":0,"equipSet":[1]}
+           ]}}}"#,
+    )
+    .expect("parses");
+    let plan = er_build_import_core::equip::equip_plan(
+        &doc,
+        &fixture_catalog::catalog(),
+        er_build_import_core::equip::Capacity::default(),
+    );
+    assert_eq!(
+        plan.head.as_ref().map(|worn| worn.name.as_str()),
+        Some("High Priest Hat")
+    );
+}
+
 #[test]
 fn every_referenced_item_resolves() {
     let (_, result) = planned();
@@ -1867,5 +1939,108 @@ fn a_pot_capped_consumable_asks_for_more_than_one_and_names_its_group() {
         u32::from_le_bytes(plan.grants[0].to_record()[4..8].try_into().unwrap()),
         10,
         "the quantity reaches the ItemGib record"
+    );
+}
+
+// ---------------------------------------------------- positions left empty
+
+use er_build_import_core::equip::{
+    CHR_ASM_SLOT_ACCESSORY_1, CHR_ASM_SLOT_GREAT_RUNE, CHR_ASM_SLOT_QUICK_BASE, POUCH_SLOTS,
+    armament_slot,
+};
+
+#[test]
+fn a_position_is_either_filled_or_vacated_never_both_and_never_neither() {
+    // The property the pair has to have: `positions` and `vacancies` partition every position the
+    // plan models. A position in neither is the gap this feature closed -- it is what let the
+    // previous build's talisman stay on a character importing a build that wears none.
+    let plan = equipped();
+    let filled: Vec<(PositionKind, i32)> = plan
+        .positions()
+        .into_iter()
+        .filter(|position| position.kind != PositionKind::Physick)
+        .map(|position| {
+            (
+                position.kind,
+                position.slot.expect("every non-physick has a slot"),
+            )
+        })
+        .collect();
+    let empty: Vec<(PositionKind, i32)> = plan
+        .vacancies()
+        .into_iter()
+        .map(|vacancy| (vacancy.kind, vacancy.slot))
+        .collect();
+
+    for position in &filled {
+        assert!(
+            !empty.contains(position),
+            "{position:?} is both filled and vacated"
+        );
+    }
+    let expected = plan.armaments.len()
+        + plan.ammo.len()
+        + 4
+        + plan.talismans.len()
+        + QUICKBAR_SLOTS
+        + POUCH_SLOTS
+        + 1;
+    assert_eq!(
+        filled.len() + empty.len(),
+        expected,
+        "every position the plan models has to be in exactly one of the two lists"
+    );
+}
+
+#[test]
+fn the_armament_slot_this_build_leaves_bare_is_vacated() {
+    // The fixture fills five of six armament positions; planner index 5 is empty, and its
+    // `ChrAsmSlot` is what the vacate pass has to clear.
+    let vacancies = equipped().vacancies();
+    let bare = armament_slot(5).expect("planner index 5 is a real position");
+    assert!(
+        vacancies
+            .iter()
+            .any(|vacancy| vacancy.kind == PositionKind::Armament && vacancy.slot == bare),
+        "the sixth armament position is empty in this build and is not being cleared: {vacancies:?}"
+    );
+}
+
+#[test]
+fn a_build_that_equips_nothing_vacates_every_position_it_models() {
+    let doc = model::parse("{}").expect("an empty document parses");
+    let plan = equip_plan(&doc, &fixture_catalog::catalog(), Capacity::default());
+    assert!(plan.positions().is_empty());
+    let vacancies = plan.vacancies();
+    // The great rune is one position and is not in any of the counted lists.
+    assert!(
+        vacancies
+            .iter()
+            .any(|vacancy| vacancy.slot == CHR_ASM_SLOT_GREAT_RUNE
+                && vacancy.kind == PositionKind::GreatRune)
+    );
+    // The talisman slots are contiguous from Accessory1, and the quickbar from its own base.
+    for offset in 0..plan.talismans.len() {
+        let slot = CHR_ASM_SLOT_ACCESSORY_1 + i32::try_from(offset).expect("small");
+        assert!(vacancies.iter().any(|vacancy| vacancy.slot == slot));
+    }
+    for offset in 0..QUICKBAR_SLOTS + POUCH_SLOTS {
+        let slot = CHR_ASM_SLOT_QUICK_BASE + i32::try_from(offset).expect("small");
+        assert!(vacancies.iter().any(|vacancy| vacancy.slot == slot));
+    }
+}
+
+#[test]
+fn the_physick_is_never_vacated() {
+    // Deliberate asymmetry, and the one place `vacancies` is not the complement of `positions`.
+    // A build that names no tear is far more often one authored before the planner modelled the
+    // flask than a deliberate instruction to empty it.
+    let doc = model::parse("{}").expect("an empty document parses");
+    let plan = equip_plan(&doc, &fixture_catalog::catalog(), Capacity::default());
+    assert_eq!(plan.physick.len(), PHYSICK_SLOTS);
+    assert!(
+        plan.vacancies()
+            .iter()
+            .all(|vacancy| vacancy.kind != PositionKind::Physick)
     );
 }

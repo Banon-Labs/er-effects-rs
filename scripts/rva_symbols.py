@@ -321,6 +321,26 @@ BUILTIN = {
 
 ARITHMETIC_ONLY = re.compile(r"^[0-9a-fA-FxXoObB_+\-*/%()<>|&^~! ]*$")
 
+# A `const fn` whose whole body is one expression is a name for an expression, and a call to it
+# with literal arguments is that expression with the arguments substituted. Inlining it is the same
+# discipline as substituting `offset_of!`: evaluate the value rather than exempt the declaration.
+#
+# Why it has to exist: `PORTRAIT_REBUILD_STEPS: usize = portrait_step_bit(2) | portrait_step_bit(4)`
+# is a step bitmask worth 0x14, but `usize` is 64 bits wide so the width test cannot rule it out,
+# and an unevaluated wide declaration sits in every query's residue and suppresses every
+# `proven_unclaimed` answer for every `.text`-scale address. One readable helper in one crate
+# silenced the whole resolver.
+#
+# Deliberately narrow. Only a body that is a single expression -- no `;`, no `let`, no `if`, no
+# `match`, no block -- is inlined, because anything else is control flow this does not evaluate and
+# guessing at it would put a wrong number into the claims universe, which is worse than a residue
+# entry. Arguments are wrapped in parentheses so precedence survives substitution, and the walk is
+# depth-bounded so a helper calling itself cannot spin.
+CONST_FN_HEAD = re.compile(
+    r"\bconst\s+fn\s+([A-Za-z_]\w*)\s*\(", re.M
+)
+CONST_FN_INLINE_DEPTH = 4
+
 # How wide is the slot? The residue is what blocks a "nothing claims this" proof, so shrinking it
 # soundly matters more than shrinking it. This is the one sound way to shrink it: a `u8` cannot
 # hold 0x7ad710 no matter what expression fills it, so an unevaluated `&[u8; 64]` byte string is
@@ -633,6 +653,8 @@ class Index:
         self.literals = []
         self.files_read = 0
         self.text = {}  # path -> comment/string-stripped source
+        # `name -> (params, body)` for single-expression `const fn`s; `None` marks an ambiguous name.
+        self.const_fns = {}
         # Type layout, not address declarations -- see the module docstring above `REPR_C`. Keyed
         # by simple type name; a list because the same name can be declared more than once (only
         # `len(..) == 1` is trusted, same "ambiguous is unresolved" rule as everywhere else here).
@@ -660,6 +682,7 @@ class Index:
             index._read_uses(path, text)
             index._read_literals(path, text)
             index._read_type_defs(path, text)
+            index._read_const_fns(path, text)
         index._read_external()
         index._resolve_all()
         return index
@@ -689,6 +712,178 @@ class Index:
         self.by_simple.setdefault(decl.symbol, []).append(decl)
         if decl.owner:
             self.by_qualified.setdefault(decl.qualified, []).append(decl)
+
+    def _read_const_fns(self, path, text):
+        """Record every single-expression `const fn` as `name -> (params, body)`.
+
+        A name declared twice with different bodies is dropped rather than guessed at: the call
+        site's meaning would depend on which module it resolved through, and this resolver has no
+        module scope. Dropping it returns the declaration to the residue, which is the honest
+        answer.
+        """
+        for match in CONST_FN_HEAD.finditer(text):
+            open_paren = match.end() - 1
+            close_paren = _scan_balanced(text, open_paren, "(", ")")
+            if close_paren is None:
+                continue
+            params = []
+            for part in _split_top(text[open_paren + 1 : close_paren], [","]):
+                part = part.strip()
+                if not part or part.startswith("&") or part.split(":")[0].strip() == "self":
+                    params = None
+                    break
+                params.append(part.split(":")[0].strip())
+            if params is None:
+                continue
+            brace = text.find("{", close_paren)
+            if brace < 0:
+                continue
+            end = _scan_balanced(text, brace, "{", "}")
+            if end is None:
+                continue
+            body = text[brace + 1 : end].strip()
+            if not body or ";" in body or "{" in body or "}" in body:
+                continue
+            if re.search(r"\b(?:let|if|match|loop|while|for|return|unsafe)\b", body):
+                continue
+            name = match.group(1)
+            known = self.const_fns.get(name)
+            if known is not None and known != (tuple(params), body):
+                self.const_fns[name] = None  # ambiguous: two bodies under one name
+                continue
+            if known is None and name in self.const_fns:
+                continue
+            self.const_fns[name] = (tuple(params), body)
+
+    def _inline_let_block(self, expr):
+        """A `{ let a = ..; let b = ..; TAIL }` const block reduced to `TAIL` with `a`/`b` inlined.
+
+        Sound because there is nothing to interpret: every statement is an irrefutable binding of a
+        name to an expression, evaluated once, in order. No branch, no mutation, no loop -- a block
+        containing any of those is left alone and stays in the residue, because guessing at control
+        flow would put a wrong number into the claims universe, which is worse than not answering.
+
+        `EMPTY_PROTECTOR_PARAM_IDS` is why it exists: `[i32; 4]` is wide enough to hold a
+        `.text`-scale address, so while it sat unevaluated it blocked every `proven_unclaimed`
+        answer -- even though its four values are 10000..10300.
+        """
+        body = expr.strip()
+        if not (body.startswith("{") and body.endswith("}")):
+            return expr
+        body = body[1:-1].strip()
+        bindings = []
+        while True:
+            head = re.match(r"let\s+([A-Za-z_]\w*)\s*(?::[^=]+)?=\s*", body)
+            if not head:
+                break
+            rest = body[head.end() :]
+            parts = _split_top(rest, [";"])
+            if len(parts) < 2:
+                return expr
+            bindings.append((head.group(1), parts[0].strip()))
+            body = rest[len(parts[0]) + 1 :].strip()
+        if not bindings or not body:
+            return expr
+        if re.search(r"\b(?:let|if|match|loop|while|for|return|unsafe|mut)\b", body):
+            return expr
+        for name, value in reversed(bindings):
+            body = re.sub(
+                r"(?<![\w.])" + re.escape(name) + r"(?![\w])", "(" + value + ")", body
+            )
+        return body
+
+    def _reduce_indexing(self, expr, seen, scope):
+        """`[a, b, c][1]` -> `b`, so one element of a table can be read instead of the union.
+
+        The index must be a plain integer literal. Anything else -- a named constant, arithmetic,
+        a range -- is left alone: this exists to read a fixed element out of a fixed table, and a
+        computed index is a different question this resolver does not answer.
+        """
+        for _ in range(CONST_FN_INLINE_DEPTH):
+            # A named table first: `FOO[2]`, or `(FOO)[2]` once a `let` binding has been inlined.
+            # The name is resolved to its own declaration and that declaration's literal list is
+            # what gets indexed -- only when the name has exactly one declaration, the same
+            # "ambiguous is unresolved" rule the rest of this resolver keeps.
+            named = re.search(
+                r"\(?\s*((?:[A-Za-z_]\w*\s*::\s*)*[A-Za-z_]\w*)\s*\)?\s*\[\s*(\d+)\s*\]", expr
+            )
+            if named is not None:
+                simple = named.group(1).split("::")[-1].strip()
+                decls = self.by_simple.get(simple, [])
+                table = decls[0].expr.strip() if len(decls) == 1 else None
+                while table and table.startswith("&"):
+                    table = table[1:].strip()
+                if table and table.startswith("[") and table.endswith("]"):
+                    elements = [e.strip() for e in _split_top(table[1:-1], [","])]
+                    elements = [e for e in elements if e]
+                    wanted = int(named.group(2))
+                    if wanted < len(elements):
+                        expr = (
+                            expr[: named.start()]
+                            + "("
+                            + elements[wanted]
+                            + ")"
+                            + expr[named.end() :]
+                        )
+                        continue
+            found = None
+            for match in re.finditer(r"[\)\]]\s*\[\s*(\d+)\s*\]", expr):
+                found = match
+                break
+            if found is None:
+                return expr
+            close = found.start()
+            opener = "(" if expr[close] == ")" else "["
+            closer = expr[close]
+            depth, start = 0, None
+            for i in range(close, -1, -1):
+                if expr[i] == closer:
+                    depth += 1
+                elif expr[i] == opener:
+                    depth -= 1
+                    if depth == 0:
+                        start = i
+                        break
+            if start is None:
+                return expr
+            elements = [e.strip() for e in _split_top(expr[start + 1 : close], [","])]
+            elements = [e for e in elements if e]
+            wanted = int(found.group(1))
+            if wanted >= len(elements):
+                return expr
+            expr = expr[:start] + "(" + elements[wanted] + ")" + expr[found.end() :]
+        return expr
+
+    def _inline_const_fns(self, expr):
+        """`expr` with every known single-expression `const fn` call substituted."""
+        for _ in range(CONST_FN_INLINE_DEPTH):
+            changed = False
+            for match in re.finditer(r"(?<![\w.:])([A-Za-z_]\w*)\s*\(", expr):
+                recorded = self.const_fns.get(match.group(1))
+                if not recorded:
+                    continue
+                params, body = recorded
+                open_paren = match.end() - 1
+                close_paren = _scan_balanced(expr, open_paren, "(", ")")
+                if close_paren is None:
+                    continue
+                args = [a.strip() for a in _split_top(expr[open_paren + 1 : close_paren], [","])]
+                args = [a for a in args if a]
+                if len(args) != len(params):
+                    continue
+                substituted = body
+                for param, argument in zip(params, args):
+                    substituted = re.sub(
+                        r"(?<![\w.])" + re.escape(param) + r"(?![\w])",
+                        "(" + argument + ")",
+                        substituted,
+                    )
+                expr = expr[: match.start()] + "(" + substituted + ")" + expr[close_paren + 1 :]
+                changed = True
+                break
+            if not changed:
+                break
+        return expr
 
     def _read_declarations(self, path, text):
         for match in DECLARATION_HEAD.finditer(text):
@@ -1013,6 +1208,10 @@ class Index:
         expr = expr.strip()
         if not expr:
             return None
+        # Before the array branch below, not in `_scalar`: the tail of a const block is very often
+        # a table, and a table is evaluated here rather than there.
+        if expr.startswith("{"):
+            expr = self._inline_let_block(expr).strip()
         if expr.startswith("__IMPLICIT__"):
             previous = expr[len("__IMPLICIT__") :]
             if previous == "None":
@@ -1064,6 +1263,12 @@ class Index:
 
     def _scalar(self, expr, seen, scope=None):
         expr = expr.strip()
+        # Before anything else, so a helper wrapping a layout intrinsic still reaches the
+        # substitutions below: `foo()` becomes its body, which may itself contain `size_of::<T>()`.
+        if "(" in expr:
+            expr = self._inline_const_fns(expr)
+        if "[" in expr:
+            expr = self._reduce_indexing(expr, seen, scope)
         # `core::mem::offset_of!(ChrAsm, equipment_param_ids)`, `size_of::<i32>()`,
         # `align_of::<T>()` -- substituted with the actual computed number (via `_offset_of` /
         # `_type_size_align`, which read real `#[repr(C)]` layouts) before anything else runs, so

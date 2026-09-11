@@ -489,6 +489,33 @@ pub unsafe fn profile_lookat_phase_draw_tick(phase_index: usize, task_data: &FD4
 /// the frame the engine passed it in.
 pub unsafe extern "system" fn per_frame_push_hook(renderer: usize, frame: usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    // Count this execution for the renderer the build-import refresh is watching, before any gate.
+    // `PROFILE_PERFRAME_HOOK_HITS` below cannot serve: it counts only frames on which a look-at pose
+    // was applied, so it reads zero whenever the overlay is off and says nothing about whether the
+    // model was rasterized. This is the draw task itself, so an increment here is the one proof in
+    // the process that the offscreen was redrawn after a rebuild -- registration is not execution,
+    // and ResMan has been measured under-scheduling these tasks.
+    if renderer != 0
+        && renderer
+            == er_telemetry_core::counters::BUILD_URL_PORTRAIT_TARGET_RENDERER
+                .load(Ordering::SeqCst)
+    {
+        er_telemetry_core::counters::BUILD_URL_PORTRAIT_DRAW_TASK_CALLS
+            .fetch_add(1, Ordering::SeqCst);
+    }
+    // The same measurement for the System>Quit panel's `CS::CSMenuFaceModelRend`, which reaches
+    // this detour because that class derives from `CSMenuAsmModelRend` and this is a detour on the
+    // function rather than on a vtable slot. Its own pair of counters, not a second consumer of the
+    // two above: both windows can be open at once, and one target field cannot answer for two
+    // renderers.
+    if renderer != 0
+        && renderer
+            == er_telemetry_core::counters::BUILD_URL_QUIT_FACE_TARGET_RENDERER
+                .load(Ordering::SeqCst)
+    {
+        er_telemetry_core::counters::BUILD_URL_QUIT_FACE_DRAW_TASK_CALLS
+            .fetch_add(1, Ordering::SeqCst);
+    }
     // Capture the engine's live render context (param_2/frame) on its own calls only (not our re-drives),
     // so our per-frame draw can enqueue the model into the same offscreen pass the engine routes to. Our
     // draw-phase task_data routes to the wrong pass -> nothing renders into the portrait RT.

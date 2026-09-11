@@ -163,7 +163,15 @@ def test_boot_autoload_mms18_can_force_stuck_testnet_step() -> None:
 
 
 def test_continue_and_boot_view_timing_oracles_exist() -> None:
-    counters = (REPO_ROOT / "crates/er-telemetry-core/src/counters.rs").read_text()
+    # The whole module, not just its root file. `counters` became a directory when the loading
+    # cover's statics moved into `counters/loading_cover.rs`, and reading only `counters.rs` then
+    # asserted a declaration was missing from a module that still declares it -- a red gate about
+    # where a static lives rather than about whether it exists.
+    counters_root = REPO_ROOT / "crates/er-telemetry-core/src/counters.rs"
+    counters = counters_root.read_text() + "".join(
+        child.read_text()
+        for child in sorted((REPO_ROOT / "crates/er-telemetry-core/src/counters").glob("*.rs"))
+    )
     assert "pub static BOOT_VIEW_PUMP_STOP_MS" in counters
     assert "pub static BOOT_VIEW_DARK_GAP_FAILURES" in counters
     assert "pub static BOOT_VIEW_PRESENT_FULL_CLEAR_HITS" in counters

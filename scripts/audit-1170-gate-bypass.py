@@ -111,6 +111,13 @@ GATE_FNS = (
     "register_shared_hook",
     "register_shared_hook_with_budget",
     "register_union_hook",
+    # The five-argument path (2026-09-10) resolves through the same `resolve_target`, so it gates
+    # identically. Listed by name because `GATE_TAIL` anchors each alternative with `$`, which the
+    # trailing `5` would otherwise fail -- and a caller spelling `base + FOO_RVA` into one of these
+    # would then be filed as a bypass it is not.
+    "register_shared_hook5",
+    "register_shared_hook5_with_budget",
+    "register_union_hook5",
 )
 # `MhHook::new` gates inside itself (`resolve_target` -> `resolve_detour_address`), so a
 # `base + rva` handed to it is resolved. It cannot go in GATE_FNS because the call head parses as

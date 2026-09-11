@@ -523,10 +523,8 @@ pub(crate) const LOADING_BG_REPLACE_BIND_RVA: usize = 0xd697d0;
 /// from MainHeap/, loadTask=0) -> this`; only inits the FD4FileCap base and zeroes `+0x90`.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const TPF_FILE_CAP_CTOR_RVA: usize = 0x225f60;
-/// Game heap allocator wrapper (dump 0x141eb9ec0 -> deobf 0x141eb9ed0). `fn(size /rcx/, align /rdx/,
-/// allocator_obj /r8/) -> *mut u8`; allocator_obj is the dereferenced DLAllocator* (== the repo's
-/// `runtime_heap_allocator` for MainHeap).
-pub(crate) const GAME_HEAP_ALLOC_RVA: usize = 0x1eb9ed0;
+// `GAME_HEAP_ALLOC_RVA` moved to `er_game_base::rva` with the software keyboard, its only caller,
+// which now lives in `er-quit-menu-core` so a standalone quit-menu shell can open the link field.
 /// `DLString<wchar_t>::substr` (dump 0x140116c90 -> deobf 0x140116c70). `fn(dest /rcx/, src /rdx/,
 /// start /r8 = 0/, count /r9 = usize::MAX = to-end/) -> dest`; copies the symbol into the rti symbol.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.

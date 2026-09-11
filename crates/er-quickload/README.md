@@ -167,6 +167,33 @@ Only the `?b=<id>` form works. The self-contained `?i=` form carries the whole b
 in the URL and is not fetched. With no `build_url` set, the row does nothing and says
 so in `er-quickload-autoload-debug.log`.
 
+### Importing the same build twice
+
+A build you import twice is usually not a build being installed twice -- it is the same
+items with something moved, or with one thing swapped out. The import treats the
+document as a statement about the whole character rather than a list of things to add,
+so re-importing rearranges what you already own instead of piling more on top:
+
+- **Nothing is granted twice.** An item you already hold is left alone, and one sitting
+  in your storage box is moved back out rather than duplicated.
+- **Gear the build does not ask for comes off.** Every armament, armour, talisman,
+  ammunition, quickbar, pouch and great-rune position the build leaves empty is cleared,
+  through the same call the equipment menu makes when you unequip something. The item
+  stays in your inventory; it just stops being worn.
+- **Your inventory ends up in the build's order.** Sorted by *Order of Acquisition*, the
+  build's items read down the list in the order the planner page lists them -- including
+  items you had owned for a hundred hours, which otherwise keep whatever position they
+  were picked up in. The import gets that by putting each one through your storage box
+  and taking it straight back, which is what re-acquires it. Everything else you carry
+  is left exactly where it is: the build's items all sort above it, so nothing you own
+  ends up interleaved with them.
+
+Two things it will not do. Items from a *previous* import that the new build does not
+name stay in your pockets -- nothing can tell them apart from the rest of your
+belongings. And a spare copy of an armament that is already in your storage box is left
+where it is, because the two copies cannot be told apart by item id and the wrong one
+could come back.
+
 Every change the import makes is confirmed by reading game memory back afterwards,
 never by a call having returned, and the counts it reports are those read-backs. The
 detail lands in `er-build-import-core.log` beside the game executable; the row's own

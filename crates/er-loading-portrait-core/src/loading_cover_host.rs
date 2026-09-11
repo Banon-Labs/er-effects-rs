@@ -30,9 +30,6 @@ use windows::Win32::Foundation::HWND;
 /// neutral default (see [`LoadingCoverHost::defaults`]); hosts overwrite the ones they own.
 #[derive(Clone, Copy)]
 pub struct LoadingCoverHost {
-    /// RVA of the first return address inside the game image on the current call stack, or 0.
-    /// The product's `crashlog::trace_first_game_caller_rva`.
-    pub trace_first_game_caller_rva: fn() -> usize,
     /// `GetProcAddress` over an already-loaded module, by NUL-terminated ASCII name.
     pub resolve_module_proc: fn(&[u8], &[u8]) -> Result<*mut c_void, String>,
     /// The game's own top-level window, when one exists yet.
@@ -57,9 +54,6 @@ pub struct LoadingCoverHost {
     pub fake_loading_screen_visible: unsafe fn(usize) -> bool,
 }
 
-fn default_trace_first_game_caller_rva() -> usize {
-    0
-}
 fn default_resolve_module_proc(_module: &[u8], _proc: &[u8]) -> Result<*mut c_void, String> {
     Err("no loading-cover host installed".to_owned())
 }
@@ -93,7 +87,6 @@ impl LoadingCoverHost {
     /// Neutral defaults: no call attribution, no symbol resolution, no window, no hooks.
     pub const fn defaults() -> Self {
         Self {
-            trace_first_game_caller_rva: default_trace_first_game_caller_rva,
             resolve_module_proc: default_resolve_module_proc,
             game_main_window: default_game_main_window,
             create_absolute_hook: default_create_absolute_hook,
@@ -127,8 +120,11 @@ fn host() -> &'static LoadingCoverHost {
 
 // --- crate-internal wrappers bearing the exact original product names/signatures ------
 
+/// Kept as a crate-internal name so the observer's call sites read unchanged, but it is no
+/// longer a seam: the reader is pure and lives in `er-game-base`, so there is nothing for a host
+/// to install and nothing a shell can get wrong by leaving it at a neutral default.
 pub(crate) fn trace_first_game_caller_rva() -> usize {
-    (host().trace_first_game_caller_rva)()
+    er_game_base::stack::trace_first_game_caller_rva()
 }
 pub(crate) fn safe_input_proc(module: &[u8], proc: &[u8]) -> Result<*mut c_void, String> {
     (host().resolve_module_proc)(module, proc)

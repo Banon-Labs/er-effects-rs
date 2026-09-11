@@ -188,6 +188,7 @@ fn drain_build_export_outcome() {
     if let Some(report) = export::take_report() {
         SYSTEM_QUIT_GENERATE_BUILD_LINK_ENCODED_COUNT.fetch_add(1, Ordering::SeqCst);
         SYSTEM_QUIT_GENERATE_BUILD_LINK_LAST_URL_LEN.store(report.url_len, Ordering::SeqCst);
+        crate::arm::append_build_row_oracle_line("generate-link-outcome");
         set_generate_build_link_row_help(&row_help_for(&report));
         append_autoload_debug(format_args!(
             "system-quit-generate-link: export complete for {:?} -- {}{}",

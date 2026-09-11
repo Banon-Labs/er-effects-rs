@@ -4,7 +4,6 @@ use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 use crate::*;
 use crate::{crashlog::*, ffi::*, telemetry::*};
 use eldenring::cs::PlayerIns;
-use er_quit_menu_core::rows::QuitRow;
 use er_quit_menu_core::save_flow_boxes::{SAVE_FLOW_BOX_NONE, SAVE_FLOW_BOX_OVERWRITE_FILE};
 use er_telemetry_core::counters::PROFILE_STATS_PREVIEW_ROW_CURSOR;
 use er_telemetry_core::counters::SAVE_DEST_COMMIT_COUNT;
@@ -38,17 +37,14 @@ pub(crate) use profile_rows_system_quit_menu::*;
 pub(crate) mod build_url_row;
 pub(crate) use build_url_row::*;
 
-pub(crate) mod build_url_clipboard;
-pub(crate) use build_url_clipboard::*;
-
 pub(crate) mod generate_build_link_row;
 pub(crate) use generate_build_link_row::*;
 
 pub(crate) mod build_url_editor;
 pub(crate) use build_url_editor::*;
 
-pub(crate) mod system_quit_row_identity;
-pub(crate) use system_quit_row_identity::*;
+pub(crate) mod build_url_backdrop;
+pub(crate) use build_url_backdrop::*;
 
 pub(crate) mod system_quit_dialog_handlers;
 pub(crate) use system_quit_dialog_handlers::*;
