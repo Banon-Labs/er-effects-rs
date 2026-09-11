@@ -6,7 +6,9 @@ The merge `importState` runs looks like the cause. It walks whichever of the two
 objects has more keys, so a key the incoming build has and the live character
 lacks is never visited. A character that has been saved once carries `computed`,
 and one with an effect toggled also carries `activeEffects` -- so an imported
-build can be the shorter of the two while being the only one with `sliders`.
+build can be the shorter of the two while being the only one with `sliders`. My
+builds come out at 23 or 24 top-level keys, which is the same range, so which
+one wins depends on what the character it lands on has been through.
 
 The builds come out of a mod of mine that reads the character from the game, but
 nothing about the format is unusual: the bytes are the same 264 the Cosmetics AOB
