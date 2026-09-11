@@ -113,9 +113,7 @@ use er_game_base::mem::{
     game_data_addr, game_module_base, game_rva_named, read_bytes, safe_read_u8, safe_read_u16,
     safe_read_usize,
 };
-use er_game_base::rva::{
-    CS_MENU_MAN_GLOBAL_RVA, GAME_DATA_MAN_GLOBAL_RVA, GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET,
-};
+use er_game_base::rva::CS_MENU_MAN_GLOBAL_RVA;
 use er_loading_portrait_core::{
     CHR_ASM_MODEL_INS_PARTS_NODE_COUNT, CHR_ASM_MODEL_INS_PARTS_NODE_OFFSET,
     CHR_ASM_MODEL_INS_SCENE_OFFSET, PROFILE_OFFSCREEN_SCENE_REGISTERED_OFFSET,
@@ -143,7 +141,6 @@ use crate::equip_fingerprint::{
     PortraitRenderVerdict, RebuildObservation, parts_fingerprint, portrait_equipment_verdict,
     portrait_rebuild_verdict, portrait_render_verdict, portrait_step_bit, portrait_walked_rebuild,
 };
-use crate::face_data::FACE_DATA_BUFFER_OFFSET;
 use crate::host::append_autoload_debug;
 
 /// The `CS::CSMenuFaceModelRend` builder, `FUN_14099b950(rendSlot, dialog, 0x13, faceSource, 1)`.
@@ -250,6 +247,16 @@ pub const MENU_PLAYER_CHR_STATUS_SIZE: usize = 0x80;
 /// storage at `+0x40`. The constructor releases the pointer after the builder returns, and this
 /// module does the same.
 pub const MENU_PLAYER_CHR_STATUS_CALLBACK_OFFSET: usize = 0x78;
+/// `MENU_PLAYER_CHR_STATUS + 0x10` -- where the builder finds the face it copies.
+///
+/// It holds a pointer, and the dereference is the whole point. `FUN_14099b950` does not read the
+/// status object's own bytes for the face: it calls `FUN_1407c8350(param_4)`, whose entire body is
+/// `return *(param_4 + 0x10)`, and hands that result to `FaceDataBuffer::Copy`. This module's doc
+/// comment used to render that step as `faceSource+0x10`, dropping the dereference, and the live
+/// oracle was written to the comment rather than to the disassembly -- see
+/// [`quit_face_source_fingerprint`].
+pub const MENU_PLAYER_CHR_STATUS_FACE_SOURCE_OFFSET: usize = 0x10;
+
 pub const MENU_PLAYER_CHR_STATUS_CALLBACK_INLINE_OFFSET: usize = 0x40;
 /// The `_Delete_this(bool deallocate)` slot in that impl's vtable, which the constructor calls.
 pub const FUNC_IMPL_DELETE_THIS_VTABLE_OFFSET: usize = 0x20;
@@ -486,6 +493,12 @@ pub unsafe fn refresh_quit_panel_portrait(dialog: usize) -> QuitFaceRefresh {
         let descriptor = pick_source();
         let status_ptr = status.as_mut_ptr() as usize;
         fill_status(descriptor, status_ptr);
+        // The source the builder will copy the face from, read the way the builder reads it. Safety:
+        // `fill_status` has just written this object, and the read is fault-guarded.
+        QUIT_FACE_SOURCE.store(
+            safe_read_usize(status_ptr + MENU_PLAYER_CHR_STATUS_FACE_SOURCE_OFFSET).unwrap_or(0),
+            Ordering::SeqCst,
+        );
         BUILD_URL_QUIT_FACE_DIALOG.store(dialog, Ordering::SeqCst);
         BUILD_URL_QUIT_FACE_RENDERER.store(renderer, Ordering::SeqCst);
         BUILD_URL_QUIT_FACE_TARGET_RENDERER.store(renderer, Ordering::SeqCst);
@@ -633,6 +646,12 @@ unsafe fn release_status_callback(status: usize) {
 ///
 /// `at` must address a `FaceDataBuffer`. The read is fault-guarded and answers `0` when it cannot
 /// be taken whole, which the comparison treats as no measurement rather than as a mismatch.
+/// The address `FaceDataBuffer::Copy` was given as its source on the last call, or `0`.
+///
+/// Module-local rather than a telemetry counter: it is a live pointer into game memory, useful for
+/// one verify window and meaningless in a written-out record.
+static QUIT_FACE_SOURCE: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
 unsafe fn face_fingerprint(at: usize) -> u64 {
     let mut bytes = [0u8; MENU_FACE_RENDERER_FACE_DATA_COMPARED];
     if !unsafe { read_bytes(at, &mut bytes) } {
@@ -641,31 +660,22 @@ unsafe fn face_fingerprint(at: usize) -> u64 {
     fnv1a64(&bytes)
 }
 
-/// The live character's face buffer, fingerprinted the same way, or `0` when there is no character.
+/// The face the builder was handed, fingerprinted the same way, or `0` when it was never captured.
 ///
-/// This is the source `FaceDataBuffer::Copy` reads: `GetFaceDataBuffer` is
-/// `pgd + face_data + face_data_buffer`, and both offsets are pinned rather than taken from the
-/// sibling binding.
+/// This replaced a walk from `GameDataMan` to `pgd + face_data + face_data_buffer`, which was
+/// comparing the renderer's copy against an object the builder never reads. The builder's source is
+/// `*(status + 0x10)` -- captured at the call in [`QUIT_FACE_SOURCE`], because the status object
+/// itself is a stack local that is gone by the time the verify window samples.
 ///
 /// # Safety
 ///
 /// Game or menu thread. Every read is fault-guarded.
-unsafe fn live_face_fingerprint(base: usize) -> u64 {
-    let game_data_man = er_game_base::mem::read_global_ptr(
-        base,
-        GAME_DATA_MAN_GLOBAL_RVA,
-        "GAME_DATA_MAN_GLOBAL_RVA",
-    );
-    if game_data_man == 0 {
+unsafe fn quit_face_source_fingerprint() -> u64 {
+    let source = QUIT_FACE_SOURCE.load(Ordering::SeqCst);
+    if source == 0 {
         return 0;
     }
-    let Some(pgd) =
-        (unsafe { safe_read_usize(game_data_man + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) })
-            .filter(|&p| p != 0)
-    else {
-        return 0;
-    };
-    unsafe { face_fingerprint(pgd + PLAYER_GAME_DATA_FACE_DATA_OFFSET + FACE_DATA_BUFFER_OFFSET) }
+    unsafe { face_fingerprint(source) }
 }
 
 /// The renderer's model instance and a fingerprint of the parts it is assembled from.
@@ -828,7 +838,7 @@ unsafe fn quit_face_verify_tick(dialog: usize) {
 
     // The input. Safety: fault-guarded reads of the renderer's copy and of the live character.
     let renderer_face = unsafe { face_fingerprint(renderer + MENU_FACE_RENDERER_FACE_DATA_OFFSET) };
-    let live_face = unsafe { live_face_fingerprint(base) };
+    let live_face = unsafe { quit_face_source_fingerprint() };
     BUILD_URL_QUIT_FACE_FINGERPRINT_AFTER.store(renderer_face, Ordering::SeqCst);
     BUILD_URL_QUIT_FACE_LIVE_FINGERPRINT.store(live_face, Ordering::SeqCst);
     let input = portrait_equipment_verdict(live_face, renderer_face);
