@@ -236,14 +236,18 @@ pub unsafe fn set_row_field_visible(
 ///
 /// A standalone shell installs neither and the push still lands -- it simply writes the text it was
 /// handed, with no font/align hot-reload wrapped around it and no field-target cache behind it.
+/// Wrap a field's text in Scaleform HTML for the live editor's current font and alignment. Handing
+/// the input straight back is the neutral answer.
+pub type LiveTextForField = fn(&str, &[u16]) -> Vec<u16>;
+
+/// Record which component a field's text last went to, tagged with the surface that wrote it, so
+/// the editor can re-drive that field between populates.
+pub type RememberFieldTarget = fn(&str, usize, &[u16], &'static str);
+
 #[derive(Clone, Copy, Default)]
 pub struct RowTextHooks {
-    /// Wrap the text in Scaleform HTML for the live editor's current font and alignment. Returning
-    /// the input unchanged is the neutral answer.
-    pub live_text_for_field: Option<fn(&str, &[u16]) -> Vec<u16>>,
-    /// Record which component a field's text last went to, so the editor can re-drive it between
-    /// populates.
-    pub remember_field_target: Option<fn(&str, usize, &[u16], &'static str)>,
+    pub live_text_for_field: Option<LiveTextForField>,
+    pub remember_field_target: Option<RememberFieldTarget>,
 }
 
 static ROW_TEXT_HOOKS: std::sync::OnceLock<RowTextHooks> = std::sync::OnceLock::new();

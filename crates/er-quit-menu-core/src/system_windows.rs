@@ -94,6 +94,12 @@ pub struct RootProxyScratch {
     bytes: [u8; MENU_WINDOW_ROOT_PROXY_SCRATCH_SIZE],
 }
 
+/// Set a `MenuWindow`'s visibility through the game's own setter and stamp the matching visual
+/// flags, returning whether the setter was dispatched.
+///
+/// # Safety
+///
+/// Menu thread, with `window` a live `MenuWindow` and `base` the game module base.
 pub unsafe fn menu_window_set_visible_and_flags(
     base: usize,
     window: usize,
@@ -179,6 +185,13 @@ pub unsafe fn menu_window_set_visible_and_flags(
     true
 }
 
+/// Hide `02_000_IngameTop` and `02_040_OptionSetting` so a submitted ProfileSelect overlay is not
+/// drawn over the pause menu it came from.
+///
+/// # Safety
+///
+/// As [`menu_window_set_visible_and_flags`]: menu thread, `base` the game module base. The windows
+/// are resolved from the live list rather than passed in.
 pub unsafe fn hide_real_system_windows(base: usize, source: &str) {
     let top = SYSTEM_QUIT_INGAME_TOP_WINDOW.load(Ordering::SeqCst);
     let option = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
@@ -205,6 +218,12 @@ pub unsafe fn hide_real_system_windows(base: usize, source: &str) {
     ));
 }
 
+/// Re-assert the `02_040_OptionSetting` pane's visibility after a restore, optionally forcing the
+/// tab the dialog should come back on.
+///
+/// # Safety
+///
+/// Menu thread, with `option_window` a live `02_040_OptionSetting` window.
 pub unsafe fn reapply_optionsetting_pane_visibility(
     _base: usize,
     option_window: usize,

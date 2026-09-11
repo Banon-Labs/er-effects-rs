@@ -76,13 +76,16 @@ fn gated_game_fn(rva: usize, what: &'static str) -> Option<usize> {
     er_game_base::mem::game_rva_named(rva as u32, what).ok()
 }
 
-/// Keep an installed hook alive for the process lifetime.
+/// Hand an installed detour over to MinHook and stop tracking its handle here.
 ///
-/// `MhHook`'s drop would revert the detour, and every hook here is installed once and never
-/// removed, so the handle is deliberately leaked rather than stored in a static nobody reads.
-fn leak_installed_hook(hook: MhHook) {
-    std::mem::forget(hook);
-}
+/// This used to call `std::mem::forget`, to say "the detour outlives the scope that created it".
+/// That was a no-op and the sentiment behind it was wrong: `MhHook` is three raw pointers with no
+/// `Drop` impl, so dropping one never uninstalled anything -- MinHook has owned the detour since
+/// `MH_ApplyQueued`. `clippy::forget_non_drop` flags exactly that.
+///
+/// Takes `MhHook` by value rather than a generic on purpose: a generic would silently accept a type
+/// that does implement `Drop` and really run its destructor.
+fn leak_installed_hook(_hook: MhHook) {}
 
 /// The steps a host with a character switch and a save-swap ledger behind it supplies.
 ///
@@ -290,6 +293,10 @@ pub fn save_picker_start_dir() -> Option<PathBuf> {
 ///     for the staged ProfileSummary prefix. Cursor values read from the live `05_010_ProfileSelect`
 ///     dialog use the same dense row index; do not read the parent System/Quit dialog and try to
 ///     compensate for the resulting garbage offset.
+/// # Safety
+///
+/// `summary` must be the live `ProfileSummary` container, and the caller must own the menu thread
+/// for the duration -- the records are rewritten in place under the list that reads them.
 pub unsafe fn save_picker_write_row_records(
     model: &er_save_picker_core::model::SavePickerModel,
     summary: usize,
@@ -371,6 +378,9 @@ pub unsafe fn save_picker_arm_row_snapshot(summary: usize) {
 /// sticky for the life of the process, and so the picker's labels were left in the game's records
 /// for every session after the first cross-file load. See
 /// [`save_picker_restore_staged_row_records`].
+/// # Safety
+///
+/// Menu thread, with the summary container the host seam resolves still live.
 pub unsafe fn save_picker_stage_row_records(
     model: &er_save_picker_core::model::SavePickerModel,
 ) -> bool {
@@ -411,6 +421,9 @@ pub unsafe fn save_picker_stage_row_records(
 /// Open the load-source picker from the "Load Character from File" row action (menu thread). Which
 /// surface that is -- this in-game browser or the OS file dialog -- is decided in one place,
 /// [`open_picker_for_intent`]; the signature and the four call sites are unchanged.
+/// # Safety
+///
+/// Menu-thread press context, with `action_obj` the row's live action object.
 pub unsafe fn system_quit_open_save_picker_menu(action_obj: usize) -> PickerOpenOutcome {
     match hooks().open_picker_for_intent {
         Some(open) => unsafe { open(PickerOpenRequest::LoadSource { action_obj }) },
@@ -423,6 +436,10 @@ pub unsafe fn system_quit_open_save_picker_menu(action_obj: usize) -> PickerOpen
 /// Open the in-game file picker (menu thread). Mirrors the old OS-picker preflight (restore stale
 /// preview, arm the active save snapshot), then stages the browse rows and submits the
 /// `05_010_ProfileSelect` window.
+/// # Safety
+///
+/// As [`system_quit_open_save_picker_menu`], which is the only caller that has not already been
+/// through the host's intent router.
 pub unsafe fn system_quit_open_save_picker_menu_in_game(action_obj: usize) -> bool {
     let save_path = match system_quit_env_save_path() {
         Ok(path) => path,
@@ -504,6 +521,9 @@ pub unsafe fn system_quit_open_save_picker_menu_in_game(action_obj: usize) -> bo
 /// owned: called from `system_quit_menu_window_run_post` after the tick stages
 /// `SAVE_DEST_OPEN_PICKER_PENDING`. Which surface opens is decided in one place,
 /// [`open_picker_for_intent`]; the signature and the call site are unchanged.
+/// # Safety
+///
+/// Menu-pump context, with `system_dialog` the live System dialog the Save Game flow came from.
 pub unsafe fn system_quit_open_save_dest_picker(system_dialog: usize) -> PickerOpenOutcome {
     match hooks().open_picker_for_intent {
         Some(open) => unsafe { open(PickerOpenRequest::SaveDestination { system_dialog }) },
@@ -526,6 +546,9 @@ pub unsafe fn system_quit_open_save_dest_picker(system_dialog: usize) -> PickerO
 ///     snapshot of the live save is taken later, at the fire gate, by `save_dest_arm_redirect`;
 ///   * the model carries the loaded save's filename so the `[ new ]` row writes that leaf, and its
 ///     full path so that row is marked `[CURRENT]` in the listing.
+/// # Safety
+///
+/// As [`system_quit_open_save_dest_picker`].
 pub unsafe fn system_quit_open_save_dest_picker_in_game(system_dialog: usize) -> bool {
     const HEAP_LO: usize = 0x10000;
     if system_dialog < HEAP_LO || system_dialog == TITLE_OWNER_SCAN_START_ADDRESS {
@@ -701,6 +724,9 @@ mod save_picker_menu_stage_transition_tests {
 /// opens in that leaf is the loaded save itself -- so pressing `[ new ]` there is an overwrite and
 /// confirms like any other. The only rows that skip the question are the ones whose target does
 /// not exist, where there is nothing to warn about.
+/// # Safety
+///
+/// Menu thread, from the activation hook, with `dialog` the live picker dialog.
 pub unsafe fn save_dest_handle_picked_target(dialog: usize, target: PathBuf, source: &'static str) {
     unsafe {
         match save_dest_route_picked_target(&target) {
@@ -760,6 +786,10 @@ pub unsafe fn save_dest_handle_picked_target(dialog: usize, target: PathBuf, sou
 /// picker window has finished tearing down (the native close also restores the user's real
 /// ProfileSummary rows and re-shows the System windows, which is exactly the state the close-all
 /// sequence expects).
+/// # Safety
+///
+/// As [`save_dest_handle_picked_target`]: this closes the window `dialog` names, so it must not
+/// be called again for the same dialog afterwards.
 pub unsafe fn save_dest_stage_commit_and_close_picker(dialog: usize, reason: &str) {
     if !save_flow_menu_enter_stage(
         SAVE_FLOW_STAGE_DEST_BROWSE,
@@ -799,6 +829,9 @@ pub unsafe fn save_dest_stage_commit_and_close_picker(dialog: usize, reason: &st
 /// This is the only signal the native window hands us, so it carries every browse action: up,
 /// enter directory, switch drive, page, pick file, `[ new ]`. The model decides which from the row
 /// index; a listing change of any kind comes back as `Repopulate` and is serviced identically.
+/// # Safety
+///
+/// Menu thread, from inside the activate hook, with `dialog` live and the picker owning the window.
 pub unsafe fn save_picker_handle_activation(dialog: usize, cursor: i32) -> usize {
     use er_save_picker_core::model::PickerActivation;
     if save_picker_path_editor_active() {
@@ -935,6 +968,9 @@ pub unsafe fn save_picker_handle_activation(dialog: usize, cursor: i32) -> usize
 
 /// Native cancel-close (SetResult(Failed) + window close) -- same primitive the character-switch
 /// pick uses; runs in menu ownership from the activate hook.
+/// # Safety
+///
+/// Menu ownership, from the activate hook, with `dialog` live and not already closed.
 pub unsafe fn save_picker_native_close(dialog: usize, reason: &str) {
     if let Ok(close_addr) = game_rva(MENU_WINDOW_CLOSE_WITH_FAILED_RVA as u32) {
         let close_fn: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(close_addr) };
@@ -1224,6 +1260,12 @@ unsafe fn save_picker_event_point(event: usize) -> Option<(f32, f32)> {
     (x.is_finite() && y.is_finite()).then_some((x, y))
 }
 
+/// Record the native click event the drive strip's hit testing needs, so a press on a drive
+/// button can be told from a press on the row it sits in.
+///
+/// # Safety
+///
+/// Menu thread, with `event` the live native event object for the press being handled.
 pub unsafe fn save_picker_note_drive_strip_click_event(event: usize) {
     if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 || save_picker_path_editor_active() {
         return;
@@ -1722,6 +1764,9 @@ fn drive_strip_pressed_mask(prev_down: usize, down_mask: usize, nav_edges: usize
 /// one hit target per row, so `[C:]  [S:]  [Z:]` can never be true native sub-buttons. While the
 /// native cursor is on the drive row, sample input edges in the menu pump and mutate the picker model
 /// directly: mouse uses the live X coordinate; Left/Right cycle to the adjacent drive.
+/// # Safety
+///
+/// Called from the `MenuWindowJob::Run` hook, on the menu thread, while the picker owns the window.
 pub unsafe fn save_picker_menu_pump_drive_strip_mouse() {
     if save_picker_path_editor_active() {
         SAVE_PICKER_DRIVE_STRIP_INPUT_DOWN_MASK.store(0, Ordering::SeqCst);
@@ -1966,6 +2011,9 @@ fn save_picker_scrollbar_packed_state(current: usize, page: usize, total: usize)
 /// native cursor movement address unstaged rows. Instead, drive the embedded native `ScrollBarV`
 /// controller directly through the same total/current setters the game uses, with the verified
 /// owner pointer at `ProfileLoadDialog + 0xbe0` (`grid + 0x1a8`).
+/// # Safety
+///
+/// As [`save_picker_menu_pump_drive_strip_mouse`].
 pub unsafe fn save_picker_menu_pump_native_scrollbar() {
     let window = save_picker_live_profile_dialog();
     if window == 0 || SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
@@ -2515,6 +2563,9 @@ unsafe fn save_picker_clear_vertical_menu_event(down: bool) -> bool {
 /// Scroll the ten-row native window by one row per explicit UP/DOWN press taken at an edge row.
 /// Consuming the latch unconditionally (even when the picker is not live) keeps a press made
 /// elsewhere from being replayed into the list the next time the picker opens.
+/// # Safety
+///
+/// As [`save_picker_menu_pump_drive_strip_mouse`].
 pub unsafe fn save_picker_menu_pump_edge_scroll() {
     let up_mask = SAVE_PICKER_NAV_UP_MASK;
     let down_mask = SAVE_PICKER_NAV_DOWN_MASK;
@@ -2799,6 +2850,10 @@ pub unsafe fn save_picker_menu_pump_edge_scroll() {
 /// Menu-pump-owned in-place list rebuild (called from the MenuWindowJob::Run hook). Runs the
 /// native records-changed rebuild queued by a picker navigation; falls back to close+resubmit
 /// when the rebuild fn cannot be resolved.
+/// # Safety
+///
+/// As [`save_picker_menu_pump_drive_strip_mouse`]. The native rebuild it runs walks the row models,
+/// so the staged records must be consistent before this is called.
 pub unsafe fn save_picker_menu_pump_rebuild() {
     let dialog = SAVE_PICKER_REBUILD_PENDING_DIALOG.swap(0, Ordering::SeqCst);
     if dialog == 0 || SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
@@ -2810,6 +2865,10 @@ pub unsafe fn save_picker_menu_pump_rebuild() {
 /// Menu-pump-owned resubmit: called from `system_quit_menu_window_job_run_hook` (the proven
 /// submit context) once the closed picker window has left the list. Returns true when a resubmit
 /// was performed (or is still pending), i.e. the caller must skip the System-UI restore.
+/// # Safety
+///
+/// As [`save_picker_menu_pump_drive_strip_mouse`], and only once the closed picker window has left
+/// the list -- resubmitting while it is still there submits a second window over the first.
 pub unsafe fn save_picker_menu_pump_resubmit() -> bool {
     if !save_picker_resubmit_pending() {
         return false;
@@ -3121,6 +3180,10 @@ pub fn save_picker_last_saved_text(modified: std::time::SystemTime) -> Option<St
 /// (Comparing `GetLocalTime` to `GetSystemTime` would give only the current offset and misdate every
 /// file from the other side of the boundary by an hour.) The offset comes back as a number, which is
 /// all the pure formatter needs -- that is what keeps the rendering unit-testable.
+/// # Safety
+///
+/// Calls the Win32 time-zone API, which has no precondition beyond being on Windows. It is `unsafe`
+/// because that call is, not because a caller can get it wrong.
 pub unsafe fn local_utc_offset_seconds(utc_secs: i64) -> Option<i64> {
     use windows::Win32::Foundation::{FILETIME, SYSTEMTIME};
     use windows::Win32::System::Time::{
