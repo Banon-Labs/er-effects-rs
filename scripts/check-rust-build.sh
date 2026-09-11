@@ -137,6 +137,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	# which is how four overridden `[lib] name`s went unchecked before.
 	me3_shells=(
 		er-armament-icons:er_armament_icons
+		er-quit-rows:er_quit_rows
 		er-better-refills:er_better_refills
 		er-build-import:er_build_import
 		er-enemynpc-effects:er_enemynpc_effects

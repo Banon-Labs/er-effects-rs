@@ -336,6 +336,74 @@ evidence = "crates/er-build-import/src/lib.rs:23; crates/er-quit-menu-core/src/g
 
 [[conflict]]
 a = "er-quickload"
+b = "er-quit-rows"
+kind = "duplicate-owner"
+reason = """`er-quit-rows` is a copy of `er-quickload`'s source being reduced to the System>Quit rows, so until that reduction finishes the two are duplicate owners of everything the product owns, not of one surface: the same row cloner arm, the same three routing prologues, the same row-populate and current-summary detours, the same save-redirect hooks, the same autoload phase machine and the same telemetry counters. Every static is per DLL, so co-loading gives each of those two independent copies with no shared lock.
+
+It was duplicated rather than extracted on 2026-09-11 by user directive, after the opposite approach was measured and rejected. `er-quit-load-character` had been built UP from shared crates, and run `br-20260911-205138-default` reached a shell where every moved code path executed and the surface still looked and behaved nothing like the product: right rows, wrong GFX content, no styling, no inserted elements, and a save-file click that did not interact like the product's. Starting from a copy means parity is the default and only what is deleted is lost.
+
+This entry is expected to narrow as the reduction proceeds, but it must never be deleted: even fully reduced, both shells arm the same Quit grid, and `er_gfx::options_02_040::quit6` fail-closes when handed already-derived bytes."""
+evidence = "crates/er-quit-rows/src/lib.rs; crates/er-quickload/src/lib.rs; bd build-a-feature-dll-down-from-quickload-not-up-2026-09-11"
+
+[[conflict]]
+a = "er-quit-rows"
+b = "er-reload-trace"
+kind = "diagnostic-drive"
+reason = """Inherited wholesale from `er-quickload`, whose entry with this same tracer records the \
+mechanism: `er-quit-rows` is a copy of that source, so it claims the same 30 addresses the tracer \
+names as bare `rva:` fields in its `HookSpec` table -- the save dispatch family around 0x67axxx, \
+the menu wrapper trio at 0x82bxxx, the load-job and profile-close prologues, and the MoveMap \
+dispatcher. Each shell links `er-hook` statically, so each owns a separate MinHook instance and \
+whichever installs second overwrites the other's trampoline; the loser reports installed and never \
+runs, which is the failure this table exists to make visible before a run rather than after.
+
+The reduction is expected to shrink this list as whole subsystems leave `er-quit-rows`, but the \
+pair stays declared: the Quit rows themselves route through `SYSTEM_QUIT_REQUEST_LOAD_SLOT_RVA` and \
+`SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_RVA`, which the tracer also names, so no amount of trimming \
+removes the overlap."""
+evidence = "crates/er-quit-rows/src/constants/profile_render.rs; crates/er-reload-trace/src/lib.rs"
+
+[[conflict]]
+a = "er-quit-rows"
+b = "er-input-harness"
+kind = "drives-input"
+reason = """The same relationship `er-quickload` has with the harness, inherited by copying its \
+source: both resolve `FD4_PAD_MANAGER_RVA` and reach the native binding keystate bitmap through it. \
+The harness writes that bitmap to drive menus; a product shell reads it to decide whether the \
+player is holding anything. Two writers of one keystate with no shared lock is a driven input the \
+other side cannot distinguish from a user's, which is why this is declared rather than assumed \
+harmless.
+
+Loading them together is still the intended agent workflow for `er-quickload`, and the conflict \
+entry is what makes the profile generator say so out loud. For `er-quit-rows` there is no such \
+workflow yet: the shell is loaded alone from `~/Elden/quit-rows-trimmed.me3` while it is being \
+reduced."""
+evidence = "crates/er-quit-rows/src/experiments/can_move_probe.rs:172; crates/er-input-harness/src/pad_inject.rs:40"
+
+[[shared]]
+a = "er-quit-rows"
+b = "er-armament-icons"
+target = "er_game_base::rva::TITLE_SCALEFORM_FILE_OPEN_RVA"
+mechanism = "hook-union"
+handler_a = "title_scaleform_file_open_observer_hook"
+handler_b = "file_open_hook"
+reason = """The same union row `er-quickload` and this companion already hold, inherited by \
+copying that source: `er-quit-rows` registers the identical observer through \
+`crate::mh::register_union_hook` rather than a private `MhHook`, so whichever shell reaches the \
+prologue first creates the dispatcher and the other chains into it. Read that entry for the \
+measurement -- 113 file-open hits alone against 0 in an eleven-native profile, with every movie \
+swap silently inert -- because it is the reason both sides are union-shaped at all.
+
+Two further addresses are shared with this companion and are not covered by the union: \
+`CSSCALEFORMVALUE_DTOR_RVA` (0xd7f850) and `TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA` \
+(0x74a2f0), which it spells `SCALEFORM_VALUE_DTOR_RVA` and `ASSIGN_COMPONENT_WITH_NAME_RVA`. \
+Neither side has been measured as the owner, and `er-quit-rows` is a transitional shell loaded \
+alone from `~/Elden/quit-rows-trimmed.me3` while it is reduced, so the pair has never actually \
+co-loaded. Measure them before that changes."""
+evidence = "crates/er-quit-rows/src/experiments/startup_hooks/loading_cover/title_resources_stats_text.rs:110; crates/er-armament-icons/src/gfx_equip_hook.rs:85"
+
+[[conflict]]
+a = "er-quickload"
 b = "er-quit-load-character"
 kind = "duplicate-owner"
 reason = """The same relation this table already records between `er-quickload` and `er-quit-menu`, for the same mechanism and one row further along. Both call `er_quit_menu_core::row_cloner::arm` with their own row set, and two arms in one process is two `AddCancelButton` registrations appending two sets of rows to one dialog, two row tables writing one set of telemetry counters, and two claims on the three routing prologues. The union makes the detours chain rather than trample, so the damage is the second set of rows, not a corrupted trampoline.

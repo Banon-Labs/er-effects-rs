@@ -1,0 +1,1059 @@
+//! D3D12 Present overlay -- draw the captured now-loading portrait directly onto the swapchain
+//! backbuffer, bypassing the Scaleform/TexRepository pipeline entirely.
+//!
+//! The in-pipeline routes (forge bake, re-forge, CS-texture upload) cannot drive the displayed image:
+//! the forge pre-binds before the portrait renders (timing race) and Scaleform samples its own decoded
+//! GFx-renderer texture copy distinct from the CS-side texture we can reach (see bd
+//! `postcontinue-portrait-EXHAUSTIVE-2026-06-30`). This is the sanctioned native D3D12/game-render-layer
+//! path: hook `IDXGISwapChain::Present`, and when the now-loading screen is up, copy the captured portrait
+//! over the backbuffer.
+//!
+//! Phase 1 (this commit): install the Present hook via the standard dummy-swapchain vtable technique and
+//! log that it fires + the backbuffer format/dims. No backbuffer writes yet (lowest crash risk) -- proves
+//! the hook mechanism before adding the draw.
+
+use std::ffi::c_void;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use windows::Win32::Graphics::Dxgi::{IDXGISwapChain, IDXGISwapChain1};
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::core::{IUnknown, Interface};
+
+use crate::mh::{MH_Initialize, MH_STATUS};
+
+use super::*;
+
+/// Per-frame Present hit counter (RAM semaphore that the overlay hook is live + firing).
+pub(crate) use er_telemetry_core::counters::PRESENT_HOOK_HITS;
+pub(crate) use er_telemetry_core::counters::PRESENT_HOOK_INSTALLED;
+/// Original `IDXGISwapChain::Present` / `Present1` trampolines; 0 until installed.
+pub(crate) use er_telemetry_core::counters::PRESENT_ORIG;
+pub(crate) use er_telemetry_core::counters::PRESENT1_ORIG;
+
+/// `IDXGISwapChain::Present` vtable index: IUnknown(3) + IDXGIObject(4) + IDXGIDeviceSubObject(1) = slot 8.
+const PRESENT_VTABLE_INDEX: usize = 8;
+/// `IDXGISwapChain1::Present1` vtable index (Present(8)..GetLastPresentCount(17), GetDesc1(18)..Present1(22)).
+const PRESENT1_VTABLE_INDEX: usize = 22;
+
+type PresentFn = unsafe extern "system" fn(*mut c_void, u32, u32) -> i32;
+type Present1Fn = unsafe extern "system" fn(*mut c_void, u32, u32, *const c_void) -> i32;
+
+/// `g_GxDrawContext` (GXSR::GxDrawContext singleton) deobf RVA -- the RE-confirmed root of the live
+/// swapchain. The deobf binary stores this singleton at 0x1419e637c (`mov [rip]=0x1447ef360`) right before
+/// the `GxDrawContext::Initilize` fall-through (ground-truthed against the deobf binary, not a formula).
+/// The 0x1010-byte GxDrawContext holds the per-window render-output vector at +0x120 (begin ptr at +0x128);
+/// each inline 0x170-byte entry's first qword is the per-window output object, whose first qword is the live
+/// `IDXGISwapChain3*`. Chain: `*(base+RVA)` -> `+0x128` -> `*entry[0]` -> `*output` = swapchain. (Supersedes
+/// the old `GLOBAL_CSGraphics` root, which never held the swapchain -- CSGraphics is unrelated to GX present.)
+const G_GX_DRAW_CONTEXT_RVA: usize = er_loading_portrait_core::GX_DRAW_CONTEXT_RVA;
+/// `GxDrawContext+0x128` = begin pointer of the per-window render-output vector (vector object at +0x120).
+const GXDC_OUTPUT_VEC_BEGIN_OFFSET: usize = 0x128;
+pub(crate) use er_telemetry_core::counters::GAME_BASE;
+/// Set once we've found the game's swapchain and hooked its real Present/Present1. (The earlier "dummy
+/// swapchain vtable funcs differ under vkd3d-proton" theory was unsound -- under Proton all dxgi.dll
+/// swapchains share one DXVK `CDXGISwapChain` vtable, so Present(8)/Present1(22) are the same function for
+/// every swapchain. The real prior blocker was the find missing the object, so MinHook was never attempted
+/// on a real swapchain; dinput8 MinHooks fire, so the hook path itself is sound.)
+pub(crate) use er_telemetry_core::counters::GAME_PRESENT_HOOKED;
+/// The found game swapchain pointer + game module base, latched in `try_install_game_present_hook`. The
+/// Present detour composites the portrait only when `this` matches `GAME_SWAPCHAIN` -- the shared dxgi
+/// vtable means the detour also fires for our throwaway dummy swapchain, which we must never draw on.
+pub(crate) use er_telemetry_core::counters::GAME_SWAPCHAIN;
+pub(crate) use er_telemetry_core::counters::GAME_SWAPCHAIN_FIND_TRIES;
+/// The dummy swapchain's resolved `Present(8)` / `Present1(22)` addrs. Under vkd3d-proton every dxgi
+/// swapchain shares one DXVK `CDXGISwapChain` vtable, so the game swapchain's `vtable[8]`/`vtable[22]`
+/// are byte-identical to these (runtime-proven: resolved 0x..209f0 == VMT-swapped Present8 0x..209f0).
+/// This lets `swapchain_vtable_matches` confirm a candidate by reading + comparing these two slots --
+/// never by dispatching `QueryInterface`, which faults on a half-constructed early-boot object whose
+/// dxgi-ranged-but-bogus vtable can't be caught by `catch_unwind` (that AV killed the pump at +726ms).
+pub(crate) use er_telemetry_core::counters::PRESENT_RESOLVED_ADDR;
+pub(crate) use er_telemetry_core::counters::PRESENT1_RESOLVED_ADDR;
+
+// === Swapchain-find reject attribution (RAM oracles) =============================================
+// The 2026-07-15 native-Windows runs burned three probes on an opaque "chain miss": the walk gave no
+// way to tell a null chain link from a real candidate rejected by the vtable-equality check. Every
+// find attempt now stores its terminal stage + candidate facts so telemetry alone names the failing
+// predicate (oracle_present_find_* in write_game_module_oracles).
+/// How the game swapchain was accepted: 0=not yet, 1=exact vtable match against the dummy-resolved
+/// Present/Present1 (the vkd3d shared-vtable fast path), 2=module-backed + stable + QI fallback (the
+/// native-Windows / wrapped-swapchain path).
+pub(crate) use er_telemetry_core::counters::PRESENT_ACCEPT_PATH;
+/// Backbuffer DXGI_FORMAT.0 from the first Present's GetDesc1 (RAM oracle: makes the native-Windows
+/// HDR/10-bit case, DXGI_FORMAT_R10G10B10A2_UNORM=24, directly attributable instead of inferred from
+/// zero composite draw-hits). 0 until the first present.
+pub(crate) use er_telemetry_core::counters::PRESENT_BACKBUFFER_FORMAT;
+/// Last non-null chain candidate (`*output`), its vtable pointer, and its Present(8)/Present1(22).
+pub(crate) use er_telemetry_core::counters::PRESENT_FIND_CANDIDATE;
+pub(crate) use er_telemetry_core::counters::PRESENT_FIND_CANDIDATE_VT;
+pub(crate) use er_telemetry_core::counters::PRESENT_FIND_GOT8;
+pub(crate) use er_telemetry_core::counters::PRESENT_FIND_GOT22;
+pub(crate) use er_telemetry_core::counters::PRESENT_FIND_LAST_CANDIDATE;
+/// Last find stage (see `FIND_STAGE_*`): which link/predicate the most recent attempt ended on.
+pub(crate) use er_telemetry_core::counters::PRESENT_FIND_STAGE;
+/// Consecutive tries that yielded the same candidate pointer (the QI-fallback stability gate).
+pub(crate) use er_telemetry_core::counters::PRESENT_FIND_STREAK;
+/// Owning module of the candidate's vtable: 0=unknown/not-module-backed, 1=dxgi.dll, 2=the game exe
+/// (mis-layout red flag), 3=another module (overlay/wrapper DLL -- name in the debug log).
+pub(crate) use er_telemetry_core::counters::PRESENT_FIND_VT_MODULE_KIND;
+/// Consecutive same-candidate observations required before the QI fallback may dispatch through the
+/// candidate's vtable. A half-constructed transient does not survive consecutive frames in the game's
+/// single live output slot; the real swapchain does.
+const PRESENT_QI_STABILITY_TRIES: usize = 3;
+/// `PRESENT_FIND_STAGE` values, in chain-walk order.
+const FIND_STAGE_CTX_NULL: usize = 1;
+const FIND_STAGE_VEC_NULL: usize = 2;
+const FIND_STAGE_ENTRY_NULL: usize = 3;
+const FIND_STAGE_CANDIDATE_NULL: usize = 4;
+const FIND_STAGE_VT_UNREADABLE: usize = 5;
+const FIND_STAGE_VT_NOT_MODULE: usize = 6;
+const FIND_STAGE_VT_IN_GAME_EXE: usize = 7;
+const FIND_STAGE_STABILITY_WAIT: usize = 8;
+const FIND_STAGE_QI_REJECTED: usize = 9;
+const FIND_STAGE_ACCEPTED_VTABLE: usize = 10;
+const FIND_STAGE_ACCEPTED_QI: usize = 11;
+
+/// Detour for `IDXGISwapChain::Present(this, SyncInterval, Flags)`. Phase 1: log-only, then tail-call the
+/// original. `this` is the game's swapchain (we never created it), so a real overlay draws onto its
+/// current backbuffer here. Must never panic (runs on the game's render thread every frame).
+/// Cached QueryPerformanceCounter frequency (ticks/sec) for converting DXGI SyncQPCTime deltas to us.
+fn qpc_frequency() -> u64 {
+    static FREQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let f = FREQ.load(Ordering::Relaxed);
+    if f != 0 {
+        return f;
+    }
+    let mut v = 0i64;
+    let _ = unsafe { windows::Win32::System::Performance::QueryPerformanceFrequency(&mut v) };
+    let v = v.max(0) as u64;
+    FREQ.store(v, Ordering::Relaxed);
+    v
+}
+
+/// Record the present-cadence semaphores for the game swapchain (read-only; never panics): the game's
+/// requested `SyncInterval`, plus the observed cadence from IDXGISwapChain::GetFrameStatistics
+/// (display-refreshes/present x100 and present-to-present QPC spacing). Splits a deliberate 20fps
+/// present throttle (SyncInterval=3) from GPU-can't-keep-up (SyncInterval=1 but 3 vblanks/present).
+/// bd GPU-timestamp-semaphore-split-reload-20fps-residual-2026-07-22.
+unsafe fn record_present_frame_stats(this: *mut c_void, sync: u32) {
+    if this as usize != GAME_SWAPCHAIN.load(Ordering::SeqCst) {
+        return;
+    }
+    er_telemetry_core::counters::PRESENT_SYNC_INTERVAL_LAST.store(sync as usize, Ordering::SeqCst);
+    let Some(sc) = (unsafe { IDXGISwapChain::from_raw_borrowed(&this) }) else {
+        return;
+    };
+    // GetFrameStatistics returns DXGI_ERROR_FRAME_STATISTICS_DISJOINT until a stable present series
+    // exists; treat any error as "no sample this frame" and leave the prior oracle values in place.
+    let mut stats = windows::Win32::Graphics::Dxgi::DXGI_FRAME_STATISTICS::default();
+    if unsafe { sc.GetFrameStatistics(&mut stats) }.is_err() {
+        return;
+    }
+    let pc = stats.PresentCount as usize;
+    let sr = stats.SyncRefreshCount as usize;
+    let qpc = stats.SyncQPCTime.max(0) as u64;
+    let prev_pc =
+        er_telemetry_core::counters::PRESENT_STATS_PREV_PRESENT_COUNT.swap(pc, Ordering::SeqCst);
+    let prev_sr =
+        er_telemetry_core::counters::PRESENT_STATS_PREV_SYNC_REFRESH.swap(sr, Ordering::SeqCst);
+    let prev_qpc = er_telemetry_core::counters::PRESENT_STATS_PREV_QPC.swap(qpc, Ordering::SeqCst);
+    let dpc = pc.wrapping_sub(prev_pc);
+    let dsr = sr.wrapping_sub(prev_sr);
+    if dpc > 0 && dpc < 1000 {
+        er_telemetry_core::counters::PRESENT_REFRESH_PER_PRESENT_X100
+            .store(dsr.wrapping_mul(100) / dpc, Ordering::SeqCst);
+    }
+    if prev_qpc != 0 && qpc > prev_qpc {
+        let freq = qpc_frequency();
+        if freq > 0 {
+            let us = ((qpc - prev_qpc) as u128 * 1_000_000 / freq as u128) as usize;
+            er_telemetry_core::counters::PRESENT_QPC_DELTA_US.store(us, Ordering::SeqCst);
+        }
+    }
+}
+
+unsafe extern "system" fn present_hook(this: *mut c_void, sync: u32, flags: u32) -> i32 {
+    let hits = PRESENT_HOOK_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+    if hits == 1 {
+        append_autoload_debug(format_args!(
+            "present-overlay: PRESENT(8) hook FIRED first-hit this=0x{:x}",
+            this as usize
+        ));
+        unsafe { log_backbuffer_desc(this) };
+    }
+    // GPU-frame oracle: a present is the frame boundary -- the next ExecuteCommandLists on the game
+    // queue is the new frame's first ECL. Game swapchain only (the shared dxgi vtable fires the detour
+    // for the dummy swapchain too).
+    if this as usize == GAME_SWAPCHAIN.load(Ordering::SeqCst) {
+        gpu_frame_oracle_on_present();
+    }
+    // Composite the captured portrait onto the backbuffer (gated; never panics). Only on the game's
+    // swapchain -- the shared dxgi vtable means this detour also fires for our throwaway dummy swapchain.
+    let this_u = this as usize;
+    if this_u == GAME_SWAPCHAIN.load(Ordering::SeqCst) {
+        let base = GAME_BASE.load(Ordering::SeqCst);
+        if base != 0 {
+            unsafe { composite_and_record_exposure(base, this_u) };
+        }
+    }
+    let orig = PRESENT_ORIG.load(Ordering::SeqCst);
+    if orig != 0 {
+        let f: PresentFn = unsafe { std::mem::transmute(orig) };
+        // Time the original Present to split present-block (compositor/vsync throttle) from a real
+        // per-frame work stall. bd focus-AB-falsifies-unfocused-throttle...next-present-duration.
+        let t0 = std::time::Instant::now();
+        let r = unsafe { f(this, sync, flags) };
+        er_telemetry_core::counters::PRESENT_CALL_LAST_US
+            .store(t0.elapsed().as_micros() as usize, Ordering::SeqCst);
+        unsafe { record_present_frame_stats(this, sync) };
+        r
+    } else {
+        0
+    }
+}
+
+/// Detour for `IDXGISwapChain1::Present1(this, SyncInterval, Flags, *DXGI_PRESENT_PARAMETERS)`.
+unsafe extern "system" fn present1_hook(
+    this: *mut c_void,
+    sync: u32,
+    flags: u32,
+    params: *const c_void,
+) -> i32 {
+    let hits = PRESENT_HOOK_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+    if hits == 1 {
+        append_autoload_debug(format_args!(
+            "present-overlay: PRESENT1(22) hook FIRED first-hit this=0x{:x}",
+            this as usize
+        ));
+        unsafe { log_backbuffer_desc(this) };
+    }
+    // GPU-frame oracle: a present is the frame boundary -- the next ExecuteCommandLists on the game
+    // queue is the new frame's first ECL. Game swapchain only (the shared dxgi vtable fires the detour
+    // for the dummy swapchain too).
+    if this as usize == GAME_SWAPCHAIN.load(Ordering::SeqCst) {
+        gpu_frame_oracle_on_present();
+    }
+    // Composite the captured portrait onto the backbuffer (gated; never panics). Only on the game's
+    // swapchain -- the shared dxgi vtable means this detour also fires for our throwaway dummy swapchain.
+    let this_u = this as usize;
+    if this_u == GAME_SWAPCHAIN.load(Ordering::SeqCst) {
+        let base = GAME_BASE.load(Ordering::SeqCst);
+        if base != 0 {
+            unsafe { composite_and_record_exposure(base, this_u) };
+        }
+    }
+    let orig = PRESENT1_ORIG.load(Ordering::SeqCst);
+    if orig != 0 {
+        let f: Present1Fn = unsafe { std::mem::transmute(orig) };
+        let t0 = std::time::Instant::now();
+        let r = unsafe { f(this, sync, flags, params) };
+        er_telemetry_core::counters::PRESENT_CALL_LAST_US
+            .store(t0.elapsed().as_micros() as usize, Ordering::SeqCst);
+        unsafe { record_present_frame_stats(this, sync) };
+        r
+    } else {
+        0
+    }
+}
+
+/// Presents skipped because the now-loading display window has not opened yet (RAM oracle).
+pub(crate) use er_telemetry_core::counters::PRESENT_COMPOSITE_EARLY_SKIPS;
+
+/// True on native Windows, where our overlay compositing must be fully suppressed. Runtime-proven across
+/// 17 native-Windows runs (bd er-effects-rs-n4x, 2026-07-15): compositing on the game's shared D3D12
+/// device -- creating resources + submitting command lists -- crashes the strict native AMD driver at
+/// every phase (early-boot D3D12 init: RIP-outside AV; the game's own now-loading screen: Write AV), while
+/// composite-off is 60s clean and reaches gameplay. vkd3d/Proton isolates the shared-device work; native
+/// Windows does not. Displaying our overlay on native Windows therefore needs a different architecture (a
+/// separate overlay swapchain/window, or the game's own Scaleform/CSEzDraw render primitives), not a
+/// when-gate. Until that redesign, native Windows runs stable with no custom overlay visuals; the
+/// swapchain-find/HDR/device-removed infra all stay in place for the eventual redesign.
+fn composite_suppressed_on_native() -> bool {
+    !running_under_wine()
+}
+
+/// Shared Present/Present1 composite body: draw the loading bar / save picker (and, where the render-drive
+/// runs, the loading-screen portrait), then the in-world effect-selector HUD, then service overlay input.
+/// Runs on the game render thread; never panics.
+///
+/// Native-Windows split (2026-07-15, bd er-effects-rs-n4x). The strict native D3D12 driver crashes on the
+/// character-profile render-drive (proven: drive off => 60s stable + reaches gameplay), so on native
+/// Windows the drive is gated off and the animated portrait cannot render. But the loading bar + save
+/// PICKER are pure display (a CopyTextureRegion of our own CPU-rasterized pixels onto the backbuffer
+/// inside the game's Present, when the backbuffer is guaranteed to be in present state) -- they need no
+/// drive. So on native Windows: Skip the portrait composite (it would only ever have a stale/absent head
+/// with the drive off, and its readback path is heavier), and draw the boot-progress bar + picker
+/// directly. On Wine/Proton (vkd3d), keep the full portrait-first path.
+/// Run the per-frame cover composite and report which gate decided this frame, as a
+/// `er_telemetry_core::counters::NATIVE_LS_GATE_*` code. The caller feeds that to
+/// [`native_ls_exposure_record`], which latches the frames where the game's own loading screen was
+/// live but our cover did not draw -- er-effects-rs-wmw defect #1, the vanilla flash-through.
+///
+/// `base` is passed through for the same function's post-release mirror path (2026-08-22): on the
+/// frames where the native loading screen is stale, and the exposure judgement therefore does not
+/// apply, the frame is handed to the post-release cover watch instead of being dropped.
+unsafe fn composite_and_record_exposure(base: usize, this_u: usize) {
+    use er_telemetry_core::counters::NATIVE_LS_GATE_OVERLAY_DISABLED;
+    // Time the boot-view composite (the suspected per-frame work stall on reloads). Gated on the
+    // overlay being a product feature this run: telemetry-only measurement records cadence but
+    // skips the flow-modifying composite so the vanilla baseline stays flow-faithful.
+    let tc = std::time::Instant::now();
+    let gate = if portrait_overlay_enabled() {
+        unsafe { composite_on_game_swapchain(base, this_u) }
+    } else {
+        NATIVE_LS_GATE_OVERLAY_DISABLED
+    };
+    er_telemetry_core::counters::COMPOSITE_LAST_US
+        .store(tc.elapsed().as_micros() as usize, Ordering::SeqCst);
+    crate::telemetry::native_ls_exposure_record(base, gate);
+}
+
+/// Returns the `NATIVE_LS_GATE_*` code describing whether the cover drew this frame, and if not,
+/// which gate blocked it.
+unsafe fn composite_on_game_swapchain(base: usize, this_u: usize) -> usize {
+    use er_telemetry_core::counters::{
+        NATIVE_LS_GATE_COVER_STOPPED, NATIVE_LS_GATE_DREW, NATIVE_LS_GATE_EPOCH_WORLD_LIVE,
+        NATIVE_LS_GATE_NATIVE_SUPPRESSED,
+    };
+    // FPS parity (bd FPS-delta-confirmed-load2-20fps-load1-45fps): once the current load epoch is
+    // genuinely in-world (world-clock live for this fresh_deser epoch -- BOOT_VIEW_EPOCH_WORLD_LIVE was
+    // set to it by the play_time_live oracle), every overlay here (portrait cover, loading bar, save
+    // picker, effect selector) is a loading/menu surface with nothing to draw in gameplay. Skip all of
+    // it so the Present hook is a pure passthrough in-world -- the reliable per-epoch stop (not the stale
+    // one-shot IN_WORLD_REACHED latch that never fires for load2). Isolates/kills the DLL per-frame
+    // composite as a load2 FPS cost; during loading (epoch world not yet live) compositing still runs.
+    {
+        let cur =
+            crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+        if cur != 0
+            && crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur
+            && crate::experiments::BOOT_VIEW_STOPPED.load(Ordering::SeqCst) != 0
+        {
+            PRESENT_COMPOSITE_EARLY_SKIPS.fetch_add(1, Ordering::SeqCst);
+            return NATIVE_LS_GATE_EPOCH_WORLD_LIVE;
+        }
+    }
+    // NOTE: the offscreen RASTERIZE is not driven here. Present is the wrong GX phase -- the frame's GX
+    // recording is already closed, so the subcontext pool pop no-ops (black). The rasterize is driven from
+    // profile_lookat_realtime_draw_tick (a draw-phase CSTaskImp task, live recording frame). This hook
+    // only does the static composite of an already-captured RGBA.
+    //
+    // Native-Windows display-window gate (2026-07-15, bd er-effects-rs-n4x). Compositing during the fragile
+    // early-boot D3D12 init / title crashes the strict driver even with the render-drive off (RIP-outside
+    // AV ~+8s; composite-off is 60s clean). So on native Windows, do no GPU work until the game's own
+    // now-loading screen is live (LOADING_SCREEN_UPDATE_HITS > 0, set by the native CS::LoadingScreen hook
+    // -- drive-independent, unlike PROFILE_LOADSCREEN_TABLE_BUILDS). Until then the detour is a pure
+    // passthrough and the game boots exactly as it does overlay-less. (Wine/vkd3d composites throughout,
+    // as before.)
+    if composite_suppressed_on_native() {
+        PRESENT_COMPOSITE_EARLY_SKIPS.fetch_add(1, Ordering::SeqCst);
+        return NATIVE_LS_GATE_NATIVE_SUPPRESSED;
+    }
+    // Loading bar + save picker + portrait/stats cover + boot-cover handoff oracle. The boot
+    // compositor is internally gated by BOOT_VIEW_STOPPED and draw-state, so this is a cheap no-op after
+    // the seamless cut. Its bool is now load-bearing: false means nothing was drawn over the
+    // backbuffer this frame, so whatever the game rendered is what the user sees.
+    // The cover half of this frame. The save-picker overlay below is the other half and is not
+    // part of `loading-cover`, which is why the Present hook itself stays either way.
+    #[cfg(feature = "loading-cover")]
+    let drew = unsafe { composite_boot_progress_on_swapchain(base, this_u) };
+    #[cfg(not(feature = "loading-cover"))]
+    let drew = {
+        let _ = (base, this_u);
+        false
+    };
+    // Keyboard input runs on an event-driven WH_KEYBOARD_LL hook (spawned once) so every press registers
+    // regardless of the ~4fps boot Present rate; the render-thread poll handles gamepad (and is the
+    // keyboard fallback if the hook fails to install).
+    let _ = std::panic::catch_unwind(ensure_save_picker_keyboard_hook);
+    let _ = std::panic::catch_unwind(save_picker_overlay_input_tick);
+    if drew {
+        NATIVE_LS_GATE_DREW
+    } else {
+        NATIVE_LS_GATE_COVER_STOPPED
+    }
+}
+
+/// Prep the Present overlay once (early): init MinHook + ask `er-d3d12-compositor` to build its
+/// throwaway dummy swapchain only to learn the IDXGISwapChain vtable module (the same-module hint for
+/// the runtime swapchain scan). The dummy's own
+/// vtable funcs are not hooked -- under vkd3d-proton the game's swapchain is a different object, so the
+/// real Present hook is installed later by `try_install_game_present_hook` once the GX device is up.
+pub(crate) fn install_present_overlay_hook() {
+    // Under a RenderDoc capture, our throwaway dummy swapchain double-registers with RenderDoc's resource
+    // tracker and trips its `ref>=0` assertion (bd RENDERDOC-assert-cause-is-product-dummy-swapchain). Skip
+    // the overlay entirely -- it is not needed to capture the render state.
+    if crate::experiments::renderdoc_active() {
+        append_autoload_debug(format_args!(
+            "present-overlay: SKIPPED -- renderdoc.dll loaded (dummy swapchain would trip RenderDoc resource assert)"
+        ));
+        return;
+    }
+    if PRESENT_HOOK_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "present-overlay: MH_Initialize failed: {status:?}"
+            ));
+            PRESENT_HOOK_INSTALLED.store(0, Ordering::SeqCst);
+            return;
+        }
+    }
+    // Module hint only: the dummy's Present addr identifies which module implements IDXGISwapChain, so the
+    // runtime BFS can filter swapchain candidates by vtable-in-that-module.
+    if let Some((present_addr, present1_addr)) = er_d3d12_compositor::resolve_present_addrs() {
+        PRESENT_RESOLVED_ADDR.store(present_addr, Ordering::SeqCst);
+        PRESENT1_RESOLVED_ADDR.store(present1_addr, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "present-overlay: prepared (module hint Present=0x{present_addr:x}); scanning for game swapchain per-frame"
+        ));
+    } else {
+        append_autoload_debug(format_args!(
+            "present-overlay: prepared (no module hint; will filter by Wine-module window)"
+        ));
+    }
+    // Early-boot self-present pump (user 2026-07-05: show the boot bar sooner than the game's
+    // first present). The game's swapchain exists long before its render loop first presents
+    // (~+3.7s); this thread polls for it from here (~+0.4s), VMT-swaps the moment it appears,
+    // then presents our own cleared strip frames through the original Present until the game's
+    // first real present arrives (PRESENT_HOOK_HITS > 0), at which point it stops forever and
+    // the Present-detour path owns the view. Bounded, one-way stop latches, never touches the
+    // game's queue.
+    std::thread::Builder::new()
+        .name("er-quickload-boot-present-pump".to_owned())
+        .spawn(boot_present_pump)
+        .ok();
+}
+
+/// True when running under Wine/Proton (vkd3d), detected by the `wine_get_version` export that Wine's
+/// `ntdll` exposes and native Windows never does. Cached after the first probe. Used to gate the boot
+/// self-present, which is only barrier-safe under vkd3d's tolerant translation layer.
+pub(crate) fn running_under_wine() -> bool {
+    static CACHED: AtomicUsize = AtomicUsize::new(0); // 0=unknown, 1=native, 2=wine
+    match CACHED.load(Ordering::SeqCst) {
+        1 => return false,
+        2 => return true,
+        _ => {}
+    }
+    let is_wine = unsafe { GetModuleHandleW(windows::core::w!("ntdll.dll")) }
+        .ok()
+        .map(|h| {
+            unsafe {
+                windows::Win32::System::LibraryLoader::GetProcAddress(
+                    h,
+                    windows::core::s!("wine_get_version"),
+                )
+            }
+            .is_some()
+        })
+        .unwrap_or(false);
+    CACHED.store(if is_wine { 2 } else { 1 }, Ordering::SeqCst);
+    is_wine
+}
+
+/// Self-present budget: the game's first present lands ~+3.7s; if it has not arrived by this
+/// pump-relative age, something unusual is happening -- stop pumping and let the detour path
+/// (which needs no pump) carry the view whenever presents do start.
+const BOOT_PUMP_MAX_MS: u128 = 20_000;
+/// Poll cadence while waiting for the swapchain to exist.
+const BOOT_PUMP_POLL_SLEEP_MS: u64 = 10;
+/// Hold the first self-present at most this long waiting for the winreconfig early final-geometry
+/// apply to declare a result. The apply's MoveWindow/SetWindowPos block until the game's window
+/// thread starts pumping messages (~+4s, measured run 200757: issued +795ms, flushed +4010ms), so
+/// the result latch fires exactly when the geometry is truly final -- present before it and the
+/// XWayland remap flashes 2 black frames over the already-visible cover (the run-200757 residual).
+/// The cap must sit past that ~4s flush; the fallback still beats an invisible boot on any hang.
+const BOOT_PUMP_EARLY_APPLY_WAIT_MAX_MS: u128 = 8_000;
+/// Self-present cadence (~30 fps -- Present(sync=1) additionally paces on vsync).
+const BOOT_PUMP_FRAME_SLEEP_MS: u64 = 16;
+
+fn set_boot_view_pump_stop_reason(reason: usize) {
+    if BOOT_VIEW_PUMP_STOP_REASON
+        .compare_exchange(0, reason, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        BOOT_VIEW_PUMP_STOP_MS.store(crate::experiments::boot_view_epoch_ms(), Ordering::SeqCst);
+    }
+}
+
+/// Body of the `er-quickload-boot-present-pump` thread. See the spawn comment for the contract.
+fn boot_present_pump() {
+    // Same gate as the install: the boot view + its swapchain hook are the portrait-path feature. Also
+    // run under telemetry-only so the pump installs the present detour for cadence measurement (the
+    // composite is gated off separately; the boot self-presents only pace the pre-game-present boot phase
+    // and do not touch the in-world steady-state cadence being measured).
+    if !portrait_overlay_enabled()
+        && !crate::experiments::save_override_telemetry_only()
+        && !crate::experiments::measure_no_composite()
+    {
+        return;
+    }
+    let start = std::time::Instant::now();
+    // Pacing primitive (matches the boot profiler): a held-but-never-sent channel; `recv_timeout`
+    // is the sanctioned bounded wait (plain `thread::sleep` is banned by check-no-timeouts). The
+    // per-iteration terminal checks below are the real stop conditions; this only paces the poll.
+    let (_tick_tx, tick_rx) = std::sync::mpsc::channel::<()>();
+    let poll = std::time::Duration::from_millis(BOOT_PUMP_POLL_SLEEP_MS);
+    let frame = std::time::Duration::from_millis(BOOT_PUMP_FRAME_SLEEP_MS);
+    loop {
+        // The game presenting is the success terminal state: the detour path draws from here on.
+        if PRESENT_HOOK_HITS.load(Ordering::SeqCst) > 0 {
+            set_boot_view_pump_stop_reason(1);
+            append_autoload_debug(format_args!(
+                "boot-pump: game presenting -- handed over after {} self-presents",
+                BOOT_VIEW_SELF_PRESENTS.load(Ordering::SeqCst)
+            ));
+            return;
+        }
+        if start.elapsed().as_millis() > BOOT_PUMP_MAX_MS {
+            set_boot_view_pump_stop_reason(2);
+            append_autoload_debug(format_args!(
+                "boot-pump: budget exhausted with no game present -- stopping (self_presents={})",
+                BOOT_VIEW_SELF_PRESENTS.load(Ordering::SeqCst)
+            ));
+            return;
+        }
+        if GAME_PRESENT_HOOKED.load(Ordering::SeqCst) == 0 {
+            if let Ok(base) = game_module_base() {
+                unsafe { try_install_game_present_hook(base) };
+            }
+            if GAME_PRESENT_HOOKED.load(Ordering::SeqCst) == 0 {
+                let _ = tick_rx.recv_timeout(poll);
+                continue;
+            }
+            let found_ms = start.elapsed().as_millis().min(usize::MAX as u128) as usize;
+            BOOT_VIEW_SWAPCHAIN_FOUND_MS.store(found_ms, Ordering::SeqCst);
+            // Native-Windows SAFETY (2026-07-15, bd er-effects-rs-n4x). The boot pump self-presents by
+            // drawing on the game swapchain's backbuffer with our own present<->COPY_DEST transitions at an
+            // arbitrary time (our thread, not synchronized with the game's frame). That barrier assumes the
+            // backbuffer is in present state; on a real D3D12 driver it usually is not (the game may be
+            // mid-render), so the wrong-state transition removes the device (Present hr=0x887a0005) and the
+            // game crashes in its device-removed handler (rva=0x1e8ad57). vkd3d/Proton TOLERATES the wrong
+            // barrier (translation layer), which is the only reason this ever worked. So the self-present is
+            // safe only under Wine/Proton; on native Windows (with or without a co-resident overlay like
+            // Special K) skip it entirely and let the Present detour -- which draws inside the game's Present
+            // call, when D3D12 guarantees the backbuffer is in present state -- carry the boot bar + portrait.
+            let self_present_safe =
+                running_under_wine() && PRESENT_ACCEPT_PATH.load(Ordering::SeqCst) != 2;
+            if !self_present_safe {
+                set_boot_view_pump_stop_reason(4);
+                append_autoload_debug(format_args!(
+                    "boot-pump: swapchain hooked at pump+{found_ms}ms -- native/wrapped (wine={}, accept_path={}); handing off to the Present detour without self-presenting",
+                    running_under_wine(),
+                    PRESENT_ACCEPT_PATH.load(Ordering::SeqCst)
+                ));
+                return;
+            }
+            append_autoload_debug(format_args!(
+                "boot-pump: swapchain hooked at pump+{found_ms}ms -- self-presenting until the game's first frame"
+            ));
+        }
+        let sc = GAME_SWAPCHAIN.load(Ordering::SeqCst);
+        let orig = PRESENT_ORIG.load(Ordering::SeqCst);
+        if sc == 0 || orig == 0 {
+            let _ = tick_rx.recv_timeout(poll);
+            continue;
+        }
+        // Hold the first pixel off the screen until the startup window geometry is final (the
+        // winreconfig early-apply latched a result): presenting before the early MoveWindow lands
+        // would re-introduce a visible black flash when XWayland services the resize
+        // (bd er-effects-rs-rzow). Bounded: after BOOT_PUMP_EARLY_APPLY_WAIT_MAX_MS the pump
+        // presents anyway (a late flash beats an invisible boot).
+        if BOOT_VIEW_SELF_PRESENTS.load(Ordering::SeqCst) == 0
+            && WINRECONFIG_EARLY_APPLY_RESULT.load(Ordering::SeqCst) == 0
+            && start.elapsed().as_millis() <= BOOT_PUMP_EARLY_APPLY_WAIT_MAX_MS
+        {
+            let _ = tick_rx.recv_timeout(poll);
+            continue;
+        }
+        // Draw first, then re-check the game has still not presented before submitting our own
+        // Present (narrows the two-thread Present race to the in-flight window; the busy-latch in
+        // the composite already serializes the draw objects themselves).
+        #[cfg(feature = "loading-cover")]
+        let drew = unsafe { composite_boot_progress_self_frame(sc) };
+        #[cfg(not(feature = "loading-cover"))]
+        let drew = false;
+        if drew && PRESENT_HOOK_HITS.load(Ordering::SeqCst) == 0 {
+            let f: PresentFn = unsafe { std::mem::transmute(orig) };
+            let hr = unsafe { f(sc as *mut c_void, 1, 0) };
+            if hr < 0 {
+                set_boot_view_pump_stop_reason(3);
+                append_autoload_debug(format_args!(
+                    "boot-pump: Present failed hr=0x{hr:x} -- stopping (self_presents={})",
+                    BOOT_VIEW_SELF_PRESENTS.load(Ordering::SeqCst)
+                ));
+                return;
+            }
+            let n = BOOT_VIEW_SELF_PRESENTS.fetch_add(1, Ordering::SeqCst) + 1;
+            if n == 1 {
+                append_autoload_debug(format_args!(
+                    "boot-pump: FIRST self-present on game swapchain 0x{sc:x} (pump+{}ms)",
+                    start.elapsed().as_millis()
+                ));
+            }
+        }
+        let _ = tick_rx.recv_timeout(frame);
+    }
+}
+
+/// Best-effort log of the swapchain's backbuffer dims/format (separate from the fired-log so a GetDesc1
+/// failure doesn't hide that the hook fired).
+unsafe fn log_backbuffer_desc(this: *mut c_void) {
+    if this as usize <= 0x10000 {
+        return;
+    }
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if let Some(sc) = unsafe { IDXGISwapChain1::from_raw_borrowed(&this) }
+            && let Ok(desc) = unsafe { sc.GetDesc1() }
+        {
+            PRESENT_BACKBUFFER_FORMAT.store(desc.Format.0 as usize, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "present-overlay: backbuffer {}x{} format={} buffers={}",
+                desc.Width, desc.Height, desc.Format.0, desc.BufferCount
+            ));
+        }
+    }));
+}
+
+/// True if the pointer `v` is a plausible dxgi.dll vtable address: within the loaded dxgi.dll module
+/// range if we can resolve it, else in the same high Wine-module window as the resolved Present addr
+/// (Wine modules live at 0x6fff_xxxx_xxxx). Gate the QI on this so we never dispatch QueryInterface
+/// through a garbage/half-constructed object's vtable during early boot -- that fault is a hardware
+/// access violation `catch_unwind` cannot catch, and it killed the game at +673ms when the early
+/// self-present pump QI-walked objects before they were fully constructed.
+fn dxgi_vtable_ok(v: usize) -> bool {
+    if let Some((lo, hi)) = unsafe { module_range(b"dxgi.dll\0") } {
+        lo <= v && v < hi
+    } else {
+        let hint = PRESENT_RESOLVED_ADDR.load(Ordering::SeqCst);
+        hint != 0 && (v >> 24) == (hint >> 24)
+    }
+}
+
+/// Crash-proof swapchain check: `obj`'s `vtable[8]`/`vtable[22]` (Present/Present1) exactly match the
+/// resolved shared DXVK addresses. Pure reads (`safe_read_usize`) + compares -- never dispatches a
+/// virtual call, so a half-constructed early-boot object with a bogus vtable is rejected, not faulted.
+/// Requires the resolved addrs to be known (dummy swapchain built at attach); returns false otherwise
+/// so callers fall back to the QI path (only reached late, when the object is fully constructed).
+fn swapchain_vtable_matches(obj: usize) -> bool {
+    if obj < 0x10000 {
+        return false;
+    }
+    let want8 = PRESENT_RESOLVED_ADDR.load(Ordering::SeqCst);
+    let want22 = PRESENT1_RESOLVED_ADDR.load(Ordering::SeqCst);
+    if want8 == 0 || want22 == 0 {
+        return false;
+    }
+    let Some(vt) = (unsafe { safe_read_usize(obj) }) else {
+        return false;
+    };
+    if !dxgi_vtable_ok(vt) {
+        return false;
+    }
+    let got8 = unsafe { safe_read_usize(vt + PRESENT_VTABLE_INDEX * 8) };
+    let got22 = unsafe { safe_read_usize(vt + PRESENT1_VTABLE_INDEX * 8) };
+    got8 == Some(want8) && got22 == Some(want22)
+}
+
+/// The loaded module image containing `addr` (VirtualQuery `AllocationBase` of a `MEM_IMAGE` region),
+/// or `None` when `addr` is heap/unmapped/garbage. This is the crash-safety predicate that lets the QI
+/// fallback run on non-dxgi vtables: a module-backed vtable belongs to some real class (dxgi proper or
+/// an overlay wrapper like SpecialK/GameOverlayRenderer), so a virtual dispatch executes real code
+/// instead of the uncatchable SEH fault a garbage vtable produces.
+fn image_module_base(addr: usize) -> Option<usize> {
+    use windows::Win32::System::Memory::{MEM_IMAGE, MEMORY_BASIC_INFORMATION, VirtualQuery};
+    if addr < 0x10000 {
+        return None;
+    }
+    let mut mbi = MEMORY_BASIC_INFORMATION::default();
+    let got = unsafe {
+        VirtualQuery(
+            Some(addr as *const c_void),
+            &mut mbi,
+            std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+        )
+    };
+    if got == 0 || mbi.Type != MEM_IMAGE {
+        return None;
+    }
+    Some(mbi.AllocationBase as usize)
+}
+
+/// Best-effort module path for a module base (diagnostic log only).
+fn module_name_of_base(module_base: usize) -> String {
+    use windows::Win32::Foundation::HMODULE;
+    use windows::Win32::System::LibraryLoader::GetModuleFileNameA;
+    let mut buf = [0u8; 260];
+    let len =
+        unsafe { GetModuleFileNameA(Some(HMODULE(module_base as *mut c_void)), &mut buf) } as usize;
+    if len == 0 || len > buf.len() {
+        return format!("module@0x{module_base:x}");
+    }
+    // UTF-8 Lossy: diagnostic-only module path; replacement chars still identify the module.
+    String::from_utf8_lossy(&buf[..len]).into_owned()
+}
+
+/// Classify the candidate vtable's owning module for `PRESENT_FIND_VT_MODULE_KIND`.
+fn vt_module_kind(vt_module: usize, game_base: usize) -> usize {
+    if vt_module == game_base {
+        return 2;
+    }
+    if let Some((lo, hi)) = unsafe { module_range(b"dxgi.dll\0") }
+        && lo <= vt_module
+        && vt_module < hi
+    {
+        return 1;
+    }
+    3
+}
+
+/// QI `obj` as `IDXGISwapChain` without the dxgi-module vtable gate. Borrow-wraps (no AddRef on
+/// `obj`); the QI result is owned + dropped (its Release balances the QI AddRef), net 0 on the game
+/// object. Callers must have pre-validated the vtable as module-backed (`image_module_base`), not the
+/// game exe's, and the candidate as pointer-stable across `PRESENT_QI_STABILITY_TRIES` consecutive
+/// frames -- together those exclude the half-constructed/garbage-vtable object whose QI dispatch
+/// hard-faults (SEH, uncatchable), which is the early-boot hazard the old dxgi-only gate guarded.
+/// The relaxation exists because on native Windows the game's swapchain is routinely wrapped by
+/// co-resident overlays (Special K observed in-process on the 2026-07-15 runs; Steam overlay/RTSS in
+/// the wild) whose vtables live outside dxgi.dll -- the dxgi-only gate rejected the real swapchain
+/// forever, which is exactly why no Windows user ever saw the boot bar or the loading portrait.
+unsafe fn qi_confirms_swapchain(obj: usize) -> bool {
+    let raw = obj as *mut c_void;
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        match unsafe { IUnknown::from_raw_borrowed(&raw) } {
+            Some(unk) => unk.cast::<IDXGISwapChain>().is_ok(),
+            None => false,
+        }
+    }))
+    .unwrap_or(false)
+}
+
+/// Find the game's live `IDXGISwapChain3*` via the RE-confirmed deref chain rooted at `g_GxDrawContext`:
+/// `*(base+RVA)` (GxDrawContext) -> `+0x128` (output-vector begin) -> `*entry[0]` (per-window output) ->
+/// `*output` (the swapchain). This is the only accepted source: it reads the game's own live pointer to
+/// its active render output, so a non-null vtable-matching hit is the real swapchain. When the chain is
+/// not yet populated (early boot) or a hit fails the vtable match, we return `None` and the caller simply
+/// retries next frame -- never a crash, never a wrong hook.
+///
+/// Seamless COMPAT (2026-07-05): the previous BFS fallback (scan any reachable dxgi-vtable'd object) was
+/// removed. `swapchain_vtable_matches` only compares the vtable pointer, which a RELEASED/dummy DXVK
+/// swapchain retains -- so BFS could latch a swapchain-shaped-but-dead object. Under Seamless Co-op (ERSC
+/// does its own DXGI work) such an object was reachable from the GxDrawContext root before the real
+/// swapchain existed; BFS latched it (`FOUND ... via BFS after 12897 objs`), the self-present pump called
+/// a COM method on it, and DXVK faulted with a null internal `this` (rcx=0). The precise chain never has
+/// this failure mode because it walks to the game's single live output slot, not arbitrary heap pointers.
+unsafe fn find_game_swapchain(base: usize) -> Option<usize> {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let read_nn = |a: usize| -> Option<usize> {
+        let v = unsafe { safe_read_usize(a) }?;
+        if v < 0x10000 || v == null || v >= 0x8000_0000_0000 {
+            None
+        } else {
+            Some(v)
+        }
+    };
+    // Every miss names its terminal stage (RAM oracle + throttled log) -- see the FIND_STAGE block.
+    let miss = |stage: usize| -> Option<usize> {
+        PRESENT_FIND_STAGE.store(stage, Ordering::SeqCst);
+        log_find_miss(stage);
+        None
+    };
+    // Resolved, not added. This is a 1.16.2 data address and every `.data` global moved on
+    // 1.17, so read raw it names some other object -- which is why the find reported
+    // `stage=1 candidate=0x0 vt_module=<none>` for 1200 consecutive tries: it never got past
+    // the root. With the vanilla title surfaces hidden and no overlay able to draw, that is a
+    // black screen with a live process behind it. The carry is unusually well evidenced --
+    // 965 of 966 referencing sites agree on 0x47f33e0.
+    let Some(ctx_slot) = er_game_base::game_build::resolve_game_address(
+        base + G_GX_DRAW_CONTEXT_RVA,
+        "GX_DRAW_CONTEXT_RVA",
+    ) else {
+        return miss(FIND_STAGE_CTX_NULL);
+    };
+    let Some(ctx) = read_nn(ctx_slot) else {
+        return miss(FIND_STAGE_CTX_NULL);
+    };
+    // Precise chain: output-vector begin -> entry[0] output object -> output[0] swapchain.
+    let Some(vec_begin) = read_nn(ctx + GXDC_OUTPUT_VEC_BEGIN_OFFSET) else {
+        return miss(FIND_STAGE_VEC_NULL);
+    };
+    let Some(entry0) = read_nn(vec_begin) else {
+        return miss(FIND_STAGE_ENTRY_NULL);
+    };
+    let Some(sc) = read_nn(entry0) else {
+        return miss(FIND_STAGE_CANDIDATE_NULL);
+    };
+    PRESENT_FIND_CANDIDATE.store(sc, Ordering::SeqCst);
+    // Same-candidate streak: the QI fallback's stability gate.
+    let streak = if PRESENT_FIND_LAST_CANDIDATE.swap(sc, Ordering::SeqCst) == sc {
+        PRESENT_FIND_STREAK.fetch_add(1, Ordering::SeqCst) + 1
+    } else {
+        PRESENT_FIND_STREAK.store(1, Ordering::SeqCst);
+        1
+    };
+    let Some(vt) = (unsafe { safe_read_usize(sc) }) else {
+        return miss(FIND_STAGE_VT_UNREADABLE);
+    };
+    PRESENT_FIND_CANDIDATE_VT.store(vt, Ordering::SeqCst);
+    PRESENT_FIND_GOT8.store(
+        unsafe { safe_read_usize(vt + PRESENT_VTABLE_INDEX * 8) }.unwrap_or(0),
+        Ordering::SeqCst,
+    );
+    PRESENT_FIND_GOT22.store(
+        unsafe { safe_read_usize(vt + PRESENT1_VTABLE_INDEX * 8) }.unwrap_or(0),
+        Ordering::SeqCst,
+    );
+    // Fast PATH: crash-proof exact vtable match (read-only compares against the dummy-resolved
+    // Present/Present1). Sufficient under vkd3d-proton, where every dxgi swapchain shares one DXVK
+    // CDXGISwapChain vtable.
+    if swapchain_vtable_matches(sc) {
+        PRESENT_FIND_STAGE.store(FIND_STAGE_ACCEPTED_VTABLE, Ordering::SeqCst);
+        if PRESENT_ACCEPT_PATH.swap(1, Ordering::SeqCst) == 0 {
+            append_autoload_debug(format_args!(
+                "present-overlay: FOUND game swapchain 0x{sc:x} via g_GxDrawContext chain (ctx=0x{ctx:x}, exact vtable match)"
+            ));
+        }
+        return Some(sc);
+    }
+    // Native-Windows FALLBACK: on real dxgi the exact match can fail legitimately -- co-resident
+    // overlays (Special K, Steam GameOverlayRenderer, RTSS) wrap the game's swapchain in their own
+    // object whose vtable lives in their module, and native dxgi may use distinct concrete vtables
+    // where DXVK uses one. The chain still points at the game's single live output (never BFS, so
+    // the Seamless dead-swapchain hazard from 2026-07-05 stays excluded); accept it when the vtable
+    // is module-backed (real class, QI dispatch executes real code), not the game exe's (a game-exe
+    // vtable means the chain layout is wrong -- swapchain impls never live there), the candidate has
+    // been stable for PRESENT_QI_STABILITY_TRIES frames, and QI confirms IDXGISwapChain.
+    let Some(vt_module) = image_module_base(vt) else {
+        PRESENT_FIND_VT_MODULE_KIND.store(0, Ordering::SeqCst);
+        return miss(FIND_STAGE_VT_NOT_MODULE);
+    };
+    let kind = vt_module_kind(vt_module, base);
+    PRESENT_FIND_VT_MODULE_KIND.store(kind, Ordering::SeqCst);
+    if kind == 2 {
+        return miss(FIND_STAGE_VT_IN_GAME_EXE);
+    }
+    if streak < PRESENT_QI_STABILITY_TRIES {
+        return miss(FIND_STAGE_STABILITY_WAIT);
+    }
+    if unsafe { qi_confirms_swapchain(sc) } {
+        PRESENT_FIND_STAGE.store(FIND_STAGE_ACCEPTED_QI, Ordering::SeqCst);
+        if PRESENT_ACCEPT_PATH.swap(2, Ordering::SeqCst) == 0 {
+            append_autoload_debug(format_args!(
+                "present-overlay: FOUND game swapchain 0x{sc:x} via g_GxDrawContext chain + QI fallback (vt=0x{vt:x} in {}, streak={streak})",
+                module_name_of_base(vt_module)
+            ));
+        }
+        return Some(sc);
+    }
+    miss(FIND_STAGE_QI_REJECTED)
+}
+
+/// Throttled, stage-attributed miss line: early tries (1/300/1200), then once every 3600 (~once a
+/// minute at frame cadence) so a session-length retry stays visible without flooding the log.
+fn log_find_miss(stage: usize) {
+    let t = GAME_SWAPCHAIN_FIND_TRIES.load(Ordering::SeqCst);
+    if !(t == 1 || t == 300 || t == 1200 || (t > 0 && t.is_multiple_of(3600))) {
+        return;
+    }
+    let candidate = PRESENT_FIND_CANDIDATE.load(Ordering::SeqCst);
+    let vt = PRESENT_FIND_CANDIDATE_VT.load(Ordering::SeqCst);
+    let got8 = PRESENT_FIND_GOT8.load(Ordering::SeqCst);
+    let got22 = PRESENT_FIND_GOT22.load(Ordering::SeqCst);
+    let want8 = PRESENT_RESOLVED_ADDR.load(Ordering::SeqCst);
+    let want22 = PRESENT1_RESOLVED_ADDR.load(Ordering::SeqCst);
+    let streak = PRESENT_FIND_STREAK.load(Ordering::SeqCst);
+    let vt_module = image_module_base(vt);
+    let module = vt_module.map_or_else(|| "<none>".to_owned(), module_name_of_base);
+    append_autoload_debug(format_args!(
+        "present-overlay: find miss try={t} stage={stage} candidate=0x{candidate:x} vt=0x{vt:x} vt_module={module} got8=0x{got8:x}/want8=0x{want8:x} got22=0x{got22:x}/want22=0x{want22:x} streak={streak}"
+    ));
+}
+
+/// Overwrite the COM `vtable[index]` slot at `slot_addr` so it points at `new_fn`, returning the previous
+/// function pointer (for call-through), or `None` if the page could not be made writable. Patches a data
+/// pointer in the dxgi vtable -- Not the function body -- so it sidesteps the W^X code-page patch that
+/// MinHook cannot apply on Wine's dxgi.dll (it reports MH_OK yet the detour never fires). `VirtualProtect`
+/// the 8-byte slot to RW, swap the pointer, then restore the original page protection.
+/// A 12-byte `mov rax, imm64; jmp rax` stub that jumps to `target`, in freshly allocated RWX memory.
+///
+/// # Why the vtable slot must not point straight at a Rust function
+///
+/// Under vkd3d-proton every dxgi swapchain in the process shares one DXVK `CDXGISwapChain`
+/// vtable, which this file already relies on -- it is why a dummy swapchain can resolve the
+/// game's `Present`. The consequence runs the other way too: the slot this code patches is the
+/// slot every other overlay reads.
+///
+/// hudhook, which `er-net-effects` and `er-build-watermark` both use, resolves `Present` exactly
+/// that way and then MinHook-patches the function it finds. Once this file has swapped the slot,
+/// the function it finds is `present_hook` -- a Rust function body inside `er_quickload.dll`.
+/// MinHook writes a jump over its prologue and relocates the displaced instructions into a
+/// trampoline, which is a thing you may do to a function compiled to be hooked and not to one
+/// LLVM emitted under its own assumptions.
+///
+/// Measured, 2026-08-29. Bisected over eighteen DLLs: `er-quickload` alone survives past
+/// fourteen seconds and presents 338 frames; `er-net-effects` alone is fine; together the
+/// process dies ~300ms after `boot-view: first draw`, with hudhook's own telemetry reporting
+/// `hudhook_render_count=0` -- it never completed a render. The ordering is not in doubt either:
+/// at swap time the slot still held dxgi's own Present (0x6ffffc8fabf0, equal to the module
+/// hint), so this code was first and hudhook arrived afterwards.
+///
+/// # Why a thunk fixes it rather than hiding it
+///
+/// The slot points at twelve bytes this code owns. A third party is free to MinHook them: the
+/// first instruction is a 10-byte `mov rax, imm64`, which is position-independent and longer
+/// than the five bytes MinHook needs, so it relocates cleanly into a trampoline. The chain then
+/// runs hudhook's detour -> its trampoline -> this stub -> `present_hook` -> the real Present,
+/// and both overlays work. Nothing is disabled and nothing is ordered by luck.
+unsafe fn hookable_thunk(target: usize) -> Option<usize> {
+    use windows::Win32::System::Memory::{
+        MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE, VirtualAlloc,
+    };
+    // A whole page per stub. It is never freed: the vtable slot points into it for the life of
+    // the process, and a third party's trampoline may too.
+    let page = unsafe {
+        VirtualAlloc(
+            None,
+            THUNK_PAGE_BYTES,
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_EXECUTE_READWRITE,
+        )
+    };
+    if page.is_null() {
+        return None;
+    }
+    let mut code = [0u8; THUNK_CODE_BYTES];
+    code[0] = 0x48; // REX.W
+    code[1] = 0xB8; // mov rax, imm64
+    code[2..10].copy_from_slice(&(target as u64).to_le_bytes());
+    code[10] = 0xFF; // jmp rax
+    code[11] = 0xE0;
+    // Pad the rest of the page with int3 rather than leaving it zero: 0x00 0x00 decodes as
+    // `add [rax], al`, so a stray entry into the tail would fault somewhere confusing instead
+    // of trapping where it happened.
+    unsafe {
+        core::ptr::copy_nonoverlapping(code.as_ptr(), page as *mut u8, code.len());
+        core::ptr::write_bytes(
+            (page as *mut u8).add(code.len()),
+            0xCC,
+            THUNK_PAGE_BYTES - code.len(),
+        );
+    }
+    Some(page as usize)
+}
+
+/// One page per stub; see [`hookable_thunk`].
+const THUNK_PAGE_BYTES: usize = 0x1000;
+/// `mov rax, imm64` (10) + `jmp rax` (2).
+const THUNK_CODE_BYTES: usize = 12;
+
+pub(crate) unsafe fn vtable_swap_slot(slot_addr: usize, new_fn: usize) -> Option<usize> {
+    use windows::Win32::System::Memory::{PAGE_PROTECTION_FLAGS, PAGE_READWRITE, VirtualProtect};
+    let slot = slot_addr as *mut usize;
+    let mut old_prot = PAGE_PROTECTION_FLAGS(0);
+    if unsafe {
+        VirtualProtect(
+            slot_addr as *const c_void,
+            std::mem::size_of::<usize>(),
+            PAGE_READWRITE,
+            &mut old_prot,
+        )
+    }
+    .is_err()
+    {
+        return None;
+    }
+    let old = unsafe { core::ptr::read_volatile(slot) };
+    unsafe { core::ptr::write_volatile(slot, new_fn) };
+    let mut restored = PAGE_PROTECTION_FLAGS(0);
+    let _ = unsafe {
+        VirtualProtect(
+            slot_addr as *const c_void,
+            std::mem::size_of::<usize>(),
+            old_prot,
+            &mut restored,
+        )
+    };
+    Some(old)
+}
+
+/// Per-frame (from a recurring game task): once the GX device is up, find the game's swapchain and redirect
+/// its real Present(8)/Present1(22) via a vtable-slot swap (not a MinHook code patch -- that reports MH_OK
+/// but never fires on Wine's dxgi.dll). One-shot (latched on success); bounded retries.
+pub(crate) unsafe fn try_install_game_present_hook(base: usize) {
+    // Install the present detour for the overlay composite or for telemetry-only cadence measurement.
+    // The detour records present cadence (record_present_frame_stats) read-only every frame; the
+    // flow-modifying composite call is separately gated on portrait_overlay_enabled() below. So a
+    // flow-faithful telemetry-only vanilla baseline (overlay off) still gets the present-cadence +
+    // GetFrameStatistics + GX semaphores without the overlay composite -- decoupling the instrumentation
+    // from the feature it measures (bd present-cadence-gx-instrumentation-coupled-to-overlay-install-gate).
+    if (!portrait_overlay_enabled()
+        && !crate::experiments::save_override_telemetry_only()
+        && !crate::experiments::measure_no_composite())
+        || crate::experiments::renderdoc_active()
+        || PRESENT_HOOK_INSTALLED.load(Ordering::SeqCst) == 0
+        || GAME_PRESENT_HOOKED.load(Ordering::SeqCst) != 0
+    {
+        return;
+    }
+    // Count attempts for telemetry/log throttling only. The old 3600-try lifetime cap dated from the
+    // removed budgeted-BFS era; today's find is four bounded safe-reads, cheap at frame cadence, and
+    // a lifetime cap would permanently disarm the hook when the chain populates late (the corrected
+    // 2026-07-15 native-Windows analysis showed the finder must keep retrying through the title era).
+    let tries = GAME_SWAPCHAIN_FIND_TRIES.fetch_add(1, Ordering::SeqCst) + 1;
+    let sc = match unsafe { find_game_swapchain(base) } {
+        Some(s) => s,
+        None => return,
+    };
+    let vt = match unsafe { safe_read_usize(sc) } {
+        Some(v) => v,
+        None => return,
+    };
+    let present8 = unsafe { safe_read_usize(vt + PRESENT_VTABLE_INDEX * 8) }.unwrap_or(0);
+    let present22 = unsafe { safe_read_usize(vt + PRESENT1_VTABLE_INDEX * 8) }.unwrap_or(0);
+    if present8 <= 0x10000 || present22 <= 0x10000 {
+        return;
+    }
+    // Latch before swapping so a retry can't double-install.
+    if GAME_PRESENT_HOOKED.swap(1, Ordering::SeqCst) != 0 {
+        return;
+    }
+    // Latch the found swapchain + base so the detours can gate the composite to the game's swapchain.
+    GAME_SWAPCHAIN.store(sc, Ordering::SeqCst);
+    GAME_BASE.store(base, Ordering::SeqCst);
+    // Save the originals first (the detours tail-call them), then VMT-swap the swapchain's vtable slots.
+    // We patch the vtable data pointers, not the function bodies: MinHook's code-page byte-patch reports
+    // MH_OK on Wine's dxgi.dll yet never intercepts (hooked-but-never-fired, a W^X code-page refusal),
+    // whereas a vtable-slot swap redirects the game's `swapchain->vtable[8]/[22]` calls deterministically.
+    // The slot is 8-byte aligned, so the render thread reading it concurrently sees old-or-new, never torn.
+    PRESENT_ORIG.store(present8, Ordering::SeqCst);
+    PRESENT1_ORIG.store(present22, Ordering::SeqCst);
+    let slot8 = vt + PRESENT_VTABLE_INDEX * 8;
+    let slot22 = vt + PRESENT1_VTABLE_INDEX * 8;
+    // Publish THUNKS, not our Rust function bodies -- see `hookable_thunk` for the measured
+    // reason. If a thunk cannot be allocated, publish nothing: pointing the shared vtable at a
+    // Rust body is the failure this exists to avoid, so the overlay goes without rather than
+    // take the crash back.
+    let (Some(thunk8), Some(thunk22)) = (
+        unsafe { hookable_thunk(present_hook as *const () as usize) },
+        unsafe { hookable_thunk(present1_hook as *const () as usize) },
+    ) else {
+        append_autoload_debug(format_args!(
+            "present-overlay: SKIPPED VMT-swap -- could not allocate a hookable thunk; refusing to put a \
+             Rust function body in the DXVK-shared vtable where another overlay's MinHook would patch it"
+        ));
+        return;
+    };
+    let swap8 = unsafe { vtable_swap_slot(slot8, thunk8) }.is_some();
+    let swap22 = unsafe { vtable_swap_slot(slot22, thunk22) }.is_some();
+    // Read the slots back so a failed patch is visible in the log (self-validating: a later fired line plus
+    // readback=true proves the redirect took; readback=true with no fired means the game presents elsewhere).
+    let now8 = unsafe { safe_read_usize(slot8) }.unwrap_or(0);
+    let now22 = unsafe { safe_read_usize(slot22) }.unwrap_or(0);
+    append_autoload_debug(format_args!(
+        "present-overlay: VMT-swap game swapchain 0x{sc:x} (tries={tries}) Present8=0x{present8:x} Present1_22=0x{present22:x} slot8@0x{slot8:x} swap={swap8} readback={} slot22@0x{slot22:x} swap={swap22} readback={}",
+        now8 == thunk8,
+        now22 == thunk22,
+    ));
+}

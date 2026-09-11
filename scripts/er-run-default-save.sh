@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch a named me3 profile on the game's OWN default save, with every DLL artifact redirected
+# Launch a named me3 profile on the game's own default save, with every DLL artifact redirected
 # into a run directory `scripts/check-runtime-evidence.sh` reads.
 #
 #     bash scripts/er-run-default-save.sh ~/Elden/quicksave.me3
@@ -8,18 +8,18 @@
 # Why this exists beside `er-run-branch.py`, which does far more
 # -------------------------------------------------------------
 # That tool picks a save out of a corpus and stages it privately, which is the right shape for a
-# reproducible branch run. It cannot launch the DEFAULT save, and it refuses rather than pretend
+# reproducible branch run. It cannot launch the default save, and it refuses rather than pretend
 # otherwise: `er-gen-me3-profile` will not name the game-owned APPDATA container as a `save_file`,
 # because the redirect stage it would create lands inside the directory the redirect matches on.
 #
 # But the default save is exactly what AGENTS.md's 2026-07-08 order prescribes for release and
 # autoload proof -- the user method, `~/Elden/launch.sh` with the real APPDATA save and no
-# redirect. Run that way, the DLL logs land in the GAME directory, which the push gate does not
+# redirect. Run that way, the DLL logs land in the game directory, which the push gate does not
 # read, so a run that really did execute the pushed commit leaves no evidence the gate can find.
 # That is the whole gap this closes: same launch, artifacts somewhere both the user and the gate
 # can see (bd er-effects-rs-rhqv).
 #
-# What it does NOT do, on purpose: pick or stage a save, write the game-directory
+# What it does not do, on purpose: pick or stage a save, write the game-directory
 # `er-quickload.toml`, or reap anything. The save is the game's and stays the game's.
 set -uo pipefail
 
@@ -109,7 +109,7 @@ main() {
 	printf 'er-run-default-save: %s artifact knobs redirected there\n' "$(printf '%s\n' "$pairs" | grep -c '=')"
 	# `env` rather than exporting into this shell: the redirect belongs to the launched process,
 	# and leaking it into the caller's environment would silently move a later unrelated run.
-	# shellcheck disable=SC2046  # word splitting is the point: one VAR=VALUE argument per knob.
+	# shellcheck disable=SC2046  # word splitting is the point: one `VAR=VALUE` argument per knob.
 	setsid env $(printf '%s\n' "$pairs") ME3_PROFILE="$profile" "$launch_sh" \
 		>"$run_dir/launch.log" 2>&1 &
 	local pid=$!

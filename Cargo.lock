@@ -3213,6 +3213,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-quit-rows"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.13.1",
+ "eldenring",
+ "er-boot-background",
+ "er-boot-profiler",
+ "er-build-import-core",
+ "er-build-import-runtime",
+ "er-cover-fade",
+ "er-d3d12-compositor",
+ "er-game-base",
+ "er-gfx",
+ "er-hook",
+ "er-loading-bar-core",
+ "er-loading-portrait-core",
+ "er-profile-summary-core",
+ "er-quit-menu-core",
+ "er-save-loader",
+ "er-save-picker-core",
+ "er-save-redirect",
+ "er-save-suppress",
+ "er-scaleform-hooks",
+ "er-telemetry-core",
+ "er-title-flow",
+ "er-tpf",
+ "erpx-rs",
+ "fromsoftware-shared",
+ "iced-x86",
+ "pelite",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "er-refill-all"
 version = "0.1.0"
 dependencies = [

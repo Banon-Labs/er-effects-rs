@@ -103,6 +103,8 @@ pub mod save_picker_menu;
 /// The native `05_010` list's own input and geometry, rebased for a sliding ten-row window.
 #[cfg(windows)]
 pub mod save_picker_native_scroll_input;
+/// The Scaleform-HTML string shapes a ProfileSelect row's text is written in.
+pub mod scaleform_html;
 #[cfg(windows)]
 pub mod scaleform_proxy;
 #[cfg(windows)]

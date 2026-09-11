@@ -1,0 +1,487 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use windows::{Win32::System::LibraryLoader::GetModuleHandleA, core::s};
+
+#[allow(unused_imports)]
+use crate::*;
+#[allow(unused_imports)]
+use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
+
+use super::*;
+
+pub(crate) fn product_autoload_enabled() -> bool {
+    PRODUCT_AUTOLOAD_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
+}
+/// Default-off gate for the ProfileSelect load flow. When false (the default) `product_core_autoload_tick`
+/// takes the proven native Continue char-load commit, byte-for-byte unchanged. When the human flips
+/// `PROFILE_SELECT_LOAD_FLOW_ENABLED` on to probe-test, the menu branch instead fires the title menu's
+/// Load-Game row to open a live `ProfileLoadDialog` (the render context in which the profile renderer's
+/// per-slot refresh gate -- `ProfileSummary->saveSlotsStates[slot]` -- is satisfied), holds the load
+/// commit until the loaded character's portrait has rendered + been captured (so the now-loading screen
+/// can display it), then drives the same STAGE2 commit (load_activate -> selector ->
+/// continue_confirm/SetState5). Compile-time `const` so the off path is dead-code-eliminated.
+pub(crate) fn profile_select_load_flow_enabled() -> bool {
+    PROFILE_SELECT_LOAD_FLOW_ENABLED
+}
+/// Force the live profile-portrait 3D model render at the title/menu phase (where the GxDrawContext is
+/// valid). The recurring task runs `force_profile_render_tick` each menu-phase frame: it marks the target
+/// slot used (`MarkProfileIndexAsUsed`) then calls the argless profile-render refresh to kick the async
+/// model build, and read-only-captures the rendered CSGxTexture once the model latches. Menu-phase only --
+/// it does not commit Continue, so there is no teardown/world-load crash path.
+///
+/// De-gated to default-on for real (non-telemetry) runs (user 2026-06-30 "just a feature without a gate";
+/// mirrors the native_continue/pab/splash de-gating precedent
+/// `user-pref-too-many-env-file-gates-default-on-product`): the loading-screen portrait is now product
+/// behavior, so it builds the model on every real autoload run without a staged flag. Master off:
+/// `autoload_disabled()`; telemetry-only runs stay off; env/file remain force-on overrides.
+/// True on native Windows (not Wine/Proton). Wine's `ntdll` exports `wine_get_version`; native Windows
+/// never does. Cached. Used to disable the character-profile render-drive on native Windows, where
+/// driving the game's own offscreen model render mid-load crashes the strict D3D12 driver (bd
+/// er-effects-rs-n4x, 2026-07-15). vkd3d/Proton tolerates it, so the drive stays on there.
+pub(crate) fn is_native_windows() -> bool {
+    use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+    static CACHED: AtomicUsize = AtomicUsize::new(0); // 0=unknown, 1=native, 2=wine
+    match CACHED.load(Ordering::SeqCst) {
+        1 => return true,
+        2 => return false,
+        _ => {}
+    }
+    let is_wine = unsafe { GetModuleHandleW(windows::core::w!("ntdll.dll")) }
+        .ok()
+        .map(|h| unsafe { GetProcAddress(h, windows::core::s!("wine_get_version")) }.is_some())
+        .unwrap_or(false);
+    CACHED.store(if is_wine { 2 } else { 1 }, Ordering::SeqCst);
+    !is_wine
+}
+
+// ENV-gate RATIONALE: ER_QUICKLOAD_FORCE_PROFILE_RENDER=1 force-enables the profile portrait render-drive
+// even on telemetry-only/no-load save-override runs (where it is otherwise off); diagnostic force-on
+// override only. Does not write a save; simply keeps the portrait render pipeline active for the probe.
+pub(crate) fn force_profile_render_enabled() -> bool {
+    if autoload_disabled() {
+        return false;
+    }
+    !save_override_telemetry_only()
+}
+/// Default-off gate for the live-portrait D3D12 readback. When on, the moment
+/// `maybe_capture_portrait_gxtexture` pins the rendered offscreen `CSGxTexture`
+/// (`LOADING_BG_PORTRAIT_GX_KEPT`), the DLL reads back that render target into CPU RGBA8
+/// (`readback_offscreen_rgba8`) and stores it in `LOADING_BG_PORTRAIT_RGBA`, so the now-loading forge
+/// can build its TPF from the real rendered character head instead of the magenta/yellow checker
+/// placeholder. It also drives the profile offscreen size-table patch (currently base 512x512 with
+/// native x2 supersample, expected 1024x1024 RT), so the portrait renders at the configured source resolution.
+///
+/// De-gated to default-on for real (non-telemetry) runs (user 2026-06-30 "just a feature without a gate";
+/// mirrors the de-gating precedent `user-pref-too-many-env-file-gates-default-on-product`). Master off:
+/// `autoload_disabled()`; telemetry-only runs stay off; env/file remain force-on overrides.
+pub(crate) fn portrait_real_pixels_enabled() -> bool {
+    if autoload_disabled() {
+        return false;
+    }
+    !save_override_telemetry_only()
+}
+/// Default-off gate for the render-thread offscreen drive (the keepalive keystone). When on, the
+/// Present hook (`present_hook`, render thread, every frame, fires during the loading screen) drives the
+/// profile renderer's offscreen draw (`PROFILE_OFFSCREEN_DRIVE_RVA` -> reads g_GxDrawContext, submits to
+/// the GX pool) for the spared/built slot-0 renderer, so the loaded character's 3D head is actually
+/// rendered into the offscreen RT after the menu's own render driver dies post-Continue. Without this the
+/// model builds but is never drawn -> the RT holds a placeholder checker (oracle_loading_bg_portrait_is_
+/// checker=True). The game-task drive renders black / crashes (wrong thread + frame phase); the render
+/// thread inside the Present hook is the surviving point.
+///
+/// De-gated to default-on for real (non-telemetry) runs (user 2026-06-30 "just a feature without a gate";
+/// mirrors the de-gating precedent `user-pref-too-many-env-file-gates-default-on-product`). The earlier
+/// "risky/unproven" caveat is retired: runtime-proven safe across the 2026-06-30 smokes (145-168 per-frame
+/// Present-hook composites, no crash). This also runs the per-frame depth-alpha-key + CPU-blend composite.
+/// Master off: `autoload_disabled()`; telemetry-only runs stay off; env/file remain
+/// force-on overrides.
+pub(crate) fn portrait_render_drive_enabled() -> bool {
+    if autoload_disabled() {
+        return false;
+    }
+    !save_override_telemetry_only()
+}
+/// Product gate for the live loading-screen portrait overlay. This keeps the rendered character portrait
+/// visible during real quick-load runs, but it deliberately does not track the mouse cursor.
+/// Measurement diagnostic (acceptance §2: no custom overlay UI in the product path -- the composite is
+/// scaffolding). For the Milestone-1 vanilla-parity diff, `er-quickload-measure-no-composite.txt` disables
+/// the composite so the product's load path is compared to vanilla without the overlay's per-frame fps cost.
+/// Cached (portrait_overlay_enabled runs every present frame, so no per-frame filesystem stat).
+pub(crate) fn measure_no_composite() -> bool {
+    static CACHED: AtomicUsize = AtomicUsize::new(0); // 0=unknown, 1=off, 2=on
+    match CACHED.load(Ordering::Relaxed) {
+        1 => false,
+        2 => true,
+        _ => {
+            let v = std::path::Path::new("er-quickload-measure-no-composite.txt").exists();
+            CACHED.store(if v { 2 } else { 1 }, Ordering::Relaxed);
+            v
+        }
+    }
+}
+
+pub(crate) fn portrait_overlay_enabled() -> bool {
+    if measure_no_composite() || autoload_disabled() {
+        return false;
+    }
+    !save_override_telemetry_only()
+}
+// ENV-gate RATIONALE: ER_QUICKLOAD_TRACE_CONTINUE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
+pub(crate) fn trace_continue_enabled() -> bool {
+    product_autoload_enabled()
+}
+// ENV-gate RATIONALE: ER_QUICKLOAD_OWN_STEPPER is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
+pub(crate) fn own_stepper_enabled() -> bool {
+    if missing_save_selection_pending() {
+        return false;
+    }
+    product_autoload_enabled()
+        || OWN_STEPPER_FILE_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
+}
+/// Observe-only native-continue gate (path B, autoload-path-B-drive-native-load-chosen-2026-06-22).
+/// Off by default; enable via env `ER_QUICKLOAD_NATIVE_CONTINUE=1` or a GAME_DIR file
+/// `er-quickload-native-continue.txt`. Mirrors `native_load_enabled` (env or file). When on, the idx10
+/// handler installs the patch (so our handler runs each frame) but does not force the title state
+/// machine: it lets OWN_STEPPER_ORIG_IDX10 pass-through advance the native boot naturally (the user
+/// drives past press-any-button + modals in this hybrid test, or the own-stepper opens the menu),
+/// and once the live TitleTopDialog menu is rendered + settled, it fires the native continue
+/// (load-most-recent) MenuMemberFuncJob node's run 0x1409aaba0 exactly once -- which drives the full
+/// native load (parse + world-asset streaming + spawn). No SetState(2/3), no beginlogo-gate clear,
+/// no registrar self-fire, no direct_build / cold_char_mount. Observe + one-shot fire only.
+///
+/// Single explicit off kill-switch for the always-on product autoload (most-recent native Continue +
+/// the readiness press-any-button advance that gets us to the title menu). Autoload is the default
+/// DLL behavior (user directive 2026-06-24 "Autoload should always be the default dll behavior";
+/// product contract `autoload-dll-product-requirements`: "always-on -- no opt-in gate; users install
+/// the DLL knowingly and read docs"). Set `ER_QUICKLOAD_NO_AUTOLOAD=1` or drop
+/// `er-quickload-no-autoload.txt` next to eldenring.exe to suppress it (overlay-only use, or a session
+/// that should not auto-Continue). Mirrors the splash-skip de-gating precedent
+/// (`user-pref-too-many-env-file-gates-default-on-product-2026-06-23`).
+///
+/// Clean-A/B diagnostic (bd STEP4-runtime-trace + STEP4-4fps-AB-structurally-CONFOUNDED): disable the
+/// menu-free switch-reload (`own_load_switch_reload_fire`) so the only reload path is the harness's
+/// menu-driven native quit->Continue. Run with vs without this marker under identical config (armed,
+/// same epoch1, same DRIVE_MODE=reload) to isolate just the reload mechanism (menu-free vs menu-driven)
+/// -- the same-epoch1 A/B the confound memory says is needed to tell a real render divergence from a
+/// measurement artifact. Diagnostic-only marker; not product behavior.
+pub(crate) fn switch_reload_ownload_disabled() -> bool {
+    std::path::Path::new("er-quickload-disable-switch-reload-ownload.txt").exists()
+}
+
+/// Phase-3 outgoing-world TEARDOWN (bd PHASE3-render-release-is-CommonFinalize-mod-suppresses-fix-
+/// teardown-outgoing-world-2026-07-23). When enabled, route the outgoing (pre-quit) world through the
+/// native render-release (`CS::InGameStep::_Common_Finalize`, reached when STEP_MoveMap walks the child
+/// 18->Cleanup(19)->Finish(20)) before own_load rebuilds, so the switch reload starts from freed
+/// GLOBAL_WorldChrMan/CSDistViewManager/g_GxDrawContext/worldres/FieldArea instead of reloading in-place
+/// over the still-live globals (the ~5x-heavier-render / 5-vblank switch bug).
+///
+/// Default-off / OPT-in (reverted from default-on 2026-07-23 after run angre-phase3fix-1 SOFTLOCKED
+/// LOAD1 at 8/11: with the fix on, load1's protective holds were suppressed and its autoload handoff hit
+/// premature teardown). It is WIP that softlocks, so the product default is the old working in-place
+/// reload; enable it deliberately for a validation run by dropping `er-quickload-enable-outgoing-teardown.txt`
+/// next to eldenring.exe. Flip back to default-on only after a clean validation. Cached (queried per frame).
+///
+/// Enabling alone does not touch LOAD1: every Phase-3 behavior is also gated by `switch_reload_active()`
+/// (a) the in-world menuData+0x5d ending-drive fires only in phases RETURN_TITLE_REQUESTED..AUTOLOAD_HANDOFF,
+/// (b) `outgoing_teardown_suppresses_holds()` requires an active switch, and (c) the reload's
+/// continue_confirm hold lives inside the switch-only `own_load_switch_reload_fire`. On the boot autoload
+/// (phase idle) the two holds stay engaged exactly as before this change.
+pub(crate) fn outgoing_teardown_enabled() -> bool {
+    static CACHED: AtomicUsize = AtomicUsize::new(0); // 0=unknown, 1=on, 2=off
+    match CACHED.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let on = std::path::Path::new("er-quickload-enable-outgoing-teardown.txt").exists();
+            CACHED.store(if on { 1 } else { 2 }, Ordering::Relaxed);
+            on
+        }
+    }
+}
+
+/// WORLDRESWAIT streaming-settle hold (bd reload-overlap-fix-design-worldreswait-defer-release-on-
+/// streaming-settle-2026-07-24). When enabled, the armed System->Quit->Load-Profile switch reload DEFERS
+/// `CS::MoveMapStep::STEP_WorldResWait`'s movability/loading-close release (its player warp + step
+/// advance) until `CS::CSWorldGeomMan` geometry streaming settles, so the incoming world's playable
+/// window no longer overlaps active block streaming (the ~20fps movable-while-streaming dip). The hold
+/// reads only passive CSWorldGeomMan fields, never writes WorldBlockRes phase/gate bytes, and is bounded
+/// fail-soft (on the cap it releases exactly like today -- no softlock, no regression).
+///
+/// Default-off / OPT-IN: this is a first-run WIP lever whose in-place-world settle behavior is not yet
+/// runtime-proven (whether the persistent CSWorldGeomMan ever reports settle mid-reload is the open
+/// unknown), so the product default is the old in-place release. Enable it deliberately for a validation
+/// run by dropping `er-quickload-enable-worldreswait-hold.txt` next to eldenring.exe. The gate hook is a
+/// pure passthrough until this marker is present and a genuine in-world switch reload is armed
+/// (`switch_reload_active()` && `SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT==0` && a per-switch arm), so LOAD1/boot
+/// (phase idle, player absent at arm) are never touched regardless of the marker. Cached (queried at arm).
+pub(crate) fn worldreswait_hold_enabled() -> bool {
+    static CACHED: AtomicUsize = AtomicUsize::new(0); // 0=unknown, 1=on, 2=off
+    match CACHED.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let on = std::path::Path::new("er-quickload-enable-worldreswait-hold.txt").exists();
+            CACHED.store(if on { 1 } else { 2 }, Ordering::Relaxed);
+            on
+        }
+    }
+}
+
+/// True only while a System->Quit->Load-Profile switch reload is in progress -- i.e. one was armed by
+/// the user ProfileSelect path (`system_quit_arm_quickload_autoload`), which advances
+/// `SYSTEM_QUIT_QUICKLOAD_PHASE` to at least RETURN_TITLE_REQUESTED. That is now the only arm: the
+/// menu-free `switch_slot_arm_programmatic` was deleted on 2026-09-05. On the boot autoload (LOAD1) the phase is idle, so this is false and every
+/// Phase-3 behavior is scoped off for load1. This is the critical guard: boot's own continue_confirm sets
+/// FRESH_DESER_COUNT != 0, so the holds' own conditions do fire during load1's autoload handoff -- without
+/// this switch gate the Phase-3 hold-suppression would (and did, run angre-phase3fix-1) disable those
+/// load1 holds and softlock LOAD1 at 8/11.
+pub(crate) fn switch_reload_active() -> bool {
+    er_telemetry_core::counters::SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+        >= crate::constants::SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+}
+
+/// True while the Phase-3 outgoing-teardown fix is actively driving a switch reload (enabled and a switch
+/// is active and not fallen back to fail-soft). Only in this state may the two in-place holds be
+/// suppressed -- they still fire on LOAD1/boot (switch inactive) and on fail-soft, so the boot autoload
+/// and the old in-place reload keep their protection. The holds otherwise only guard the old in-place
+/// reload, which no longer happens once the outgoing world is torn down first.
+pub(crate) fn outgoing_teardown_suppresses_holds() -> bool {
+    outgoing_teardown_enabled()
+        && switch_reload_active()
+        && er_telemetry_core::counters::OUTGOING_TEARDOWN_FAILSOFT.load(Ordering::SeqCst) == 0
+}
+
+pub(crate) fn autoload_disabled() -> bool {
+    // De-gated for product (deprecate-env-marker-gate-allowlists-2026-07-19): autoload is unconditionally
+    // the product default. Diagnostic-only marker (er-quickload-diag-no-autoload.txt) disables it for the
+    // clean-A/B step-4 test (armed + autoload-off + DRIVE_MODE=full -> reload via harness-Continue epoch1
+    // like vanilla, isolating arming from the epoch1-path confound; bd
+    // STEP4-4fps-AB-is-structurally-CONFOUNDED). This is a measurement override, not a product feature gate.
+    std::path::Path::new("er-quickload-diag-no-autoload.txt").exists()
+}
+/// Product direction (2026-07-04): the ProfileSelect / Load-Game menu shows a **stats panel** instead
+/// of the character portrait in each 128x128 save-slot face box. When this is on (the product default)
+/// the stats-panel pipeline runs: a neutral background texture is injected into each
+/// `SYSTEX_Menu_ProfileNN` slot and each visible `menu_dummyprofileface_NN` bind is redirected to it, so
+/// the box shows our background; the character's attributes are then drawn as native `MenuFont_01` text
+/// (see bd `profile-select-stats-panel-goal-plan-2026-07-03`,
+/// `profile-select-05010-layout-fonts-RE-2026-07-04`, `profileselect-native-settext-RE-2026-07-04`).
+///
+/// Important -- this does not blank the character render. The portrait render pipeline
+/// (`force_profile_render_enabled` etc.) also produces the loading-screen portrait of the loaded
+/// character (via the offscreen readback -> now-loading forge, a different consumer than the
+/// ProfileSelect box display bind). Blanking the render to hide the ProfileSelect portraits also killed
+/// the loading-screen portrait (user-reported 2026-07-04). Since the ProfileSelect boxes are hidden by
+/// the display-bind redirect regardless of whether the render ran, the render stays on (the crash-free
+/// one-slot render feeds the loading-screen portrait) and only the box display is redirected.
+///
+/// This is a product-level lever tied to autoload state (not a per-feature knob): default-on for any
+/// real product autoload run, off for telemetry-only runs. A single disable
+/// override turns the stats panel off for A/B, mirroring `autoload_disabled()`'s `ER_QUICKLOAD_NO_AUTOLOAD`
+/// shape: env `ER_QUICKLOAD_NO_STATS_PANEL=1` or the GAME_DIR file `er-quickload-no-stats-panel.txt`.
+pub(crate) fn stats_panel_enabled() -> bool {
+    if autoload_disabled() || save_override_telemetry_only() {
+        return false;
+    }
+    true
+}
+// ENV-gate RATIONALE: ER_QUICKLOAD_NATIVE_CONTINUE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
+pub(crate) fn native_continue_enabled() -> bool {
+    if autoload_disabled() {
+        return false;
+    }
+    !save_override_telemetry_only()
+}
+/// Commit sub-gate for the native full-save-read chain (required to actually fire continue_confirm
+/// 0x140b0e180 -> SetState5, the sole save write). Off by default; enable via env
+/// `ER_QUICKLOAD_FULLREAD_COMMIT=1` or a GAME_DIR file `er-quickload-fullread-commit.txt`. Without it the
+/// chain stops at the step-6 guard (deserialize + guard + log only): save-safe, no continue_confirm,
+/// no SetState5. This lets a first test run verify-only (default) before any save write.
+pub(crate) fn native_fullread_commit_enabled() -> bool {
+    product_autoload_enabled()
+}
+/// OPT-in post-world native TitleTopDialog cleanup. Static trace of 0x1409a8890 shows this is the
+/// real dialog cleanup body: it clears active-screen renderers and releases dialog-owned resources.
+/// It fires only after PlayerIns exists, so it cannot participate in save/load success.
+pub(crate) fn cleanup_title_dialog_after_world_enabled() -> bool {
+    product_autoload_enabled()
+}
+// Permanently-false gates keep leaving this file, from both directions, for the same reason.
+// `input_probe_enabled` / `own_load_pump_verify_only` / `direct_build_enabled` went with the
+// autoload/title-flow slice: each returned a literal `false`, each had exactly one call site, and
+// deleting those unreachable branches left the gate with no caller -- a hard error under
+// `[workspace.lints.rust] warnings = "deny"`. `main` then deleted 19 more the same way ("Delete 26
+// gates that could only ever be false, and the code behind them"), including the four the
+// er-title-flow seam still names: `experimental_direct_menu_load_enabled`,
+// `fire_tfc_continue_enabled`, `title_accept_byte_gate_enabled` and `title_proceed_gate_enabled`.
+// Those four are not gone from the product -- `lib_parts/dll_entry_parts/bootstrap.rs` wires the
+// corresponding `TitleFlowHost` fields to `|| false` closures instead, so the seam keeps its shape
+// without this crate carrying a function whose only possible answer is `false`.
+//
+// Four more went the same way (2026-08-26, PR #362 review -- the user refused to approve a change
+// that added permanently-false gates: "we cannot rely on env gating for product stability"):
+//
+//   * `native_profile_capture_enabled` -- a diagnostic native ProfileSelect/portrait-capture mode.
+//     It only ever ORed an extra `false` into six product gates (`force_profile_render_enabled`,
+//     `portrait_real_pixels_enabled`, `portrait_render_drive_enabled`, `portrait_overlay_enabled`,
+//     `stats_panel_enabled`, `native_continue_enabled`), so removing it cannot change any of them.
+//     The identically-named `TitleFlowHost` field is a different symbol and stays: bootstrap.rs
+//     wires it to `|| false` and `er-title-flow` reads it, exactly like the four above.
+//   * `native_profile_drive_disabled` -- an env force-off escape for the native-Windows portrait
+//     render-drive. Its two call sites were
+//     `is_native_windows() && native_profile_drive_disabled()`, never true. `is_native_windows()`
+//     itself is untouched: input_block.rs, task_tick.rs and title_visual_startup.rs still call it.
+//   * `own_stepper_passive_enabled` -- a marker-file-gated hand-driven own-stepper mode. Its idx10
+//     branch was already gone; the leftovers were two `input_block.rs` terms.
+//   * `inject_nav_enabled` -- an env/marker-file-gated fabricated D-pad-Down title nav. Its driver
+//     branch and its `INJECT_NAV_*` counters were already gone; the leftovers were the XInput
+//     force-connect terms in `input_block.rs`.
+
+/// Movement-proof probe (`er-quickload-prove-movement.txt`). When staged, authorizes the in-DLL
+/// can-move probe to inject a forward stick in-world and forces XInput slot 0 "connected" so the game
+/// polls it (else, with no physical pad, the injected stick never lands). Proof-only / diagnostic.
+pub(crate) fn prove_movement_enabled() -> bool {
+    // DECOUPLED TOGGLE: the can-move probe (drive the player forward >=60 frames + confirm
+    // CAN_MOVE_CONFIRMED) is part of the load2 test-drive; enable it when the input-harness DLL is
+    // present (presence-gated, not marker/env). Without it sq-repro's WAIT_WORLD never advances. bd
+    // load2-testdrive-move60-then-menu-load-driver-degated-2026-07-19.
+    harness_dll_present()
+}
+
+// Removed (user 2026-07-23, bd harness-drive-contract-...-no-force-focus): `probe_foreground_enabled`
+// authorized the can-move probe to force the ER window foreground while injecting. The user's window focus
+// must never be seized, so the force-focus call was removed from can_move_probe and this gate deleted.
+// Movement is now delivered foreground-only (only when ER is already the active window).
+/// Self-driven system->quit->load-profile REPRO autopilot (er-quickload-system-quit-repro.txt /
+/// ER_QUICKLOAD_SYSTEM_QUIT_REPRO). Off by default. When on, after the boot autoload reaches the
+/// world, the DLL keeps the input block engaged and injects a scripted DInput keyboard sequence --
+/// gated on observed menu-window transitions (IngameTop / OptionSetting / ProfileSelect), never on
+/// timers -- to open the escape/system menu, activate the cloned Load-Profile (Quit Game) row, move
+/// the ProfileSelect cursor to a non-current slot, and confirm. This drives the exact user flow with
+/// zero human input so the switch bug (return-title reload crash / wrong-slot) reproduces
+/// deterministically. Diagnostic repro harness, not a product lever.
+/// True when the separate `er_input_harness.dll` is loaded in the process (i.e. listed in the ME3
+/// profile). This is the DECOUPLED toggle for the load2 flow (bd
+/// harness-orchestrates-product-exposes-primitives-boundary / load2-flow-decoupled-into-harness-dll):
+/// the product ships with the load2 driver inert; including the harness DLL in the profile turns it on.
+/// This is a runtime module-presence check (`GetModuleHandle`), not a marker file or env var -- it
+/// passes check-marker-file-gates / check-env-gate-comments because it gates on real process state,
+/// exactly the "conditional INCLUSION, not conditional gating" the user asked for.
+pub(crate) fn harness_dll_present() -> bool {
+    static CACHED: AtomicUsize = AtomicUsize::new(0); // 0 = not-yet-seen, 1 = present
+    if CACHED.load(Ordering::Relaxed) == 1 {
+        return true;
+    }
+    let present = unsafe { GetModuleHandleA(s!("er_input_harness.dll")) }
+        .map(|h| !h.is_invalid())
+        .unwrap_or(false);
+    if present {
+        CACHED.store(1, Ordering::Relaxed);
+    }
+    present
+}
+/// True when `renderdoc.dll` is loaded (a RenderDoc capture is hooking D3D12). The product's Present-overlay
+/// hook + throwaway dummy swapchain conflict with RenderDoc's resource tracking (bd RENDERDOC-assert-cause-
+/// is-product-dummy-swapchain: RenderDoc double-tracks the dummy swapchain -> resource_manager `ref>=0`
+/// assert -> ER dies ~50s). So the render-thread hooks stand down under RenderDoc; the reload still drives
+/// via the CSTask/load path (no render hooks needed to capture the render state).
+pub(crate) fn renderdoc_active() -> bool {
+    static CACHED: AtomicUsize = AtomicUsize::new(0);
+    if CACHED.load(Ordering::Relaxed) == 1 {
+        return true;
+    }
+    let present = unsafe { GetModuleHandleA(s!("renderdoc.dll")) }
+        .map(|h| !h.is_invalid())
+        .unwrap_or(false);
+    if present {
+        CACHED.store(1, Ordering::Relaxed);
+    }
+    present
+}
+pub(crate) fn system_quit_repro_enabled() -> bool {
+    // Stand down when the harness is driving the menu itself (its force-drive marker is present).
+    // Two switch drivers in one process do not merely conflict -- they make the run a lie. Measured
+    // on br-20260905-041435-e8d0: the harness had opened the pause menu and was on
+    // `nav_to_optionsetting` when the old autopilot hit its 180-frame settle, armed a menu-free
+    // switch and tore the world down (`world_sim` 1 -> 0), so the phase logged derailed for a nav
+    // that never got the chance to fail. The second load the user watched was the autopilot's every
+    // time -- `presses=0` -- which is why a menu bug could never be reproduced no matter how correct
+    // the harness's menu phases became.
+    //
+    // The third clause this used to carry stood the driver down whenever the control-file switch
+    // driver was live. That driver was deleted on 2026-09-05 (user directive) precisely because it
+    // loaded characters without the menu, so there is nothing left to defer to.
+    harness_dll_present() && !harness_force_drive_marker_present()
+}
+
+/// True when `er-input-harness` has been told to drive this run itself (the same marker its
+/// `force_drive_requested()` reads, resolved the same way -- beside the DLL's log, because me3
+/// launches the game with an arbitrary CWD and a bare relative path silently answers false).
+/// Read-only here: the product uses it to keep out of the harness's way, never to drive anything.
+pub(crate) fn harness_force_drive_marker_present() -> bool {
+    matches!(std::env::var("ER_HARNESS_FORCE_DRIVE").as_deref(), Ok("1"))
+        || er_game_base::log::redirected_artifact_path(
+            "ER_HARNESS_FORCE_DRIVE_PATH",
+            "er-harness-force-drive.txt",
+        )
+        .exists()
+}
+/// Cold CHAR-mount experiment gate (env ER_QUICKLOAD_COLD_CHAR_MOUNT / er-quickload-cold-char-mount.txt,
+/// off by default). The decisive save-data experiment (save-io-infra-present-cold-char-mount-is-the-
+/// decisive-untested-experiment-2026): with the stream worker registered, can the b80 save-IO read
+/// drain to resident so 0x67b290 mounts the real char -- zero-input, save-safe (reads the save,
+/// applies char to memory; No SetState, no save write).
+pub(crate) fn cold_char_mount_enabled() -> bool {
+    COLD_CHAR_MOUNT_FILE_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
+}
+/// Save-safe verify-only own-load buffer-feed gate. Off by default; enable via the reliable
+/// autoload-file channel (`own_load=1` in er-quickload-autoload.txt -> `OWN_LOAD_FILE_ARMED`), env
+/// `ER_QUICKLOAD_OWN_LOAD=1`, or a GAME_DIR file `er-quickload-own-load.txt`. When on, `own_load_drive`
+/// hooks the FSM-gated save read 0x67b100, feeds it our sliced plaintext .sl2 slot body, calls the
+/// native parser 0x67b290(slot) in-process, then reads back GameMan+0xc30 + the PlayerGameData
+/// fingerprint. No SetState5, no autosave, no continue_confirm.
+pub(crate) fn own_load_enabled() -> bool {
+    OWN_LOAD_FILE_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
+}
+/// Whether the final guarded `continue_confirm`/`SetState5` world-stream step is armed. Save-writing
+/// when it fires (`SetState5` autosaves), so it stays off by default: `own_load_drive` is verify-only
+/// unless this is explicitly armed via the autoload-file channel (`own_load_continue=1` in
+/// er-quickload-autoload.txt -> `OWN_LOAD_CONTINUE_FILE_ARMED`), env `ER_QUICKLOAD_OWN_LOAD_CONTINUE=1`,
+/// or a GAME_DIR file `er-quickload-own-load-continue.txt`. The hard c30/fingerprint guard inside
+/// `own_load_drive` is the absolute save-safety backstop even when this is armed.
+pub(crate) fn own_load_continue_enabled() -> bool {
+    OWN_LOAD_CONTINUE_FILE_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
+}
+/// Whether the own-load m28 direct-enqueue lever (`AddDefaultFileLoadProcess`) is armed. This is the
+/// arming gate only; the lever additionally requires `OWN_LOAD_CONTINUE_FIRED` (our menu-free path
+/// actually fired) at fire time, so on a vanilla native menu load -- where that flag is never set --
+/// it can never dispatch even if armed. Arm via the autoload-file channel (`own_dispatch=1` in
+/// er-quickload-autoload.txt -> `OWN_DISPATCH_FILE_ARMED`), env `ER_QUICKLOAD_OWN_DISPATCH=1`, or a
+/// GAME_DIR file `er-quickload-own-dispatch.txt`. Save-SAFE: reaches only world-asset file-load
+/// streaming (RequestDCX -> RSResourceFileRequest -> GLOBAL_LoadManager), never save IO.
+pub(crate) fn own_dispatch_enabled() -> bool {
+    OWN_DISPATCH_FILE_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
+}
+/// Whether the menu-free LoadGame-job install lever is armed. When set (alongside `own_load`, which
+/// makes `own_load_drive` run), the verify-only parse is followed by build (`FUN_140826510`) +
+/// install (`FUN_1407a9560`) of the native LoadGame `MenuJobWithContext` into the title owner's
+/// `+0x130` MenuJob slot -- replacing the idle `IfElseJob` so `STEP_MenuJobWait` ticks it (self-build
+/// -> deser -> world stream). This is the non-SetState5 alternative to `own_load_continue`: no
+/// `SetState5`, no autosave, no save write (build + first-tick deser only read the save). Off by
+/// default; arm via the autoload-file channel (`own_load_install_job=1` ->
+/// `OWN_LOAD_INSTALL_JOB_FILE_ARMED`), env `ER_QUICKLOAD_OWN_LOAD_INSTALL_JOB=1`, or a GAME_DIR file
+/// `er-quickload-own-load-install-job.txt`.
+pub(crate) fn own_load_install_job_enabled() -> bool {
+    OWN_LOAD_INSTALL_JOB_FILE_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
+}
+/// Whether the path B menu-free private-pump lever (`own_load_pump`) is armed. When set (alongside
+/// `own_load`, which makes `own_load_drive` run the verify-only parse), the parse is followed by build
+/// of the LoadGame `MenuJobWithContext` with real mss-derived ctx; the recurring game task then ticks
+/// its `Run` privately every frame to completion (deser -> map stream -> m28 mount) and, once it reaches
+/// `state==Success`, fires the guarded SetState5 transition once. This is the "own the load" rebuild --
+/// no owner+0x130 install, no CSMenuMan dialog, no queue. Off by default; arm via the autoload-file
+/// channel (`own_load_pump=1` -> `OWN_LOAD_PUMP_FILE_ARMED`), env `ER_QUICKLOAD_OWN_LOAD_PUMP=1`, or a
+/// GAME_DIR file `er-quickload-own-load-pump.txt`.
+pub(crate) fn own_load_pump_enabled() -> bool {
+    OWN_LOAD_PUMP_FILE_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
+}

@@ -208,7 +208,7 @@ fn default_normalize(_bytes: &mut [u8]) -> bool {
 /// The live `CS::ProfileSummary`, read the way `er-profile-summary-core` reads it.
 ///
 /// A default rather than a refusal, for the same reason the save root is: this is a fault-guarded
-/// READ of the game's own allocation, not a product setting, and answering 0 stops a file browser
+/// read of the game's own allocation, not a product setting, and answering 0 stops a file browser
 /// from staging a single row -- which is what left the standalone **Load Character from File** row
 /// inert with `cannot stage rows -- live ProfileSummary unavailable` (2026-09-11). A host that
 /// tracks the allocation itself still overrides it.
@@ -494,10 +494,10 @@ mod tests {
 
     #[test]
     fn an_unhosted_quit_menu_reports_no_save_source_rather_than_a_guess() {
-        // The save PATH is now discovered rather than refused, because refusing it stops a file
+        // The save path is now discovered rather than refused, because refusing it stops a file
         // browser from opening at all -- but discovery only ever finds the game's own
         // `%APPDATA%/EldenRing/<steamid>/ER0000.*`, and on a machine with no such directory it
-        // still errors. What must never be guessed is the WRITE authorisation above.
+        // still errors. What must never be guessed is the write authorisation above.
         let discovered = system_quit_env_save_path();
         if let Ok(path) = &discovered {
             assert!(

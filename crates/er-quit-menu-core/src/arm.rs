@@ -115,6 +115,19 @@ pub unsafe fn arm_standalone(rows: RowSet, actions: QuitRowActions) -> Standalon
     crate::menu_pump::set_character_rows_armed(character_rows);
     let menu_pump = (build_rows || character_rows)
         .then(|| unsafe { crate::menu_pump::install_quit_menu_window_run_hook() });
+    // The row-populate detour is what dresses a browse row: it hides the `Level` caption and the
+    // bottom `PlayTime` that would otherwise read "Level 0" and "0:00:00" about a character that
+    // does not exist, repurposes the top-right `Location` for the file's last-saved time, and
+    // writes the drive strip and the current-path bar. Without it the picker opens onto the game's
+    // own character presentation.
+    //
+    // The product installs the same two detours from its own private copy, and the two must never
+    // both run: `scripts/me3-dll-conflicts.toml` records the pair as duplicate owners and the
+    // profile generator refuses to emit a profile carrying both, so one owner per process is a
+    // property of the conflict table rather than an assumption made here.
+    if character_rows {
+        crate::profile_row_chrome::install_profile_row_populate_hooks();
+    }
     let arm = StandaloneArm {
         gfx_served,
         rows_armed,

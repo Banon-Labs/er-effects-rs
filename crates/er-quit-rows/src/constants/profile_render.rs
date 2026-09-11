@@ -1,0 +1,312 @@
+// ============================================================================================
+// ownership ledger -- conservation oracle for the "took a native object, released it one-sidedly"
+// bug class (the repeated-switch spared-renderer leak: we excluded a CSMenuProfModelRend from the
+// engine's delete to render the portrait, then a bare `store(0)` dropped our responsibility for it
+// without discharging it, leaking one live renderer per switch). A raw `usize` in an AtomicUsize
+// carries no ownership semantics, so `store(0)` reads as innocuous. This ledger makes ownership
+// conservation observable: every "take" (we become responsible for freeing a native object) and
+// "release" (we hand it back to the native lifecycle) is counted per class, and a per-switch check
+// asserts outstanding <= bound. The old leak would have tripped this at switch #2 (outstanding
+// climbing 1->2->3->4) instead of crashing the GX queue at #4. It is also the acceptance test for a
+// future RAII `EngineOwned` wrapper: build the invariant first, then make it structurally unbreakable.
+// ============================================================================================
+/// Classes of native object we take manual ownership of. Extend as the RAII wrapper subsumes more of
+/// the spare/pin family; only classes with a true release obligation belong here (borrowed engine
+/// pointers -- the RT/depth pins, the anim-bound renderer -- are observation, not ownership).
+#[derive(Clone, Copy)]
+pub(crate) enum OwnedClass {
+    /// The teardown-spared portrait renderer (excluded from the native delete; we must delete it).
+    SparedRenderer = 0,
+}
+pub(crate) const OWNED_CLASS_COUNT: usize = 1;
+pub(crate) static OWNED_TAKEN: [AtomicUsize; OWNED_CLASS_COUNT] =
+    [const { AtomicUsize::new(0) }; OWNED_CLASS_COUNT];
+pub(crate) static OWNED_RELEASED: [AtomicUsize; OWNED_CLASS_COUNT] =
+    [const { AtomicUsize::new(0) }; OWNED_CLASS_COUNT];
+/// Per-class high-water of outstanding (should equal the bound in a healthy run, exceed it on a leak).
+pub(crate) static OWNED_MAX_OUTSTANDING: [AtomicUsize; OWNED_CLASS_COUNT] =
+    [const { AtomicUsize::new(0) }; OWNED_CLASS_COUNT];
+/// Gate-local `CS::MenuWindowJob::Run` hook state. `MENU_WINDOW_JOB_RUN_RVA` is defined with the
+/// title-cover constants above; System Quit reuses that same live/deobf target.
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
+pub(crate) static SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
+pub(crate) const SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED: usize = 0;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
+pub(crate) const SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED_YES: usize = 1;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_LOG_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_INGAME_TOP_WINDOW;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_OPTION_SETTING_WINDOW;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_SELECT_WINDOW;
+/// Latched from the moment the user clicks System->Quit->Load Profile (the profile-load route fire) until
+/// ProfileSelect is reset. `SYSTEM_QUIT_PROFILE_SELECT_WINDOW` is only set later, in the MenuWindowJob::Run
+/// hook, so there is a window where the own_stepper self-pump builds the native load-confirm MessageBox
+/// while that var is still 0 -- the confirm then escapes msgbox suppression and crashes the game (2026-07-15).
+/// This flag spans the whole flow so `switch_active` in the msgbox builder hook covers that gap.
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_SKIP_RESTORE_AFTER_QUICKLOAD_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_REAL_WINDOWS_HIDDEN;
+pub(crate) static SYSTEM_QUIT_WINDOW_LIST_PUSH_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED;
+pub(crate) const SYSTEM_QUIT_WINDOW_LIST_PUSH_NOT_INSTALLED: usize = 0;
+pub(crate) const SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED_YES: usize = 1;
+/// Live/deobf `CS::ProfileLoadDialog` activation vtable target (`dump 0x1409a47c0` -> deobf
+/// `0x1409a4670`). This builds/submits the native confirmation dialog for the selected profile.
+pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_RVA: u32 = 0x9a4670;
+/// Live/deobf `<lambda_4c99...>::operator()` (`dump 0x1409a4ee0` -> deobf `0x1409a4d90`). This
+/// only writes `*(dialog+0x1cc8+0x14c)=2` and `dialog+0x1e8=Success`; runtime evidence showed the
+/// crash happens before this lambda is reached when the confirmation is accepted, so this transition
+/// is safe to allow after blocking the actual load job.
+pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_RVA: u32 = 0x9a4d90;
+/// Live/deobf `CS::MenuJobWithContext<LoadJobContext,...>::Run` (`dump 0x140826e40` -> deobf
+/// `0x140826d50`). This is the load job queued behind the native confirmation dialog; accepting
+/// confirmation reaches this job and then crashed at CSGaitemImp::Deserialize live/deobf `0x14067141a`.
+pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA: u32 = 0x826d50;
+/// Native MenuWindow close-finalize `FUN_1407ac980` (dump `0x1407ac980` -> live/deobf `0x7ac890`,
+/// content-unique). Takes `rcx = MenuWindow*`; does `MenuJobResult::SetResult(&r, Failed, 0)` then
+/// invokes the window's own close vmethod (`window->vtable+0x60`). Calling it on the ProfileSelect
+/// window sets `owningMenuWindow+0x1e8` terminal, so `CS::MenuWindowJob::Run` (0x7ad1c0) reads a
+/// terminal result and `ExecuteMenuJob` (0x7a96f0) pops the job from the menu-job queue head. That
+/// is the native cancel/back close (approach B): it clears `queue[0]` so the return-title chain's
+/// `queue[0]==0` ready-gate finally passes and the direct chain can submit. See bd
+/// `system-quit-profileselect-native-close-B-path` / `menu-job-queue-pump-dequeue-mechanism`.
+pub(crate) const SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA: u32 =
+    er_game_base::rva::MENU_WINDOW_CLOSE_WITH_FAILED_RVA as u32;
+/// Times the list-builder hook re-staged the browse rows before a native list build (oracle; each
+/// re-stage repairs any game-save record stomp that landed since the previous staging).
+/// One-shot latch: set when we have invoked the native ProfileSelect close during a return-title
+/// transition, so the per-tick handler closes it exactly once. Reset with the ProfileSelect state.
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_FIRED;
+/// Telemetry: number of native ProfileSelect close-finalize calls issued (expected 1 per flow).
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_COUNT;
+/// The load-only save routine `FUN_14067b380` (dump 0x14067b380 -> LIVE/deobf 0x67b290, shift -0xf0),
+/// called by `CS::MoveMapStep::DoSaveStuff` when `GameMan.saveState/b80 == 2`: it reads the slot's save
+/// file and runs `PlayerGameData::Deserialize -> CSGaitemImp::Deserialize` (the in-world deserialize
+/// that crashes at live 0x67141a), then `warpRequested=true`. Guarded during the in-world
+/// System->Quit->Load-Profile transition so the picked slot is not deserialized into the still-live
+/// world; forwarded normally at a clean title so the autoload loads the slot. Distinct from the save
+/// path (DoSaveStuff `IsSaveState1` branch), so the return-title's save-on-quit is untouched. NOTE:
+/// the RVA is the live 0x67b290 (game_rva uses the deobf base); the dump 0x67b380 is a different
+/// function -- hooking it silently no-ops (observed 2026-07-01: guard installed but never fired).
+pub(crate) const SYSTEM_QUIT_INWORLD_LOAD_RVA: u32 = 0x67b290;
+pub(crate) static SYSTEM_QUIT_INWORLD_LOAD_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_INWORLD_LOAD_INSTALLED;
+/// Claim states for [`SYSTEM_QUIT_INWORLD_LOAD_INSTALLED`], read by `mh_install_hook_once`'s
+/// compare-exchange. The guard installs LAZILY (at the moment a switch arms, not at boot) and the
+/// arm can happen many times a session, so the claim is the rolled-back kind: a real failure puts
+/// the flag back to NOT_INSTALLED and the next arm retries.
+pub(crate) const SYSTEM_QUIT_INWORLD_LOAD_NOT_INSTALLED: usize = 0;
+pub(crate) const SYSTEM_QUIT_INWORLD_LOAD_INSTALLED_YES: usize = 1;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_INWORLD_LOAD_SKIP_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_INWORLD_LOAD_ALLOW_COUNT;
+/// Count of frames the menu-pump Run hook forced GameMan.saveState/b80 back to idle to abort a
+/// half-started in-world load transition so the queued return-title chain can run.
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_INWORLD_LOAD_ABORT_COUNT;
+/// `CS::GameMan::RequestLoadSlot(slot)` -- the native setter that transitions GameMan.saveState/b80
+/// 0->2 to request an in-world load of an explicit slot 0-9 (dump `FUN_14067b2f0` -> LIVE/deobf
+/// `0x67b200`, shift -0xf0, content-unique). It validates the slot's ProfileSummary then calls the
+/// common arm worker `FUN_140e6ec30(mgr, slot, 0)` and, on success, writes `GLOBAL_GameMan->saveState
+/// = 2`. Called from the per-frame MoveMapStep load steps (`STEP_LoadSaveData`, `FUN_140afb970`) once
+/// the confirmed ProfileSelect chain pushes the map machine into loading -- Independent of our load-job
+/// block, which is why blocking the load-job/confirm never stopped the arm. Setting saveState=2 both
+/// makes `DoSaveStuff` deserialize (guarded) and starts the 02_904_NowLoading transition that freezes
+/// the menu pump so the queued return-title chain can never run (observed 2026-07-01: bc4=0,
+/// functor_call_count=0, player present; the reactive abort is too late because NowLoading commits in
+/// the same frame). During the in-world switch we neutralize this at the source so saveState never
+/// reaches 2. NOTE distinct from the Continue/boot variants FUN_14067b290 (sentinel slot 10) and
+/// FUN_14067b570 (sentinel slot 0xb): those arm the boot/clean-title autoload and must not be blocked.
+/// See bd system-quit-loadjob-success-commits-phantom-load-2026-07-01.
+pub(crate) const SYSTEM_QUIT_REQUEST_LOAD_SLOT_RVA: u32 = 0x67b200;
+pub(crate) static SYSTEM_QUIT_REQUEST_LOAD_SLOT_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_REQUEST_LOAD_SLOT_INSTALLED;
+/// Claim states for [`SYSTEM_QUIT_REQUEST_LOAD_SLOT_INSTALLED`]; same rolled-back claim as its
+/// in-world-load sibling above, for the same reason (lazy install, re-armed per switch).
+pub(crate) const SYSTEM_QUIT_REQUEST_LOAD_SLOT_NOT_INSTALLED: usize = 0;
+pub(crate) const SYSTEM_QUIT_REQUEST_LOAD_SLOT_INSTALLED_YES: usize = 1;
+/// Count of in-world load requests we neutralized (returned "not armed") during the switch so
+/// GameMan.saveState/b80 stayed 0 and no NowLoading transition started.
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_REQUEST_LOAD_SLOT_BLOCK_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_REQUEST_LOAD_SLOT_ALLOW_COUNT;
+pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
+pub(crate) static SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
+pub(crate) static SYSTEM_QUIT_GAITEM_DESERIALIZE_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
+pub(crate) static SYSTEM_QUIT_GAITEM_LOOKUP_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
+pub(crate) static SYSTEM_QUIT_GAITEM_FINALIZE_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_INSTALLED;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_INSTALLED;
+pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_NOT_INSTALLED: usize = 0;
+pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED_YES: usize = 1;
+pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_NOT_INSTALLED: usize = 0;
+pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_INSTALLED_YES: usize = 1;
+pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_NOT_INSTALLED: usize = 0;
+pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_INSTALLED_YES: usize = 1;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
+pub(crate) const SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_NOT_INSTALLED: usize = 0;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
+pub(crate) const SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED_YES: usize = 1;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
+pub(crate) const SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_DISABLED: usize = 2;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
+pub(crate) const SYSTEM_QUIT_GAITEM_DESERIALIZE_NOT_INSTALLED: usize = 0;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
+pub(crate) const SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED_YES: usize = 1;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
+pub(crate) const SYSTEM_QUIT_GAITEM_DESERIALIZE_DISABLED: usize = 2;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
+pub(crate) const SYSTEM_QUIT_GAITEM_LOOKUP_NOT_INSTALLED: usize = 0;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
+pub(crate) const SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED_YES: usize = 1;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
+pub(crate) const SYSTEM_QUIT_GAITEM_LOOKUP_DISABLED: usize = 2;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
+pub(crate) const SYSTEM_QUIT_GAITEM_FINALIZE_NOT_INSTALLED: usize = 0;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
+pub(crate) const SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED_YES: usize = 1;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
+pub(crate) const SYSTEM_QUIT_GAITEM_FINALIZE_DISABLED: usize = 2;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_PICKER_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_SLOT_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_BLOCK_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_JOB;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_LIST;
+pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_PROFILE_ID: AtomicUsize =
+    AtomicUsize::new(usize::MAX);
+/// Captured fourth constructor argument for native ProfileSelect LoadJob builder, mirrored from the
+/// consumed LoadJobContext (`job+0x60`, originally `*(ProfileLoadDialog+0x1cc8)`).
+pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_CONTEXT_ARG: AtomicUsize =
+    AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_POST_RETURN_TITLE_FIRED: AtomicUsize =
+    AtomicUsize::new(0);
+/// Native return-title semantic request used after System->ProfileSelect confirmation. This is
+/// `FUN_14067a490` in the Ghidra dump and maps to live/deobf `0x14067a3a0`; it sets the same
+/// GameMan return-title/save flags used by the normal Quit Game confirmation callback without
+/// displaying another confirmation dialog.
+pub(crate) const SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA: u32 = 0x67a3a0;
+/// Guard on the native title Continue confirm `0x140b0e180` (`CONTINUE_CONFIRM_RVA`): it only reads
+/// GameMan+0xc30 -> owner+0xbc -> SetState(5) and picks no slot, so after a System->Quit switch the
+/// clean-title reload would re-stream the pre-switch GameMan/PlayerGameData state (no fresh
+/// deserialize of the picked slot runs anywhere on that native path -- static RE 2026-07-02, bd
+/// system-quit-cleantitle-load-is-stale-restream-not-slot-source-2026-07-02). While a switch is
+/// active the hook drives one synchronous feed-deserialize of the picked slot
+/// (`own_load_feed_deserialize`) before forwarding, so ac0/c30/PGD all become the picked slot and
+/// the confirm streams the right character. Installed unconditionally at attach (single MinHook per
+/// address: this hook also carries the continue-trace `CAP continue_confirm` logging that used to be
+/// a separate trace-set hook -- same precedent as `install_c30_writer_hook`).
+pub(crate) static SYSTEM_QUIT_CONTINUE_CONFIRM_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_INSTALLED;
+pub(crate) static START_SYSTEM_QUIT_CONTINUE_CONFIRM_HOOK: Once = Once::new();
+pub(crate) static START_SYSTEM_QUIT_CHILD_FINISH_TRACE_HOOK: Once = Once::new();
+/// One-shot per armed switch: 0 = the fresh picked-slot deserialize has not yet run for the active
+/// System->Quit switch (reset by `system_quit_arm_quickload_autoload`); 1 = it succeeded and the
+/// confirm may stream. While 0, any confirm during an active switch first drives the deserialize.
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE;
+/// Count of successful fresh picked-slot deserializes driven by the confirm hook (product proof
+/// expects exactly 1 per switch).
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT;
+/// One-shot guard for the menu-free clean-title switch reload (own_load_switch_reload_fire, 2026-07-18).
+/// The warm-rebuilt TitleTopDialog never reaches Loop post-return-title (press-start SceneObjProxy at
+/// dialog+0xb78 unbound), so the title accept-byte/open-menu path deadlocks. For a genuine in-world
+/// switch we instead drive the picked slot through the boot load's own native commit (feed-deserialize
+/// -> continue_confirm -> SetState5). 0 = not yet attempted this switch; compare_exchange(0,1) claims
+/// the single attempt so a flickering-owner / partial-feed frame never re-runs the leak-prone feed.
+/// Reset per switch in system_quit_arm_quickload_autoload.
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_SWITCH_MENU_FREE_RELOAD_FIRED;
+/// Menu-free reload completion latch (2026-07-18, repeatability fix). Continuous in-world frames observed
+/// after own_load_switch_reload_fire committed the picked slot (FRESH_DESER_DONE==1) while the switch phase
+/// is still armed. Once sustained, the switch is DONE: reset the phase to idle + clear the arm so the
+/// return-title chain cannot re-submit and bounce the freshly-loaded world back to title (which would block
+/// the next switch). Reset whenever the completion condition breaks. See bd
+/// repeatability-menu-free-phase-reset-fix-2026-07-18.
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_MENU_FREE_STABLE_TICKS;
+/// Sustained in-world frames after the menu-free reload commit before latching the switch done (~1s at
+/// task rate). Long enough that a transient mid-stream player flicker does not latch prematurely, short
+/// enough to disarm well before the return-title chain's queue-ready re-submit window (~tens of seconds).
+pub(crate) const SYSTEM_QUIT_MENU_FREE_STABLE_TICKS_THRESHOLD: usize = 60;
+/// Count of confirms blocked fail-closed because the fresh deserialize could not be proven (no save
+/// bytes / parse failed / fingerprint not real). Streaming stale state would load the wrong
+/// character and the post-load autosave would then write it back to the picked slot.
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_BLOCK_COUNT;
+/// Count of confirms forwarded to the native original (boot autoload, normal play, or post-deser).
+/// This is the authoritative total world-load count for a session, boot included -- unlike the load
+/// epoch, which skips the boot load. See `er_telemetry_core::load_count`.
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT;
+/// Bucket: forwards from outside the switch machine (the boot/title Continue).
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_NON_SWITCH_COUNT;
+/// Bucket: forwards that arrived while the previous world was still up.
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_WORLD_UP_COUNT;
+/// Switch forwards whose native requested-slot proof did not fire (carries the `FORWARD #n` label).
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_UNPROVEN_FORWARD_COUNT;
+pub(crate) use er_title_flow::SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE;
+pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED: usize = 1;
+pub(crate) use er_title_flow::SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED;
+pub(crate) use er_title_flow::SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_QUICKLOAD_PHASE;
+/// Continuous in-world game-task frames observed while a return-title reload is still armed
+/// (`SYSTEM_QUIT_QUICKLOAD_PHASE >= RETURN_TITLE_REQUESTED`) with the local player present. A genuine
+/// user-initiated return-title tears the world down within ~1-2s so the player vanishes and this never
+/// climbs; a SPURIOUS arm -- the boot autoload's own ProfileSelect navigation queuing a post-load reload
+/// of the character we just loaded (`system_quit_arm_quickload_autoload`) -- leaves the player present
+/// indefinitely. Reset to 0 whenever no reload is armed. See bd
+/// angre-reload-full-causal-chain-and-fix-2026-07-18.
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_INWORLD_ARMED_STABLE_TICKS;
+/// Continuous armed+in-world frames after which a still-armed return-title is treated as SPURIOUS and
+/// disarmed (phase -> idle). ~5s at the game-task rate: far below a genuine stable load's tens-of-seconds
+/// presence (observed ~47s to the destructive submit) and comfortably above a real switch's ~1-2s
+/// arm->teardown window, so it never disarms a legitimate user switch.
+pub(crate) const SYSTEM_QUIT_INWORLD_ARMED_DISARM_TICKS: usize = 300;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_INWORLD_ARMED_DISARM_COUNT;
+/// SPURIOUS-vs-genuine arm discriminator (2026-07-18, bd repeatable-multi-save-consolidated-plan).
+/// Records whether the local player was absent at the moment a return-title reload was armed
+/// (`system_quit_arm_quickload_autoload`). The two arm scenarios differ causally by exactly this:
+///   * SPURIOUS boot self-reload -- the boot autoload navigates the ProfileSelect load flow from the
+///     title/menu (player absent) and queues a pointless post-load return-title of the character it is
+///     about to load. `armed_while_absent = 1`.
+///   * genuine in-world switch -- the user (or the harness) is already in-world (player present) and
+///     initiates System->Quit->Load-Profile to a different character. `armed_while_absent = 0`.
+///
+/// The time-based disarm below is only correct for the SPURIOUS case; gating it on this flag stops it
+/// from cancelling a genuine switch whose old world lingers past the threshold (the switch-regression
+/// in bd angre-4loads-goal-met-but-switch-regression-2026-07-18). 1 = armed while player absent.
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT;
+/// Latch (0/1): we drove menuData+0x5d=1 to walk the child past 18 and are holding it until the child
+/// leaves step 18, then we clear it -- a lingering 0x5d re-requests quit-to-title ~4s after the reload
+/// commits (return_title.rs:1-7), bouncing the freshly-loaded world back to title.
+#[cfg(feature = "loading-cover")]
+pub(crate) use er_telemetry_core::counters::ENDING_REQUEST_SET;
+/// Runtime semaphore: >0 == the recovery fired (SET menuData+0x5d=1 at an mms18 stall) this run.
+pub(crate) use er_telemetry_core::counters::ENDING_REQUEST_SET_COUNT;
+/// The MoveMapStep pointer as resolved by write_oracle (the only resolution that reliably tracks
+/// load2's in-world step; the game-task's fresh title_owner scan reads a stale owner -> stale step).
+/// Published each telemetry write; the in-world finalize drive consumes it instead of re-resolving.
+/// 0 == not currently resolved.
+pub(crate) use er_telemetry_core::counters::ORACLE_RELIABLE_INGAME_PTR;
+pub(crate) use er_telemetry_core::counters::ORACLE_RELIABLE_MMS_PTR;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT;
+pub(crate) static SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT: AtomicUsize =
+    AtomicUsize::new(0);
+/// Native return-title final functor (`FUN_1407a3990` dump -> live/deobf `0x1407a3900`).
+/// It sets `CSMenuMan->menuData+0x5d` and `DAT_143d6c5e8`, which request the real title/menu rebuild.
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
+pub(crate) const SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_RVA: u32 = 0x7a3900;

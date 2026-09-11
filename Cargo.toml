@@ -1,6 +1,12 @@
 [workspace]
 members = [
   "crates/er-quickload",
+  # A copy of `er-quickload` being reduced down to the System>Quit rows and nothing else
+  # (2026-09-11, user directive). The previous attempt built the same shell UP from shared crates
+  # and reached something that ran every moved code path and still looked and behaved nothing like
+  # the product on screen -- so this one starts at parity by construction and loses only what is
+  # deleted. The two must never load together; `scripts/me3-dll-conflicts.toml` records the pair.
+  "crates/er-quit-rows",
   # Offline answer to the exact question the DLL now asks before it will wait on a Continue slot:
   # which character slots does this save container actually hold? Same parser
   # (`er_save_loader::bnd4::active_character_slots`), so a runtime refusal can be predicted and
