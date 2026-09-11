@@ -781,10 +781,26 @@ mod tests {
         assert_eq!(written["images"][0]["geometry"]["zoom"], 1.0);
     }
 
-    /// The key count is load-bearing, not decoration. The planner's `importState` merge walks the
-    /// longer of the two key lists, so an extra key on an incoming character survives only while
-    /// the document stays at or under the live object's count. `makeDefault()` writes 21;
-    /// `greatRune` and `sliders` are the two this crate may add on top.
+    /// The key count is load-bearing, not decoration, and the direction of the rule is the
+    /// opposite of what it looks like.
+    ///
+    /// `importState` merges with `K_(this.character, incoming)`, whose first line is
+    /// `Object.keys(live).length > Object.keys(incoming).length ? Object.keys(live) :
+    /// Object.keys(incoming)`. It walks one list, not the union. So a key that exists only on the
+    /// **incoming** document -- which is what `sliders` is, for a character whose Cosmetics tab
+    /// has never been opened -- is visited only when the incoming list is the one chosen, i.e.
+    /// while `len(live) <= len(incoming)`. Carrying *more* keys is what protects the key, not
+    /// fewer.
+    ///
+    /// `makeDefault()` writes 21 and this crate may add `greatRune` and `sliders`, so a fully
+    /// populated document is 23. The live object ratchets past that on its own:
+    /// `populateComputedValues` adds `computed` on every save (22), and `greatRune`, `pve` and
+    /// `activeEffects` each add one more as the player uses those features. A live character at
+    /// 24 or more that does not already carry `sliders` will drop ours.
+    ///
+    /// This test pins the number so the arithmetic stays checkable; it cannot fix the asymmetry,
+    /// which is an interop decision about whether to emit `computed`/`activeEffects` purely to
+    /// raise the count.
     #[test]
     fn a_fully_populated_document_stays_within_the_planners_key_count() {
         let mut set = er_build_import_core::sliders::SliderMap::new();

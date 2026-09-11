@@ -1,15 +1,27 @@
 #!/usr/bin/env python3
-"""Extract every character's `FaceDataBuffer` from the local saves into a corpus directory.
+"""Extract every distinct character appearance under `save-files/` into a corpus directory.
 
-Why this exists at all: `crates/er-build-export/tests/appearance_round_trip.rs` proves the slider
-codec against faces people actually made, and `AGENTS.md` forbids committing game-derived bytes.
-So the real buffers live on disk, untracked, and the test skips when they are absent -- the same
-shape `er-gfx` uses for its own extraction corpus.
+Why this exists: `crates/er-build-export/tests/appearance_round_trip.rs` proves the slider codec
+against faces people actually made, and `AGENTS.md` forbids committing game-derived bytes. So the
+real buffers live on disk, untracked, and the test skips when they are absent -- the same shape
+`er-gfx` uses for its own extraction corpus.
 
-The extraction itself is deliberately not a save parser. `scripts/save-slot-oracle.py` already
-decodes a slot and emits `face_data_buffer_hex`, and re-deriving that here would be a second
-opinion about the save layout that could disagree with the first. This runs that script per slot
-and writes the bytes it reports.
+The decode is not re-implemented here. `scripts/save-slot-oracle.py` already locates and validates
+a slot's `FaceDataBuffer`, and a second opinion about the save layout could disagree with the
+first, so that module is imported and called rather than copied.
+
+Two things this does that a naive walk does not, both learned the expensive way:
+
+* It **imports** the oracle instead of spawning it per slot. The tree holds 256 containers and ten
+  slots each; 2,560 Python starts do not finish inside the repo's 30-second command cap, and a run
+  that is killed part-way leaves a corpus that looks complete and silently omits characters. The
+  first version of this script did exactly that and lost the one character whose `faceModelId` is
+  500 -- the value the planner's own AOB importer truncates, i.e. the single most interesting face
+  in the tree.
+* It **deduplicates by buffer content**. That tree is mostly copies of itself (a mirrored
+  `save-files/save-files/`, plus staged redirect trees several deep), so the same appearance
+  appears thousands of times. One file per distinct 288-byte buffer keeps the corpus to the couple
+  of dozen faces that are actually distinct, and keeps the test's count meaningful.
 
 Usage::
 
@@ -24,14 +36,14 @@ Saves are read-only inputs and nothing here opens one for writing.
 from __future__ import annotations
 
 import argparse
-import json
+import hashlib
+import importlib.util
 import os
-import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-ORACLE = os.path.join(HERE, "save-slot-oracle.py")
+ORACLE_PATH = os.path.join(HERE, "save-slot-oracle.py")
 
 # The whole buffer, magic first. Mirrored from `er_build_import_core::sliders`, and checked rather
 # than trusted: a short buffer is the one defect that would make the corpus quietly useless.
@@ -39,17 +51,26 @@ FACE_BUFFER_LEN = 0x120
 FACE_MAGIC = b"FACE"
 FACE_VERSION = 4
 
-# Slots a container can hold. The oracle answers per slot and reports an unoccupied one as an
-# error, which is how an empty slot is told from a save that will not parse.
+# The planner's slider range ends twelve bytes before the payload does.
+SLIDER_BYTES = 264
+PAYLOAD_OFFSET = 12
+
+# Slots a container can hold.
 SLOTS = range(10)
 
-# Where saves are looked for when `--root` is not given, in order. Relative entries are resolved
-# against the repository root.
+# Where saves are looked for when `--root` is not given, in order. Relative entries resolve against
+# the repository root.
 DEFAULT_ROOTS = ("save-files", os.path.join(os.path.expanduser("~"), "save-files"))
 
-# One agent-shell operation must stay well inside the repo's 30-second cap, and ten slots per save
-# means this is per invocation rather than per run.
-ORACLE_TIMEOUT_SECONDS = 20
+
+def load_oracle():
+    """The slot oracle as a module. Its filename is hyphenated, so it needs a spec loader."""
+    spec = importlib.util.spec_from_file_location("save_slot_oracle", ORACLE_PATH)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"cannot load {ORACLE_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def find_saves(root):
@@ -62,25 +83,21 @@ def find_saves(root):
     return sorted(found)
 
 
-def slot_face(save, slot):
-    """One slot's whole face buffer, or `None` when the slot holds no readable character."""
+def decode_slot_body(oracle, slot_data, slot):
+    """One slot body's face buffer and character name, or `None` when it has neither.
+
+    Every failure mode collapses to `None` on purpose: an empty slot, a layout the oracle declines
+    to decode and a slot whose face magic is missing are all just "no face here" to a corpus
+    builder, and telling them apart is the oracle's job rather than this script's.
+    """
     try:
-        done = subprocess.run(
-            [sys.executable, ORACLE, "--save", save, "--slot", str(slot)],
-            capture_output=True,
-            text=True,
-            timeout=ORACLE_TIMEOUT_SECONDS,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
+        report = oracle.decode_sl2_bt_fixture_fields(slot_data)
+    except (SystemExit, ValueError, IndexError, KeyError):
         return None
-    if done.returncode != 0 or not done.stdout.strip():
-        return None
-    try:
-        report = json.loads(done.stdout)
-    except json.JSONDecodeError:
-        return None
-    fields = report.get("decoded_fields") or {}
+    # The oracle answers `{"layout": ..., "decoded_fields": {...}}`, not a flat dict. Reading the
+    # outer level finds no `face_data_buffer_hex` and returns `None` for every slot in the tree --
+    # a corpus of zero files that looks exactly like a corpus of zero characters.
+    fields = (report or {}).get("decoded_fields") or {}
     hex_bytes = fields.get("face_data_buffer_hex")
     if not hex_bytes:
         return None
@@ -88,7 +105,7 @@ def slot_face(save, slot):
         raw = bytes.fromhex(hex_bytes)
     except ValueError:
         return None
-    return raw, fields.get("name") or f"slot{slot}"
+    return raw, (fields.get("name") or f"slot{slot}")
 
 
 def well_formed(raw):
@@ -101,7 +118,7 @@ def well_formed(raw):
 
 
 def selftest():
-    """Check the shape checks, which is all of this that has no saves in it."""
+    """Check the shape checks and that the oracle still exposes what this calls."""
     good = bytearray(FACE_BUFFER_LEN)
     good[:4] = FACE_MAGIC
     good[4:8] = FACE_VERSION.to_bytes(4, "little")
@@ -114,7 +131,10 @@ def selftest():
     bad_version = bytearray(good)
     bad_version[4:8] = (5).to_bytes(4, "little")
     assert not well_formed(bytes(bad_version)), "a wrong version should fail"
-    assert os.path.exists(ORACLE), f"the slot oracle should be at {ORACLE}"
+
+    oracle = load_oracle()
+    for name in ("extract_slot", "decode_sl2_bt_fixture_fields"):
+        assert hasattr(oracle, name), f"the slot oracle should expose {name}"
     print("SELFTEST PASSED")
     return 0
 
@@ -125,7 +145,7 @@ def main():
     parser.add_argument(
         "--out",
         default=os.path.join(REPO, "target", "face-corpus"),
-        help="directory to write one .bin per character into",
+        help="directory to write one .bin per distinct appearance into",
     )
     parser.add_argument("--selftest", action="store_true", help="check this script and exit")
     args = parser.parse_args()
@@ -133,10 +153,14 @@ def main():
     if args.selftest:
         return selftest()
 
-    roots = [args.root] if args.root else [
-        candidate if os.path.isabs(candidate) else os.path.join(REPO, candidate)
-        for candidate in DEFAULT_ROOTS
-    ]
+    roots = (
+        [args.root]
+        if args.root
+        else [
+            candidate if os.path.isabs(candidate) else os.path.join(REPO, candidate)
+            for candidate in DEFAULT_ROOTS
+        ]
+    )
     saves = []
     for root in roots:
         if os.path.isdir(root):
@@ -145,37 +169,71 @@ def main():
         print(f"no ER0000.sl2/.co2 found under: {', '.join(roots)}", file=sys.stderr)
         return 1
 
+    oracle = load_oracle()
     os.makedirs(args.out, exist_ok=True)
-    written = 0
-    skipped = 0
+
+    # Distinct buffer -> the first character seen carrying it, and how many carry it.
+    seen = {}
+    # Slot-body digest -> what decoding it produced, so an identical body is decoded once.
+    #
+    # This is the difference between a tool that finishes and one that gets killed part-way. The
+    # tree is overwhelmingly copies of itself, so the same ~2.6 MB slot body recurs thousands of
+    # times, and `decode_sl2_bt_fixture_fields` scans it for the face magic every time. Hashing
+    # the body first collapses a few thousand decodes into a couple of hundred.
+    decoded = {}
+    malformed = 0
+    containers = 0
     for save in saves:
+        try:
+            with open(save, "rb") as fh:
+                data = fh.read()
+        except OSError:
+            continue
+        containers += 1
         label = os.path.basename(os.path.dirname(save))
         for slot in SLOTS:
-            got = slot_face(save, slot)
+            try:
+                slot_data, _ = oracle.extract_slot(data, slot)
+            except (SystemExit, ValueError, IndexError, KeyError):
+                continue
+            body = hashlib.sha256(slot_data).hexdigest()
+            if body not in decoded:
+                decoded[body] = decode_slot_body(oracle, slot_data, slot)
+            got = decoded[body]
             if got is None:
                 continue
             raw, name = got
             if not well_formed(raw):
-                print(
-                    f"skipping {label} slot {slot} ({name!r}): "
-                    f"{len(raw)} bytes, magic {raw[:4]!r}",
-                    file=sys.stderr,
-                )
-                skipped += 1
+                malformed += 1
                 continue
-            safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in f"{label}-{slot}-{name}")
-            out = os.path.join(args.out, f"{safe}.bin")
-            with open(out, "wb") as fh:
-                fh.write(raw)
-            face_model_id = int.from_bytes(raw[12:16], "little")
-            tail_zero = all(byte == 0 for byte in raw[12 + 264 :])
-            print(
-                f"{out}  name={name!r} faceModelId={face_model_id} "
-                f"tail12_zero={tail_zero}"
-            )
-            written += 1
-    print(f"\n{written} character(s) written to {args.out}, {skipped} skipped", file=sys.stderr)
-    return 0 if written else 1
+            digest = hashlib.sha256(raw).hexdigest()[:12]
+            if digest in seen:
+                seen[digest]["count"] += 1
+                continue
+            seen[digest] = {"raw": raw, "name": name, "label": label, "slot": slot, "count": 1}
+
+    for digest, entry in sorted(seen.items()):
+        safe = "".join(
+            c if c.isalnum() or c in "-_" else "_"
+            for c in f"{entry['label']}-{entry['slot']}-{entry['name']}"
+        )
+        out = os.path.join(args.out, f"{safe}-{digest}.bin")
+        with open(out, "wb") as fh:
+            fh.write(entry["raw"])
+        raw = entry["raw"]
+        face_model_id = int.from_bytes(raw[PAYLOAD_OFFSET : PAYLOAD_OFFSET + 4], "little")
+        tail_zero = all(byte == 0 for byte in raw[PAYLOAD_OFFSET + SLIDER_BYTES :])
+        print(
+            f"{os.path.basename(out)}  name={entry['name']!r} "
+            f"faceModelId={face_model_id} tail12_zero={tail_zero} copies={entry['count']}"
+        )
+
+    print(
+        f"\n{len(seen)} distinct appearance(s) from {containers} container(s) "
+        f"written to {args.out}; {malformed} slot(s) had a malformed buffer",
+        file=sys.stderr,
+    )
+    return 0 if seen else 1
 
 
 if __name__ == "__main__":

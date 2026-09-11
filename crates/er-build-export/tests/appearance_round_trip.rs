@@ -178,6 +178,13 @@ fn every_face_in_the_local_save_corpus_round_trips() {
         );
         checked += 1;
     }
-    assert!(checked > 0, "the corpus at {root} holds no .bin files");
+    // An empty directory means the same thing as an absent one, and it is the state a dump is in
+    // while it runs -- `dump-face-corpus.py` creates the directory up front and writes into it at
+    // the end. Failing here would make the test flap against a populate that is merely in
+    // progress, which says nothing about the codec.
+    if checked == 0 {
+        eprintln!("skipping: face corpus at {root} is empty (see scripts/dump-face-corpus.py)");
+        return;
+    }
     eprintln!("{checked} real character(s) round-tripped");
 }
