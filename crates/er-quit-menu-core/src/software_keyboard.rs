@@ -344,14 +344,23 @@ pub fn build_url_note_editor_window_state(window: usize, state: i32) -> bool {
         BUILD_URL_EDITOR_WINDOW.store(0, Ordering::SeqCst);
         let paired = BUILD_URL_EDITOR_WINDOW_JOB.swap(0, Ordering::SeqCst);
         let latched = keyboard_active_job_slot(KeyboardPurpose::BuildUrl).load(Ordering::SeqCst);
-        if paired != 0 && latched != 0 && paired != latched {
-            // A newer field is already up. This close belongs to the previous one, whose job is
-            // gone, so there is nothing here to release -- and releasing the latched job would
-            // cancel a field the player has only just opened.
-            append_autoload_debug(format_args!(
-                "system-quit-build-url: window=0x{window:x} closed carrying job=0x{paired:x}, but \
-                 job=0x{latched:x} is latched now -- a newer field; leaving it alone"
-            ));
+        if paired != latched || paired == 0 {
+            // This close does not belong to the latched job, so it releases nothing.
+            //
+            // `paired == 0` is the case that made the first attempt at this guard useless, caught
+            // in run br-20260911-152041-9dff: a window whose field has already closed keeps being
+            // run live for a few more frames, gets re-adopted at a moment when no job is latched,
+            // and pairs with 0. The first version treated 0 as "unknown, go ahead and release" and
+            // so still cancelled the next field 2ms after it opened -- `link field requested` at
+            // `+66928ms`, `closed with job=0x9a6d60c0 ... releasing it` at `+66930ms`. A window
+            // adopted while nothing was latched cannot own a job, which makes 0 a positive answer
+            // rather than a missing one.
+            if paired != 0 || latched != 0 {
+                append_autoload_debug(format_args!(
+                    "system-quit-build-url: window=0x{window:x} closed carrying job=0x{paired:x} \
+                     while job=0x{latched:x} is latched -- not this window's field; releasing nothing"
+                ));
+            }
             return false;
         }
         // The window going terminal is the only reliable "THE FIELD CLOSED" signal we get.
@@ -1530,6 +1539,61 @@ mod tests {
         );
     }
 
+    /// A window that outlives its own field must not cancel the field that replaces it.
+    ///
+    /// Run br-20260911-152041-9dff: `link field requested` at `+66928ms`, and at `+66930ms` --
+    /// two milliseconds later, before the new field's window had run once -- the previous field's
+    /// window went terminal and released the job that had just been latched. The player had opened
+    /// a second link field and it was cancelled out from under them.
+    #[test]
+    fn a_stale_window_closing_does_not_cancel_the_field_that_replaced_it() {
+        let _guard = KEYBOARD_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let window = 0xb0b0_0000;
+        let fresh_job = 0x7777_0000;
+
+        // The lingering window: still reported live, but nothing is latched, so it owns no job.
+        keyboard_active_job_slot(KeyboardPurpose::BuildUrl).store(0, Ordering::SeqCst);
+        BUILD_URL_EDITOR_WINDOW.store(0, Ordering::SeqCst);
+        BUILD_URL_EDITOR_WINDOW_JOB.store(0, Ordering::SeqCst);
+        assert!(build_url_note_editor_window_state(
+            window,
+            MENU_JOB_STATE_CONTINUE
+        ));
+        assert_eq!(
+            BUILD_URL_EDITOR_WINDOW_JOB.load(Ordering::SeqCst),
+            0,
+            "a window adopted while nothing was latched cannot own a job"
+        );
+
+        // The player presses the row again: a new field, a new job.
+        keyboard_active_job_slot(KeyboardPurpose::BuildUrl).store(fresh_job, Ordering::SeqCst);
+        *keyboard_outcome_slot(KeyboardPurpose::BuildUrl)
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+
+        // ...and only now does the old window go terminal.
+        assert!(!build_url_note_editor_window_state(
+            window,
+            MENU_JOB_STATE_FAILED
+        ));
+
+        assert_eq!(
+            keyboard_active_job_slot(KeyboardPurpose::BuildUrl).load(Ordering::SeqCst),
+            fresh_job,
+            "the new field's job must survive the old window's close"
+        );
+        assert!(
+            keyboard_outcome_slot(KeyboardPurpose::BuildUrl)
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_none(),
+            "no outcome may be deposited for a field the player is still looking at"
+        );
+        keyboard_active_job_slot(KeyboardPurpose::BuildUrl).store(0, Ordering::SeqCst);
+    }
+
     /// Pressing B closed the field and killed the row for the rest of the session.
     ///
     /// Live session `dll:8dca09bb`, 2026-08-23: three link fields opened, each closed with the back
@@ -1547,7 +1611,15 @@ mod tests {
         *keyboard_outcome_slot(KeyboardPurpose::BuildUrl)
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-        BUILD_URL_EDITOR_WINDOW.store(window, Ordering::SeqCst);
+        // Through adoption rather than by storing the window directly. The close path releases
+        // only the job a window was adopted with, so a fixture that skips the live frame is
+        // testing a state the game never reaches.
+        BUILD_URL_EDITOR_WINDOW.store(0, Ordering::SeqCst);
+        BUILD_URL_EDITOR_WINDOW_JOB.store(0, Ordering::SeqCst);
+        assert!(build_url_note_editor_window_state(
+            window,
+            MENU_JOB_STATE_CONTINUE
+        ));
 
         assert!(!build_url_note_editor_window_state(
             window,
