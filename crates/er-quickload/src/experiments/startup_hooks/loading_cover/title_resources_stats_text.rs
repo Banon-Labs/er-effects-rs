@@ -682,6 +682,13 @@ pub(crate) fn install_title_scene_obj_proxy_named_child_bind_hook() {
         Ok(hook) => {
             TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG
                 .store(hook.trampoline() as usize, Ordering::SeqCst);
+            // Publish it across the crate boundary too: `er-quit-menu-core`'s proxy resolves run
+            // this same binder, and calling the detour instead of the trampoline re-enters this
+            // hook. A shell with no product behind it leaves the slot at zero and calls the game
+            // function directly, which is correct there because nothing detoured it.
+            er_quit_menu_core::scaleform_proxy::set_named_child_bind_trampoline(
+                hook.trampoline() as usize
+            );
             if let Err(status) = unsafe { hook.queue_enable() } {
                 append_autoload_debug(format_args!(
                     "title-cover-part-a: queue_enable named-child bind failed: {status:?}"

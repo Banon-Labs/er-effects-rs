@@ -670,3 +670,61 @@ pub const CS_SESSION_MANAGER_GLOBAL_RVA: usize = 0x3d7_a4d0;
 /// member, `CSEventManImp` field ordinal 2 in the named 1.16.2 dump) and `CALL 0x1405fef50`,
 /// which is the one-line getter `return param_1->field1_0x8;`, compared against `2`.
 pub const CS_EVENT_MAN_GLOBAL_RVA: usize = 0x3d6_86f8;
+
+// ---------------------------------------------------------------------------------------
+// Scaleform proxy primitives
+//
+// The four native calls that reach a `CS::SceneObjProxy` / `CS::CSScaleformValue` pair, plus the
+// two pure-virtual traps a destroyed component's vtable slot points at. Three separate features
+// drive them -- the loading-screen stats text, the ProfileSelect editor runtime, and the
+// System>Quit link field -- and the third of those now lives in `er-quit-menu-core`, on the far
+// side of a crate boundary from the constants module that used to own the literals. Centralised
+// here rather than copied, because a copy is a second claim about what the address is
+// (`scripts/check-rva-alias-drift.py`).
+
+/// `CS::CSScaleformValue::~CSScaleformValue`, the destructor every resolved child proxy owes.
+pub const CSSCALEFORMVALUE_DTOR_RVA: usize = 0xd7f850;
+
+/// `GFx::TextField::SetSelection(field, begin, end)` -- the caret/selection primitive, and the only
+/// thing that moves the caret in either 02_990 field. The native SoftwareKeyboard owns no caret at
+/// all: `EnterName_` (`0xe70c00`) writes a prompt string, max length and flags, and the set-initial
+/// path (`0xe709f0` -> `0x142416ef0`) is a pure `DLString` assign. The caret lives in Scaleform, and
+/// this is the function ActionScript's `Selection.setSelection` (impl `0x140f47060`) ends up calling
+/// once it has resolved the focused character and checked the text object's kind slot against 4.
+///
+/// It takes the same text object the native text helpers do (`*(value + 0x88)`), creates the field's
+/// editor kit if absent, clamps both indices to the current text length, then invalidates for
+/// redraw. The clamp is why caret-to-end needs no string length: pass `i64::MAX` for both and the
+/// field resolves it to the end -- exactly what ActionScript does when `setSelection` is called
+/// without an end argument.
+///
+/// Byte-verified against `eldenring-deobf.bin`: `48 89 5c 24 10 48 89 74 24 18 57 48 83 ec 20`
+/// (`MOV [RSP+0x10],RBX; MOV [RSP+0x18],RSI; PUSH RDI; SUB RSP,0x20`), matching the 1.16.2 dump at
+/// the same VA (shift 0). See bd `path-editor-caret-to-end-setselection-141198e50-2026-08-12`.
+pub const GFX_TEXT_FIELD_SET_SELECTION_RVA: usize = 0x1198e50;
+
+/// The engine's own `SetText` wrapper over a resolved component slot: it changes what is drawn and
+/// what an accept reads back in one move.
+pub const PROFILE_SETTEXT_RVA: usize = 0x74a000;
+
+/// `CS::SceneObjProxy::assignComponentWithName`, the named-child binder every proxy resolve goes
+/// through.
+pub const TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA: usize = 0x74a2f0;
+
+/// Lower-level GFx display-info setters for a `CSScaleformValue`'s position(x,y) and scale(x,y).
+/// Dump `0x140d83ed0` / `0x140d84140` -> deobf and live `0x140d83e20` / `0x140d84090`. The scale
+/// setter converts to Scaleform's percent space itself, so a caller passes the unit factor through.
+pub const TITLE_GFX_VALUE_SET_POSITION_RVA: usize = 0xd83e20;
+pub const TITLE_GFX_VALUE_SET_SCALE_RVA: usize = 0xd84090;
+
+/// The two addresses a destroyed component's `GetValue` vtable slot points at. A dispatch to
+/// either is the crash this repo guards against by checking the slot before calling it.
+pub const PURECALL_RVA: usize = 0x251c480;
+pub const PURECALL_CRASH_HANDLER_RVA: usize = 0xc90080;
+
+/// The game's heap-allocator wrapper (dump `0x141eb9ec0` -> deobf `0x141eb9ed0`):
+/// `fn(size /rcx/, align /rdx/, allocator_obj /r8/) -> *mut u8`, where `allocator_obj` is the
+/// dereferenced `DLAllocator*`. Its prologue is `mov rax,[r8]; mov r9,r8; mov r8,rdx` before it
+/// tail-jumps through the allocator vtable. Every native object this repo constructs on the game's
+/// heap -- the `CS::SoftwareKeyboard` job among them -- is allocated through it.
+pub const GAME_HEAP_ALLOC_RVA: usize = 0x1eb9ed0;

@@ -316,6 +316,26 @@ evidence = "crates/er-loading-bar/src/lib.rs:102"
 
 [[conflict]]
 a = "er-quickload"
+b = "er-quit-menu"
+kind = "duplicate-owner"
+reason = """Both arm the System>Quit rows, from the same code: since 2026-09-11 the cloner, the row router and the three routing detours live in `er-quit-menu-core`, and each DLL calls `er_quit_menu_core::row_cloner::arm` with its own row set. Two arms in one process is two of everything that call installs -- two `AddCancelButton` registrations appending two sets of rows to one dialog, two row tables writing one set of telemetry counters, and two claims on the three routing prologues. The union makes the detours chain rather than trample, which is why this is a duplicate OWNER rather than a hook collision: the damage is the second set of rows, not a corrupted trampoline.
+
+The `02_040` grid settles it on its own. Both derive the six-cell Quit panel from the game's own vanilla payload, and `er_gfx::options_02_040::quit6` fail-closes when its input is not vanilla (`Quit6Error::KnownInputBadOutput`, asserted by `crates/er-gfx/tests/options_02_040.rs`). Whichever deriver runs second is handed already-derived bytes and correctly refuses -- so co-loading cannot produce a working tab, only a fail-closed log line and whichever half of the pair happened to win.
+
+The product DLL is the one to keep. The shell exists for a profile that does not load it, and it arms `RowSet::BUILD_ROWS_ONLY`: the two build rows, and none of the four whose flows only a product has."""
+evidence = "crates/er-quit-menu/src/lib.rs; crates/er-quit-menu-core/src/row_cloner.rs; crates/er-quickload/src/experiments/startup_hooks/diagnostics/layout_global_hooks.rs"
+
+[[conflict]]
+a = "er-build-import"
+b = "er-quit-menu"
+kind = "duplicate-owner"
+reason = """The same two-owners-of-one-mutation this table already records between `er-build-import` and the product, for the same reason: both link `er-build-import-runtime`, whose statics are per DLL, and both now register a `CSTaskImp` FrameBegin task that drives its phase machine. The shell imports the configured `build_url` unprompted at character load; the quit-menu shell imports on demand from the **Load Build from URL** row. Two copies of the phase machine, two fetch workers and two tasks mutating one character's inventory, equipment slots and PlayerGameData, with no shared lock.
+
+This entry became true on 2026-09-11, when `er-quit-menu` stopped being a harness that armed nothing. Its `[compatible]` note predicted exactly this: "if the harness ever arms that row, this entry becomes a `duplicate-owner` conflict with `er-build-import` and with `er-quickload`"."""
+evidence = "crates/er-build-import/src/lib.rs:23; crates/er-quit-menu-core/src/game_task.rs"
+
+[[conflict]]
+a = "er-quickload"
 b = "er-build-import"
 kind = "duplicate-owner"
 reason = """Both link `er-build-import-runtime`, and a statically linked crate's statics are \
@@ -720,17 +740,7 @@ request ring, which is mutex-guarded by the engine and is consumed by every NPC 
 in-flight request per target, drained on the frame it completes, is the same traffic a handful of \
 extra NPCs would make."""
 "er-player-name-filter" = "Hooks SessionManagerPlayerEntryBase::Copy only; er-quickload no longer carries this hook, and the standalone DLL byte-checks the 1.16.2 prologue before installing."
-"er-quit-menu" = """System>Quit harness. Its detours route through `er_hook::register_union_hook` \
-rather than a bare `MhHook`, and -- the part that actually matters -- none of its targets is claimed \
-by another shell, which `check-shared-hook-rvas.py` re-proves on every run. Note that the union alone \
-would NOT be enough if one were: `register_union_hook` unions handlers within ONE DLL, because its \
-statics and its MinHook instance are per-DLL. Crossing images takes `register_shared_hook`. \
-Since the Generate Build Link row moved into `er-quit-menu-core` this shell also LINKS \
-`er-build-import-runtime`, whose statics are per-DLL for the same reason -- but the harness calls \
-none of it and arms no row, so the second copy of the importer's phase machine never runs. If the \
-harness ever arms that row, this entry becomes a `duplicate-owner` conflict with `er-build-import` \
-and with `er-quickload`, for exactly the reason the `er-quickload`/`er-build-import` pair \
-below already records."""
+
 "er-save-picker" = "Detects the product DLL and stays inert when it is present."
 "er-seamless-bugfixes" = """Own MinHook instance, but on SpecialEffect::HasSpecialEffectId \
 (0x4f9940) and SpecialEffect::Apply (0x4fa8e0) -- prologues no other DLL in this repo hooks \

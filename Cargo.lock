@@ -3200,11 +3200,14 @@ dependencies = [
  "er-build-import-core",
  "er-build-import-runtime",
  "er-game-base",
+ "er-gfx",
  "er-hook",
  "er-save-loader",
  "er-save-picker-core",
  "er-telemetry-core",
+ "er-title-flow",
  "fromsoftware-shared",
+ "iced-x86",
  "windows 0.62.2",
 ]
 

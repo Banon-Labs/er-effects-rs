@@ -24,7 +24,6 @@
     "crates/er-quickload/src/experiments/save_redirect/path_hooks.rs": 9,
     "crates/er-quickload/src/experiments/startup_hooks/loading_cover/startup_modals_menu_cover.rs": 1,
     "crates/er-quickload/src/experiments/startup_hooks/loading_cover/title_scaleform_msgbox.rs": 5,
-    "crates/er-quickload/src/experiments/startup_hooks/quit_menu/system_quit_dialog_handlers.rs": 2,
     "crates/er-quickload/src/experiments/startup_hooks/save_picker/save_picker_boot.rs": 12,
     "crates/er-quickload/src/lib_parts/dll_entry_parts/bootstrap.rs": 6,
     "crates/er-quickload/src/lib_parts/dll_entry_parts/task_registration.rs": 7,

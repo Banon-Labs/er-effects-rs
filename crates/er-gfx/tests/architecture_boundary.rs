@@ -133,6 +133,10 @@ fn the_direct_codec_consumers_match_the_decision_evidence() {
         "er-quickload".to_owned(),
         "er-invasion-warp".to_owned(),
         "er-loading-portrait-core".to_owned(),
+        // Added 2026-09-11 with the System>Quit build rows' move: the six-cell `02_040` grid the
+        // rows are cells of and the `02_990` link-field movie are derived here, so a standalone
+        // quit-menu shell can serve them with no product DLL in the profile.
+        "er-quit-menu-core".to_owned(),
     ]);
     if workspace_root()
         .join("crates/er-scaleform-hooks/Cargo.toml")

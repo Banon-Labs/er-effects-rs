@@ -65,13 +65,32 @@ pub mod save_dest_identity;
 pub mod save_flow_boxes;
 
 #[cfg(windows)]
+pub mod arm;
+pub mod build_url_backdrop;
+#[cfg(windows)]
 pub mod build_url_clipboard;
+#[cfg(windows)]
+pub mod build_url_editor;
+#[cfg(windows)]
+pub mod build_url_row;
 #[cfg(windows)]
 pub mod dim;
 #[cfg(windows)]
+pub mod game_task;
+#[cfg(windows)]
 pub mod generate_build_link_row;
 #[cfg(windows)]
+pub mod gfx_swap;
+#[cfg(windows)]
+pub mod menu_pump;
+#[cfg(windows)]
+pub mod row_cloner;
+#[cfg(windows)]
 pub mod save_dest_commit_runtime;
+#[cfg(windows)]
+pub mod scaleform_proxy;
+#[cfg(windows)]
+pub mod software_keyboard;
 #[cfg(windows)]
 pub use dim::*;
 #[cfg(windows)]

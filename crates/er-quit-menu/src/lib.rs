@@ -1,14 +1,33 @@
-//! Optional ME3-loadable harness for product (B), the customized System>Quit menu.
+//! Standalone ME3 shell for the System>Quit build rows: **Load Build from URL** and
+//! **Generate Build Link**, with no product DLL in the profile.
 //!
-//! Required product behavior is statically linked into the single shipped
-//! `er_quickload.dll`; its product profile never requires this shell. The harness exists
-//! for isolated/coexistence tests, logs its attach, and installs a standalone host seam.
-//! It arms nothing yet because `er-quit-menu-core` still has no moved code to arm.
+//! Everything the rows are made of lives in `er-quit-menu-core`, which the product DLL also links
+//! and arms. The difference between the two loads is one argument: the product passes
+//! `RowSet::ALL` and the four flows this crate does not own, while this shell passes
+//! `RowSet::BUILD_ROWS_ONLY` and none. A row that is not in the set is never cloned, so a press
+//! that could reach a flow this shell does not have never happens -- the row is not on the tab.
 //!
-//! An explicit coexistence test may load this harness alongside the product or companions.
-//! It contends on game addresses the product also hooks, so its detours go through the
-//! `er-hook` union -- never a bare `MhHook::new` -- and the union owner is elected at load
-//! time rather than assumed to be `er_quickload.dll`.
+//! # What this shell has to install that the product already had
+//!
+//! Three things, and each fails differently, so each is reported separately:
+//!
+//! * the derived six-cell `02_040_optionsetting` grid the rows are cells of, and the `02_990`
+//!   movie the link field opens, both served from the Scaleform file-open prologue;
+//! * a `MenuWindowJob::Run` detour, which is the only context in which the link field's job can be
+//!   submitted and its display objects resolved;
+//! * a `FrameBegin` task, which is the only context in which an import may touch the inventory.
+//!
+//! # Never in the same profile as the product
+//!
+//! Both offer the same two rows and both derive the same movie, and `er_gfx::options_02_040::quit6`
+//! fail-closes when its input is not vanilla -- so a second deriver handed already-derived bytes
+//! correctly refuses. `scripts/me3-dll-conflicts.toml` records the pair as a duplicate owner, and
+//! the profile generator refuses to emit a profile carrying both.
+//!
+//! # What stays refused here
+//!
+//! Every product-owned answer in the host seam stays at its neutral default -- including the
+//! save-write bypass, so a product-less load can never push a write past `er-save-suppress`.
 
 // A cdylib whose every consumer is `DllMain` and the hooks it installs, all of them
 // `#[cfg(windows)]`. On a host build the shell is compiled with its only callers cfg'd
@@ -59,6 +78,27 @@ fn standalone_log(args: std::fmt::Arguments<'_>) {
     append_log(&log_dir(), args);
 }
 
+/// Arm the two build rows. Runs on its own thread because the game-task registration waits for the
+/// game's task manager to exist, and waiting inside the loader lock deadlocks the process.
+#[cfg(windows)]
+fn arm_build_rows() {
+    // Safety: a bootstrap thread, once per process (`START` gates the spawn), before the Quit tab
+    // has built a dialog.
+    let arm = unsafe {
+        er_quit_menu_core::arm::arm_standalone(
+            er_quit_menu_core::row_cloner::RowSet::BUILD_ROWS_ONLY,
+        )
+    };
+    if !arm.is_complete() {
+        append_log(
+            &log_dir(),
+            format_args!(
+                "some of the rows' machinery did not install: {arm:?}; the rows may be absent or inert"
+            ),
+        );
+    }
+}
+
 #[cfg(windows)]
 #[unsafe(no_mangle)]
 /// # Safety
@@ -80,13 +120,15 @@ pub unsafe extern "system" fn DllMain(
 
         let module_base = module as usize;
         START.call_once(|| {
+            // Before the thread, so no moved code can run against an un-installed seam.
             install_standalone_host();
             append_log(
                 &log_dir(),
                 format_args!(
-                    "loaded module_base=0x{module_base:x}; standalone quit-menu shell (scaffolding: nothing armed yet)"
+                    "loaded module_base=0x{module_base:x}; arming the System>Quit build rows"
                 ),
             );
+            std::thread::spawn(arm_build_rows);
         });
     }
     DLL_MAIN_SUCCESS

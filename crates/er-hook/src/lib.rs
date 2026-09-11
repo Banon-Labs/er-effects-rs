@@ -2108,7 +2108,12 @@ mod tests {
         f as usize
     }
 
-    const FAKE_TARGET: usize = 0x1_4092_0c90;
+    // Deliberately not a real game address. This used to be `0x1_4092_0c90`, the Quit row
+    // cloner's `AddCancelButton` -- flavour, since these tests only manipulate the admission
+    // table and never hook anything. It was also a second literal declaration of an address
+    // `er-title-flow` already owns, which `scripts/check-rva-alias-drift.py` reads as two claims
+    // about one function. A value below the image's `.text` cannot be either.
+    const FAKE_TARGET: usize = 0x1_4000_0c90;
     const OTHER_TARGET: usize = 0x1_4074_6e80;
     const HANDLER_A: usize = 0xaaa0;
     const HANDLER_B: usize = 0xbbb0;

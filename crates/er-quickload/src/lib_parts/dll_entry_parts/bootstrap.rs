@@ -200,6 +200,11 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         // the `GameDataMan+0x78` walk, not through a second copy of it.
         system_quit_profile_summary_ptr:
             er_profile_summary_core::live_records::system_quit_profile_summary_ptr,
+        // The shared software keyboard moved with the link field it also serves, so the picker's
+        // half of it now reaches the picker's own browse surface through the seam.
+        save_picker_stage_row_records: crate::experiments::save_picker_stage_row_records,
+        reset_path_editor_caret_latch: crate::experiments::reset_path_editor_caret_latch,
+        build_import_applied: crate::experiments::build_url_refresh_character_portrait,
         ..er_quit_menu_core::QuitMenuHost::defaults()
     });
     // Title-flow crate split: wire the er-title-flow seam to the real product fns, same

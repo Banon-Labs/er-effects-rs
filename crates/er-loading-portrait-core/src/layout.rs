@@ -258,7 +258,7 @@ pub const DLSTRING_U16_SSO_THRESHOLD: usize = 7;
 
 /// SetText wrapper `FUN_14074a0f0` (deobf/live 0x74a000). fastcall(rcx=CSScaleformValue*, rdx=wchar_t*).
 /// Not hooked -- called directly for the stats push (null-guards text and checks the field dataType).
-pub const PROFILE_SETTEXT_RVA: usize = 0x74a000;
+pub const PROFILE_SETTEXT_RVA: usize = er_game_base::rva::PROFILE_SETTEXT_RVA;
 
 pub const SCALEFORM_MEMORY_FILE_VTABLE_RVA: usize =
     er_game_base::rva::SCALEFORM_MEMORY_FILE_VTABLE_RVA;

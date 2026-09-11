@@ -623,11 +623,6 @@ pub(crate) fn install_title_native_menu_visual_render_suppression_hook() {
 }
 
 #[repr(C, align(8))]
-pub(crate) struct SystemQuitMenuHelpLabelScratch {
-    bytes: [u8; MENU_HELP_LABEL_SIZE],
-}
-
-#[repr(C, align(8))]
 pub(crate) struct SystemQuitRootProxyScratch {
     bytes: [u8; MENU_WINDOW_ROOT_PROXY_SCRATCH_SIZE],
 }
