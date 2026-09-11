@@ -326,6 +326,12 @@ pub unsafe fn system_quit_record_grid_geometry(dialog: usize) {
 /// row, so the row is resolved positively from the row table + the live label at the dialog's list
 /// cursor. An unresolvable row is suppressed rather than forwarded, because the native action behind
 /// the second row is the irreversible Return to Desktop.
+///
+/// # Safety
+///
+/// Quit-tab action-thunk context. `action_obj` is a live thunk `this`, and `orig` is either the
+/// game trampoline for that thunk or the next handler on the union, both callable under the union
+/// signature. Calling this off that path forwards an arbitrary pointer into a native action.
 pub unsafe fn system_quit_route_button_action_or_forward(
     action_obj: usize,
     orig: usize,
@@ -498,11 +504,23 @@ pub unsafe fn system_quit_route_button_action_or_forward(
     }
 }
 
+/// The Save Game row's action thunk, reached as the first native Quit row.
+///
+/// # Safety
+///
+/// Installed by `er-hook` on `FUN_140961640`; the game calls it on the menu thread with a live
+/// thunk `this`.
 pub unsafe extern "system" fn system_quit_noop_desktop_action_hook(action_obj: usize) -> usize {
     let orig = SYSTEM_QUIT_NOOP_ACTION_ORIG.load(Ordering::SeqCst);
     unsafe { system_quit_route_button_action_or_forward(action_obj, orig, "save-game/first-row") }
 }
 
+/// The second native Quit row's action thunk, shared by every row cloned from it.
+///
+/// # Safety
+///
+/// Installed by `er-hook` on `FUN_1409610d0`; the game calls it on the menu thread with a live
+/// thunk `this`.
 pub unsafe extern "system" fn system_quit_return_desktop_action_hook(action_obj: usize) -> usize {
     let orig = SYSTEM_QUIT_RETURN_DESKTOP_ACTION_ORIG.load(Ordering::SeqCst);
     unsafe {
@@ -510,6 +528,12 @@ pub unsafe extern "system" fn system_quit_return_desktop_action_hook(action_obj:
     }
 }
 
+/// Hand one controller activation back to whoever owns the address below us.
+///
+/// # Safety
+///
+/// `PropertyNewButtonController::Activate` context. `controller` and both event arguments must be
+/// the live ones the game passed, and the published trampoline must still be installed.
 pub unsafe fn system_quit_forward_button_controller_activation(
     controller: usize,
     event_kind: u32,
@@ -530,6 +554,13 @@ pub unsafe fn system_quit_forward_button_controller_activation(
     unsafe { original(controller, event_kind as usize, event_a, event_b) };
 }
 
+/// Ask the controller's own predicate whether this event is a real confirm, rather than deciding
+/// from the event kind -- the game collapses several kinds onto one dispatch.
+///
+/// # Safety
+///
+/// `PropertyNewButtonController::Activate` context, `controller` live; this calls through the
+/// controller's vtable.
 pub unsafe fn system_quit_controller_should_invoke_action(
     controller: usize,
     event_a: usize,
@@ -553,6 +584,11 @@ pub unsafe fn system_quit_controller_should_invoke_action(
 /// dispatch collapses cloned buttons onto the native Return-to-Desktop controller, and the pointer at
 /// `controller + 0xa8` is merely `controller + 0x70`. Row identity comes from
 /// `system_quit_resolve_row_now`, i.e. the dialog's own list cursor.
+///
+/// # Safety
+///
+/// Installed by `er-hook` on vtable slot 2; the game calls it on the menu thread with a live
+/// controller and its live event.
 pub unsafe extern "system" fn property_new_button_controller_activate_hook(
     controller: usize,
     event_kind: u32,
@@ -565,10 +601,9 @@ pub unsafe extern "system" fn property_new_button_controller_activate_hook(
         // the normal ProfileLoad activation hook will consume the pending cell.
         if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0
             && unsafe { system_quit_controller_should_invoke_action(controller, event_a) }
+            && let Some(note_click) = row_actions().note_drive_strip_click_event
         {
-            if let Some(note_click) = row_actions().note_drive_strip_click_event {
-                unsafe { note_click(event_a) };
-            }
+            unsafe { note_click(event_a) };
         }
         unsafe {
             system_quit_forward_button_controller_activation(
@@ -698,6 +733,10 @@ pub unsafe extern "system" fn property_new_button_controller_activate_hook(
     }
 }
 
+/// # Safety
+///
+/// `out` must point at uninitialised storage the size of the game's menu-string type, and `text`
+/// must stay alive for the process -- the constructor keeps the pointer rather than copying.
 pub unsafe fn system_quit_init_menu_string_from_static_wide(
     out: usize,
     text: &'static [u16],
@@ -714,6 +753,10 @@ pub unsafe fn system_quit_init_menu_string_from_static_wide(
     true
 }
 
+/// # Safety
+///
+/// `out` must point at uninitialised storage for the label component, and both slices must be
+/// process-lifetime: the built component borrows them instead of copying.
 pub unsafe fn system_quit_build_static_label_component(
     out: usize,
     label: &'static [u16],
@@ -756,6 +799,10 @@ fn system_quit_row_returns_unavailable_once() {
     );
 }
 
+/// # Safety
+///
+/// Installed by `er-hook` on `AddCancelButton`; the game calls it on the menu thread while it
+/// builds the Quit tab, with a live dialog and a live label component.
 pub unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hook(
     dialog: usize,
     label: usize,

@@ -1210,6 +1210,49 @@ pub fn verified_translation_count() -> usize {
     VERIFIED_1162_TO_1170.len()
 }
 
+/// Is Seamless Co-op (`ersc.dll`) resident in this process?
+///
+/// A monotonic latch, not a sample. me3 defers native loading until after Arxan init and loads
+/// Seamless through its me2 compatibility shim, so `ersc.dll` is not yet registered in the PEB when
+/// a `DllMain` runs (+1ms) -- a raw module handle returns false that early and would wrongly gate
+/// every Seamless decision to "vanilla". So this re-polls on each call until the module first
+/// resolves, then latches true forever and never re-samples. That makes the answer correct at the
+/// moment each call site needs it (title terms-of-service build ~+16.9s, save read on the first
+/// game-task tick), regardless of the early false negative, and it never flaps back to false.
+///
+/// It lives here rather than in a product telemetry module because it has no product state at all,
+/// and because the System>Quit row cloner reads it to decide which help line the
+/// **Load Character from File** row advertises -- from `er-quit-menu-core`, across a crate boundary.
+#[cfg(windows)]
+pub fn seamless_coop_loaded() -> bool {
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    /// 0 = not yet seen, 1 = observed resident. Once latched it never clears: Seamless is not
+    /// unloaded mid-session.
+    static LATCHED: AtomicUsize = AtomicUsize::new(0);
+    const MODULE_NAME: &[u8] = b"ersc.dll\0";
+
+    unsafe extern "system" {
+        fn GetModuleHandleA(module_name: *const u8) -> isize;
+    }
+
+    if LATCHED.load(Ordering::Relaxed) != 0 {
+        return true;
+    }
+    // Safety: a NUL-terminated ASCII name; the call only reads it and returns a handle or zero.
+    let present = unsafe { GetModuleHandleA(MODULE_NAME.as_ptr()) } != 0;
+    if present {
+        LATCHED.store(1, Ordering::Relaxed);
+    }
+    present
+}
+
+/// Host builds have no module table to ask, and no Seamless to find.
+#[cfg(not(windows))]
+pub fn seamless_coop_loaded() -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1963,47 +2006,4 @@ mod tests {
             table.len()
         );
     }
-}
-
-/// Is Seamless Co-op (`ersc.dll`) resident in this process?
-///
-/// A monotonic latch, not a sample. me3 defers native loading until after Arxan init and loads
-/// Seamless through its me2 compatibility shim, so `ersc.dll` is not yet registered in the PEB when
-/// a `DllMain` runs (+1ms) -- a raw module handle returns false that early and would wrongly gate
-/// every Seamless decision to "vanilla". So this re-polls on each call until the module first
-/// resolves, then latches true forever and never re-samples. That makes the answer correct at the
-/// moment each call site needs it (title terms-of-service build ~+16.9s, save read on the first
-/// game-task tick), regardless of the early false negative, and it never flaps back to false.
-///
-/// It lives here rather than in a product telemetry module because it has no product state at all,
-/// and because the System>Quit row cloner reads it to decide which help line the
-/// **Load Character from File** row advertises -- from `er-quit-menu-core`, across a crate boundary.
-#[cfg(windows)]
-pub fn seamless_coop_loaded() -> bool {
-    use core::sync::atomic::{AtomicUsize, Ordering};
-
-    /// 0 = not yet seen, 1 = observed resident. Once latched it never clears: Seamless is not
-    /// unloaded mid-session.
-    static LATCHED: AtomicUsize = AtomicUsize::new(0);
-    const MODULE_NAME: &[u8] = b"ersc.dll\0";
-
-    unsafe extern "system" {
-        fn GetModuleHandleA(module_name: *const u8) -> isize;
-    }
-
-    if LATCHED.load(Ordering::Relaxed) != 0 {
-        return true;
-    }
-    // Safety: a NUL-terminated ASCII name; the call only reads it and returns a handle or zero.
-    let present = unsafe { GetModuleHandleA(MODULE_NAME.as_ptr()) } != 0;
-    if present {
-        LATCHED.store(1, Ordering::Relaxed);
-    }
-    present
-}
-
-/// Host builds have no module table to ask, and no Seamless to find.
-#[cfg(not(windows))]
-pub fn seamless_coop_loaded() -> bool {
-    false
 }
