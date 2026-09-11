@@ -506,6 +506,24 @@ This repo must be a sibling of a `fromsoftware-rs` checkout (the root crate uses
 # The whole-workspace verdict is the orchestrator's, run once at integration.
 bash scripts/check.sh
 
+# ...which is now ELEVEN STAGES fanned out as child processes, not one long process. The step
+# list is unchanged and still lives in check.sh alone; what changed is that each step belongs to
+# a named stage, so a failure lands somewhere named and the fast stages answer first. Measured on
+# this tree: `lint` is 9s and `policy` 104s, against 695s for every non-cargo step.
+bash scripts/check.sh --list-stages         # the stages, and how many steps each holds
+bash scripts/check.sh --stage lint          # one stage, in this process, no children
+bash scripts/check.sh --jobs 1              # every stage, one at a time
+ER_CHECK_STAGES=lint,policy bash scripts/check.sh   # a deliberate subset (NOT a push shortcut)
+
+# A stage takes a SHARED lock and a whole-suite run an EXCLUSIVE one, so two stage runs coexist
+# and a whole-suite run excludes everything. The stage of every step comes from the fifth column
+# of docs/ci-gate-portability.tsv (gate steps) or from four rules in scripts/check-stages.py
+# (toolchain steps); `check-stages.py --check` is a step of the suite and refuses a step that
+# belongs to no stage or to two. .github/workflows/check.yml generates its matrix from the same
+# command, so a GitHub run page shows the same eleven names.
+#
+# Same suite under act, in containers: bash scripts/act-check.sh --stage lint
+
 # Host-buildable workspace members (no game dependencies):
 cargo test -p er-soulsformats -p er-param-inspect
 cargo check -p er-soulsformats -p er-param-inspect

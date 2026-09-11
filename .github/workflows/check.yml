@@ -445,35 +445,57 @@ jobs:
         if: inputs.skip-unchanged
         uses: actions/cache/restore@v5
         with:
-          path: .stage-green
+          path: stage-results
           key: stage-green-${{ runner.os }}-${{ matrix.stage }}-${{ steps.stage-digest.outputs.digest }}
 
       - name: THE STAGE
         id: run
         if: steps.stage-cache.outputs.cache-hit != 'true'
-        run: bash scripts/check.sh --stage "${{ matrix.stage }}"
-        env:
-          # Where check.sh writes the machine-readable copy of its per-step table. The report job
-          # joins these back into one verdict over the whole suite.
-          ER_CHECK_RESULT_DIR: ${{ github.workspace }}/.stage-results
+        # ER_CHECK_RESULT_DIR is where check.sh writes the machine-readable copy of its per-step
+        # table, which the report job joins back into one verdict over the whole suite.
+        #
+        # `stage-results`, with no leading dot, and that is load-bearing rather than cosmetic.
+        # It was a dot-prefixed directory until running this workflow under `act` caught the cost:
+        # `actions/upload-artifact@v4` globbed it, found nothing, and reported that as a yellow
+        # `::warning::` on a step that still went GREEN -- so every stage would have uploaded an
+        # empty artifact and the report job would have called all 283 steps NO REPORT, with no red
+        # step anywhere to say why. An isolated probe pinned the cause to the dot and nothing else:
+        # in one job, `dotless-results/*.tsv` uploaded and `.dot-results/*.tsv` did not, same
+        # directory, same step, same relative form. `@actions/glob` will not match a path segment
+        # beginning with a dot.
+        #
+        # `stage-results/` is in .gitignore, so a local run of the same command leaves no untracked
+        # file behind for scripts/check-gate-config-guard.sh to notice.
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/stage-results"
+          ER_CHECK_RESULT_DIR="$GITHUB_WORKSPACE/stage-results" \
+            bash scripts/check.sh --stage "${{ matrix.stage }}"
 
       # A cache HIT means this stage did not execute, and every one of its steps still owes the
       # report a state. CACHED is that state, and it is not `passed`.
       - name: Record that this stage was skipped, not passed
         if: steps.stage-cache.outputs.cache-hit == 'true'
         run: |
-          mkdir -p .stage-results
+          mkdir -p "$GITHUB_WORKSPACE/stage-results"
           python3 scripts/check-stages.py --result-stub "${{ matrix.stage }}" --state CACHED \
             --reason "inputs unchanged since a green run (${{ steps.stage-digest.outputs.digest }})" \
-            > ".stage-results/${{ matrix.stage }}.tsv"
+            > "$GITHUB_WORKSPACE/stage-results/${{ matrix.stage }}.tsv"
 
       # Written only on success, so a marker can never mean "this failed quickly last time".
       - name: Save this stage's green marker
         if: inputs.skip-unchanged && success() && steps.stage-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
-          path: .stage-results
+          path: stage-results
           key: stage-green-${{ runner.os }}-${{ matrix.stage }}-${{ steps.stage-digest.outputs.digest }}
+
+      # What the stage actually wrote, listed before it is uploaded. This exists because the
+      # upload action's failure mode here is a yellow `::warning::` on a green step: it says "No
+      # files were found" and the job still succeeds, so a stage that produced nothing looks
+      # identical to one that produced its table. One `ls` makes the difference visible in the log.
+      - name: What this stage wrote
+        if: always()
+        run: ls -l "$GITHUB_WORKSPACE/stage-results"
 
       # if: always() -- a red stage's per-step table is the most interesting one there is, and the
       # report job cannot tell "this stage failed" from "this stage never started" without it.
@@ -482,7 +504,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: stage-result-${{ matrix.stage }}
-          path: .stage-results/*.tsv
+          path: stage-results/*.tsv
           if-no-files-found: warn
           retention-days: 7
 
@@ -520,7 +542,7 @@ jobs:
         with:
           pattern: stage-result-*
           merge-multiple: true
-          path: .stage-results
+          path: stage-results
       - name: Join every stage into one verdict
         run: |
           set -euo pipefail
@@ -528,7 +550,7 @@ jobs:
             echo '## Combined verdict'
             echo
             echo '```'
-            python3 scripts/check-stage-report.py .stage-results --quiet 2>&1 | tee /tmp/report.txt
+            python3 scripts/check-stage-report.py stage-results --quiet 2>&1 | tee /tmp/report.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY" || true
-          python3 scripts/check-stage-report.py .stage-results --quiet
+          python3 scripts/check-stage-report.py stage-results --quiet

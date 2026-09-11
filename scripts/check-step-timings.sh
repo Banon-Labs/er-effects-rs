@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# What does each scripts/check.sh step actually COST? Wall clock per step, as a TSV.
+# What does each scripts/check.sh step actually cost? Wall clock per step, as a TSV.
 #
 # The stage split in scripts/check-stages.py is supposed to be chosen by measurement rather than
 # by intuition about which gates look slow. This is that measurement, kept runnable so the next
@@ -7,7 +7,7 @@
 #
 # It reads the step list back out of check.sh through scripts/check-stages.py, so it can never
 # drift behind the suite, and it runs each step the way check.sh runs it: `bash -c` with
-# `repo_root` exported, cwd at the repo root. What it deliberately does NOT reproduce is check.sh's
+# `repo_root` exported, cwd at the repo root. What it deliberately does not reproduce is check.sh's
 # shims -- no step is skipped here for a missing input or an unrelated diff, because the question
 # is what a step costs when it runs.
 #

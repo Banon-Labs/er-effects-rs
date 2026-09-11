@@ -4,7 +4,7 @@
 Why a separate program. Splitting the suite into stages splits the verdict with it, and a split
 verdict is worth less than the one it replaced unless something puts it back together. Ten green
 jobs on a run page do not say "the suite passed" -- they say ten things passed, and the question
-check.sh has always insisted on answering is the other one: which steps have NO verdict.
+check.sh has always insisted on answering is the other one: which steps have no verdict.
 
 So every stage writes a machine-readable copy of its own per-step table (check.sh's `_check_summary`
 does it whenever `ER_CHECK_RESULT_DIR` is set), and this program joins those files against the step

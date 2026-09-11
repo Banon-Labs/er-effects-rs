@@ -167,5 +167,12 @@ if [[ "$repo_root" == */.claude/worktrees/agent-* ]]; then
 	exit 0
 fi
 
-printf 'pre-push: running scripts/check.sh (the same suite CI runs)\n' >&2
+# STAGES DID NOT REINTRODUCE A SUBSET EITHER (2026-09-11). check.sh now partitions its steps into
+# eleven named stages and runs them as children, so this line still gets every step -- the stage a
+# step belongs to comes from the same scripts/check-stages.py table CI's matrix is generated from,
+# and check-stages.py --check (a step of the suite) refuses a step that belongs to no stage. What
+# the push gains is the same thing CI gains: a red lint stage says so in seconds instead of after
+# the cross-compile. ER_CHECK_JOBS=1 serialises it; ER_CHECK_STAGES=<names> narrows it, and is
+# deliberately NOT set here -- a push gets all of them.
+printf 'pre-push: running scripts/check.sh (the same stages, and the same step list, CI runs)\n' >&2
 exec bash scripts/check.sh

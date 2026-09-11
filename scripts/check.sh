@@ -49,7 +49,7 @@ cpu_courtesy check.sh
 # --- one suite, ten stages ---------------------------------------------------------------------
 # `bash scripts/check.sh` still runs everything. That has to stay true: every agent instruction,
 # every git hook and every piece of documentation in this repo invokes this file by name and
-# expects the whole verdict. What is new is HOW it gets there -- it runs its own stages as child
+# expects the whole verdict. What is new is how it gets there -- it runs its own stages as child
 # processes and merges their results -- and that one stage can be run on its own:
 #
 #     bash scripts/check.sh --stage lint      one stage, in this process, no children
@@ -145,14 +145,14 @@ fi
 # prevent. XDG_RUNTIME_DIR is per-user and tmpfs-backed; /tmp is the fallback. If flock is absent
 # the gate runs anyway -- a missing tool must not make the suite unrunnable.
 _check_lock="${XDG_RUNTIME_DIR:-/tmp}/er-mods-rs-check-sh.lock"
-# SHARED FOR A STAGE, EXCLUSIVE FOR THE WHOLE SUITE (added with stages). The refusal above is
+# Shared for a stage, exclusive for the whole suite (added with stages). The refusal above is
 # about one run corrupting another's verdict, and that is a statement about the whole suite: a
-# contended box manufactures INCONCLUSIVE and NOT RUN steps, and a whole-suite green is only worth
+# contended box manufactures `INCONCLUSIVE` and `NOT RUN` steps, and a whole-suite green is
 # something from a quiet tree. A single stage is a fraction of that load and a fraction of that
 # claim, and two people -- or one person and an editor-on-save -- running `--stage lint` and
 # `--stage policy` side by side is a use the split exists to enable, not a hazard.
 #
-# So a `--stage` run takes a SHARED lock and a whole-suite run takes an EXCLUSIVE one. Stages
+# So a `--stage` run takes a shared lock and a whole-suite run takes an exclusive one. Stages
 # coexist with each other; a whole-suite run excludes every stage and every other whole-suite run,
 # in both directions, because it is the one whose verdict covers everything. The fan-out's children
 # take no lock at all -- they carry ER_CHECK_LOCK_HELD from the parent that already holds the
@@ -296,7 +296,7 @@ elif [[ -n $_check_scope_src ]]; then
 		"$_check_scope_n" >&2
 fi
 
-# --- which steps belong to a DIFFERENT stage ------------------------------------------------
+# --- which steps belong to a different stage ------------------------------------------------
 # The third source of non-execution, and the only one that is a deliberate partition rather than
 # an absent input. `--stage lint` runs lint's steps and leaves the other nine stages' steps alone.
 # They get their own state in the summary, `OTHER STAGE`, so a single stage's log can never be
@@ -308,8 +308,8 @@ fi
 # what a reader needs is "this was stage lint, and the other 253 steps are other stages' work",
 # which the summary header and one summary line say once.
 #
-# A tooling failure fails OPEN -- the stage filter is dropped and the whole suite runs, which is
-# loud. An unknown stage NAME fails closed, because "run everything" is not a plausible reading of
+# A tooling failure fails open -- the stage filter is dropped and the whole suite runs, which is
+# loud. An unknown stage name fails closed, because "run everything" is not a plausible reading of
 # a typo and silently doing so would hide the typo in CI forever.
 declare -A _check_stage_out=()
 if [[ -n $_check_stage ]]; then
@@ -608,7 +608,7 @@ _check_summary() {
 	echo "per-step state (passed / FAILED / INCONCLUSIVE / SKIPPED / NOT RUN):"
 	printf '%s' "$table"
 
-	# THE MACHINE-READABLE COPY, for whoever has to merge stages back together.
+	# The machine-readable copy, for whoever has to merge stages back together.
 	# Two callers need it and they are the same code path on two machines: the local fan-out below
 	# (ten children, one summary) and .github/workflows/check.yml (ten jobs, one report job that
 	# downloads these files as artifacts). Both hand it to scripts/check-stage-report.py, so the
@@ -770,7 +770,7 @@ gate_config_snapshot "$repo_root"
 #   2. Stages overlap. The suite is mostly single-process python gates that leave fifteen of this
 #      machine's sixteen cores idle while the one cargo stage is building.
 #
-# WHY FOUR. `ER_CHECK_JOBS` defaults to 4 here and `max-parallel: 4` says the same thing in
+# Why four. `ER_CHECK_JOBS` defaults to 4 here and `max-parallel: 4` says the same thing in
 # .github/workflows/check.yml, because the user asked for one default in both places. Four rather
 # than ten: scripts/lib/cpu-courtesy.sh already caps cargo at half this box (CARGO_BUILD_JOBS=8 of
 # 16) so the machine stays usable, and a cargo stage running eight rustc processes alongside three
@@ -781,7 +781,7 @@ gate_config_snapshot "$repo_root"
 # times. Raise either with ER_CHECK_JOBS / max-parallel; they are one edit each.
 #
 # This function never returns. It is defined here, below the preamble marker, on purpose:
-# scripts/test-check-sh-accumulates.py lifts everything ABOVE that marker and runs it over synthetic
+# scripts/test-check-sh-accumulates.py lifts everything above that marker and runs it over synthetic
 # suites, and a fan-out lifted into that fixture would try to spawn the fixture's own stages.
 _check_fanout() {
 	local stages=() selected=() stage rc=0 dir cached=0
@@ -792,7 +792,7 @@ _check_fanout() {
 		echo "  instead would silently ignore the partition every other caller relies on." >&2
 		exit 2
 	fi
-	# A deliberate subset, for someone iterating on one area. It is NOT a way to make a push
+	# A deliberate subset, for someone iterating on one area. It is not a way to make a push
 	# cheaper: the pre-push hook sets nothing, so it always gets every stage.
 	if [[ -n ${ER_CHECK_STAGES:-} ]]; then
 		IFS=',' read -r -a selected <<<"$ER_CHECK_STAGES"
@@ -816,7 +816,7 @@ _check_fanout() {
 	# digest over files cannot see everything a stage depends on. `suite` runs
 	# check-no-local-main-commits.sh, whose subject is git history; `addresses` reads a gitignored
 	# game image; every cargo stage depends on the installed toolchain. A hit on any of those would
-	# skip a gate whose answer really had changed. Where the inputs DO determine the outcome -- the
+	# skip a gate whose answer really had changed. Where the inputs do determine the outcome -- the
 	# cargo stages, which is where the minutes are -- turning it on is a large win, so the lever
 	# exists and says what it is doing.
 	local cache_dir="${ER_CHECK_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/er-mods-rs/check-stages}"
@@ -865,8 +865,8 @@ _check_fanout() {
 	# damage done by a sibling stage after that sibling had already finished.
 	gate_config_report || rc=1
 
-	# The EXIT trap belongs to a run that executes steps. This process executed none; letting it
-	# fire would print a 278-row table of NOT RUN over the merged report that just answered the
+	# The `EXIT` trap belongs to a run that executes steps. This process executed none; letting
+	# it fire would print a 283-row table of `NOT RUN` over the merged report that just answered
 	# same question properly.
 	trap - EXIT
 	exit "$rc"

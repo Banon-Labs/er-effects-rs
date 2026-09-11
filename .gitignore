@@ -93,3 +93,9 @@ docs/recon/rva-map-1162-to-1170.functions.tsv
 # Seamless update has nothing to diff against. Same category as eldenring-deobf*.bin:
 # a read-only RE input, not a bundled artifact.
 vendor-archive/
+
+# scripts/check.sh --stage writes its machine-readable per-step table here when
+# ER_CHECK_RESULT_DIR points at it, which .github/workflows/check.yml does so the report job can
+# join every stage back into one verdict. A local run of the same command leaves the directory
+# behind; it is a run artifact, not a source file.
+stage-results/

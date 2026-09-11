@@ -13,7 +13,7 @@ its own job on a GitHub run page. Nothing about the gates themselves changed: th
 still the one place a gate is written down, and `bash scripts/check.sh` with no arguments still
 runs all of it.
 
-THE ANTI-DRIFT PROPERTY IS THE POINT, and it is the reason this file exists rather than a stage
+The anti-drift property is the point, and it is the reason this file exists rather than a stage
 list written into `.github/workflows/check.yml`. This repo has been bitten three times by a
 hand-copied list of gate names falling behind the suite it was copied from:
 
@@ -29,7 +29,7 @@ ledger already has: `--check` fails when a step belongs to no stage, to more tha
 stage is declared and nothing is in it. There is no default bucket and no catch-all, because a
 catch-all is how a step stops being classified without anyone deciding that.
 
-WHERE THE ASSIGNMENT LIVES, and why it is not a second file. Every check.sh step that runs a repo
+Where the assignment lives, and why it is not a second file. Every check.sh step that runs a repo
 gate script already has exactly one row in `docs/ci-gate-portability.tsv` -- measured, and held in
 bijection with the step list by `ci-gate-portability.py --check` (204 rows, 204 keyed steps, no
 duplicates, no orphans, as of this writing). Adding a parallel `docs/check-stages.tsv` would create
@@ -54,7 +54,7 @@ Usage:
   python3 scripts/check-stages.py --lines <stage>  # check.sh line numbers in one stage
   python3 scripts/check-stages.py --skip-lines <stage>   # the complement: what --stage must skip
   python3 scripts/check-stages.py --inputs <stage>       # files whose hash keys that stage's cache
-  python3 scripts/check-stages.py --steps-tsv      # line<TAB>text for every step, for tooling
+  python3 scripts/check-stages.py --steps-tsv      # `line<TAB>text` for every step, for tooling
   python3 scripts/check-stages.py --selftest       # positive controls for --check
 """
 
@@ -103,7 +103,7 @@ class Stage:
     inputs: tuple[str, ...]
 
 
-# THE STAGE LIST. Ordered cheapest-first as a deliberate scheduling hint: run locally with
+# The stage list. Ordered cheapest-first as a deliberate scheduling hint: run locally with
 # ER_CHECK_JOBS=1 and the first verdict arrives from `lint`, not from a cross-compile.
 #
 # The boundaries were chosen from the per-step measurement in `scripts/check-step-timings.sh`, on
@@ -331,15 +331,15 @@ def stage_tools(stage: str) -> dict[str, bool]:
 
     Derived from two readings, both over-inclusive on purpose. The first word of a toolchain step
     is the obvious one (`shellcheck ...` needs shellcheck). The second is the one that matters:
-    most tool use in this suite is INDIRECT -- `test-cupcake-policies.py` is a python3 step that
+    most tool use in this suite is indirect -- `test-cupcake-policies.py` is a python3 step that
     spawns `cupcake eval` 176 times, and `check-rust-build.sh` is a bash step that runs
     `cargo xwin build`. Reading each gate script's own source for the binary's name catches those;
     a hand-written map of stage to tools would not, and would go stale the first time a gate
     learned a new dependency.
 
     Over-detection costs an install that was not needed. Under-detection costs coverage, and in
-    two of these cases it costs it QUIETLY -- check.sh reports a missing shellcheck or opa as
-    SKIPPED, which is green. That asymmetry is why every pattern below is written loose.
+    two of these cases it costs it quietly -- check.sh reports a missing shellcheck or opa as
+    `SKIPPED`, which is green. That asymmetry is why every pattern below is written loose.
     """
     portability = _load_portability()
     steps = [s for s in staged_steps() if s.stage == stage]
