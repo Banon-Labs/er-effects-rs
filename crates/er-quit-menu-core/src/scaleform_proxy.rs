@@ -81,7 +81,7 @@ pub fn set_named_child_bind_trampoline(address: usize) {
 /// Every direct call goes through here for the reason `er-hook` refuses an unrecognised build: a
 /// hand-built `base + rva` asks nothing, and on a build where the function moved it transfers
 /// control into the middle of an unrelated one.
-fn gated_game_fn(rva: usize, what: &'static str) -> Option<usize> {
+pub(crate) fn gated_game_fn(rva: usize, what: &'static str) -> Option<usize> {
     game_rva_named(rva as u32, what).ok()
 }
 

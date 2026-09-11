@@ -86,6 +86,8 @@ pub mod menu_pump;
 #[cfg(windows)]
 pub mod profile_load_dialog;
 #[cfg(windows)]
+pub mod profile_table_guard;
+#[cfg(windows)]
 pub mod row_cloner;
 #[cfg(windows)]
 pub mod save_dest_commit_runtime;

@@ -39,6 +39,12 @@ er-save-picker-core = { path = "../er-save-picker-core", default-features = fals
 ] }
 # BND4 slot walk + PlayerGameData reads for the ProfileSummary preview of a foreign save.
 er-save-loader = { path = "../er-save-loader" }
+# The profile-renderer table this crate's ProfileSelect opener stands on: the 10-slot table
+# accessor, the renderer vtable, the native table builder and the shared `..._DIAG_ORIG` slot. The
+# window the opener submits renders character models, so the table's health is a precondition of
+# opening it at all -- see `profile_table_guard`. Direction stays acyclic: that crate does not
+# reference this one.
+er-loading-portrait-core = { path = "../er-loading-portrait-core" }
 # Shared cross-platform telemetry counters (the oracle_system_quit_* / save_flow_* /
 # save_dest_* / save_picker_* fields).
 er-telemetry-core = { path = "../er-telemetry-core" }

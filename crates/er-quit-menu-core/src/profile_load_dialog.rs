@@ -147,23 +147,24 @@ pub unsafe fn system_quit_open_profile_load_dialog_on(system_dialog: usize) -> b
     }
     .unwrap_or(NULL);
     if renderer_table_ptr == NULL {
-        let built = unsafe { maybe_build_profile_table_for_loading(base) };
-        let after = unsafe {
-            safe_read_usize(er_game_base::mem::game_data_addr(
-                base,
-                PROFILE_MODEL_REND_TABLE_RVA,
-                "PROFILE_MODEL_REND_TABLE_RVA",
-            ))
-        }
-        .unwrap_or(NULL);
-        if after == NULL {
+        // Ask the host first: a product has a loading-cover pipeline that owns this table and may
+        // want to build it its own way. A shell's neutral default does nothing and answers false,
+        // which is not a refusal -- it just means nobody else is going to do it.
+        let host_built = unsafe { maybe_build_profile_table_for_loading(base) };
+        // Then build it here. This is the call that actually closes the loop: the refresh detour
+        // can repair a table only once the refresh is entered, and the refresh is entered only
+        // after this window is submitted, so a submit gated on a repair that needs the submit can
+        // never happen. Measured 2026-09-11 before this line existed: four presses, each
+        // `build_requested=false`, and no picker.
+        let ready = unsafe { crate::profile_table_guard::ensure_profile_table_ready(base) };
+        if !ready {
             append_autoload_debug(format_args!(
-                "system-quit-dup: profile-load route abort -- the profile model renderer table at `PROFILE_MODEL_REND_TABLE_RVA` is null and the host could not build one (build_requested={built}). Submitting 05_010_ProfileSelect now would fault in `PROFILE_RENDERER_REFRESH_RVA` reading [null+0x754], which is an access violation, not a refused row"
+                "system-quit-dup: profile-load route abort -- the profile model renderer table at `PROFILE_MODEL_REND_TABLE_RVA` could not be made safe to walk (host_built={host_built}). Submitting 05_010_ProfileSelect now would fault in `PROFILE_RENDERER_REFRESH_RVA` reading [null+0x754], which is an access violation, not a refused row"
             ));
             return false;
         }
         append_autoload_debug(format_args!(
-            "system-quit-dup: profile-load route built the profile model renderer table before submitting (was null, now 0x{after:x})"
+            "system-quit-dup: profile-load route made the profile model renderer table safe to walk before submitting (host_built={host_built})"
         ));
     }
     let Ok(wrapper_addr) = game_rva(PROFILE_SELECT_WRAPPER_RVA) else {

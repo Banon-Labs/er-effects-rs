@@ -43,6 +43,9 @@ pub struct StandaloneArm {
     /// The import and the export have a game task to finish on. `None` when this row set has
     /// nothing to import or export.
     pub game_task: Option<bool>,
+    /// The profile-renderer table is guarded, so opening `05_010_ProfileSelect` cannot fault in the
+    /// native refresh. `None` when no row in this set opens that window.
+    pub profile_table_guard: Option<bool>,
 }
 
 impl StandaloneArm {
@@ -55,6 +58,7 @@ impl StandaloneArm {
             && self.rows_armed
             && self.menu_pump != Some(false)
             && self.game_task != Some(false)
+            && self.profile_table_guard != Some(false)
     }
 }
 
@@ -98,11 +102,20 @@ pub unsafe fn arm_standalone(rows: RowSet, actions: QuitRowActions) -> Standalon
     let menu_pump =
         build_rows.then(|| unsafe { crate::menu_pump::install_quit_menu_window_run_hook() });
     let game_task = build_rows.then(crate::game_task::install_build_row_game_task);
+    // Both character rows open `05_010_ProfileSelect`, and that window renders a character model
+    // per slot. The native refresh that draws them walks the renderer table without a null check,
+    // so a host arming either row has to own the guard or the first press is an access violation
+    // rather than a row -- measured 2026-09-11, `0xc0000005` at `eldenring.exe+0x9ab874`.
+    // The product installs the same body from its own private detour and must not call this.
+    let character_rows = rows.load_character || rows.load_character_from_file;
+    let profile_table_guard = character_rows
+        .then(|| unsafe { crate::profile_table_guard::install_profile_table_guard() });
     let arm = StandaloneArm {
         gfx_served,
         rows_armed,
         menu_pump,
         game_task,
+        profile_table_guard,
     };
     // `not-required` rather than `None`: the line is read by a person looking for what went wrong,
     // and a bare `None` beside three booleans reads as a failure that printed oddly.
@@ -112,10 +125,11 @@ pub unsafe fn arm_standalone(rows: RowSet, actions: QuitRowActions) -> Standalon
         None => "not-required",
     };
     append_autoload_debug(format_args!(
-        "system-quit-dup: standalone arm complete={} gfx_served={gfx_served} rows_armed={rows_armed} menu_pump={} game_task={} rows={rows:?}",
+        "system-quit-dup: standalone arm complete={} gfx_served={gfx_served} rows_armed={rows_armed} menu_pump={} game_task={} profile_table_guard={} rows={rows:?}",
         arm.is_complete(),
         describe(menu_pump),
-        describe(game_task)
+        describe(game_task),
+        describe(profile_table_guard)
     ));
     arm
 }
