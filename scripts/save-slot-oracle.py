@@ -131,24 +131,35 @@ STATUS_BUILDUP_FIELDS = [
     ("madness_buildup", PGD_REL_MADNESS_BUILDUP),
 ]
 
-# Offsets relative to SL2.bt's FaceData.Magic / fromsoftware-rs FaceDataBuffer.magic.
-FACE_BODY_FIELD_OFFSETS = {
-    "face_model": 0x0C,
-    "hair_model": 0x10,
-    "eyebrow_model": 0x18,
-    "beard_model": 0x1C,
-    "eye_patch_model": 0x20,
-    "apparent_age": 0x2C,
-    "facial_aesthetic": 0x2D,
-    "form_emphasis": 0x2E,
-    "head_size": 0xAC,
-    "chest_size": 0xAD,
-    "abdomen_size": 0xAE,
-    "arms_size": 0xAF,
-    "legs_size": 0xB0,
-    "skin_color_r": 0xB3,
-    "skin_color_g": 0xB4,
-    "skin_color_b": 0xB5,
+# Offsets relative to SL2.bt's FaceData.Magic / fromsoftware-rs FaceDataBuffer.magic, each paired
+# with the width the game stores that field at.  The payload starts at magic+0x0c
+# (`FaceDataBuffer::buffer`), and the eight model ids that lead it are four-byte little-endian
+# values, not bytes.  Two independent sources agree.  The game's own
+# `CS::FaceData::ValidateFaceData` (1.16.2 `0x140252610`) range-checks them as
+# `add rax,0xc` then `cmp dword ptr [rax],0x0` / `add rax,0x4` eight times, so it reads the
+# payload as eight signed 32-bit ids.  The er-build-planner slider table types the same eight
+# entries `{"type": "list", "size": 4}` at payload offsets 0, 4, 8, 12, 16, 20, 24 and 28.
+# Reading one as a single byte silently truncates any id past 255: the `200-99-Mage` slot 0
+# character stores `faceModelId` 500 (`f4 01 00 00`) and used to be reported as 244.  Everything
+# from `apparent_age` onward is genuinely one byte, the three skin-colour channels included --
+# the planner carries those as one three-byte `colour` at payload offset 167.
+FACE_BODY_FIELD_LAYOUT = {
+    "face_model": (0x0C, U32_SIZE),
+    "hair_model": (0x10, U32_SIZE),
+    "eyebrow_model": (0x18, U32_SIZE),
+    "beard_model": (0x1C, U32_SIZE),
+    "eye_patch_model": (0x20, U32_SIZE),
+    "apparent_age": (0x2C, U8_SIZE),
+    "facial_aesthetic": (0x2D, U8_SIZE),
+    "form_emphasis": (0x2E, U8_SIZE),
+    "head_size": (0xAC, U8_SIZE),
+    "chest_size": (0xAD, U8_SIZE),
+    "abdomen_size": (0xAE, U8_SIZE),
+    "arms_size": (0xAF, U8_SIZE),
+    "legs_size": (0xB0, U8_SIZE),
+    "skin_color_r": (0xB3, U8_SIZE),
+    "skin_color_g": (0xB4, U8_SIZE),
+    "skin_color_b": (0xB5, U8_SIZE),
 }
 
 DECODED_FIELD_SOURCES: dict[str, str] = {
@@ -320,11 +331,20 @@ def face_buffer_offset(face_magic_offset: int, relative_offset: int) -> int:
     return face_magic_offset + relative_offset
 
 
+def read_face_body_field(data: bytes, offset: int, size: int) -> int | None:
+    """Read one `FACE_BODY_FIELD_LAYOUT` entry at the width that table declares for it."""
+    if size == U32_SIZE:
+        return read_u32_le(data, offset)
+    if size == U8_SIZE:
+        return read_u8(data, offset)
+    raise ValueError(f"unsupported face-body field width {size}")
+
+
 def decode_face_body_fields(slot_data: bytes, face_magic_offset: int) -> tuple[bytes, dict[str, int | None]]:
     face_data_buffer = slot_data[face_magic_offset:face_magic_offset + FACE_DATA_BUFFER_SIZE]
     face_body_fields = {
-        name: read_u8(slot_data, face_buffer_offset(face_magic_offset, offset))
-        for name, offset in FACE_BODY_FIELD_OFFSETS.items()
+        name: read_face_body_field(slot_data, face_buffer_offset(face_magic_offset, offset), size)
+        for name, (offset, size) in FACE_BODY_FIELD_LAYOUT.items()
     }
     return face_data_buffer, face_body_fields
 

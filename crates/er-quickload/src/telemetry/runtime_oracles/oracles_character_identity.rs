@@ -157,14 +157,23 @@ fn write_character_identity_oracles(body: &mut String) -> bool {
         use std::fmt::Write as _;
         let _ = write!(&mut face_data_buffer_hex, "{byte:02x}");
     }
-    let face_model = read_pgd_u8(face_buffer_pgd_offset + crate::FACE_BODY_FIELD_FACE_MODEL_OFFSET);
-    let hair_model = read_pgd_u8(face_buffer_pgd_offset + crate::FACE_BODY_FIELD_HAIR_MODEL_OFFSET);
+    // The five model ids are four bytes each, which is why their offset constants step by
+    // `size_of::<u32>()`. `CS::FaceData::ValidateFaceData` (1.16.2 `0x140252610`) range-checks the
+    // eight ids leading `FaceDataBuffer::buffer` as `cmp dword ptr [rax],0x0` / `add rax,0x4`,
+    // and the er-build-planner slider table types the same eight `{"type": "list", "size": 4}`.
+    // Reading one byte truncates every id past 255 -- a real character carries `faceModelId` 500.
+    // The static side (`scripts/save-slot-oracle.py`) reads the same five as little-endian u32,
+    // so the two `face_body_fields` blocks stay comparable.
+    let face_model =
+        read_pgd_u32(face_buffer_pgd_offset + crate::FACE_BODY_FIELD_FACE_MODEL_OFFSET);
+    let hair_model =
+        read_pgd_u32(face_buffer_pgd_offset + crate::FACE_BODY_FIELD_HAIR_MODEL_OFFSET);
     let eyebrow_model =
-        read_pgd_u8(face_buffer_pgd_offset + crate::FACE_BODY_FIELD_EYEBROW_MODEL_OFFSET);
+        read_pgd_u32(face_buffer_pgd_offset + crate::FACE_BODY_FIELD_EYEBROW_MODEL_OFFSET);
     let beard_model =
-        read_pgd_u8(face_buffer_pgd_offset + crate::FACE_BODY_FIELD_BEARD_MODEL_OFFSET);
+        read_pgd_u32(face_buffer_pgd_offset + crate::FACE_BODY_FIELD_BEARD_MODEL_OFFSET);
     let eye_patch_model =
-        read_pgd_u8(face_buffer_pgd_offset + crate::FACE_BODY_FIELD_EYE_PATCH_MODEL_OFFSET);
+        read_pgd_u32(face_buffer_pgd_offset + crate::FACE_BODY_FIELD_EYE_PATCH_MODEL_OFFSET);
     let apparent_age =
         read_pgd_u8(face_buffer_pgd_offset + crate::FACE_BODY_FIELD_APPARENT_AGE_OFFSET);
     let facial_aesthetic =
