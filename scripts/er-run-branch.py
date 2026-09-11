@@ -772,6 +772,16 @@ def launch(args) -> int:
     # nothing for this run, and a watcher that finds nothing reports a healthy session as silent.
     artifact_env["ER_RUN_ARTIFACT_DIR"] = str(artifact_dir)
 
+    # The live command file (crates/er-input-harness/src/repl.rs), pointed at this run's directory
+    # whether or not a drive was asked for. `crate::repl::on_frame` runs above every early return in
+    # the harness's frame hook, including the Passive one, precisely so a session can be interrogated
+    # when nothing is driving it -- and the session most worth interrogating is a derailed one, which
+    # by definition has no drive left. Keying this on --harness-drive made the answer unreachable in
+    # exactly that case: the harness fell back to the game directory, where the question was never
+    # written. Measured on br-20260911-164202-c4da, whose nav_to_optionsetting derail could not be
+    # followed up because the only path to `grid` ran through a flag the run did not carry.
+    artifact_env["ER_HARNESS_CMD_PATH"] = str(artifact_dir / "er-harness-cmd.txt")
+
     # The markers must be named, not just written. `redirected_artifact_path` falls back to the game
     # directory when its env var is unset, so markers dropped in this run's directory are invisible
     # unless the variable points at them -- measured on br-20260905-040013-1038, where both files were
@@ -785,11 +795,6 @@ def launch(args) -> int:
         artifact_env["ER_HARNESS_FORCE_DRIVE_PATH"] = str(
             artifact_dir / "er-harness-force-drive.txt"
         )
-        # The live command file (crates/er-input-harness/src/repl.rs). Same reason as the two above,
-        # and it bites harder here: the whole point of the command loop is to interrogate a session
-        # that is already up, so a command written into this run's directory that the harness reads
-        # from the game directory instead is a question that silently never gets asked.
-        artifact_env["ER_HARNESS_CMD_PATH"] = str(artifact_dir / "er-harness-cmd.txt")
 
     # Both candidate homes for the DLL's testimony -- the redirect, and the game directory it falls
     # back to if the environment does not survive the launch chain. See `await_testimony`.
