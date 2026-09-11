@@ -145,3 +145,25 @@ pub const PROFILE_RENDERER_CHR_ASM_INBOX_OFFSET: usize = 0x548;
 /// `FUN_1409eb5e0`, `FUN_1409eb9b0`) touch flag bits at +0x20 and a pointer at +0x320; none is an
 /// arm-style setter, so there is no native call to prefer over the write.
 pub const CHR_ASM_MODEL_INS_ARM_STYLE_OFFSET: usize = 0x328;
+
+/// `CS::CSChrAsmModelIns` -> the first of its part-model node pointers.
+///
+/// This array is the model as the renderer draws it: the model submit `FUN_1409e9ac0` walks every
+/// non-null slot of `model_ins+0x28 .. +0x100` and draws it, so one pointer per attached piece of
+/// armour, weapon and body part. `lookat_bone_hooks`'s parts enumerator already reads exactly this
+/// range; the two constants are named here so a reader does not have to recover `0x28` and `27`
+/// from a loop bound.
+///
+/// Why it is worth fingerprinting: the pointers are allocations. A model that is genuinely torn
+/// down and rebuilt gets new ones, and a rebuild that resolved different armour rows gets a
+/// different set. Comparing the array across a rebuild therefore separates three states that the
+/// renderer's own `ChrAsm` cannot: the model was rebuilt with new gear, the model was rebuilt with
+/// the same gear, and the model was never rebuilt at all even though its input changed.
+pub const CHR_ASM_MODEL_INS_PARTS_NODE_OFFSET: usize = 0x28;
+/// Slots in that array, i.e. `(0x100 - 0x28) / 8`.
+pub const CHR_ASM_MODEL_INS_PARTS_NODE_COUNT: usize = 27;
+const _: () = assert!(
+    CHR_ASM_MODEL_INS_PARTS_NODE_OFFSET
+        + CHR_ASM_MODEL_INS_PARTS_NODE_COUNT * core::mem::size_of::<usize>()
+        == 0x100
+);

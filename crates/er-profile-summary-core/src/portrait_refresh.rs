@@ -43,31 +43,57 @@
 //! rather than papered over with a destructive write. [`BUILD_URL_PORTRAIT_RECORD_SLOT_PLUS1`]
 //! records the slot so a run can tell the two cases apart.
 //!
-//! # What is measured
+//! # What is measured, and the measurement that was not enough
 //!
-//! A kick count says a rebuild was requested. It does not say the model is being built from the
-//! imported gear, and every existing portrait oracle compares the renderer against the record --
-//! which after an import agree with each other while both disagree with the player. So the field
-//! this module exists to publish is [`BUILD_URL_PORTRAIT_EQUIP_VERDICT`], taken by re-reading the
-//! renderer's live stage-0 `ChrAsm` after the asynchronous build lands and comparing its equipment
-//! fingerprint against the record's.
+//! A kick count says a rebuild was requested, so the first oracle here compared the renderer's live
+//! stage-0 `ChrAsm` against the record and published [`BUILD_URL_PORTRAIT_EQUIP_VERDICT`]. Run
+//! `br-20260911-002901-a7e0` then read that field as a pass -- record and renderer stage agreed on
+//! the imported loadout, the kick was accepted, the level moved to the imported 150 -- while the
+//! player was still looking at the previous armour.
+//!
+//! The field was true and useless. Setting a renderer's `ChrAsm` is a state write, and the portrait
+//! is a captured render: until the model is destroyed, reassembled from the new rows and
+//! rasterized, the picture is the old one however correct the input. An oracle that stops at the
+//! input cannot fail on the defect it is supposed to catch.
+//!
+//! So the headline is now [`BUILD_URL_PORTRAIT_RENDER_VERDICT`], a conjunction. It reaches its pass
+//! value only when the input matched and the model object was observed being torn down and rebuilt
+//! with a different set of parts -- `renderer+0x778` going absent, and the part-node array the model
+//! submit walks coming back different. Its other values name the failures apart: the input took and
+//! the model never moved, the model rebuilt and came back identical, the input was wrong.
+//!
+//! That is still RAM rather than pixels, and the honest limit is worth stating: a rebuilt model with
+//! different parts is the last thing observable in memory before the rasterizer, not the rasterizer
+//! itself. A gate on the pixels would have to read back the renderer's own offscreen render target
+//! (`renderer+0xa8` -> `CSEzOffscreenRend`, `+0x10` -> `CSRuntimeTexResCap`, `+0x78` ->
+//! `CSGxTexture`, which `er_loading_portrait_core::resource_readback` already knows how to fetch)
+//! before the import and after the rebuild, and require the two images to differ.
 
 use core::sync::atomic::Ordering;
 
 use er_game_base::mem::{game_data_addr, game_module_base, safe_read_usize};
 use er_loading_portrait_core::{
-    PROFILE_RENDERER_CHR_ASM_LIVE_OFFSET, TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
-    portrait_renderer_table_entry,
+    CHR_ASM_MODEL_INS_PARTS_NODE_COUNT, CHR_ASM_MODEL_INS_PARTS_NODE_OFFSET,
+    PROFILE_RENDERER_CHR_ASM_LIVE_OFFSET, PROFILE_RENDERER_MODEL_INS_OFFSET,
+    TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA, portrait_renderer_table_entry,
 };
 use er_telemetry_core::counters::{
     BUILD_URL_PORTRAIT_EQUIP_VERDICT, BUILD_URL_PORTRAIT_KICK_REFUSALS, BUILD_URL_PORTRAIT_KICKS,
+    BUILD_URL_PORTRAIT_MODEL_ABSENT_SEEN, BUILD_URL_PORTRAIT_MODEL_INS_AFTER,
+    BUILD_URL_PORTRAIT_MODEL_INS_BEFORE, BUILD_URL_PORTRAIT_PARTS_AFTER,
+    BUILD_URL_PORTRAIT_PARTS_BEFORE, BUILD_URL_PORTRAIT_REBUILD_VERDICT,
     BUILD_URL_PORTRAIT_RECORD_FINGERPRINT, BUILD_URL_PORTRAIT_RECORD_LEVEL,
     BUILD_URL_PORTRAIT_RECORD_SLOT_PLUS1, BUILD_URL_PORTRAIT_RECORD_SYNC_STATE,
     BUILD_URL_PORTRAIT_RECORD_SYNCS, BUILD_URL_PORTRAIT_REFRESH_ATTEMPTS,
-    BUILD_URL_PORTRAIT_RENDERER_FINGERPRINT, BUILD_URL_PORTRAIT_VERIFY_TICKS,
+    BUILD_URL_PORTRAIT_RENDER_VERDICT, BUILD_URL_PORTRAIT_RENDERER_FINGERPRINT,
+    BUILD_URL_PORTRAIT_VERIFY_TICKS,
 };
 
-use crate::equip_fingerprint::{LiveSync, PortraitEquipmentVerdict, portrait_equipment_verdict};
+use crate::equip_fingerprint::{
+    LiveSync, PortraitEquipmentVerdict, PortraitRenderVerdict, RebuildObservation,
+    parts_fingerprint, portrait_equipment_verdict, portrait_rebuild_verdict,
+    portrait_render_verdict,
+};
 use crate::host::append_autoload_debug;
 use crate::live_player_sync::{chr_asm_equipment_fingerprint, sync_record_from_live_player};
 use crate::live_records::system_quit_profile_summary_ptr;
@@ -167,11 +193,47 @@ pub unsafe fn portrait_rebuild_target(slot: i32) -> Option<PortraitRebuildTarget
         ));
         return None;
     }
+    // The model object as it stands before anything is asked of it. Taken here because this is the
+    // last moment before the kick, and the whole rebuild detector is a comparison against it.
+    // Safety: fault-guarded reads of the renderer's own model instance.
+    let (model, parts) = unsafe { read_model_and_parts(renderer) };
+    BUILD_URL_PORTRAIT_MODEL_INS_BEFORE.store(model, Ordering::SeqCst);
+    BUILD_URL_PORTRAIT_PARTS_BEFORE.store(parts, Ordering::SeqCst);
+    BUILD_URL_PORTRAIT_MODEL_INS_AFTER.store(0, Ordering::SeqCst);
+    BUILD_URL_PORTRAIT_PARTS_AFTER.store(0, Ordering::SeqCst);
+    BUILD_URL_PORTRAIT_MODEL_ABSENT_SEEN.store(0, Ordering::SeqCst);
     Some(PortraitRebuildTarget {
         base,
         summary,
         renderer,
     })
+}
+
+/// The renderer's model instance and a fingerprint of the parts it is assembled from.
+///
+/// Returns `(0, 0)` when there is no model, which is a legitimate reading rather than a failure:
+/// mid-teardown is exactly when it happens, and it is the observation the rebuild detector needs
+/// most.
+///
+/// # Safety
+///
+/// Game task thread, `renderer` a live `CSMenuProfModelRend`. Every read is fault-guarded.
+unsafe fn read_model_and_parts(renderer: usize) -> (usize, u64) {
+    let model =
+        unsafe { safe_read_usize(renderer + PROFILE_RENDERER_MODEL_INS_OFFSET) }.unwrap_or(0);
+    if model == 0 {
+        return (0, 0);
+    }
+    let mut nodes = [0usize; CHR_ASM_MODEL_INS_PARTS_NODE_COUNT];
+    for (index, node) in nodes.iter_mut().enumerate() {
+        let at =
+            model + CHR_ASM_MODEL_INS_PARTS_NODE_OFFSET + index * core::mem::size_of::<usize>();
+        // A node that cannot be read counts as absent rather than aborting the whole sample: the
+        // fingerprint is a change detector, and a consistently unreadable slot is consistently
+        // zero on both sides.
+        *node = unsafe { safe_read_usize(at) }.unwrap_or(0);
+    }
+    (model, parts_fingerprint(&nodes))
 }
 
 /// Step two, part two: record whether the rebuild was actually taken, and open the verify window.
@@ -192,21 +254,36 @@ pub fn note_portrait_rebuild(slot: i32, renderer: usize, fired: bool) {
         Ordering::SeqCst,
     );
     BUILD_URL_PORTRAIT_RENDERER_FINGERPRINT.store(0, Ordering::SeqCst);
+    // Both verdicts start at "no reading" for this window rather than carrying a previous import's
+    // answer forward, so a second import that fails cannot be read through the first one's pass.
+    BUILD_URL_PORTRAIT_REBUILD_VERDICT.store(0, Ordering::SeqCst);
+    BUILD_URL_PORTRAIT_RENDER_VERDICT
+        .store(PortraitRenderVerdict::Unproven.code(), Ordering::SeqCst);
     BUILD_URL_PORTRAIT_VERIFY_TICKS.store(PORTRAIT_VERIFY_WINDOW_TICKS, Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "profile-portrait: asked slot {slot} to rebuild from the re-derived record (renderer=0x{renderer:x}); the verdict lands in oracle_build_url_portrait_equip_verdict once the async build completes"
     ));
 }
 
-/// Read the renderer stage back while the window is open, and latch what it says.
+/// Sample the renderer while the window is open, and latch what it says.
 ///
-/// This is the measurement the whole repair is judged on. It reads the renderer's live stage-0
-/// `ChrAsm` -- `+0x130`, the block the per-frame model-resource request actually reads, not the
-/// `+0x548` inbox the feed writes -- and compares its equipment fingerprint against the record's.
+/// Two independent measurements per tick, and the second is the one added after run
+/// `br-20260911-002901-a7e0`:
 ///
-/// A match closes the window. Anything else keeps sampling until the window runs out, so a window
-/// that expires carries the last thing it actually saw rather than an optimistic default. Costs one
-/// lock-free load per frame while closed, which is every frame but the few after an import.
+/// * the **input** -- the renderer's live stage-0 `ChrAsm` at `+0x130`, the block the per-frame
+///   model-resource request actually reads, compared against the record's fingerprint;
+/// * the **model object** -- `renderer+0x778` and the part-node array it points at, compared
+///   against what they were before the rebuild was asked for.
+///
+/// The first alone is what reported a pass over a screen that had not changed. Setting a
+/// renderer's `ChrAsm` is a state write; the portrait is a captured render, so until the model is
+/// destroyed and reassembled the picture is the previous one no matter how correct the input is.
+/// Only [`PortraitRenderVerdict::Proven`] -- input matched and the model came back with different
+/// parts -- closes the window, so a rebuild that never happens keeps sampling and the window
+/// expires carrying the failure rather than an early optimistic pass.
+///
+/// Costs one lock-free load per frame while closed, which is every frame but the few after an
+/// import.
 ///
 /// # Safety
 ///
@@ -216,7 +293,7 @@ pub unsafe fn portrait_verify_tick() {
     if BUILD_URL_PORTRAIT_VERIFY_TICKS.load(Ordering::SeqCst) == 0 {
         return;
     }
-    BUILD_URL_PORTRAIT_VERIFY_TICKS.fetch_sub(1, Ordering::SeqCst);
+    let remaining = BUILD_URL_PORTRAIT_VERIFY_TICKS.fetch_sub(1, Ordering::SeqCst);
     let slot = match BUILD_URL_PORTRAIT_RECORD_SLOT_PLUS1.load(Ordering::SeqCst) {
         0 => return,
         plus_one => plus_one as i32 - 1,
@@ -231,20 +308,80 @@ pub unsafe fn portrait_verify_tick() {
     if renderer == 0 {
         return;
     }
-    // Safety: the renderer's own stage-0 `ChrAsm`, read dword by fault-guarded dword.
-    let Some(live) =
-        (unsafe { chr_asm_equipment_fingerprint(renderer + PROFILE_RENDERER_CHR_ASM_LIVE_OFFSET) })
-    else {
-        return;
+    // The model object. Sampled first and unconditionally, because the teardown half of a rebuild
+    // is a state the input read below cannot be taken in -- and it is the half that was missing.
+    // Safety: fault-guarded reads of the renderer's own model instance.
+    let (model, parts) = unsafe { read_model_and_parts(renderer) };
+    if model == 0 {
+        BUILD_URL_PORTRAIT_MODEL_ABSENT_SEEN.store(1, Ordering::SeqCst);
+    } else {
+        BUILD_URL_PORTRAIT_MODEL_INS_AFTER.store(model, Ordering::SeqCst);
+        BUILD_URL_PORTRAIT_PARTS_AFTER.store(parts, Ordering::SeqCst);
+    }
+    let observed = RebuildObservation {
+        model_before: BUILD_URL_PORTRAIT_MODEL_INS_BEFORE.load(Ordering::SeqCst),
+        model_after: BUILD_URL_PORTRAIT_MODEL_INS_AFTER.load(Ordering::SeqCst),
+        saw_model_absent: BUILD_URL_PORTRAIT_MODEL_ABSENT_SEEN.load(Ordering::SeqCst) != 0,
+        parts_before: BUILD_URL_PORTRAIT_PARTS_BEFORE.load(Ordering::SeqCst),
+        parts_after: BUILD_URL_PORTRAIT_PARTS_AFTER.load(Ordering::SeqCst),
     };
-    BUILD_URL_PORTRAIT_RENDERER_FINGERPRINT.store(live, Ordering::SeqCst);
-    let record = BUILD_URL_PORTRAIT_RECORD_FINGERPRINT.load(Ordering::SeqCst);
-    let verdict = portrait_equipment_verdict(record, live);
-    BUILD_URL_PORTRAIT_EQUIP_VERDICT.store(verdict.code(), Ordering::SeqCst);
-    if verdict == PortraitEquipmentVerdict::Matches {
+    let rebuild = portrait_rebuild_verdict(observed);
+    BUILD_URL_PORTRAIT_REBUILD_VERDICT.store(rebuild.code(), Ordering::SeqCst);
+
+    // The input. A model that is mid-teardown has no readable stage to compare, which is not a
+    // mismatch -- so an unreadable stage leaves the previous equipment verdict standing.
+    let equipment = match unsafe {
+        chr_asm_equipment_fingerprint(renderer + PROFILE_RENDERER_CHR_ASM_LIVE_OFFSET)
+    } {
+        Some(live) => {
+            BUILD_URL_PORTRAIT_RENDERER_FINGERPRINT.store(live, Ordering::SeqCst);
+            let record = BUILD_URL_PORTRAIT_RECORD_FINGERPRINT.load(Ordering::SeqCst);
+            let equipment = portrait_equipment_verdict(record, live);
+            BUILD_URL_PORTRAIT_EQUIP_VERDICT.store(equipment.code(), Ordering::SeqCst);
+            equipment
+        }
+        None => {
+            equipment_verdict_from_code(BUILD_URL_PORTRAIT_EQUIP_VERDICT.load(Ordering::SeqCst))
+        }
+    };
+
+    let render = portrait_render_verdict(equipment, rebuild);
+    BUILD_URL_PORTRAIT_RENDER_VERDICT.store(render.code(), Ordering::SeqCst);
+    if render == PortraitRenderVerdict::Proven {
         BUILD_URL_PORTRAIT_VERIFY_TICKS.store(0, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "profile-portrait: slot {slot} is now dressing its model from the imported build (record and renderer stage agree at 0x{record:016x})"
+            "profile-portrait: slot {slot} re-rendered -- the model was torn down and rebuilt with different parts (0x{:016x} -> 0x{:016x}) and its stage carries the imported gear",
+            observed.parts_before, observed.parts_after
         ));
+        return;
+    }
+    // The window ran out without a proof. Say which of the failures it was, once, at the moment the
+    // evidence is final -- a run whose portrait did not change must not have to be diagnosed from
+    // an absent log line.
+    if remaining == 1 {
+        append_autoload_debug(format_args!(
+            "profile-portrait: slot {slot} did NOT re-render within the verify window -- {} (equipment {}, model 0x{:x} -> 0x{:x}, absent_seen={}, parts 0x{:016x} -> 0x{:016x})",
+            render.tag(),
+            equipment.tag(),
+            observed.model_before,
+            observed.model_after,
+            observed.saw_model_absent,
+            observed.parts_before,
+            observed.parts_after,
+        ));
+    }
+}
+
+/// Recover the last published equipment verdict when this tick could not read the stage.
+///
+/// A mid-teardown renderer has no stage to compare, and treating that as a fresh
+/// [`PortraitEquipmentVerdict::Unmeasured`] would erase a match already established on an earlier
+/// tick -- turning the very teardown the detector is waiting for into a reason to forget what it
+/// had seen.
+const fn equipment_verdict_from_code(code: usize) -> PortraitEquipmentVerdict {
+    match code {
+        1 => PortraitEquipmentVerdict::Matches,
+        2 => PortraitEquipmentVerdict::Differs,
+        _ => PortraitEquipmentVerdict::Unmeasured,
     }
 }

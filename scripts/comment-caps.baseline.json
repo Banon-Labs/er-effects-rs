@@ -31,7 +31,6 @@
     "crates/er-quickload/src/telemetry/runtime_oracles/write_telemetry.rs": 18,
     "crates/er-quit-menu-core/src/rows.rs": 1,
     "crates/er-save-suppress/src/lib.rs": 1,
-    "crates/er-telemetry-core/src/counters.rs": 3,
     "crates/er-telemetry-core/src/lib.rs": 1,
     "crates/er-title-flow/src/constants_autoload_state.rs": 6,
     "crates/er-title-flow/src/constants_own_load_pump.rs": 1,

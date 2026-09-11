@@ -178,6 +178,192 @@ pub const fn portrait_equipment_verdict(record: u64, renderer: u64) -> PortraitE
     }
 }
 
+/// What was observed of the model object across a rebuild window.
+///
+/// # Why the renderer's own `ChrAsm` cannot answer this
+///
+/// [`portrait_equipment_verdict`] compares the gear the renderer was told to wear against the gear
+/// the record carries. Both can be correct while the picture on screen is the previous one, because
+/// setting a renderer's `ChrAsm` is a state write and the portrait is a captured render: the model
+/// has to be destroyed, rebuilt from the new rows and rasterized before a pixel moves. Run
+/// `br-20260911-002901-a7e0` is that exact case -- record and renderer stage agreed on the imported
+/// loadout and the player still saw the old armour -- so an oracle that stops at the input reports
+/// success over a screen that did not change.
+///
+/// These fields are the model object, not its input. `model_before`/`model_after` are the
+/// `CSChrAsmModelIns` pointer; `saw_model_absent` is whether it was ever read as null while the
+/// window was open, which is what a teardown looks like and what makes the detector survive an
+/// allocator that hands the same address straight back; `parts_*` fingerprint the part-node array
+/// the model submit actually walks.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RebuildObservation {
+    /// The model instance pointer before the rebuild was asked for.
+    pub model_before: usize,
+    /// The model instance pointer at the last sample of the window.
+    pub model_after: usize,
+    /// The model instance was read as null at least once while the window was open.
+    pub saw_model_absent: bool,
+    /// Fingerprint of the part-node array before the rebuild was asked for (0 = not read).
+    pub parts_before: u64,
+    /// Fingerprint of the part-node array at the last sample (0 = not read).
+    pub parts_after: u64,
+}
+
+/// Whether the model object was genuinely torn down and rebuilt, and whether it came back
+/// different.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PortraitRebuildVerdict {
+    /// No model was readable on either side, so nothing can be said.
+    NotMeasured,
+    /// The model went away and came back with a different set of parts. This is the only state in
+    /// which the rasterized portrait can have changed.
+    Rebuilt,
+    /// The model went away and came back assembling the same parts -- so it was rebuilt, and it
+    /// rebuilt the previous outfit. A resource request that resolved the old rows looks like this.
+    RebuiltSameParts,
+    /// The model object never went away and never changed. Its input was updated and nothing was
+    /// re-rendered: the picture on screen is stale. This is the state run
+    /// `br-20260911-002901-a7e0` was actually in while the input oracle read as a pass.
+    NeverRebuilt,
+}
+
+impl PortraitRebuildVerdict {
+    /// Short stable tag for a log line.
+    #[must_use]
+    pub const fn tag(self) -> &'static str {
+        match self {
+            Self::NotMeasured => "not-measured",
+            Self::Rebuilt => "rebuilt",
+            Self::RebuiltSameParts => "rebuilt-same-parts",
+            Self::NeverRebuilt => "never-rebuilt",
+        }
+    }
+
+    /// Did the model object actually get torn down and rebuilt, whatever it came back wearing?
+    #[must_use]
+    pub const fn model_was_rebuilt(self) -> bool {
+        matches!(self, Self::Rebuilt | Self::RebuiltSameParts)
+    }
+
+    /// The value the telemetry field carries: 0 not measured, 1 rebuilt with different parts,
+    /// 2 rebuilt with the same parts, 3 never rebuilt.
+    #[must_use]
+    pub const fn code(self) -> usize {
+        match self {
+            Self::NotMeasured => 0,
+            Self::Rebuilt => 1,
+            Self::RebuiltSameParts => 2,
+            Self::NeverRebuilt => 3,
+        }
+    }
+}
+
+/// Read a rebuild window's observation.
+///
+/// A teardown is recognised by the model instance having been absent at some point, or by the
+/// pointer changing value. The absence term is the load-bearing one: a heap allocator is entitled
+/// to hand the same address back for the replacement, and on that entirely ordinary outcome a
+/// pointer comparison alone would report no rebuild.
+#[must_use]
+pub const fn portrait_rebuild_verdict(observed: RebuildObservation) -> PortraitRebuildVerdict {
+    if observed.model_before == 0 && observed.model_after == 0 {
+        return PortraitRebuildVerdict::NotMeasured;
+    }
+    let rebuilt = observed.saw_model_absent
+        || (observed.model_before != 0
+            && observed.model_after != 0
+            && observed.model_before != observed.model_after);
+    if !rebuilt {
+        return PortraitRebuildVerdict::NeverRebuilt;
+    }
+    if observed.parts_before != 0
+        && observed.parts_after != 0
+        && observed.parts_before == observed.parts_after
+    {
+        return PortraitRebuildVerdict::RebuiltSameParts;
+    }
+    PortraitRebuildVerdict::Rebuilt
+}
+
+/// The headline field a run is read through: did the portrait actually re-render with the imported
+/// gear?
+///
+/// It is a conjunction on purpose. The previous headline was the input comparison alone, and that
+/// is precisely what reported a pass over an unchanged screen, so this one cannot reach
+/// [`Self::Proven`] without the model object having been rebuilt as well.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PortraitRenderVerdict {
+    /// The window has not produced a reading yet.
+    Unproven,
+    /// The renderer was given the record's gear and the model was torn down and rebuilt with a
+    /// different set of parts.
+    Proven,
+    /// The renderer was given the right gear and the model was never rebuilt -- the input took and
+    /// the image did not.
+    InputOnlyImageStale,
+    /// The model was rebuilt and came back wearing the same parts.
+    RebuiltUnchanged,
+    /// The renderer was not even given the right gear.
+    InputWrong,
+}
+
+impl PortraitRenderVerdict {
+    /// The value the telemetry field carries. 0 is reserved for "no reading", so a counter that was
+    /// never written cannot be mistaken for a proof.
+    #[must_use]
+    pub const fn code(self) -> usize {
+        match self {
+            Self::Unproven => 0,
+            Self::Proven => 1,
+            Self::InputOnlyImageStale => 2,
+            Self::RebuiltUnchanged => 3,
+            Self::InputWrong => 4,
+        }
+    }
+
+    /// Short stable tag for a log line.
+    #[must_use]
+    pub const fn tag(self) -> &'static str {
+        match self {
+            Self::Unproven => "unproven",
+            Self::Proven => "proven",
+            Self::InputOnlyImageStale => "input-only-image-stale",
+            Self::RebuiltUnchanged => "rebuilt-unchanged",
+            Self::InputWrong => "input-wrong",
+        }
+    }
+}
+
+/// Fold the input comparison and the model-object observation into the one field a run is judged
+/// on.
+#[must_use]
+pub const fn portrait_render_verdict(
+    equipment: PortraitEquipmentVerdict,
+    rebuild: PortraitRebuildVerdict,
+) -> PortraitRenderVerdict {
+    match equipment {
+        PortraitEquipmentVerdict::Unmeasured => PortraitRenderVerdict::Unproven,
+        PortraitEquipmentVerdict::Differs => PortraitRenderVerdict::InputWrong,
+        PortraitEquipmentVerdict::Matches => match rebuild {
+            PortraitRebuildVerdict::NotMeasured => PortraitRenderVerdict::Unproven,
+            PortraitRebuildVerdict::NeverRebuilt => PortraitRenderVerdict::InputOnlyImageStale,
+            PortraitRebuildVerdict::RebuiltSameParts => PortraitRenderVerdict::RebuiltUnchanged,
+            PortraitRebuildVerdict::Rebuilt => PortraitRenderVerdict::Proven,
+        },
+    }
+}
+
+/// Fingerprint the model's part-node array. Null slots are mixed like any other value, so a piece
+/// of armour appearing or disappearing moves the number.
+#[must_use]
+pub fn parts_fingerprint(nodes: &[usize]) -> u64 {
+    let mut hash = FNV1A64_OFFSET_BASIS;
+    for node in nodes {
+        hash = fnv1a64_mix(hash, *node as u64);
+    }
+    hash
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,6 +539,176 @@ mod tests {
         );
         assert_eq!(PortraitEquipmentVerdict::Matches.code(), 1);
         assert_eq!(PortraitEquipmentVerdict::Differs.code(), 2);
+    }
+
+    /// The regression this whole verdict exists for, as a test.
+    ///
+    /// Run `br-20260911-002901-a7e0`: the record synced, the renderer's stage-0 `ChrAsm` carried
+    /// the imported ids, the kick was accepted, and the player saw the old armour. The model object
+    /// never went away, so nothing was re-rasterized. The headline field must say so rather than
+    /// report the input match as a pass.
+    #[test]
+    fn an_updated_input_over_an_untouched_model_is_not_a_pass() {
+        let observed = RebuildObservation {
+            model_before: 0x2000_0000,
+            model_after: 0x2000_0000,
+            saw_model_absent: false,
+            parts_before: 0xaaaa,
+            parts_after: 0xaaaa,
+        };
+        assert_eq!(
+            portrait_rebuild_verdict(observed),
+            PortraitRebuildVerdict::NeverRebuilt
+        );
+        assert_eq!(
+            portrait_render_verdict(
+                PortraitEquipmentVerdict::Matches,
+                portrait_rebuild_verdict(observed)
+            ),
+            PortraitRenderVerdict::InputOnlyImageStale,
+            "the input matching is exactly what the old oracle called success"
+        );
+    }
+
+    /// The state the fix is trying to reach: the model went away and came back assembling a
+    /// different set of parts.
+    #[test]
+    fn a_torn_down_and_differently_rebuilt_model_is_the_only_proof() {
+        let observed = RebuildObservation {
+            model_before: 0x2000_0000,
+            model_after: 0x3000_0000,
+            saw_model_absent: true,
+            parts_before: 0xaaaa,
+            parts_after: 0xbbbb,
+        };
+        assert_eq!(
+            portrait_rebuild_verdict(observed),
+            PortraitRebuildVerdict::Rebuilt
+        );
+        assert_eq!(
+            portrait_render_verdict(
+                PortraitEquipmentVerdict::Matches,
+                portrait_rebuild_verdict(observed)
+            ),
+            PortraitRenderVerdict::Proven
+        );
+    }
+
+    /// A heap allocator is entitled to hand the replacement the address the old model just freed.
+    /// Without the absence term, that entirely ordinary outcome would be reported as no rebuild --
+    /// a false negative that would send the next reader hunting a defect that is not there.
+    #[test]
+    fn an_address_reused_by_the_allocator_is_still_a_rebuild() {
+        let observed = RebuildObservation {
+            model_before: 0x2000_0000,
+            model_after: 0x2000_0000,
+            saw_model_absent: true,
+            parts_before: 0xaaaa,
+            parts_after: 0xbbbb,
+        };
+        assert_eq!(
+            portrait_rebuild_verdict(observed),
+            PortraitRebuildVerdict::Rebuilt
+        );
+    }
+
+    /// A rebuild that resolved the previous rows is its own diagnosis, and it is not a pass. It
+    /// says the teardown worked and the resource request asked for the old armour, which is a
+    /// different defect from the model never being rebuilt at all.
+    #[test]
+    fn a_rebuild_that_came_back_identical_is_reported_apart() {
+        let observed = RebuildObservation {
+            model_before: 0x2000_0000,
+            model_after: 0x3000_0000,
+            saw_model_absent: true,
+            parts_before: 0xaaaa,
+            parts_after: 0xaaaa,
+        };
+        assert_eq!(
+            portrait_rebuild_verdict(observed),
+            PortraitRebuildVerdict::RebuiltSameParts
+        );
+        assert_eq!(
+            portrait_render_verdict(
+                PortraitEquipmentVerdict::Matches,
+                portrait_rebuild_verdict(observed)
+            ),
+            PortraitRenderVerdict::RebuiltUnchanged
+        );
+        assert!(PortraitRebuildVerdict::RebuiltSameParts.model_was_rebuilt());
+    }
+
+    /// Nothing read on either side is not a rebuild and not a failure -- it is no measurement, and
+    /// the headline has to stay unproven rather than inventing either verdict.
+    #[test]
+    fn an_unreadable_model_measures_nothing() {
+        assert_eq!(
+            portrait_rebuild_verdict(RebuildObservation::default()),
+            PortraitRebuildVerdict::NotMeasured
+        );
+        assert_eq!(
+            portrait_render_verdict(
+                PortraitEquipmentVerdict::Matches,
+                PortraitRebuildVerdict::NotMeasured
+            ),
+            PortraitRenderVerdict::Unproven
+        );
+        assert_eq!(PortraitRenderVerdict::Unproven.code(), 0);
+    }
+
+    /// A wrong input outranks whatever the model did: there is no point reporting a rebuild as a
+    /// pass when the gear fed into it was never right.
+    #[test]
+    fn a_wrong_input_is_reported_as_such_whatever_the_model_did() {
+        for rebuild in [
+            PortraitRebuildVerdict::Rebuilt,
+            PortraitRebuildVerdict::NeverRebuilt,
+            PortraitRebuildVerdict::NotMeasured,
+        ] {
+            assert_eq!(
+                portrait_render_verdict(PortraitEquipmentVerdict::Differs, rebuild),
+                PortraitRenderVerdict::InputWrong
+            );
+        }
+    }
+
+    /// Only one of the five headline states may read as a proof, and none of them may collide.
+    #[test]
+    fn exactly_one_render_verdict_is_a_pass_and_the_codes_are_distinct() {
+        let all = [
+            PortraitRenderVerdict::Unproven,
+            PortraitRenderVerdict::Proven,
+            PortraitRenderVerdict::InputOnlyImageStale,
+            PortraitRenderVerdict::RebuiltUnchanged,
+            PortraitRenderVerdict::InputWrong,
+        ];
+        let passes = all
+            .iter()
+            .filter(|verdict| **verdict == PortraitRenderVerdict::Proven)
+            .count();
+        assert_eq!(passes, 1);
+        for (at, verdict) in all.iter().enumerate() {
+            for other in &all[at + 1..] {
+                assert_ne!(verdict.code(), other.code());
+                assert_ne!(verdict.tag(), other.tag());
+            }
+        }
+    }
+
+    /// A piece of armour appearing or disappearing changes the part array, so the fingerprint has
+    /// to move on a null slot becoming populated -- otherwise a character who put a helmet on would
+    /// score as rebuilt-unchanged.
+    #[test]
+    fn a_populated_slot_moves_the_parts_fingerprint() {
+        let bare = [0usize, 0, 0x1000, 0];
+        let mut helmeted = bare;
+        helmeted[0] = 0x2000;
+        assert_ne!(parts_fingerprint(&bare), parts_fingerprint(&helmeted));
+        assert_ne!(
+            parts_fingerprint(&bare),
+            0,
+            "an empty model is not an unread one"
+        );
     }
 
     /// The three codes are distinct, because the telemetry field is a number and a reader has only

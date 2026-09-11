@@ -975,6 +975,36 @@ pub static BUILD_URL_PORTRAIT_KICK_REFUSALS: AtomicUsize = AtomicUsize::new(0);
 /// asynchronous (measured ~94ms, i.e. a handful of frames), so the verdict cannot be taken on the
 /// frame the kick fires; the window is what keeps that from becoming an open-ended per-frame read.
 pub static BUILD_URL_PORTRAIT_VERIFY_TICKS: AtomicUsize = AtomicUsize::new(0);
+// ---- and whether the model was actually rebuilt, which the input comparison cannot see ---------
+//
+// Run `br-20260911-002901-a7e0` is why these exist. `_equip_verdict` read 1 -- the renderer's live
+// stage-0 `ChrAsm` carried the imported ids -- and the player still saw the previous armour. A
+// state write is not a draw: the portrait is a captured render, so the model has to be destroyed,
+// rebuilt from the new rows and rasterized before a pixel moves. These observe the model object
+// instead of its input, so the fields below can report the failure the input comparison scored as
+// a pass.
+/// The `CSChrAsmModelIns` (`renderer+0x778`) before the rebuild was asked for.
+pub static BUILD_URL_PORTRAIT_MODEL_INS_BEFORE: AtomicUsize = AtomicUsize::new(0);
+/// The same pointer at the last sample of the verify window.
+pub static BUILD_URL_PORTRAIT_MODEL_INS_AFTER: AtomicUsize = AtomicUsize::new(0);
+/// Set once the model instance has been read as null while the window was open -- what a teardown
+/// looks like. This is the term that survives an allocator handing the replacement the address the
+/// old model just freed, on which a pointer comparison alone would report no rebuild.
+pub static BUILD_URL_PORTRAIT_MODEL_ABSENT_SEEN: AtomicUsize = AtomicUsize::new(0);
+/// FNV-1a over the model's part-node array (`model_ins+0x28..+0x100`, the 27 slots the model submit
+/// `FUN_1409e9ac0` walks and draws) before the rebuild was asked for.
+pub static BUILD_URL_PORTRAIT_PARTS_BEFORE: AtomicU64 = AtomicU64::new(0);
+/// The same fingerprint at the last sample. Different from `_BEFORE` means the model came back
+/// wearing something else, which is the closest thing in RAM to "the picture changed".
+pub static BUILD_URL_PORTRAIT_PARTS_AFTER: AtomicU64 = AtomicU64::new(0);
+/// `PortraitRebuildVerdict`: 0 not measured, 1 rebuilt with different parts, 2 rebuilt with the
+/// same parts, 3 never rebuilt (the input took and the image did not).
+pub static BUILD_URL_PORTRAIT_REBUILD_VERDICT: AtomicUsize = AtomicUsize::new(0);
+/// The headline field a run is judged on. `PortraitRenderVerdict`: 0 unproven, 1 proven (the input
+/// matched and the model was torn down and rebuilt differently), 2 the input took but the image is
+/// stale, 3 rebuilt unchanged, 4 the input was wrong. Only 1 is a pass, and reaching it requires
+/// the model-object evidence that `_equip_verdict` alone cannot supply.
+pub static BUILD_URL_PORTRAIT_RENDER_VERDICT: AtomicUsize = AtomicUsize::new(0);
 // ---- the Generate Build Link row: the inverse of everything above -----------------------------
 // That row takes a link and rewrites the character; this one takes the character and writes a link.
 // It touches no game state at all, so it has no "applied" counter -- what it has instead is a
@@ -1270,7 +1300,7 @@ pub static SYSTEM_QUIT_CONTINUE_CONFIRM_NON_SWITCH_COUNT: AtomicUsize = AtomicUs
 /// Forwards that arrived while the previous world was still up -- a state we never drive. Logged
 /// loudly since forever but counted by nothing, so it was invisible to every load-count audit.
 pub static SYSTEM_QUIT_CONTINUE_CONFIRM_WORLD_UP_COUNT: AtomicUsize = AtomicUsize::new(0);
-/// Switch-machine forwards whose native requested-slot proof did NOT fire. Carries the `FORWARD #n`
+/// Switch-machine forwards whose native requested-slot proof did not fire. Carries the `FORWARD #n`
 /// log label that used to be taken from the allow counter.
 pub static SYSTEM_QUIT_CONTINUE_CONFIRM_UNPROVEN_FORWARD_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Load-count invariant failures, as the [`crate::load_count::LoadCountMismatch`] bit set. Nonzero
@@ -2210,7 +2240,7 @@ pub static TITLE_OPEN_MENU_PASSTHROUGH_COUNT: AtomicUsize = AtomicUsize::new(0);
 ///
 /// **This is the decisive one.** If a late pick releases the hold and this stays 0, the native
 /// title never re-issued `open_menu` and its rows can never be rebuilt with the save present --
-/// the pick must then TRIGGER the open rather than wait for a retry. Nonzero says the title does
+/// the pick must then trigger the open rather than wait for a retry. Nonzero says the title does
 /// retry on its own and the drop-and-retry model is sound.
 pub static TITLE_OPEN_MENU_PASSTHROUGH_AFTER_SUPPRESS_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Boot default-save check vs. the container the runtime opens: 0 = not decided yet,
@@ -2266,7 +2296,7 @@ pub static SAVE_PICKER_LIST_BUILDER_RESTAGE_COUNT: AtomicUsize = AtomicUsize::ne
 /// session where no picker ever opens. Every other `SAVE_PICKER_OS_*` counter is only meaningful
 /// once this reads 1, and a report can state the mode without the reporter knowing the config.
 pub static SAVE_PICKER_SURFACE: AtomicUsize = AtomicUsize::new(0);
-/// 1 while an OS common file dialog is up and BLOCKING the thread that owns the menu pump.
+/// 1 while an OS common file dialog is up and blocking the thread that owns the menu pump.
 ///
 /// One word of state doing triple duty: the re-entrancy claim (taken by compare-exchange, so only
 /// the first caller proceeds and a message comdlg32 dispatches back into our own row-action detour
