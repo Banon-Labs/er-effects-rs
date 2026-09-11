@@ -469,7 +469,7 @@ pub unsafe fn system_quit_route_button_action_or_forward(
             // the native first row, and its own thunk still holds the game's action, so forwarding
             // leaves the row exactly as vanilla built it -- label and behaviour together. Replacing
             // it with nothing is what a standalone shell used to do: measured 2026-09-11 on an
-            // `er_quit_load_character.dll`-only profile, where the tab's first row read "Quit Game"
+            // product-less profile arming this row alone, where the tab's first row read "Quit Game"
             // and did nothing at all, because this arm suppressed the native action unconditionally
             // and then had no flow to run in its place.
             //
