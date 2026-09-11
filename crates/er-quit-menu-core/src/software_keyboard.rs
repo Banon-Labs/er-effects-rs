@@ -301,6 +301,17 @@ static BUILD_URL_EDITOR_OUTCOME: OnceLock<Mutex<Option<PathEditorOutcome>>> = On
 /// own job had gone quiet, and cancel it.
 static BUILD_URL_EDITOR_WINDOW: AtomicUsize = AtomicUsize::new(0);
 
+/// Which keyboard job was latched when [`BUILD_URL_EDITOR_WINDOW`] adopted its window.
+///
+/// The pairing is the point. Without it the close path took whatever job the slot held, which is
+/// not necessarily the job the closing window belonged to -- and in run `br-20260911-151334-56a8`
+/// it was not: at `+106723ms` a job was submitted and, in the same millisecond, reported closed and
+/// cancelled, before its window had run a single frame. What closed was the previous field's
+/// window, going terminal one frame late; the job it cancelled was the one just submitted. The
+/// second occurrence is starker still -- `window=0x0 closed with job=0x1c5a4cb80` -- a null window
+/// cancelling a field the player had only just opened.
+static BUILD_URL_EDITOR_WINDOW_JOB: AtomicUsize = AtomicUsize::new(0);
+
 /// Note the link field's 02_990 MenuWindow state. `true` while it is a live transform target -- the
 /// caller may position it; `false` once the window is terminal and its SceneObjProxy teardown has
 /// begun, after which writing a transform through that proxy is a use-after-free.
@@ -311,6 +322,12 @@ pub fn build_url_note_editor_window_state(window: usize, state: i32) -> bool {
             Ordering::SeqCst,
         );
         if BUILD_URL_EDITOR_WINDOW.swap(window, Ordering::SeqCst) == 0 {
+            // Pair this window with the job that is latched right now, so its close can only ever
+            // release that job and never a later one.
+            BUILD_URL_EDITOR_WINDOW_JOB.store(
+                keyboard_active_job_slot(KeyboardPurpose::BuildUrl).load(Ordering::SeqCst),
+                Ordering::SeqCst,
+            );
             // A fresh field. The window pointer is recycled across opens, so this 0 -> window
             // transition is the only per-open signal there is.
             //
@@ -323,8 +340,20 @@ pub fn build_url_note_editor_window_state(window: usize, state: i32) -> bool {
         }
         return true;
     }
-    if BUILD_URL_EDITOR_WINDOW.load(Ordering::SeqCst) == window {
+    if window != 0 && BUILD_URL_EDITOR_WINDOW.load(Ordering::SeqCst) == window {
         BUILD_URL_EDITOR_WINDOW.store(0, Ordering::SeqCst);
+        let paired = BUILD_URL_EDITOR_WINDOW_JOB.swap(0, Ordering::SeqCst);
+        let latched = keyboard_active_job_slot(KeyboardPurpose::BuildUrl).load(Ordering::SeqCst);
+        if paired != 0 && latched != 0 && paired != latched {
+            // A newer field is already up. This close belongs to the previous one, whose job is
+            // gone, so there is nothing here to release -- and releasing the latched job would
+            // cancel a field the player has only just opened.
+            append_autoload_debug(format_args!(
+                "system-quit-build-url: window=0x{window:x} closed carrying job=0x{paired:x}, but \
+                 job=0x{latched:x} is latched now -- a newer field; leaving it alone"
+            ));
+            return false;
+        }
         // The window going terminal is the only reliable "THE FIELD CLOSED" signal we get.
         //
         // The back action was supposed to arrive at the `0x81d3d0` result gate, which would record
