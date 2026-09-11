@@ -1,14 +1,65 @@
 # Shipping "Load Build from URL" + "Generate Build Link" as a standalone DLL
 
-Status: plan. Nothing here is implemented. Every number below was measured on
-`feat/ersc-seam-owner-hunt` on 2026-09-10 and is reproducible with the command beside it.
+Status: **Phase 0 done; Phase 1 started, not finished; Phases 2-6 not started.** No shell arms
+anything yet, so an `er_quit_menu.dll`-only profile still shows no build rows. Every number below
+was measured on `feat/ersc-seam-owner-hunt`, the dated ones on 2026-09-10 and the re-measured ones
+on 2026-09-11, each reproducible with the command beside it.
+
+## Read this before the rest of the document
+
+Two things below are now wrong, and one whole blocker is missing. Both corrections were measured on
+this branch, not argued.
+
+**The five-argument problem is solved.** A sibling branch
+(`refactor/build-rows-standalone-dll`, bd `er-effects-rs-ehvj`) concluded **No** on this plan, and
+its first and strongest reason was that `system_quit_duplicate_add_cancel_button_hook` takes five
+arguments while `er_hook::UnionFn` takes four, so the row cloner could never leave a bare
+`MhHook::new` and could never share its prologue with a second DLL. That was true when it was
+written and is no longer: `er_hook::UnionFn5` / `register_union_hook5` / `union_dispatch5` landed
+the same evening (`crates/er-hook/src/lib.rs:131`, and the commit says so in its subject -- "a
+five-argument union, so the Quit row cloner can share its prologue"), and the cloner is **already
+registered on it** (`experiments/startup_hooks/diagnostics/layout_global_hooks.rs`, which now reads
+"The union, not a bare `MhHook`"). `scripts/check-union-hook-abi.py` gates the arity. That sibling
+branch was never merged, so the repository currently holds two documents that disagree; this
+paragraph is the reconciliation, and the sibling's remaining findings are folded in below.
+
+**Its other three findings survive, but two of them are answered by Phase 5 rather than by code.**
+The Quit grid is one six-cell derivation that fail-closes on a second deriver
+(`er-gfx/src/options_02_040.rs:174`, asserted by `er-gfx/tests/options_02_040.rs:64`), and
+`QUIT_ROW_TABLE_ROWS` is one six-row array whose resolver gates the irreversible `ExitProcess(0)`
+(`er-quit-menu-core/src/rows.rs:127`, `row_identity.rs:292`). Both only bite when the product and
+the shell load together, which Phase 5 exists to refuse. The conflict table already predicts the
+answer in prose: the `[compatible]` entry for `er-quit-menu` says that "if the harness ever arms
+that row, this entry becomes a `duplicate-owner` conflict with `er-build-import` and with
+`er-quickload`". Phase 5 is writing that down, not deciding it.
+
+**The fourth finding is live, and it is the one that stops Phase 2.** Re-measured on this branch on
+2026-09-11: `build_url_editor.rs` still calls ten symbols defined in files this plan does not move
+-- eight in `save_picker_path_editor.rs` (`submit_build_url_keyboard`, `build_url_menu_pump_tick`,
+`BuildUrlKeyboardOutcome`, ...) and two in `profile_05_010_editor_runtime.rs`
+(`place_text_input_02_990_caret_at_end` at `:1289`, `set_text_input_02_990_text` at `:1197`), which
+the file table below marks "no -- ProfileSelect browse surface". And `save_picker_path_editor.rs`
+opens with an `include!(concat!(env!("OUT_DIR"), ...))` of a generated prologue table (`:19`), while
+`er-quit-menu-core` has no `build.rs` at all (bd `er-effects-rs-pq31`). Coupling **inside** the
+`quit_menu/` tree, not the `use crate::*` glob, is what binds this slice.
+
+**The missing blocker: nothing in the phase list owns the GFx swap.** A shell-only profile shows no
+rows at all unless the shell itself derives and swaps two movies -- the `02_040` quit6 grid the rows
+are cells of, and the `02_990` link field. Both are served from one URL-keyed chain in
+`experiments/startup_hooks/loading_cover/profile_table_gfx_files.rs` (the `02_040` arm at `:930`,
+the build-url `02_990` arm at `:936`), reached from the Scaleform file-open prologue
+`TITLE_SCALEFORM_FILE_OPEN_RVA` (0x11ced80) -- already a two-way `[[shared]]` with
+`er-armament-icons`, and the pair that went silently inert for a day on 2026-08-23. That file is in
+`loading_cover/`, not `quit_menu/`, and also serves the loading cover and the profile table, so it
+has to be carved rather than moved. Add it as a phase before Phase 4 or the shell arms rows onto a
+grid that has no cells for them.
 
 ## The verdict in one line
 
-It is achievable without inventing any new mechanism, because the two things that usually kill a
-second DLL on this target -- hook collision and GFx-swap collision -- are already solved and already
-gated. What is left is a code move: the row machinery the two rows stand on is 16,478 lines inside
-`er-quickload`, and it has to reach a crate a shell can arm.
+Achievable, and now cheaper than when this was written because the five-argument union exists. What
+is left is a code move plus one carve-out the phase list did not account for: the row machinery is
+16,741 lines inside `er-quickload`, and the GFx swap that makes the rows visible is in a second
+subtree.
 
 ## What is already done (do not redo these)
 
@@ -116,8 +167,20 @@ and the 22 consts move as data -- most already belong in `er-game-base::rva`
 which is the concrete argument for shipping `RowSet::BUILD_ROWS_ONLY` first and the other three
 rows later.
 
-What Phase 0 still owes: the per-symbol verdict on those 32 -- host field, move-with-the-code, or
-delete -- because one function pointer per symbol is an upper bound, not a design.
+**The estimate above is an upper bound and it overcounts by the whole amount: the answer is zero
+new host fields, not 32.** One function pointer per symbol was never a design, and the sibling
+branch's per-symbol pass found eleven of the intersection to be name collisions rather than
+reaches, twenty-three belonging to `system_quit_hooks.rs` (which serves the title Continue-confirm
+and the ProfileLoad route -- no build row touches it, so it should not have been in the slice), and
+six reached from inside two functions that are *already* `QuitMenuHost` fields. Re-measured
+directly on this branch on 2026-09-11, `system_quit_dialog_handlers.rs` reaches 13 real root-crate
+symbols and `system_quit_row_identity.rs` reaches none; the ones that matter
+(`append_autoload_debug`, `release_input_block_now`, `save_picker_seamless_mode_after_settle`,
+`normalize_save_bytes_to_active_steam_id`) are all declared host fields today.
+
+What is left of those 13 is data or a shared-crate move, never a function pointer. Three were
+singled out as belonging in `er-game-base` beside `game_module_base()`, having no product state at
+all: `callstack_contains_game_rva`, `trace_first_game_caller_rva` and `seamless_coop_loaded`.
 
 Proof: the per-symbol table exists as this doc's appendix. No build change.
 
@@ -130,7 +193,32 @@ shell yet.
 
 Every detour that moves must become `er_hook::register_union_hook` -- the crate's own `Cargo.toml`
 already mandates it, and `check-shared-hook-rvas.py` will fail the moment two shells claim one
-address without a table row.
+address without a table row. The cloner's own detour is **already** converted: it registers through
+`register_union_hook5`, so the five-argument prologue no longer holds MinHook's single slot alone.
+
+**Started 2026-09-11. Done so far: the two stack readers now live in `er-game-base`.**
+`callstack_contains_game_rva` and `trace_first_game_caller_rva` moved out of
+`er-quickload/src/crashlog/module_resolution.rs` into a new `er-game-base/src/stack.rs`, and
+`module_resolution.rs` re-exports both under their original names so all ~35 `crate::crashlog::`
+call sites read unchanged. This is a prerequisite rather than a tidy-up: `callstack_contains_game_rva`
+is how the cloner tells its two native `AddCancelButton` call sites apart, so it has to be reachable
+from whatever crate ends up owning the cloner, and it cannot become a host field without making the
+seam bigger for a function that has no product state to seam.
+
+The move also retires a seam entry. `er-loading-portrait-core` carried a
+`LoadingCoverHost::trace_first_game_caller_rva` function-pointer field whose only job was to reach
+back into the product for the same pure function; the field, its neutral default and the product's
+wiring line are all gone, and the crate-internal wrapper calls `er_game_base::stack` directly. One
+fewer field for every shell that installs that host to get right.
+
+Still to do in this phase: `seamless_coop_loaded` (the third `er-game-base` candidate --
+`GetModuleHandleA("ersc.dll")` plus a sticky latch, read inside the same `cloned_rows` table that
+carries both build rows), and the file move itself. Note that
+`system_quit_dialog_handlers.rs` is **not** a single-purpose file: of its 1,492 lines the cloner and
+the label helpers are build-row machinery, but roughly half is the Save Game flow
+(`system_quit_save_game_*`, ten functions) and the ProfileLoad dialog opener, which belong to the
+other rows. Extract the cloner rather than moving the file, or Phase 1 silently becomes the
+whole-quit-menu scope this plan costed at 69 seam symbols.
 
 Proof: the scoped gate list above, with `check-shared-hook-rvas.py` mandatory because detours move
 in this phase; the product DLL still loads and the three existing rows still work in the combined
@@ -203,9 +291,12 @@ counter -- not a screenshot.
    `default-features = false`. Cargo unifies features across a build graph, so the isolation is real
    only in a build where the product is absent. A shell-only build must be verified as its own
    cargo invocation, not as part of the 29-shell link.
-2. **The `use crate::*` glob.** 32 behavioural symbols for the build-rows subset, 69 for the full
-   quit menu. That gap is the price of taking the other three rows along, and it is why the plan
-   ships `BUILD_ROWS_ONLY` first.
+2. **The `use crate::*` glob -- superseded; it was never the blocker.** The 32-symbol estimate for
+   the build-rows subset is an upper bound that overcounts to zero new host fields once the
+   collisions, the wrong-file symbols and the already-seamed bodies come out (see Phase 0). The
+   binding constraint is coupling *inside* the `quit_menu/` tree: ten symbols from `build_url_editor.rs`
+   into two files this plan excludes, and a generated `OUT_DIR` prologue table that
+   `er-quit-menu-core` has no `build.rs` to produce.
 3. **The 02_990 swap.** The link field's derived movie is swapped at the Scaleform file-open
    prologue the product also hooks. That is exactly the pair that went silently inert for a day on
    2026-08-23 (113 hits alone, 0 co-loaded). Route through the union from the first line, never a
@@ -216,9 +307,31 @@ counter -- not a screenshot.
 
 ## Open questions this plan does not answer
 
-The feasibility study running alongside it owns these, and its answers fold into Phase 0:
+The feasibility study answered these (bd `er-effects-rs-ehvj`, and the appendix on
+`refactor/build-rows-standalone-dll`):
 
-- which of the five Quit-menu addresses the two rows actually need, vs. which belong to the other rows;
-- whether row cloning can be armed at all without the product's arm sequencing;
-- the file-by-file verdict on the 16,478 lines;
-- the honest session count.
+- **which addresses the two rows actually need** -- seven, not five, and five of them the product
+  also hooks: the cloner `0x920c90`, both routing entry points (`0x9610d0`, `0x9749f0`), the shared
+  software-keyboard pair (`0x81d3d0`, `0x81d220`), the Scaleform file-open prologue `0x11ced80`
+  (already a two-way `[[shared]]`) and `MenuWindowJob::Run` `0x7ad1c0` (documented as a deterministic
+  sole owner after a second contender broke it once). The cloner was the one the union could not
+  take; `register_union_hook5` now takes it. Note that the shared-hook gate keys declarations on the
+  **crate pair**, not the address, so one row covers every address a pair shares -- "36 shared and
+  all declared" is a weaker statement than it reads as;
+- **whether row cloning can be armed without the product's arm sequencing** -- unanswered in the
+  affirmative, and it is what Phases 3-4 exist to settle;
+- **the file-by-file verdict on the 16,741 lines** -- partially, in the file table above and the
+  sibling appendix;
+- the honest session count -- still open, and larger than this plan's phase list implies, because
+  the GFx carve-out is not in it.
+
+Still genuinely open, and new:
+
+- who owns the `02_040` quit6 grid derivation and the `02_990` link-field derivation in a
+  shell-only profile, given both are served from one URL-keyed chain in `loading_cover/` that also
+  serves the loading cover and the profile table;
+- whether `er-quit-menu-core` gains a `build.rs` (bd `er-effects-rs-pq31`) or the 02_990 editor path
+  is restructured so the generated prologue table is not needed on that side of the seam;
+- bd `er-effects-rs-gx3s`: a 7-DLL closure including `er_quit_menu` wedges before the title screen,
+  reproduced on two branches, both times inside hook installation. `er_quit_menu` arms nothing
+  today, so that has to be understood before Phase 4 arms it.

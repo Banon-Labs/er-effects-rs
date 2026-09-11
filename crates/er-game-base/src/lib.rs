@@ -50,6 +50,11 @@ pub mod reentry;
 /// seven distinct facts, 5.43 MB in one 8m39s run).
 pub mod repeat;
 pub mod rva;
+/// Tier A: the two return-address stack readers, which answer "which native call site am I in"
+/// and "who called me" against the game image. They moved here because one of them had a second
+/// definition reached through a `LoadingCoverHost` function pointer -- a seam entry for a pure
+/// function -- and because the System>Quit row cloner needs the other one outside the product.
+pub mod stack;
 /// Tier A: bounded, wineserver-friendly polling for a game singleton. The unbounded
 /// `loop { yield_now() }` every shell used instead deadlocked a whole boot -- see the module.
 pub mod wait;
