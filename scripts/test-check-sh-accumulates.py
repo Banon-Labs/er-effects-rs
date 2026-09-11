@@ -32,6 +32,14 @@ What it checks
 7. Not run alone, with nothing failing, still exits non-zero;
 8. Non-VACUITY: with the ERR trap deleted from the lifted preamble, case 2 must fail. Without
    this, a preamble that had quietly stopped recording would still pass every case above.
+9. the preamble's own lock, from both sides: a run carrying the re-entrancy marker still executes
+   its steps, and a run without one is still refused while the lock is held.
+
+Every fixture below runs against a lock file of this test's own making, never the machine-wide
+one. It is the same distinction the marker in check.sh draws -- these children are this run's
+steps, not a competing run -- applied at a level that does not depend on who invoked this file.
+Sharing the production lock made all fifteen cases above fail whenever a real
+`bash scripts/check.sh` happened to be running in any worktree on the box.
 """
 from __future__ import annotations
 
@@ -67,19 +75,45 @@ def preamble() -> str:
 
 
 def run_fixture(
-    body: str, head: str | None = None, env: "dict[str, str] | None" = None
+    body: str,
+    head: str | None = None,
+    env: "dict[str, str] | None" = None,
+    lock_dir: "str | None" = None,
 ) -> "tuple[int, str]":
+    """Run one synthetic suite under the real preamble, on a lock file of its own.
+
+    `lock_dir` is the load-bearing argument. The lifted preamble takes
+    `${XDG_RUNTIME_DIR:-/tmp}/er-mods-rs-check-sh.lock` machine-wide, and a run that cannot have
+    it exits 2 having printed nothing at all. A fixture competing for that one file is therefore
+    refused whenever a real `bash scripts/check.sh` is running anywhere on the box -- any
+    worktree, any user session -- and the cases below then go red for a reason that has nothing
+    to do with accumulation.
+
+    Measured 2026-09-11: exactly that, 15 red cases against a live check.sh in
+    `.worktrees/evidence-gate`, while the same commit was green in CI. Green there because CI
+    reaches this gate through `bash scripts/check.sh`, which exports `ER_CHECK_LOCK_HELD=1`
+    before any step runs; the marker is inherited through python into every fixture and the lock
+    is never reached. Run this file on its own -- which is how it is debugged, and what the
+    scoped gate list tells a worktree agent to do -- and that cover is gone.
+
+    Pointing `XDG_RUNTIME_DIR` at a private directory keeps the acquisition path under test and
+    makes it contend with nothing. It also stops the fixtures writing on the production lock:
+    the preamble's `exec 9>` truncates on open, so each refused fixture erased the live holder's
+    pid and the refusal then reported `pid unknown`.
+    """
     with tempfile.TemporaryDirectory() as td:
         path = Path(td) / "fixture.sh"
         path.write_text((head if head is not None else preamble()) + body, encoding="utf-8")
         path.chmod(0o755)
+        fixture_env = dict(os.environ if env is None else env)
+        fixture_env["XDG_RUNTIME_DIR"] = lock_dir if lock_dir is not None else td
         proc = subprocess.run(
             ["bash", str(path)],
             capture_output=True,
             text=True,
             timeout=TIMEOUT_SECONDS,
             cwd=td,
-            env=env,
+            env=fixture_env,
         )
         return proc.returncode, proc.stdout + proc.stderr
 
@@ -105,6 +139,35 @@ def marker_printed(out: str) -> bool:
     return re.search(r"^LAST_STEP_RAN$", out, re.M) is not None
 
 
+def fixtures_blocked() -> "str | None":
+    """Can the lifted preamble reach a step at all on this machine, before anything is asserted?
+
+    Every case below reads the summary the preamble prints from its exit trap. Two refusals sit
+    above that trap and exit 2 before it is installed: the agent-worktree guard, and the
+    machine-wide `flock`. When either fires the fixture prints nothing whatever, and fifteen of
+    the nineteen cases below go red at once -- the four survivors only because what they assert is
+    a non-zero exit, which a refusal also produces. That reads as fifteen broken properties and is
+    really one environmental fact, so name it here rather than leave it to be re-derived from
+    fifteen misleading verdicts.
+
+    The lock half is fixed at its source: `run_fixture` gives each fixture a private lock
+    directory. What remains reachable is the worktree guard, which reads the fixture's own path,
+    so a `TMPDIR` pointing under `.claude/worktrees/agent-*` would trip it. Name it if it ever
+    happens.
+    """
+    rc, out = run_fixture(f"{PASSING}\n{END}")
+    if "== check.sh summary" in out:
+        return None
+    body = "".join(f"    {line}\n" for line in (out.splitlines() or ["(no output at all)"]))
+    return (
+        f"the lifted preamble never reached a step: the fixture exited {rc} without printing a "
+        "summary, so nothing below was asserted.\n"
+        "  The cause is one of the two refusals above the exit trap in scripts/check.sh -- the\n"
+        "  agent-worktree guard, which reads the fixture's own path and so trips on a TMPDIR\n"
+        "  under .claude/worktrees/agent-*, or the flock. Verbatim fixture output:\n" + body
+    )
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -112,6 +175,17 @@ def main() -> int:
         print(f"  {'ok  ' if cond else 'FAIL'}  {why}")
         if not cond:
             failures.append(why)
+
+    blocked = fixtures_blocked()
+    if blocked:
+        print(f"  FAIL  {blocked}")
+        print(
+            "check-sh-accumulates FAILED: the lifted preamble refused before its first step, so "
+            "no property below was measured",
+            file=sys.stderr,
+        )
+        print("[test-check-sh-accumulates] 1 failure(s)")
+        return 1
 
     # 1 + 2: two failures among five steps -- all five run, both are named, exit is non-zero.
     rc, out = run_fixture(
@@ -184,47 +258,59 @@ def main() -> int:
         "watching the trap rather than passing on their own",
     )
 
-    # 9: The lock must not refuse this suite'S own steps. The preamble takes a machine-wide flock
-    # so two runs cannot corrupt each other's verdict -- and this gate re-enters that preamble
-    # thirteen times while the run invoking it holds the lock. Without a re-entrancy marker every
-    # fixture above exits 2 before printing anything, and all thirteen cases fail for a reason
-    # that has nothing to do with accumulation. Measured in CI on 2026-09-02: exactly that.
+    # 9: The lock must not refuse this suite's own steps. The preamble takes a flock so two runs
+    # cannot corrupt each other's verdict -- and this gate re-enters that preamble ten times while
+    # the run invoking it holds the lock. Without a re-entrancy marker every fixture above exits 2
+    # before printing anything, and the cases above fail for a reason that has nothing to do with
+    # accumulation. Measured in CI on 2026-09-02, and again here on 2026-09-11.
     #
-    # The lock is taken here rather than in a helper subprocess, so there is no sleep and no race:
-    # if this process cannot take it, the parent check.sh already holds it, which is the condition
-    # under test either way.
+    # Both halves run against a lock file this test makes and holds itself, never the machine-wide
+    # one. The old shape took the production lock, and so asked a question whose answer depended on
+    # what else was running on the box: with a real check.sh already holding it the acquisition
+    # failed, the test proceeded anyway on the reasoning that the lock was held either way, and the
+    # fifteen cases above -- which never wanted the lock at all -- had already gone red.
     if shutil.which("flock"):
-        lock = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "er-mods-rs-check-sh.lock"
-        fd = os.open(str(lock), os.O_WRONLY | os.O_CREAT, 0o644)
-        try:
+        with tempfile.TemporaryDirectory() as lock_dir:
+            lock = Path(lock_dir) / "er-mods-rs-check-sh.lock"
+            fd = os.open(str(lock), os.O_WRONLY | os.O_CREAT, 0o644)
             try:
+                # A file this process just created in its own temporary directory. Nothing else can
+                # hold it, so there is no branch here: a failure would mean the two cases below
+                # were measuring nothing.
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                ours = True
-            except OSError:
-                ours = False  # our parent check.sh holds it; the lock is held regardless
-            nested = dict(os.environ, ER_CHECK_LOCK_HELD="1")
-            _, out = run_fixture(f"{PASSING}\n{MARKER}\n{END}", env=nested)
-            check(
-                marker_printed(out),
-                "a step of a run that already holds the lock still executes",
-            )
-            # ...and the guard is not thereby neutered: a genuinely separate run, which inherits
-            # no marker, is still refused. Without this half the fix above would pass by turning
-            # the lock off.
-            separate = {
-                k: v
-                for k, v in os.environ.items()
-                if k not in ("ER_CHECK_LOCK_HELD", "ER_CHECK_FORCE")
-            }
-            rc, out = run_fixture(f"{PASSING}\n{MARKER}\n{END}", env=separate)
-            check(
-                rc == 2 and not marker_printed(out),
-                "a second run with no marker is still refused while the lock is held",
-            )
-        finally:
-            if ours:
+                nested = dict(os.environ, ER_CHECK_LOCK_HELD="1")
+                _, out = run_fixture(
+                    f"{PASSING}\n{MARKER}\n{END}", env=nested, lock_dir=lock_dir
+                )
+                check(
+                    marker_printed(out),
+                    "a step of a run that already holds the lock still executes",
+                )
+                # ...and the guard is not thereby neutered: a genuinely separate run, which
+                # inherits no marker, is still refused. Without this half the fix above would pass
+                # by turning the lock off.
+                separate = {
+                    k: v
+                    for k, v in os.environ.items()
+                    if k not in ("ER_CHECK_LOCK_HELD", "ER_CHECK_FORCE")
+                }
+                rc, out = run_fixture(
+                    f"{PASSING}\n{MARKER}\n{END}", env=separate, lock_dir=lock_dir
+                )
+                check(
+                    rc == 2 and not marker_printed(out),
+                    "a second run with no marker is still refused while the lock is held",
+                )
+            finally:
                 fcntl.flock(fd, fcntl.LOCK_UN)
-            os.close(fd)
+                os.close(fd)
+    else:
+        # Not a pass, and not silent either: two properties went unmeasured and the summary line
+        # below would otherwise report the same "0 failure(s)" as a run that checked them.
+        print(
+            "  SKIPPED (NOT A PASS)  flock is absent here, so the lock's re-entrancy marker and "
+            "its refusal of a second run were not exercised; nothing was asserted about either"
+        )
 
     for f in failures:
         print(f"check-sh-accumulates FAILED: {f}", file=sys.stderr)
