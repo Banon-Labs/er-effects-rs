@@ -100,6 +100,9 @@ pub mod save_dest_commit_runtime;
 /// The in-game save-file picker rendered through `05_010_ProfileSelect`.
 #[cfg(windows)]
 pub mod save_picker_menu;
+/// The native `05_010` list's own input and geometry, rebased for a sliding ten-row window.
+#[cfg(windows)]
+pub mod save_picker_native_scroll_input;
 #[cfg(windows)]
 pub mod scaleform_proxy;
 #[cfg(windows)]

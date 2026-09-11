@@ -75,9 +75,11 @@ REQUIRED_EDGES = {
     "profile_editor_runtime_tick": {
         "experiments/startup_hooks/loading_cover/title_resources_stats_text.rs"
     },
-    "save_picker_request_path_editor": {
-        "experiments/startup_hooks/quit_menu/save_picker_menu.rs"
-    },
+    # Left experiments/** entirely on 2026-09-11: the in-game save picker moved to
+    # `er-quit-menu-core`, so both the function and its caller now live outside this scan root.
+    # An empty set is the honest entry, the same way `own_load_switch_reload_fire` spells it --
+    # naming the old path would assert an edge that cannot exist.
+    "save_picker_request_path_editor": set(),
     "save_picker_menu_pump_path_editor": {
         "experiments/startup_hooks/quit_menu/profile_rows_system_quit_menu.rs"
     },
