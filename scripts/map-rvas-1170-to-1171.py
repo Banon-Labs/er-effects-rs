@@ -86,8 +86,49 @@ PDATA_RVA = 0x04867000
 PDATA_SIZE = 0x002B3200
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_OLD = Path(os.environ.get("ER_DEOBF_1170", REPO_ROOT / "eldenring-deobf-1.17.bin"))
-DEFAULT_NEW = Path(os.environ.get("ER_DEOBF_1171", REPO_ROOT / "eldenring-deobf-1.17.1.bin"))
+
+
+def _resolve_image(env_var, filename):
+    """Locate a deobf image: explicit env override, then this checkout, then the main worktree.
+
+    The same resolution `scripts/map-rvas-1162-to-1170.py` uses, and here for the same reason.
+    The images are gitignored multi-hundred-megabyte reverse engineering inputs that live beside
+    the primary checkout, and git never copies a gitignored file into a linked worktree. Without
+    the fallback this script dies from an agent worktree with `eldenring-deobf-1.17.bin is absent
+    ... regenerate it` -- advice that is both expensive and wrong, since the file exists one
+    directory away. Measured 2026-09-10: that message sent an agent looking for a missing image
+    instead of carrying an address, and it reads as "the image is gone" rather than "you are in a
+    worktree".
+    """
+    override = os.environ.get(env_var)
+    if override:
+        return Path(override)
+    local = REPO_ROOT / filename
+    if local.exists():
+        return local
+    # `git rev-parse --git-common-dir` resolves to the primary checkout's `.git` from inside a
+    # linked worktree, and to our own otherwise, so its parent is the main working tree.
+    try:
+        import subprocess
+
+        common = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "rev-parse", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if common.returncode == 0:
+            candidate = (REPO_ROOT / common.stdout.strip()).resolve().parent / filename
+            if candidate.exists():
+                return candidate
+    except Exception:
+        pass
+    return local
+
+
+DEFAULT_OLD = _resolve_image("ER_DEOBF_1170", "eldenring-deobf-1.17.bin")
+DEFAULT_NEW = _resolve_image("ER_DEOBF_1171", "eldenring-deobf-1.17.1.bin")
 
 
 class Unmappable(Exception):
