@@ -29,9 +29,10 @@
 //!
 //! Its own cache key, its own derived bytes, and the save picker's movie untouched:
 //!
-//! * the black backing plate (character 5) and the two `MENU_FL_Arts_waku2` frame placements
-//!   (character 6, depths 2 and 4) are kept and scaled horizontally with the field, so the field
-//!   keeps the game's own text-entry chrome;
+//! * the black backing plate (character 5) is widened with the field, and the two
+//!   `MENU_FL_Arts_waku2` frame placements (character 6, depths 2 and 4) are re-placed so they keep
+//!   the authored gap between the box's edges and the art's, so the field keeps the game's own
+//!   text-entry chrome at the proportions the game draws it in (`vanilla_chrome`);
 //! * the field grows from 400 px to [`FIELD_WIDTH_PX`], measured against the link it has to hold;
 //! * a caption ([`CAPTION`]) is added above the box, centred over it, naming the row that opened
 //!   it;
@@ -52,7 +53,15 @@ use er_game_base::fnv1a::fnv1a64;
 /// -- exactly as the save picker's derivation handles the same pair of inputs.
 pub const CENTERED_LEN: usize = 1222;
 /// FNV-1a-64 of the [`CENTERED_LEN`]-byte derived movie.
-pub const CENTERED_FNV1A64: u64 = 0xacd1_3190_e7fc_24d1;
+pub const CENTERED_FNV1A64: u64 = 0x3d9c_14dd_0843_1971;
+
+/// `GFX_DefineExternalImage2`, the tag that declares an external bitmap's pixel size. The codec
+/// keeps it opaque, so the two fields this module needs are read straight out of the body: its
+/// layout is `characterId`, a reserved `u16`, `bitmapFormat`, `targetWidth`, `targetHeight`, then
+/// the export and file names.
+const GFX_DEFINE_EXTERNAL_IMAGE2: u16 = 1009;
+const EXTERNAL_IMAGE_CHARACTER_ID_OFFSET: usize = 0;
+const EXTERNAL_IMAGE_TARGET_WIDTH_OFFSET: usize = 6;
 
 /// Sprite id of the `TextInput` sprite, and character ids inside it. Vanilla values.
 const TEXT_INPUT_SPRITE_ID: u16 = 8;
@@ -71,6 +80,15 @@ const CAPTION_DEPTH: u16 = 8;
 /// own box (character 7 bounds `-40..7960 x -40..680` twips placed at `tx = -160, ty = 40`) are the
 /// same rectangle to the twip: `-200..7800 x 0..720`. That exact coincidence is what lets one scale
 /// factor move the plate and the field together without them drifting apart.
+///
+/// The frame art is a third rectangle and it is not that one. `MENU_FL_Arts_waku2` is 558x100 px,
+/// placed twice with the same matrix (`sx = 56074/65536`, `tx = -910`), so it spans
+/// `-910..8638.73` twips -- 710 twips wider than the box on the left and 838.73 on the right. That
+/// gap is not decoration around an opaque border: the art's own interior is a translucent near-black
+/// fill (alpha 184 of 255, rgb 14/14/10, flat across the whole middle, with the visible rim 10 to 16
+/// texture px in from its edges). So the black plate is what turns the art's fill opaque, and
+/// wherever the art overhangs the plate its fill lands on the menu background instead and reads
+/// lighter. The vanilla gap is the box's bevel; a widened one is the defect this module fixed.
 const NATIVE_FIELD_WIDTH_PX: i32 = 400;
 const NATIVE_PLATE_LEFT_TWIPS: i32 = -200;
 const NATIVE_PLATE_LEFT_PX: f32 = -10.0;
@@ -228,6 +246,8 @@ fn min_signed_nbits(values: &[i32]) -> u32 {
 
 /// Scale a `MATRIX`'s horizontal terms by `scale`, widening the stored bit widths to fit.
 ///
+/// This is how the plate follows the field, and only the plate: the frame art is placed by
+/// [`fit_matrix_horizontally`] instead, because scaling it here would scale its overhang too.
 /// `has_scale` may be false on entry (the plate is placed with a bare translate), in which case the
 /// scale terms are created from 16.16 unity.
 fn scale_matrix_horizontally(matrix: &mut Matrix, scale: f64) {
@@ -247,6 +267,144 @@ fn scale_matrix_horizontally(matrix: &mut Matrix, scale: f64) {
     matrix.scale_nbits = min_signed_nbits(&[matrix.scale_x, matrix.scale_y]);
     matrix.translate_x = (matrix.translate_x as f64 * scale).round() as i32;
     matrix.translate_nbits = min_signed_nbits(&[matrix.translate_x, matrix.translate_y]);
+}
+
+/// Horizontal span, in the placing sprite's twips, of a character whose own span is `local`.
+fn placed_span(matrix: &Matrix, local: (f64, f64)) -> (f64, f64) {
+    let scale = if matrix.has_scale {
+        f64::from(matrix.scale_x) / f64::from(FIXED_POINT_ONE)
+    } else {
+        1.0
+    };
+    let translate = f64::from(matrix.translate_x);
+    (local.0 * scale + translate, local.1 * scale + translate)
+}
+
+/// Re-place a character so its own `local` span lands exactly on `target`, leaving the vertical
+/// terms alone.
+///
+/// The rounding is anchored on the right edge rather than the left: the right edge is where the
+/// unfilled band opens, so it is the one that has to land on the twip.
+fn fit_matrix_horizontally(matrix: &mut Matrix, local: (f64, f64), target: (f64, f64)) {
+    let base_y = if matrix.has_scale {
+        matrix.scale_y
+    } else {
+        FIXED_POINT_ONE
+    };
+    let scale = (target.1 - target.0) / (local.1 - local.0);
+    matrix.has_scale = true;
+    matrix.scale_x = (scale * f64::from(FIXED_POINT_ONE)).round() as i32;
+    matrix.scale_y = base_y;
+    matrix.scale_nbits = min_signed_nbits(&[matrix.scale_x, matrix.scale_y]);
+    let written = f64::from(matrix.scale_x) / f64::from(FIXED_POINT_ONE);
+    matrix.translate_x = (target.1 - local.1 * written).round() as i32;
+    matrix.translate_nbits = min_signed_nbits(&[matrix.translate_x, matrix.translate_y]);
+}
+
+/// A little-endian `u16` out of an opaque tag body, or `None` when the body is too short.
+fn le_u16(raw: &[u8], at: usize) -> Option<u16> {
+    let bytes = raw.get(at..at + 2)?;
+    Some(u16::from_le_bytes([bytes[0], bytes[1]]))
+}
+
+/// The chrome geometry this derivation measures off the movie before it changes anything.
+struct VanillaChrome {
+    /// The plate shape's own span, in that character's local twips.
+    plate_local: (f64, f64),
+    /// The frame art's span, in the frame character's local twips.
+    frame_local: (f64, f64),
+    /// The plate's vanilla placement inside the `TextInput` sprite.
+    plate_matrix: Matrix,
+    /// The frame's vanilla placement inside the `TextInput` sprite. Both placements carry the same
+    /// matrix, so one of them describes both.
+    frame_matrix: Matrix,
+}
+
+impl VanillaChrome {
+    /// The gap the art leaves outside the box on each side, in `TextInput`-sprite twips.
+    ///
+    /// This is the number the widened field has to keep. Multiplying it by the width scale along
+    /// with everything else is what left a lighter band at the right end of the box: at
+    /// [`FIELD_WIDTH_PX`] the right-hand gap grew from 41.94 px to 67.09 px.
+    fn frame_margins_twips(&self) -> (f64, f64) {
+        let plate = placed_span(&self.plate_matrix, self.plate_local);
+        let frame = placed_span(&self.frame_matrix, self.frame_local);
+        (plate.0 - frame.0, frame.1 - plate.1)
+    }
+}
+
+/// Measure the plate and the frame art off the movie, rather than restating them here.
+///
+/// The frame character is a sprite holding one `PlaceObject3` of a `GFX_DefineExternalImage2`
+/// bitmap, and that tag is what declares the art's width -- so the art's span is read through the
+/// movie's own two levels of indirection instead of being a second copy of `558`.
+fn vanilla_chrome(movie: &Movie) -> Option<VanillaChrome> {
+    let plate_local = movie.tags.iter().find_map(|tag| match tag {
+        Tag::DefineShape {
+            shape_id: PLATE_CHARACTER_ID,
+            shape_bounds,
+            ..
+        } => Some((f64::from(shape_bounds.x_min), f64::from(shape_bounds.x_max))),
+        _ => None,
+    })?;
+
+    let frame_children = movie.tags.iter().find_map(|tag| match tag {
+        Tag::DefineSprite {
+            id: FRAME_CHARACTER_ID,
+            tags,
+            ..
+        } => Some(tags),
+        _ => None,
+    })?;
+    let (image_id, image_matrix) = frame_children.iter().find_map(|child| match child {
+        Tag::PlaceObject3 {
+            character_id: Some(id),
+            matrix,
+            ..
+        } => Some((*id, matrix.clone())),
+        _ => None,
+    })?;
+    let image_width_px = movie.tags.iter().find_map(|tag| match tag {
+        Tag::Unknown {
+            code: GFX_DEFINE_EXTERNAL_IMAGE2,
+            raw,
+            ..
+        } if le_u16(raw, EXTERNAL_IMAGE_CHARACTER_ID_OFFSET) == Some(image_id) => {
+            le_u16(raw, EXTERNAL_IMAGE_TARGET_WIDTH_OFFSET)
+        }
+        _ => None,
+    })?;
+    let image_local = (0.0, f64::from(image_width_px) * f64::from(TWIPS_PER_PIXEL));
+    let frame_local = match &image_matrix {
+        Some(matrix) => placed_span(matrix, image_local),
+        None => image_local,
+    };
+
+    let children = movie.tags.iter().find_map(|tag| match tag {
+        Tag::DefineSprite {
+            id: TEXT_INPUT_SPRITE_ID,
+            tags,
+            ..
+        } => Some(tags),
+        _ => None,
+    })?;
+    let placement = |character: u16| {
+        children.iter().find_map(|child| match child {
+            Tag::PlaceObject2 {
+                character_id: Some(id),
+                matrix: Some(matrix),
+                ..
+            } if *id == character => Some(matrix.clone()),
+            _ => None,
+        })
+    };
+
+    Some(VanillaChrome {
+        plate_local,
+        frame_local,
+        plate_matrix: placement(PLATE_CHARACTER_ID)?,
+        frame_matrix: placement(FRAME_CHARACTER_ID)?,
+    })
 }
 
 /// A pure-translate `MATRIX` in twips.
@@ -297,6 +455,19 @@ pub fn centered_build_url_editor(vanilla: &[u8]) -> Result<Vec<u8>, BuildUrlFiel
     }
     let scale = width_scale();
     let mut movie = Movie::parse(vanilla).map_err(BuildUrlFieldError::Parse)?;
+
+    // 0. Measure the chrome before touching it, and work out where the widened box's edges land, so
+    //    the frame can be re-placed against that box instead of being stretched along with it.
+    let chrome = vanilla_chrome(&movie).ok_or(BuildUrlFieldError::MissingStructure(
+        "plate shape, frame art and their placements in sprite 8",
+    ))?;
+    let (margin_left, margin_right) = chrome.frame_margins_twips();
+    let widened_box = {
+        let mut matrix = chrome.plate_matrix.clone();
+        scale_matrix_horizontally(&mut matrix, scale);
+        placed_span(&matrix, chrome.plate_local)
+    };
+    let frame_target = (widened_box.0 - margin_left, widened_box.1 + margin_right);
 
     // 1. Widen the field itself, and remember the style the caption inherits.
     let mut style: Option<FieldStyle> = None;
@@ -386,8 +557,8 @@ pub fn centered_build_url_editor(vanilla: &[u8]) -> Result<Vec<u8>, BuildUrlFiel
         },
     );
 
-    // 3. Scale the chrome with the field, move the field to stay glued to the plate, and hang the
-    //    caption above the box.
+    // 3. Widen the plate with the field, re-place the frame around the widened box, move the field
+    //    to stay glued to the plate, and hang the caption above the box.
     let mut scaled_plate = 0usize;
     let mut scaled_frames = 0usize;
     let mut moved_field = 0usize;
@@ -415,7 +586,7 @@ pub fn centered_build_url_editor(vanilla: &[u8]) -> Result<Vec<u8>, BuildUrlFiel
                     scaled_plate += 1;
                 }
                 FRAME_CHARACTER_ID => {
-                    scale_matrix_horizontally(matrix, scale);
+                    fit_matrix_horizontally(matrix, chrome.frame_local, frame_target);
                     scaled_frames += 1;
                 }
                 TEXT_FIELD_CHARACTER_ID => {
@@ -486,9 +657,10 @@ mod tests {
         assert_eq!(min_signed_nbits(&[-1]), 1);
         assert_eq!(min_signed_nbits(&[-40]), 7);
         assert_eq!(min_signed_nbits(&[12760]), 15);
-        // -910 fits 11 bits; -1456, what it becomes at this width, does not.
+        // The frame's translate: -910 fits 11 bits; -1030, where re-placing it around the widened
+        // box puts it, does not.
         assert_eq!(min_signed_nbits(&[-910]), 11);
-        assert_eq!(min_signed_nbits(&[-1456]), 12);
+        assert_eq!(min_signed_nbits(&[-1030]), 12);
         // 16.16 unity scaled to 640/400 px overflows the source's 17-bit scale field.
         assert_eq!(min_signed_nbits(&[104_858]), 18);
     }

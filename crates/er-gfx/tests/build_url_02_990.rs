@@ -14,7 +14,7 @@ use er_gfx::build_url_02_990::{
 use er_gfx::text_input_02_990::{
     VANILLA_FNV1A64, VANILLA_LEN, inline_current_path_editor, is_known_vanilla,
 };
-use er_gfx::{Movie, TWIPS_PER_PIXEL, Tag};
+use er_gfx::{Matrix, Movie, TWIPS_PER_PIXEL, Tag};
 
 /// Vanilla sprite/character ids and geometry this derivation is written against.
 const TEXT_INPUT_SPRITE_ID: u16 = 8;
@@ -246,5 +246,176 @@ fn the_save_pickers_derivation_is_untouched_by_this_one() {
     assert_ne!(
         picker, link,
         "two cache keys, two different movies; sharing one is what shipped the unstyled field"
+    );
+}
+
+/// `GFX_DefineExternalImage2`, the tag that declares the frame art's pixel size. Opaque to the
+/// codec, so the walk below reads the character id at body offset 0 and the width at offset 6.
+const GFX_DEFINE_EXTERNAL_IMAGE2: u16 = 1009;
+/// The frame art's authored pixel width, which the movie declares for itself.
+const FRAME_ART_WIDTH_PX: u16 = 558;
+
+fn sprite_tags(tags: &[Tag], sprite_id: u16) -> &[Tag] {
+    tags.iter()
+        .find_map(|tag| match tag {
+            Tag::DefineSprite { id, tags, .. } if *id == sprite_id => Some(tags.as_slice()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("sprite {sprite_id} present"))
+}
+
+fn placements(children: &[Tag], character: u16) -> Vec<Matrix> {
+    children
+        .iter()
+        .filter_map(|child| match child {
+            Tag::PlaceObject2 {
+                character_id: Some(id),
+                matrix: Some(matrix),
+                ..
+            } if *id == character => Some(matrix.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Horizontal span of a character placed by `matrix`, given its own local span.
+fn placed_span(matrix: &Matrix, local: (f64, f64)) -> (f64, f64) {
+    let scale = if matrix.has_scale {
+        f64::from(matrix.scale_x) / f64::from(1 << 16)
+    } else {
+        1.0
+    };
+    let translate = f64::from(matrix.translate_x);
+    (local.0 * scale + translate, local.1 * scale + translate)
+}
+
+/// The backing plate's and the frame art's horizontal spans, in `TextInput`-sprite twips, read out
+/// of a movie's own tags.
+///
+/// Read the long way on purpose -- the plate through its `DefineShape` bounds, the art through the
+/// sprite that wraps it and the `GFX_DefineExternalImage2` that declares its pixel width -- so this
+/// measures the movie instead of restating the derivation's arithmetic back at it.
+fn chrome_spans(movie: &Movie) -> ((f64, f64), (f64, f64)) {
+    let plate_local = movie
+        .tags
+        .iter()
+        .find_map(|tag| match tag {
+            Tag::DefineShape {
+                shape_id: PLATE_CHARACTER_ID,
+                shape_bounds,
+                ..
+            } => Some((f64::from(shape_bounds.x_min), f64::from(shape_bounds.x_max))),
+            _ => None,
+        })
+        .expect("the backing plate is a DefineShape");
+
+    let frame_children = sprite_tags(&movie.tags, FRAME_CHARACTER_ID);
+    let (image_id, image_matrix) = frame_children
+        .iter()
+        .find_map(|child| match child {
+            Tag::PlaceObject3 {
+                character_id: Some(id),
+                matrix,
+                ..
+            } => Some((*id, matrix.clone())),
+            _ => None,
+        })
+        .expect("the frame character wraps one bitmap");
+    let width_px = movie
+        .tags
+        .iter()
+        .find_map(|tag| match tag {
+            Tag::Unknown {
+                code: GFX_DEFINE_EXTERNAL_IMAGE2,
+                raw,
+                ..
+            } if raw.len() >= 8 && u16::from_le_bytes([raw[0], raw[1]]) == image_id => {
+                Some(u16::from_le_bytes([raw[6], raw[7]]))
+            }
+            _ => None,
+        })
+        .expect("the bitmap declares its own pixel width");
+    assert_eq!(
+        width_px, FRAME_ART_WIDTH_PX,
+        "MENU_FL_Arts_waku2 is the art whose overhang this test pins"
+    );
+    let image_local = (0.0, f64::from(width_px) * f64::from(TWIPS_PER_PIXEL));
+    let frame_local = match &image_matrix {
+        Some(matrix) => placed_span(matrix, image_local),
+        None => image_local,
+    };
+
+    let children = sprite_tags(&movie.tags, TEXT_INPUT_SPRITE_ID);
+    let plate = placements(children, PLATE_CHARACTER_ID);
+    assert_eq!(plate.len(), 1, "one backing-plate placement");
+    let frames = placements(children, FRAME_CHARACTER_ID);
+    assert_eq!(frames.len(), 2, "two frame-art placements");
+    assert_eq!(
+        frames[0], frames[1],
+        "the two frame placements carry one matrix; a rule applied to only one of them puts the \
+         band back on the layer that was missed"
+    );
+    (
+        placed_span(&plate[0], plate_local),
+        placed_span(&frames[0], frame_local),
+    )
+}
+
+/// The frame art overhangs the box, and how far is the box's bevel rather than slack to scale.
+///
+/// This is the regression the widened field shipped. `MENU_FL_Arts_waku2` is not a border around a
+/// hole: its interior is a translucent near-black fill (alpha 184 of 255) with a bright rim 10 to 16
+/// texture px in from its edges, so every twip it overhangs the solid-black plate is a twip where
+/// its fill lands on the menu background rather than on black, and reads lighter. Vanilla overhangs
+/// the 400 px box by 710 twips (35.50 px) on the left and 838.73 (41.94 px) on the right; scaling
+/// that overhang along with the box stretched it to 1135.99 (56.80 px) and 1341.86 (67.09 px),
+/// which is the lighter band at the right end of the field.
+///
+/// The invariant pinned here is the measured overhang, not a flush edge: vanilla's own plate stops
+/// 838.73 twips inside the art's right edge, roughly 28 px inside the art's visible rim, so making
+/// the two edges equal would push black out past the border the art draws.
+#[test]
+fn the_frame_art_overhangs_the_widened_box_by_what_it_overhangs_the_vanilla_one() {
+    let Some(vanilla) = vanilla() else {
+        return;
+    };
+    let derived = centered_build_url_editor(&vanilla).expect("known 02_990 derives");
+    let (vanilla_plate, vanilla_frame) =
+        chrome_spans(&Movie::parse(&vanilla).expect("vanilla movie parses"));
+    let (plate, frame) = chrome_spans(&Movie::parse(&derived).expect("derived movie parses"));
+
+    let overhang = |plate: (f64, f64), frame: (f64, f64)| (plate.0 - frame.0, frame.1 - plate.1);
+    let (vanilla_left, vanilla_right) = overhang(vanilla_plate, vanilla_frame);
+    let (left, right) = overhang(plate, frame);
+
+    // The vanilla numbers this derivation is written against, so a corpus that drifted out from
+    // under it fails here rather than silently redefining what the fix preserves.
+    assert!(
+        (vanilla_left - 710.0).abs() < 1.0 && (vanilla_right - 838.734_130_859_375).abs() < 1.0,
+        "vanilla overhang drifted: left {vanilla_left} right {vanilla_right}"
+    );
+
+    assert!(
+        (right - vanilla_right).abs() < 1.0,
+        "the art overhangs the widened box by {right} twips on the right, not the authored \
+         {vanilla_right}; that difference is the lighter band at the right end of the field"
+    );
+    assert!(
+        (left - vanilla_left).abs() < 1.0,
+        "the art overhangs the widened box by {left} twips on the left, not the authored \
+         {vanilla_left}"
+    );
+
+    // The box itself is still the widened field, so the overhang was corrected by re-placing the
+    // art rather than by shrinking what it frames.
+    let width = plate.1 - plate.0;
+    assert!(
+        (width - f64::from(FIELD_WIDTH_PX * TWIPS_PER_PIXEL)).abs() < 1.0,
+        "the plate spans {width} twips, not the widened field's {}",
+        FIELD_WIDTH_PX * TWIPS_PER_PIXEL
+    );
+    assert!(
+        frame.0 < plate.0 && frame.1 > plate.1,
+        "the art still surrounds the box on both sides"
     );
 }
