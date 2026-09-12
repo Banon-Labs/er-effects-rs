@@ -2084,6 +2084,14 @@ python3 "$repo_root/scripts/er-release-bisect.py" --selftest
 python3 "$repo_root/scripts/check-single-dll-product-contract.py" --selftest
 python3 "$repo_root/scripts/check-single-dll-product-contract.py"
 
+# A Cargo feature nothing names gates nothing. `default` was trimmed to four features on
+# 2026-09-11, the DLL was rebuilt and relaunched, and the observed result was "that seemed to have
+# no effect" -- five of the six features named zero lines between them, so turning them off could
+# not remove anything. This holds a per-feature count that may only move when the baseline moves
+# with it, and lists the features that still gate nothing along with what is in the way.
+python3 "$repo_root/scripts/check-feature-gates-bite.py" --selftest
+python3 "$repo_root/scripts/check-feature-gates-bite.py"
+
 bash "$repo_root/scripts/check-rust-build.sh"
 
 # The launch-time freshness gate, shared by five launch scripts as `require_fresh_dlls`. Its

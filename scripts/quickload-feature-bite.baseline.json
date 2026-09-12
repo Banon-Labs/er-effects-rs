@@ -1,0 +1,12 @@
+{
+  "gated": {
+    "menu-trace": 2
+  },
+  "ungated": {
+    "autoload": "everything else is built on it, so it comes off last if ever -- a build with no autoload is a different product, not a trim of this one",
+    "loading-cover": "six title-visual hook installers (logo hide, start-login hide, PAB information, gfx value-set-visible, two native-menu suppressions) live in quit_menu/profile_rows_system_quit_menu.rs and are called from lifecycle/title_visual_startup.rs",
+    "portrait": "force_profile_render_tick plus patch_profile_offscreen_size_for_loaded_slot, profile_renderer_teardown_spare_hook and profile_select_table_diag_hook live in quit_menu/save_swap_profile_table.rs",
+    "quit-rows": "the rows are spread through startup_hooks/quit_menu/, which also holds the Save Game destination flow, the save-picker surfaces, the title visuals, the profile-render tick and the delay-delete telemetry; 70 of its symbols are called from outside it, so the directory is demuxed onto its real owners before a cfg can go on what is left",
+    "save-picker": "save_picker_menu.rs, save_picker_path_editor.rs and profile_05_010_editor_runtime.rs sit under quit_menu/ rather than under startup_hooks/save_picker/"
+  }
+}
