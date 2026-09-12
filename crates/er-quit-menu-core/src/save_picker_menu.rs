@@ -2500,6 +2500,24 @@ pub fn save_picker_set_visible_status(message: er_save_picker_core::PickerStatus
 /// as row detail instead of a wrapped second line.
 pub const SAVE_PICKER_BROWSE_LINE_CHAR_BUDGET: usize = 34;
 
+/// Font height for one synthetic ProfileSelect field.
+///
+/// A host that ships the live-layout editor answers with whatever is authored right now. A host
+/// that does not -- every standalone shell, and every unit test -- gets the shipped schema, which
+/// is the same number `crates/er-gfx/profile_05_010_layout.toml` builds the GFX box from. The
+/// absent hook must not answer 0: `size="0"` renders the drive strip and the path control
+/// invisible, so a shell that installs no hooks would browse with unreadable chrome.
+fn profile_editor_field_font_height(field_name: &str) -> i32 {
+    match hooks().profile_editor_field_font_height {
+        Some(height) => height(field_name),
+        None => {
+            er_gfx::profile_05_010_layout::shipped()
+                .field(field_name)
+                .font_height
+        }
+    }
+}
+
 pub fn save_picker_drive_cell_html_utf16(text: &str) -> Vec<u16> {
     // The button frame already supplies the visual boundary. Keep the model's `>C:<` / `[S:]`
     // wrappers for the boot overlay and selection semantics, but do not render that punctuation
@@ -2518,9 +2536,7 @@ pub fn save_picker_drive_cell_html_utf16(text: &str) -> Vec<u16> {
         (false, text)
     };
     let color = if selected { "#d8a052" } else { "#8f887a" };
-    let font_height = hooks()
-        .profile_editor_field_font_height
-        .map_or(0, |height| height("DriveCell_0"));
+    let font_height = profile_editor_field_font_height("DriveCell_0");
     save_picker_html_utf16_color_size(display, color, font_height)
 }
 
@@ -2549,9 +2565,7 @@ pub fn save_picker_current_path_text(row: usize) -> Option<Vec<u16>> {
         None => (model.current_dir().to_str()?, SAVE_PICKER_PATH_NORMAL_COLOR),
     };
     let escaped = save_picker_html_escape(text);
-    let font_height = hooks()
-        .profile_editor_field_font_height
-        .map_or(0, |height| height("CurrentPath"));
+    let font_height = profile_editor_field_font_height("CurrentPath");
     let html = format!(
         "<p align=\"left\"><font size=\"{font_height}\" color=\"{color}\">{escaped}</font></p>"
     );
