@@ -1,7 +1,7 @@
 {
   "gated": {
     "menu-trace": 2,
-    "quit-rows": 113
+    "quit-rows": 116
   },
   "ungated": {
     "autoload": "everything else is built on it, so it comes off last if ever -- a build with no autoload is a different product, not a trim of this one",

@@ -768,6 +768,7 @@ pub(crate) unsafe fn text_input_02_990_swap_to_build_url(base: usize, file: usiz
 /// MemoryFile swap path, but deliberately has no env/file-backed diagnostic input: the product must not
 /// ship or depend on an external GFx. The derived movie is built from the game's own vanilla payload and
 /// cached for process lifetime so the native MemoryFile's data pointer remains valid.
+#[cfg(feature = "quit-rows")]
 pub(crate) unsafe fn options_02_040_quit6_swap_to_edited(base: usize, file: usize) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if file == 0 || file == null || file == HOOK_ORIGINAL_UNSET {
@@ -950,7 +951,15 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
             if is_profile_05_010 && PROFILE_05_010_RUNTIME_EDIT_ARMED.load(Ordering::SeqCst) != 0 {
                 memory_replacement = unsafe { profile_05_010_swap_to_edited(base, native) };
             }
-            // System->Quit four-button GFx edit: product-default, no external asset dependency.
+            // System>Quit six-cell grid, derived from the game's own vanilla payload.
+            //
+            // Behind `quit-rows` because the cells exist to hold cloned rows. A build with no rows
+            // that still widened the panel would show the two vanilla entries and four empty cells,
+            // and it would consume the one derivation `er_gfx::options_02_040::quit6` allows -- the
+            // deriver fail-closes on input it has already edited, so a standalone rows shell loaded
+            // beside this one would be handed widened bytes and correctly refuse to widen them
+            // again. Leaving the panel vanilla is what lets that shell own the grid it fills.
+            #[cfg(feature = "quit-rows")]
             if is_options_02_040 {
                 memory_replacement = unsafe { options_02_040_quit6_swap_to_edited(base, native) };
             }
