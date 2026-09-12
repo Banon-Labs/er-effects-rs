@@ -489,6 +489,7 @@ pub(crate) static SOUND_POST_EVENT_LAST_CALLER_RVA: AtomicUsize =
 
 /// Successful runtime-strip serves (native MemoryFile data/len swapped to the derived movie).
 pub(crate) use er_telemetry_core::counters::TITLE_05_000_RUNTIME_STRIP_SERVES;
+pub(crate) use er_telemetry_core::counters::TITLE_05_000_RUNTIME_STRIP_DECLINED;
 /// Runtime-strip failures (unexpected file vtable, unreadable payload, parse/edit/write error).
 /// Every failure falls closed to the untouched native file (vanilla title UI).
 pub(crate) use er_telemetry_core::counters::TITLE_05_000_RUNTIME_STRIP_FAILURES;
