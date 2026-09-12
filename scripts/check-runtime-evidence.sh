@@ -242,6 +242,34 @@ selftest() {
 		printf '  skip  carry-forward (the fixture commits are not in this clone)\n'
 	fi
 
+	# A deletion under crates/ is unprovable, not unproven: the run it would ask for is a run of
+	# the code being removed. Built as a throwaway repository rather than against this one's
+	# history, because it has to contain a commit that deletes a crate and no such fixture pair is
+	# guaranteed to be in every clone.
+	local del="$tmp/deletion"
+	mkdir -p "$del/crates/er-gone"
+	(
+		cd "$del" || exit 1
+		git init -q . 2>/dev/null
+		git config user.email selftest@example.invalid
+		git config user.name selftest
+		git config commit.gpgsign false
+		printf 'fn main() {}\n' >crates/er-gone/lib.rs
+		git add -A && git commit -qm "add the crate" --no-verify
+		git rm -q -r crates/er-gone && git commit -qm "delete the crate" --no-verify
+	) >/dev/null 2>&1
+	if git -C "$del" rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
+		local deleted_paths kept_paths
+		deleted_paths="$(git -C "$del" show --name-only --diff-filter=d --format= HEAD)"
+		kept_paths="$(git -C "$del" show --name-only --format= HEAD)"
+		expect 0 "a crates/ deletion leaves no path the gate would ask a run to prove" \
+			bash -c '! printf "%s\n" "$1" | grep -q "^crates/"' _ "$deleted_paths"
+		expect 0 "without the filter the same commit does look like changed game code" \
+			bash -c 'printf "%s\n" "$1" | grep -q "^crates/"' _ "$kept_paths"
+	else
+		printf '  skip  deletion (a throwaway repository could not be created)\n'
+	fi
+
 	rm -rf "$tmp"
 	if [ "$failures" -eq 0 ]; then
 		printf 'check-runtime-evidence selftest: PASS\n'
@@ -265,11 +293,18 @@ main() {
 	[ -n "$tip" ] || return 0
 
 	# Only code that ends up inside the game can be proven by a run.
+	#
+	# `--diff-filter=d` (lowercase, an exclusion) drops deleted paths. A deletion cannot be proven
+	# by a run, because the thing a run would exercise is the code being removed: asking for one
+	# means asking for the DLL under deletion to be built and launched. Measured 2026-09-11 on
+	# chore/remove-er-lockon-filter, which deletes crates/er-lockon-filter entirely -- every path
+	# came back as a `D`, this gate demanded runtime evidence for it, and the only way past was the
+	# override, which is meant for an unproven change rather than an unprovable one.
 	local changed
 	if git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null 2>&1; then
-		changed="$(git diff --name-only refs/remotes/origin/main...HEAD 2>/dev/null)"
+		changed="$(git diff --name-only --diff-filter=d refs/remotes/origin/main...HEAD 2>/dev/null)"
 	else
-		changed="$(git show --name-only --format= HEAD 2>/dev/null)"
+		changed="$(git show --name-only --diff-filter=d --format= HEAD 2>/dev/null)"
 	fi
 	if ! printf '%s\n' "$changed" | grep -q '^crates/'; then
 		return 0
