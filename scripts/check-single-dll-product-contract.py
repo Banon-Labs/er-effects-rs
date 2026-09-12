@@ -33,6 +33,11 @@ QUIT_MENU_PACKAGE = "er-quit-menu-core"
 HARNESS_PACKAGE = "er-quit-menu"
 PRODUCT_DLL = "er_quickload.dll"
 PRODUCT_PROFILE = "er-quickload.me3"
+# Crate types that emit a dynamic library. Exactly one of them may appear on the product, and it
+# must be the `cdylib`; a `dylib` or `proc-macro` beside it would be a second shipped artifact.
+DLL_CRATE_TYPES = ("cdylib", "dylib", "proc-macro")
+# Crate types the linker consumes and never ships on their own.
+LINK_ONLY_CRATE_TYPES = ("rlib", "lib")
 
 
 def load_toml(path: Path) -> dict[str, Any]:
@@ -90,8 +95,25 @@ def check_cargo_contract(
         )
 
     product_crate_types = product.get("lib", {}).get("crate-type", [])
-    if product_crate_types != ["cdylib"]:
+    # The contract is one shipped DLL, not one crate-type. `cdylib` is the type that produces a
+    # DLL, so exactly one of it must be declared and no second DLL-producing type beside it.
+    # `rlib`/`lib` are link-time archives, never a shipped artifact, so they are permitted:
+    # er-quickload declares an `rlib` so a feature-selected subset of the crate can be linked
+    # into a smaller shell without that shell becoming a second product DLL.
+    dll_types = [name for name in product_crate_types if name in DLL_CRATE_TYPES]
+    if dll_types != ["cdylib"]:
         failures.append("er-quickload must emit exactly one cdylib product artifact")
+    unknown_types = [
+        name
+        for name in product_crate_types
+        if name not in DLL_CRATE_TYPES and name not in LINK_ONLY_CRATE_TYPES
+    ]
+    if unknown_types:
+        failures.append(
+            "er-quickload declares crate-type "
+            f"{', '.join(sorted(set(unknown_types)))}, which this contract does not recognize "
+            "as either the one DLL or a link-only archive"
+        )
 
     product_dependencies = dependency_tables(product)
     quit_entries: list[Any] = []
@@ -186,9 +208,11 @@ def write_manifest(path: Path, text: str) -> None:
 
 def selftest() -> int:
     failures = 0
+    ran = 0
 
     def case(name: str, condition: bool) -> None:
-        nonlocal failures
+        nonlocal failures, ran
+        ran += 1
         if not condition:
             print(f"selftest FAIL: {name}", file=sys.stderr)
             failures += 1
@@ -245,6 +269,33 @@ def selftest() -> int:
         write_manifest(workspace, original_workspace)
 
         original_product = product.read_text(encoding="utf-8")
+        # The `rlib` the feature-selected subset link needs is not a shipped artifact, so the
+        # contract must accept it beside the one `cdylib`.
+        write_manifest(
+            product,
+            original_product.replace(
+                'crate-type = ["cdylib"]', 'crate-type = ["cdylib", "rlib"]'
+            ),
+        )
+        case(
+            "an rlib beside the one cdylib passes",
+            not check_cargo_contract(workspace, product, quit_menu),
+        )
+        # A second dynamic library is what the contract exists to refuse, whichever type spells it.
+        for second in ('"dylib"', '"cdylib"'):
+            write_manifest(
+                product,
+                original_product.replace(
+                    'crate-type = ["cdylib"]', f'crate-type = ["cdylib", {second}]'
+                ),
+            )
+            problems = check_cargo_contract(workspace, product, quit_menu)
+            case(
+                f"a second {second.strip(chr(34))} artifact fails",
+                any("exactly one cdylib" in problem for problem in problems),
+            )
+        write_manifest(product, original_product)
+
         write_manifest(product, original_product.replace("er-quit-menu-core", "er-quit-menu"))
         problems = check_cargo_contract(workspace, product, quit_menu)
         case(
@@ -289,7 +340,7 @@ def selftest() -> int:
     if failures:
         print(f"selftest: {failures} case(s) failed", file=sys.stderr)
         return 1
-    print("[check-single-dll-product-contract] selftest ok (7 cases)")
+    print(f"[check-single-dll-product-contract] selftest ok ({ran} cases)")
     return 0
 
 
