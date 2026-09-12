@@ -18,6 +18,12 @@ use std::{
     time::UNIX_EPOCH,
 };
 
+pub(crate) mod profile_render_drive;
+pub(crate) use profile_render_drive::*;
+
+pub(crate) mod title_visual_hooks;
+pub(crate) use title_visual_hooks::*;
+
 pub(crate) mod title_scaleform_msgbox;
 pub(crate) use title_scaleform_msgbox::*;
 

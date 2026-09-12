@@ -14,6 +14,10 @@
 
 use super::*;
 
+// `quit_menu/mod.rs` supplied this to every child; `lifecycle.rs` does not, and the two
+// `save_dest_arm_redirect` parameters are the only reason the module needs it.
+use std::path::Path;
+
 use er_quit_menu_core::save_dest_commit_runtime::SaveJobObserver;
 pub(crate) use er_quit_menu_core::save_dest_commit_runtime::{
     SaveDestVerdict, SaveDestWriterState, save_dest_arm_live_overwrite, save_dest_clear_target,

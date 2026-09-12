@@ -65,7 +65,7 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     // The picker itself lives in `er-quit-menu-core` since 2026-09-11. These are the steps only a
     // host with a save-swap ledger, a save flow and a live-layout editor behind it can perform; a
     // standalone shell installs none of them and the picker still browses and picks.
-    super::super::quit_menu::save_picker_menu::install_product_save_picker_hooks();
+    super::super::save_picker::save_picker_menu::install_product_save_picker_hooks();
     install_save_picker_list_builder_hook();
     if SYSTEM_QUIT_DUPLICATE_INSTALLED.load(Ordering::SeqCst) != SYSTEM_QUIT_DUPLICATE_NOT_INSTALLED
     {
