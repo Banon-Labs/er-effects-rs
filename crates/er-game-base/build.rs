@@ -14,11 +14,26 @@
 //!
 //! # The staleness this cannot fully close
 //!
-//! `rerun-if-changed` on `.git/HEAD`, the ref it names, and `.git/index` catches commits,
-//! checkouts and `git add`. It does not catch a bare edit to a tracked file that is never
+//! `rerun-if-changed` on the git directory's `HEAD`, the ref it names, and its `index` catches
+//! commits, checkouts and `git add`. It does not catch a bare edit to a tracked file that is never
 //! staged -- cargo has no reason to rebuild this crate for that, so the `+dirty` suffix can
 //! be absent from a build whose tree had edits. That is why the runtime line pairs this with the DLL's
 //! own PE timestamp, which is written by the linker on every relink and cannot go stale.
+//!
+//! # Worktrees, where this silently baked a frozen commit
+//!
+//! In a linked worktree `.git` is a file holding `gitdir: <path>`, not a directory. Joining
+//! `HEAD` and `index` onto it produced paths that cannot exist, every `exists()` was false, and
+//! the script emitted no `rerun-if-changed` at all -- which cargo reads as "this build script
+//! depends on nothing", so it never ran it again. The baked sha then froze at whatever `HEAD`
+//! was the first time that target directory was populated, and every later build in that
+//! worktree stamped a commit it was not built from.
+//!
+//! That is worse than no provenance, because the line still looks authoritative. It cost a push
+//! on 2026-09-11: the evidence gate correctly refused a commit whose freshly-built DLL named a
+//! commit from two days earlier. Agent work in this repo happens in worktrees, so the broken
+//! case was the common one. The directory is now resolved by asking git, which answers for a
+//! worktree and a plain checkout alike.
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -71,24 +86,45 @@ fn repo_root() -> PathBuf {
 
 /// Rebuild when the commit, the checked-out branch, or the index moves.
 ///
-/// `.git/HEAD` covers a checkout; the ref file it names covers a commit on that branch;
-/// `.git/index` covers a `git add`, which is what flips `DIRTY` back to clean.
+/// `HEAD` covers a checkout; the ref file it names covers a commit on that branch; `index`
+/// covers a `git add`, which is what flips `+dirty` back to clean.
+///
+/// Both directories are asked for by name rather than assembled from `repo`. A linked worktree
+/// has two: its own, holding that worktree's `HEAD` and `index`, and the common one, holding the
+/// refs every worktree shares. Watching `HEAD` in the common directory would track the main
+/// checkout's branch instead of this one's, and looking for the ref in the worktree directory
+/// would find nothing.
 fn declare_rerun(repo: &Path) {
-    let git_dir = repo.join(".git");
-    for relative in ["HEAD", "index"] {
-        let path = git_dir.join(relative);
+    let Some(git_dir) = git(repo, &["rev-parse", "--absolute-git-dir"]).map(PathBuf::from) else {
+        // Not a checkout at all, which `main` already handles by baking `unknown`. Nothing to
+        // watch, and nothing to warn about.
+        return;
+    };
+    let common_dir = git(
+        repo,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )
+    .map(PathBuf::from)
+    .unwrap_or_else(|| git_dir.clone());
+    for path in [git_dir.join("HEAD"), git_dir.join("index")] {
         if path.exists() {
             println!("cargo::rerun-if-changed={}", path.display());
         }
     }
     // `HEAD` normally holds `ref: refs/heads/<branch>`; a detached head holds a raw sha and
-    // there is no second file to watch.
+    // there is no second file to watch. The ref itself lives in the common directory, and may
+    // be packed rather than loose -- in which case `packed-refs` is the file that moves.
     if let Ok(head) = std::fs::read_to_string(git_dir.join("HEAD"))
         && let Some(reference) = head.trim().strip_prefix("ref: ")
     {
-        let path = git_dir.join(reference);
-        if path.exists() {
-            println!("cargo::rerun-if-changed={}", path.display());
+        let loose = common_dir.join(reference);
+        if loose.exists() {
+            println!("cargo::rerun-if-changed={}", loose.display());
+        } else {
+            let packed = common_dir.join("packed-refs");
+            if packed.exists() {
+                println!("cargo::rerun-if-changed={}", packed.display());
+            }
         }
     }
 }

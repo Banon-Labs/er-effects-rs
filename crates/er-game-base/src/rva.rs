@@ -313,6 +313,149 @@ pub const UPDATE_TROPHY_STATS_RVA: usize = 0x24a1a0;
 /// `if (max < amount) amount = max;`, so an add of five that delivers three returns no error and
 /// sets no result code. Asking first is what turns that into a number a caller can report.
 pub const GET_ADD_OR_REMOVE_AMOUNT_RVA: usize = 0x24c630;
+/// `CS::EquipGameData::RemoveItem(egd, int itemIdx, uint flag, bool refresh) -> bool` -- the
+/// engine's discard, and the only call that destroys an inventory entry.
+///
+/// # It unequips for you, which is why the menu's discard cap looks off by one
+///
+/// The body, in order: `GetSlotIndexByItemIndex` and, when that names a slot,
+/// `FUN_140247160(egd, slot, true)` to take it off; then three calls on `EquipItemData`
+/// (`FUN_140250060`, `FUN_140250100`, `FUN_140250030`) that clear the quickbar and pouch
+/// references to that index; then the optional equip refresh; then
+/// `EquipInventoryData::RemoveItem`. So an assigned or worn copy does not have to be unassigned
+/// first -- the native does it -- which is what the inventory menu is expressing when it offers
+/// to discard ten of eleven Hefty Pots while one sits on the quickbar.
+///
+/// # The third argument is a flag, not a count
+///
+/// It is passed straight through to `EquipInventoryData::RemoveItem` (`0x14024d1e0`), whose own
+/// third parameter is only ever tested against zero. The whole entry goes, whatever its quantity.
+/// To destroy part of a stack, decrement it with [`ADJUST_QUANTITY_BY_RVA`] instead and call this
+/// only when the entry is to disappear entirely.
+pub const EQUIP_GAME_DATA_REMOVE_ITEM_RVA: usize = 0x248ad0;
+/// `CS::EquipInventoryData::AdjustQuantityBy(inventory, uint itemIdx, int amount, BOOL *clamped)
+/// -> uint newQuantity`.
+///
+/// Adds `amount` to the entry's quantity, clamping at zero, and answers with what the entry now
+/// holds; `clamped` is set when the engine gave a different number from the one asked for. A
+/// negative `amount` is therefore a partial discard, and it is the same call
+/// `TransferItemBetweenInventoryDatas` uses to take a stack down as it moves it.
+///
+/// An entry left at zero still exists. The transfer path follows a zero return with
+/// `EquipInventoryData::RemoveItem`, and anything using this to discard should do the same --
+/// through [`EQUIP_GAME_DATA_REMOVE_ITEM_RVA`], so the quickbar and pouch references go with it.
+pub const ADJUST_QUANTITY_BY_RVA: usize = 0x24bfe0;
+
+/// `FUN_140249e60(EquipGameData*, GaItemHandle *weapon)` -- the engine's remove-Ash-of-War action.
+///
+/// Takes the mounted gem off an armament and gives it back to the player, which is the whole
+/// reason to call it before destroying an armament: the ash is not a property of the weapon, it is
+/// an item that was consumed into it, and discarding the weapon with the ash still mounted
+/// destroys both.
+///
+/// The body, in order: `GaitemLookupResult::GetGaitemWeapon` on the handle, then
+/// `GetGemGaitemHandleFromWeapon` -- and it returns immediately if that is null, so calling it on
+/// an armament with no ash is a no-op rather than an error. Otherwise it checks `CanChangeGem`,
+/// asks `CSGaitemGameData::IsItemAcquired_` whether the gem is already a known item,
+/// `EquipInventoryData::InsertItem`s the gem back into the carried inventory, detaches it from the
+/// weapon, resets the weapon's affinity row through the same `FUN_140249310` the mount path uses,
+/// and finishes with `CSGaitemGameData::UpdateItem`.
+///
+/// Its only in-game caller is `FUN_140248670`, the mount action, which calls this first to take
+/// off whatever is already there before putting the new ash on. So this is exactly the half of the
+/// Ashes of War menu that restores a weapon's default skill.
+///
+/// The argument is a `GaItemHandle*`, not an inventory index: an ash lives on one specific
+/// instance, so the id of the item cannot say which copy to strip.
+pub const REMOVE_GEM_FROM_WEAPON_RVA: usize = 0x249e60;
+
+/// `CS::MapItemManImpl::DropItem(MapItemManImpl*, ItemDropData*, DL_BOOL isNetworked, bool
+/// spawnInRadiusAroundPlayer)` -- the engine's put-this-on-the-ground action.
+///
+/// The body is short and copies rather than interprets: it builds a one-entry `ItemDropDataList`,
+/// copies `itemId`, `quantity`, `reinforce` into `upgrade` and `gemId` straight across, calls the
+/// inner drop, and destroys the list. So whatever is in the `ItemDropData` is what lands.
+///
+/// # Why this and not the Discard
+///
+/// [`EQUIP_GAME_DATA_REMOVE_ITEM_RVA`] destroys the entry and everything on it. This spawns a
+/// world object the player can walk back to and pick up, carrying the armament's upgrade level
+/// and its mounted Ash of War with it -- so a `+25` shield the storage box had no room for lands
+/// as a `+25` shield instead of ceasing to exist. For gear an import did not ask for, that is the
+/// difference between a tidy-up and a loss.
+///
+/// # It does not touch the inventory
+///
+/// The inner drop's whole callee set contains no `EquipGameData` or `EquipInventoryData` symbol.
+/// This spawns the object and nothing else; the caller still has to remove the entry, and the
+/// order matters -- see `er_build_import_runtime::storage::Storage::drop_to_ground`.
+pub const MAP_ITEM_MAN_DROP_ITEM_RVA: usize = 0x55aba0;
+
+/// `FUN_14055e3d0(ItemDropData *out, GaItemHandle *held)` -- fill a drop request from an instance.
+///
+/// The reason a drop preserves anything. It zeroes the request to `{-1, 0, -1, -1}` and then, for
+/// a weapon, reads `GetItemId` into `itemId`, `GetDurability` into `reinforce`, and -- when
+/// `GetGemGaitemHandleFromWeapon` finds one -- that gem's own item id into `gemId`. Anything else
+/// gets the first two. A hand-built `ItemDropData` cannot do this: the upgrade level and the ash
+/// live on the gaitem instance, not in the item id, so filling the struct by hand drops a bare
+/// item and calls it success.
+///
+/// `quantity` is deliberately left at zero here; the game's own caller sets it afterwards.
+///
+/// Its caller `FUN_140784960` is the inventory menu's Drop action, which is the path this repo
+/// clones: fill from the handle, set the quantity, null-check the singleton, drop.
+pub const ITEM_DROP_DATA_FROM_GAITEM_RVA: usize = 0x55e3d0;
+
+/// `GLOBAL_MapItemMan` -- the `CS::MapItemManImpl` singleton [`MAP_ITEM_MAN_DROP_ITEM_RVA`] takes.
+///
+/// A plain data global, not a getter. Every one of its five call sites null-checks it and takes
+/// the `FD4Singleton` `DLPanic` path when it is null, so a caller must check it too rather than
+/// pass a null through. It is populated once the world is up and freed again by
+/// `CS::InGameStep::_Common_Finalize` on return to title.
+pub const GLOBAL_MAP_ITEM_MAN_RVA: usize = 0x3d67a50;
+
+/// `EquipInventoryData::GetInventoryItemEntryByIndex(inventory, uint itemIdx)
+/// -> InventoryItemEntry*`.
+///
+/// The one call that hands back the entry itself rather than a copy of one field of it, which is
+/// what makes [`INVENTORY_ITEM_ENTRY_SORT_ID_OFFSET`] readable. It bounds-checks `itemIdx`
+/// against `itemEntriesCount`, picks the key-item or normal-item accessor by comparing against
+/// `keyItems.capacity`, and answers null when the entry's `gaItemHandle` is null -- so a null
+/// return is "no entry there", not a fault.
+pub const GET_INVENTORY_ITEM_ENTRY_BY_INDEX_RVA: usize = 0x24e770;
+
+/// `InventoryItemEntry.sortId` -- the order-of-acquisition key, in a 24-byte entry.
+///
+/// # What stamps it, and why that makes it the acquisition order
+///
+/// `CS::EquipInventoryData::InsertItem` (`0x14024cfd0`) ends every successful insert with
+///
+/// ```text
+///   iVar1 = inventory->nextSortId;
+///   inventory->nextSortId = iVar1 + 1;
+///   InventoryItemEntry::UpdateQuantityAndSortId(entry, amount, iVar1, false);
+/// ```
+///
+/// so an entry's `sortId` is the value of the inventory's monotonic counter at the moment the
+/// item arrived. `UpdateQuantityAndSortId` (`0x140712940`) is seven instructions and re-stamps
+/// the field only when the new quantity is greater than the old one (or when its fourth argument
+/// forces it), so topping a stack up moves it and spending from it does not.
+///
+/// # The consequence a caller can use
+///
+/// An item that leaves an inventory entirely and comes back is a new insert, and therefore lands
+/// at the top of the order. That is the mechanism behind
+/// `crate::storage`-style deposit-then-retrieve reordering: it is the same thing a player does at
+/// a storage box, and it re-stamps `sortId` because the engine's own acquisition path does.
+/// Merging into a stack that is still present does not re-stamp it --
+/// `TransferItemBetweenInventoryDatas` routes a stackable whose destination already holds one
+/// through `AdjustQuantityBy` instead of `InsertItem` -- so a caller that wants the re-stamp has
+/// to move the whole stack out first.
+///
+/// Structure confirmed in the 1.16.2 dump: `InventoryItemEntry` is 24 bytes,
+/// `gaItemHandle +0x0`, `itemId +0x4`, `quantity +0x8`, `sortId +0xc`, `isNew +0x10`,
+/// `potGroupId +0x14`.
+pub const INVENTORY_ITEM_ENTRY_SORT_ID_OFFSET: usize = 0xc;
 
 // ---- the equipped loadout: read by the importer, the exporter and the HUD badge ----
 //
@@ -375,6 +518,48 @@ pub const GET_PHYSIC_TEAR_BY_SLOT_RVA: usize = 0x247a20;
 /// from the unchanged `+0x9c`. Clamp to 16 units and terminate; never rely on a length check
 /// inside the callee to report anything.
 pub const PLAYER_GAME_DATA_COPY_CHR_NAME_RVA: usize = 0x2610c0;
+
+/// `CS::PlayerGameData::CopyFaceDataFromBuffer(PlayerGameData*, FaceDataBuffer*)` -- the game's
+/// own writer of a character's appearance, and the only sanctioned way to change one.
+///
+/// Decompiled 2026-09-10 against the 1.16.2 dump. The function itself is one line --
+/// `FaceData::CopyFromBuffer(&pgd->faceData, buffer)` -- and every reason to call it rather than
+/// storing 288 bytes into `PGD+0x760+0x08` lives in that callee (1.16.2 `0x140252f70`, which
+/// `er_profile_summary_core::FACE_DATA_COPY_FROM_BUFFER_RVA` names for the ProfileSummary side):
+///
+///   * It refuses a buffer whose `version` is not 4, and refuses a null pointer, without
+///     reporting either. A rejected call changes nothing and returns normally, so the caller has
+///     to read the buffer back rather than infer success from the call having returned.
+///   * After copying it recomputes a derived block of seven floats at `FaceData+0x130` through
+///     `FUN_140251b10`. A `memcpy` of the buffer alone leaves that block describing the previous
+///     face.
+///   * It then increments a generation stamp at `FaceData+0x14c` and sets bit 0 of
+///     `FaceData+0x154`. The stamp is what makes an appearance change reach a model that is
+///     already built, and the bit is what stops a stale override at `FaceData+0x128` masking the
+///     write. A hand-written copy sets neither and is invisible to both.
+///
+/// The argument is the `PlayerGameData*` itself, not the inner `FaceData`; the wrapper is one
+/// instruction, `add rcx, 0x760`, so no offset arithmetic crosses this boundary.
+///
+/// # A write reaches a character already in the world
+///
+/// The world player's model instance aliases this very object rather than holding a copy:
+/// `InitializeCharacterRendering(PlayerIns*)` (1.16.2 `0x140650bf0`) runs
+/// `SetFaceData(playerIns->chrAsmModelIns, &GetPlayerGameData(chrIns)->faceData)`.
+/// `CSChrAsmModelIns::SetFaceData` (1.16.2 `0x1409eb640`) caches the stamp at `modelIns+0x308`,
+/// and `CS::PlayerIns::PrePhysicsSafe1` calls `FUN_1409ec160` on every frame that
+/// `chrAsmModelIns` is non-null, ending in `FUN_1409e9b20`: compare the stamp with the cached
+/// one and, on a difference, re-apply the face across the instance's 27 model slots. So the
+/// character re-renders on the next frame with nothing pumped. The game leans on this itself --
+/// `CS::PlayerIns::PopulateFromPcInfo` writes a peer's face into a live `PlayerGameData` as
+/// routine network handling.
+///
+/// The exception is the eight leading `i32`s of the payload, which are model ids (face mesh,
+/// hair, eyes, ...). Their consumer `FUN_1409e6fb0` is reached for a live `PlayerIns` only
+/// through vtable slot `0x500`, whose one dispatch site is inside the `ChrSet` load-state
+/// machine, so those are expected to wait for the next load. That is inference from a
+/// single-dispatch-site search, not a proven negative.
+pub const PLAYER_GAME_DATA_COPY_FACE_DATA_FROM_BUFFER_RVA: usize = 0x261000;
 
 /// `CS::EquipMagicData::GetMagicSlotsCount(emd, SpecialEffect*) -> uint`.
 ///
@@ -485,3 +670,78 @@ pub const CS_SESSION_MANAGER_GLOBAL_RVA: usize = 0x3d7_a4d0;
 /// member, `CSEventManImp` field ordinal 2 in the named 1.16.2 dump) and `CALL 0x1405fef50`,
 /// which is the one-line getter `return param_1->field1_0x8;`, compared against `2`.
 pub const CS_EVENT_MAN_GLOBAL_RVA: usize = 0x3d6_86f8;
+
+// ---------------------------------------------------------------------------------------
+// Scaleform proxy primitives
+//
+// The four native calls that reach a `CS::SceneObjProxy` / `CS::CSScaleformValue` pair, plus the
+// two pure-virtual traps a destroyed component's vtable slot points at. Three separate features
+// drive them -- the loading-screen stats text, the ProfileSelect editor runtime, and the
+// System>Quit link field -- and the third of those now lives in `er-quit-menu-core`, on the far
+// side of a crate boundary from the constants module that used to own the literals. Centralised
+// here rather than copied, because a copy is a second claim about what the address is
+// (`scripts/check-rva-alias-drift.py`).
+
+/// `CS::CSScaleformValue::~CSScaleformValue`, the destructor every resolved child proxy owes.
+pub const CSSCALEFORMVALUE_DTOR_RVA: usize = 0xd7f850;
+
+/// `GFx::TextField::SetSelection(field, begin, end)` -- the caret/selection primitive, and the only
+/// thing that moves the caret in either 02_990 field. The native SoftwareKeyboard owns no caret at
+/// all: `EnterName_` (`0xe70c00`) writes a prompt string, max length and flags, and the set-initial
+/// path (`0xe709f0` -> `0x142416ef0`) is a pure `DLString` assign. The caret lives in Scaleform, and
+/// this is the function ActionScript's `Selection.setSelection` (impl `0x140f47060`) ends up calling
+/// once it has resolved the focused character and checked the text object's kind slot against 4.
+///
+/// It takes the same text object the native text helpers do (`*(value + 0x88)`), creates the field's
+/// editor kit if absent, clamps both indices to the current text length, then invalidates for
+/// redraw. The clamp is why caret-to-end needs no string length: pass `i64::MAX` for both and the
+/// field resolves it to the end -- exactly what ActionScript does when `setSelection` is called
+/// without an end argument.
+///
+/// Byte-verified against `eldenring-deobf.bin`: `48 89 5c 24 10 48 89 74 24 18 57 48 83 ec 20`
+/// (`MOV [RSP+0x10],RBX; MOV [RSP+0x18],RSI; PUSH RDI; SUB RSP,0x20`), matching the 1.16.2 dump at
+/// the same VA (shift 0). See bd `path-editor-caret-to-end-setselection-141198e50-2026-08-12`.
+pub const GFX_TEXT_FIELD_SET_SELECTION_RVA: usize = 0x1198e50;
+
+/// The engine's own `SetText` wrapper over a resolved component slot: it changes what is drawn and
+/// what an accept reads back in one move.
+pub const PROFILE_SETTEXT_RVA: usize = 0x74a000;
+
+/// `CS::SceneObjProxy::assignComponentWithName`, the named-child binder every proxy resolve goes
+/// through.
+pub const TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA: usize = 0x74a2f0;
+
+/// Lower-level GFx display-info setters for a `CSScaleformValue`'s position(x,y) and scale(x,y).
+/// Dump `0x140d83ed0` / `0x140d84140` -> deobf and live `0x140d83e20` / `0x140d84090`. The scale
+/// setter converts to Scaleform's percent space itself, so a caller passes the unit factor through.
+pub const TITLE_GFX_VALUE_SET_POSITION_RVA: usize = 0xd83e20;
+pub const TITLE_GFX_VALUE_SET_SCALE_RVA: usize = 0xd84090;
+
+/// The two addresses a destroyed component's `GetValue` vtable slot points at. A dispatch to
+/// either is the crash this repo guards against by checking the slot before calling it.
+pub const PURECALL_RVA: usize = 0x251c480;
+pub const PURECALL_CRASH_HANDLER_RVA: usize = 0xc90080;
+
+/// The game's heap-allocator wrapper (dump `0x141eb9ec0` -> deobf `0x141eb9ed0`):
+/// `fn(size /rcx/, align /rdx/, allocator_obj /r8/) -> *mut u8`, where `allocator_obj` is the
+/// dereferenced `DLAllocator*`. Its prologue is `mov rax,[r8]; mov r9,r8; mov r8,rdx` before it
+/// tail-jumps through the allocator vtable. Every native object this repo constructs on the game's
+/// heap -- the `CS::SoftwareKeyboard` job among them -- is allocated through it.
+pub const GAME_HEAP_ALLOC_RVA: usize = 0x1eb9ed0;
+
+/// `FD4StateMachine::is_in_state(sm, state_descriptor) -> bool`, a read-only predicate with no
+/// side effects, which is what makes it safe to call from a per-frame task.
+///
+/// Owned here because two shells need it and a literal in each is how two shells come to disagree:
+/// `scripts/check-rva-alias-drift.py` counts a second declaration of the same address as drift, and
+/// it is right to. `er-title-flow` reaches it through `TitleDialogRva::IsInState`, and
+/// `er-input-harness` has no `er-title-flow` dependency, so the shared floor both already depend on
+/// is this crate.
+pub const TITLE_TOP_DIALOG_IS_IN_STATE_RVA: usize = 0x749b20;
+
+/// The `Loop` state descriptor: the title dialog has finished fading in and is sitting still.
+///
+/// Anything else -- `FadeIn`, `TextFadeOut`, the transient states a return-to-title teardown passes
+/// through -- is a dialog that is not ready to be pressed. Owned here for the same reason as the
+/// predicate above.
+pub const TITLE_STATE_DESC_LOOP_RVA: usize = 0x2a8f9e8;

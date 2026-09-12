@@ -3059,15 +3059,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "er-lockon-filter"
-version = "0.1.0"
-dependencies = [
- "er-game-base",
- "er-hook",
- "iced-x86",
-]
-
-[[package]]
 name = "er-net-effects"
 version = "0.1.0"
 dependencies = [
@@ -3153,6 +3144,7 @@ dependencies = [
  "er-build-import-core",
  "er-build-import-runtime",
  "er-cover-fade",
+ "er-crash-logging-core",
  "er-d3d12-compositor",
  "er-game-base",
  "er-gfx",
@@ -3185,6 +3177,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-quit-load-character"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+ "er-quit-menu-core",
+]
+
+[[package]]
 name = "er-quit-menu"
 version = "0.1.0"
 dependencies = [
@@ -3200,11 +3200,51 @@ dependencies = [
  "er-build-import-core",
  "er-build-import-runtime",
  "er-game-base",
+ "er-gfx",
  "er-hook",
+ "er-loading-portrait-core",
+ "er-profile-summary-core",
  "er-save-loader",
  "er-save-picker-core",
  "er-telemetry-core",
+ "er-title-flow",
  "fromsoftware-shared",
+ "iced-x86",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "er-quit-rows"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.13.1",
+ "eldenring",
+ "er-boot-background",
+ "er-boot-profiler",
+ "er-build-import-core",
+ "er-build-import-runtime",
+ "er-cover-fade",
+ "er-crash-logging-core",
+ "er-d3d12-compositor",
+ "er-game-base",
+ "er-gfx",
+ "er-hook",
+ "er-loading-bar-core",
+ "er-loading-portrait-core",
+ "er-profile-summary-core",
+ "er-quit-menu-core",
+ "er-save-loader",
+ "er-save-picker-core",
+ "er-save-redirect",
+ "er-save-suppress",
+ "er-scaleform-hooks",
+ "er-telemetry-core",
+ "er-title-flow",
+ "er-tpf",
+ "erpx-rs",
+ "fromsoftware-shared",
+ "iced-x86",
+ "pelite",
  "windows 0.62.2",
 ]
 

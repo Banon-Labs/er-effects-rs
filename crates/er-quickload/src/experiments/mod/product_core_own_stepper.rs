@@ -367,6 +367,7 @@ pub(crate) const PROFILE_LOAD_JOB_RUN_RVA: usize = ProfileLoadMenuRva::LoadJobRu
 pub(crate) use er_telemetry_core::counters::TFC_AUTO_MENU_OPENED;
 /// One-shot guard for `maybe_fire_tfc_continue` (0 = not yet fired).
 pub(crate) use er_telemetry_core::counters::TFC_CONTINUE_FIRED;
+#[cfg(feature = "quit-rows")]
 /// Throttle counter for the dialog+0x50 load-vector readiness gate in `maybe_fire_tfc_continue`
 /// (logs the count value occasionally while waiting for it to become a valid has-room vector).
 pub(crate) use er_telemetry_core::counters::TFC_LOAD_VEC_WAIT_TICKS;
@@ -456,6 +457,7 @@ pub(crate) unsafe extern "system" fn pab_node_update_detour(
                 "pab-run-post: PAB detour (deterministic 0x7ad1c0 winner) drove system_quit_menu_window_run_post #{n}"
             ));
         }
+        #[cfg(feature = "quit-rows")]
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
             crate::experiments::startup_hooks::system_quit_menu_window_run_post(step, ret)
         }));

@@ -101,7 +101,7 @@ QUEUE_CALL = "queue_enable("
 # Creating a hook is what puts a member in the batch. Kept in sync with the installer list
 # `check-detour-rva-coverage.py` derives from er-hook; a name added there and missed here makes
 # this gate quieter, never louder, so the two are checked against each other in --selftest.
-HOOK_CREATE_RE = re.compile(r"\b(?:MhHook::new(?:_runtime_derived)?|register_union_hook(?:_runtime_derived|_resolved)?|register_shared_hook(?:_with_budget)?)\s*\(")
+HOOK_CREATE_RE = re.compile(r"\b(?:MhHook::new(?:_runtime_derived)?|register_union_hook5?(?:_runtime_derived|_resolved)?|register_shared_hook5?(?:_with_budget)?)\s*\(")
 
 # `let mut ok = true;`, `let mut ok: bool = false;`
 FLAG_DECL_RE = re.compile(r"\blet\s+mut\s+([a-z_][a-z0-9_]*)\s*(?::\s*bool\s*)?=\s*(?:true|false)\s*;")

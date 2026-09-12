@@ -47,13 +47,6 @@ ARTIFACT_ENV: dict[str, str] = {
     "ER_QUICKLOAD_INVASION_WARP_LOG_PATH": "er-invasion-warp.log",
     "ER_QUICKLOAD_INVASION_WARP_TELEMETRY_PATH": "er-invasion-warp-telemetry.json",
     "ER_QUICKLOAD_INVASION_WARP_RUN_PATH": "er-invasion-warp-run.json",
-    # er-lockon-filter had no knob at all until 2026-09-09, which is a different failure from the
-    # five above: they were unredirected, this one was invisible. `er-artifact-redirect-audit.py`
-    # discovers knobs by reading the Rust for `ER_QUICKLOAD_*_PATH`, so a DLL that never asks for a
-    # redirect is a DLL the audit has nothing to say about. Reconstructed from the launcher logs,
-    # 43 runs had loaded that shell and 41 of their logs were destroyed by the next launch.
-    "ER_QUICKLOAD_LOCKON_FILTER_LOG_PATH": "er-lockon-filter.log",
-
     "ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH": "er-input-harness-phases.jsonl",
     "ER_QUICKLOAD_DIAG_HARNESS_PATH": "er-diag-harness.log",
     "ER_QUICKLOAD_TIMESERIES_PATH": "er-telemetry-timeseries.jsonl",
@@ -87,6 +80,14 @@ ARTIFACT_ENV: dict[str, str] = {
     # launching, taking the `.prev` behind the live file with them.
     "ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH": "er-save-disable.log",
     "ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH": "er-save-disable-telemetry.json",
+    # The build importer's whole report -- what it fetched, what it planned, every item it granted
+    # or could not, and the share link the export side produces. It had no knob until 2026-09-10,
+    # so a run directory held zero build-import lines and investigating run
+    # `br-20260911-005533-858a` meant reading the game-directory copy, which had survived only
+    # because nothing had rotated it yet. Written by `er-build-import-runtime`, which both the
+    # standalone `er-build-import` shell and the product's `Load Build from URL` row drive, so the
+    # file exists for runs that load either one.
+    "ER_QUICKLOAD_BUILD_IMPORT_LOG_PATH": "er-build-import.log",
 }
 
 # The name a watcher reads to find this run's artifacts. A reader still on the fixed game-directory

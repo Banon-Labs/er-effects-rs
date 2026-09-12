@@ -189,7 +189,7 @@ pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
     (host().append_autoload_debug)(args)
 }
 #[allow(dead_code)]
-pub(crate) fn missing_save_selection_pending() -> bool {
+pub fn missing_save_selection_pending() -> bool {
     (host().missing_save_selection_pending)()
 }
 #[allow(dead_code)]

@@ -368,6 +368,7 @@ unsafe fn save_flow_dest_browse_tick(ticks: usize) {
                     SAVE_FLOW_ABORT_COUNT.fetch_add(1, Ordering::SeqCst);
                     save_flow_box_clear();
                     save_dest_reset("destination picker dismissed");
+                    #[cfg(feature = "quit-rows")]
                     if !os_surface
                         && SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0
                         && let Ok(base) = game_module_base()

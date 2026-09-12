@@ -18,6 +18,58 @@ pub const TITLE_PROFILE_SLOT_COUNT: usize =
 pub const TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET: usize = 0xa8;
 pub const TITLE_CUSTOM_COVER_PROFILE_OFFSCREEN_TEX_RESCAP_OFFSET: usize = 0x10;
 
+/// The renderer's `FD4StepTemplateBase` current step index.
+///
+/// `CSMenuAsmModelRend` derives from `FD4::FD4StepTemplateBase`, whose step table is filled by the
+/// static initializer `FUN_1400a75c0` into `DAT_143d745f0` at a stride of 0x10 (`{fn, wide name}`):
+/// 0 `STEP_Init`, 1 `STEP_Wait_Request`, 2 `STEP_Init_Setup`, 3 `STEP_Wait_Setup`,
+/// 4 `STEP_Finish_Setup`, 5 `STEP_Init_Play`, 6 `STEP_Wait_Play`, 7 `STEP_Finish_Play`,
+/// 8 `STEP_Finish`.
+///
+/// The executor writes this field on every frame (`cur = +0x44; +0x40 = cur; table[cur].fn(this)`),
+/// so it is maintained in release, unlike the step name at `+0x98` -- which is written only when two
+/// flags the constructor zeroes are both set, and therefore reads `NotExecuting` forever.
+///
+/// It is the cheapest possible answer to "did the state machine actually do anything": a data-change
+/// rebuild walks 6 -> 7 -> 8 -> 1 -> 2 -> 3 -> 4 -> 5 -> 6, and a renderer parked at 6 the whole time
+/// did nothing at all.
+pub const PROFILE_RENDERER_STEP_INDEX_OFFSET: usize = 0x40;
+/// Highest index in that table.
+pub const PROFILE_RENDERER_STEP_MAX: usize = 8;
+
+/// The renderer's per-frame part-draw task proxy (`CSEzTask` at `+0xe0`, its proxy here).
+///
+/// Registered at group 100 by `STEP_Finish_Setup` and freed by `STEP_Finish_Play`'s first tick
+/// (`(**(code **)(renderer[0x1c] + 0x28))()`). The task body `FUN_140bba6e0` runs
+/// `FUN_1409e9990(model_ins, ..)`, which walks the model's part-node array and submits each part --
+/// the actual per-frame draw submission. So a null here means nothing is submitting this portrait's
+/// model, however correct the model is.
+pub const PROFILE_RENDERER_DRAW_TASK_PROXY_OFFSET: usize = 0xf0;
+
+/// `CSEzOffscreenRend` -> the byte saying its `GXSgScene` is registered with the render system.
+///
+/// `FUN_140bb7250` sets it to 1 alongside `FUN_141ad89c0(offscreen+0x18, offscreen+0x48)`, and
+/// `FUN_140bb7930` clears it. `STEP_Init_Play` performs the registration and `STEP_Finish_Play`
+/// the removal, so across a rebuild it drops and comes back.
+pub const PROFILE_OFFSCREEN_SCENE_REGISTERED_OFFSET: usize = 0x58;
+
+/// `CS::CSChrAsmModelIns` -> the scene its parts were registered into.
+///
+/// `FUN_1409e9790(model_ins, scene)` stores the scene here and then registers all 27 part slots into
+/// it; `FUN_1409e9f50` is the exact inverse and leaves this null. A model whose parts were created
+/// while this was null is attached to no scene and is never drawn, which is the difference between a
+/// rebuilt model and a visible one.
+pub const CHR_ASM_MODEL_INS_SCENE_OFFSET: usize = 0x10;
+
+/// The renderer's `ChrAsmModelRes`, the object that owns the requested and resolved part rows.
+///
+/// `STEP_Wait_Play` passes `renderer+0x768` as the first argument to the model-resource request
+/// `FUN_1409e6fb0`, and again to `FUN_1409ec160` alongside the model instance. Its entries are
+/// `0x40` bytes from `+0x30`, each carrying the resolved param id at `+0x00` and the requested one
+/// at `+0x04`; while a pair disagrees the parts file for that row is still loading and the request
+/// early-outs instead of rebuilding from it.
+pub const PROFILE_RENDERER_MODEL_RES_OFFSET: usize = 0x768;
+
 /// `CS::TexResCap` embeds the draw-usable `CSGxTexture*` at +0x78, and that wrapper keeps
 /// the backing graphics texture/reference at +0x10. The overlay cannot safely reinterpret this as
 /// a generic texture ID yet, but observing these handles during a native draw would be a concrete
@@ -206,7 +258,7 @@ pub const DLSTRING_U16_SSO_THRESHOLD: usize = 7;
 
 /// SetText wrapper `FUN_14074a0f0` (deobf/live 0x74a000). fastcall(rcx=CSScaleformValue*, rdx=wchar_t*).
 /// Not hooked -- called directly for the stats push (null-guards text and checks the field dataType).
-pub const PROFILE_SETTEXT_RVA: usize = 0x74a000;
+pub const PROFILE_SETTEXT_RVA: usize = er_game_base::rva::PROFILE_SETTEXT_RVA;
 
 pub const SCALEFORM_MEMORY_FILE_VTABLE_RVA: usize =
     er_game_base::rva::SCALEFORM_MEMORY_FILE_VTABLE_RVA;

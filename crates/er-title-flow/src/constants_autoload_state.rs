@@ -1081,6 +1081,43 @@ pub use er_telemetry_core::counters::{
     SYSTEM_QUIT_LOAD_BUILD_URL_REFUSED_COUNT, SYSTEM_QUIT_LOAD_BUILD_URL_REJECTED_COUNT,
     SYSTEM_QUIT_LOAD_BUILD_URL_REQUEST_COUNT,
 };
+/// The character panel's portrait after an import: the record re-derived from the live player, the
+/// rebuild asked of its profile renderer, and the fingerprint comparison that says whether the
+/// model is actually being built from the imported gear.
+pub use er_telemetry_core::counters::{
+    BUILD_URL_PORTRAIT_DRAW_BITS, BUILD_URL_PORTRAIT_DRAW_CALLS_AT_KICK,
+    BUILD_URL_PORTRAIT_DRAW_TASK_CALLS, BUILD_URL_PORTRAIT_EQUIP_VERDICT,
+    BUILD_URL_PORTRAIT_KICKS,
+    BUILD_URL_PORTRAIT_KICK_REFUSALS,
+    BUILD_URL_PORTRAIT_MODEL_ABSENT_SEEN, BUILD_URL_PORTRAIT_MODEL_INS_AFTER,
+    BUILD_URL_PORTRAIT_MODEL_INS_BEFORE, BUILD_URL_PORTRAIT_PARTS_AFTER,
+    BUILD_URL_PORTRAIT_PARTS_BEFORE, BUILD_URL_PORTRAIT_RECORD_FINGERPRINT,
+    BUILD_URL_PORTRAIT_RECORD_LEVEL, BUILD_URL_PORTRAIT_RECORD_SLOT_PLUS1,
+    BUILD_URL_PORTRAIT_RECORD_SYNCS, BUILD_URL_PORTRAIT_RECORD_SYNC_STATE,
+    BUILD_URL_PORTRAIT_REBUILD_VERDICT, BUILD_URL_PORTRAIT_REFRESH_ATTEMPTS,
+    BUILD_URL_PORTRAIT_RENDERER_FINGERPRINT, BUILD_URL_PORTRAIT_RENDER_VERDICT,
+    BUILD_URL_PORTRAIT_MODELRES_PENDING, BUILD_URL_PORTRAIT_MODELRES_REQUESTED,
+    BUILD_URL_PORTRAIT_MODELRES_RESOLVED, BUILD_URL_PORTRAIT_STEPS_SEEN,
+    BUILD_URL_PORTRAIT_VERIFY_TICKS,
+};
+/// The System>Quit panel's own portrait, which is a different renderer with a different producer:
+/// the `CS::CSMenuFaceModelRend` at `OptionSettingTopDialog+0x1890` that fills
+/// `SYSTEX_Menu_StatusFace`. Its verdict is the same conjunction as the profile surface's, over its
+/// own measurements, so a pass on one still says nothing about the other.
+pub use er_telemetry_core::counters::{
+    BUILD_URL_QUIT_FACE_ARMED, BUILD_URL_QUIT_FACE_ATTEMPTS, BUILD_URL_QUIT_FACE_CALLS,
+    BUILD_URL_QUIT_FACE_DIALOG, BUILD_URL_QUIT_FACE_DRAW_BITS,
+    BUILD_URL_QUIT_FACE_DRAW_CALLS_AT_CALL, BUILD_URL_QUIT_FACE_DRAW_TASK_CALLS,
+    BUILD_URL_QUIT_FACE_FINGERPRINT_AFTER, BUILD_URL_QUIT_FACE_FINGERPRINT_BEFORE,
+    BUILD_URL_QUIT_FACE_INPUT_VERDICT, BUILD_URL_QUIT_FACE_LIVE_FINGERPRINT,
+    BUILD_URL_QUIT_FACE_MODEL_ABSENT_SEEN, BUILD_URL_QUIT_FACE_MODEL_INS_AFTER,
+    BUILD_URL_QUIT_FACE_MODEL_INS_BEFORE, BUILD_URL_QUIT_FACE_PARTS_AFTER,
+    BUILD_URL_QUIT_FACE_PARTS_BEFORE, BUILD_URL_QUIT_FACE_REBUILD_VERDICT,
+    BUILD_URL_QUIT_FACE_REFRESH_OWED, BUILD_URL_QUIT_FACE_REFUSAL_REASON,
+    BUILD_URL_QUIT_FACE_REFUSALS, BUILD_URL_QUIT_FACE_RENDER_VERDICT,
+    BUILD_URL_QUIT_FACE_RENDERER, BUILD_URL_QUIT_FACE_STEPS_SEEN,
+    BUILD_URL_QUIT_FACE_TARGET_RENDERER, BUILD_URL_QUIT_FACE_VERIFY_TICKS,
+};
 // ---- System->Quit row identity table + resolution oracles (see system_quit_row_identity.rs) ----
 pub use er_telemetry_core::counters::SYSTEM_QUIT_NATIVE_RETURN_DESKTOP_CONTROLLER_LAST_OBJECT;
 pub use er_telemetry_core::counters::SYSTEM_QUIT_NATIVE_SAVE_GAME_CONTROLLER_LAST_OBJECT;
@@ -1451,6 +1488,33 @@ pub const OPTIONSETTING_DIALOG_PANE_PROXY_OFFSET: usize = 0x1200;
 pub const OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA: u32 = 0x0093b760;
 /// CSMenuMan flag bit meaning "menu actively shown/drawn this frame" (per-frame updater sets `|=0x4`).
 pub const OPTIONSETTING_FLAG_ACTIVELY_SHOWN_BIT: u8 = 0x4;
+
+/// Native `CS::ProfileLoadDialog` in-place list rebuild `FUN_1409a5020`. `fn(rcx = dialog)`. The
+/// game's own records-changed refresh, used by the delete-save flow: it re-runs the item-list
+/// builder against a fresh `GetProfileSummary()` read, copies the new list into `dialog+0x1260`,
+/// and rebinds -- rewriting the row count at `+0xb08`, re-selecting a valid cursor and
+/// re-decorating every visible row. This is the sanctioned way to change row text while the
+/// `05_010` window stays open: the decorate pass reads per-row snapshots, so a bare record write
+/// is invisible without it. RE 2026-07-07, adversarially verified.
+pub const PROFILE_LOAD_DIALOG_LIST_REBUILD_RVA: u32 = 0x9a4ed0;
+/// Native ProfileSelect item-list builder `FUN_140875590` (1.16.2 dump VA == deobf/live VA, shift
+/// 0; entry bytes `48 8b c4 56 57 41 56 48 81 ec d0 0b 00 00` byte-verified in
+/// `eldenring-deobf.bin`). `fn(rcx = out BasicViewItemList<MenuSaveDataSummary,10>*) -> out`.
+/// Builds the visible 10-row list straight from the live ProfileSummary. Every point where records
+/// become visible rows funnels through this one function -- the dialog ctor/bind paths and the
+/// delete-flow rebuild above -- so a re-stage hook at its entry covers every build site.
+pub const PROFILE_SELECT_LIST_BUILDER_RVA: u32 = 0x875590;
+/// OptionSettingTopDialog (menu_id 0x25) -> embedded `CS::CompositeOptionSettingDialog`.
+pub const OPTIONSETTING_COMPOSITE_OFFSET: usize = 0x1768;
+/// Composite -> current pane dialog ptr (`+0xb8`) and the 10-entry per-tab pane-dialog cache (`+0x68`).
+pub const OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET: usize = 0xb8;
+pub const OPTIONSETTING_COMPOSITE_PANE_CACHE_OFFSET: usize = 0x68;
+pub const OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT: usize = 10;
+/// OptionSetting/OptionSetting_Trial window menu_id (indexes the CSMenuMan flag byte; gates the
+/// pane-reapply).
+pub const OPTIONSETTING_MENU_ID: u16 = 0x25;
+/// CSMenuMan per-menu flag bits a window needs set to be treated as visible again after a hide.
+pub const TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK: u8 = 0x3;
 
 /// GX command-queue producer telemetry (switch-#4 overflow, run autostep10c-directarm 2026-07-03).
 /// `reserve_command_queue_slot` (deobf entry 0x141aeae60; shift-verified against dump 0x141aeae80)

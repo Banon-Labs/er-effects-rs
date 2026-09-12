@@ -10,11 +10,12 @@
 // (RE: bd profileselect-native-settext-RE-2026-07-04 + Ghidra dump FUN_1408758d0/FUN_14074c630;
 // ARM/CONSUME SetText substitution was rejected because the FMG-static populate pass calls the SetText
 // core directly, so no wrapper-level routing can target a field the row-populate never writes.)
+#[cfg(feature = "quit-rows")]
 /// `CS::CSScaleformValue::~CSScaleformValue` (dump 0x140d7f900) = deobf/live 0xd7f850
 /// (`scripts/dump-deobf-shift.py` -> content-unique). fastcall(rcx=CSScaleformValue*). Releases the
 /// GFx::Value handle a resolved child proxy holds; the stats push calls it exactly like the native
 /// row-populate does after each field.
-pub(crate) const CSSCALEFORMVALUE_DTOR_RVA: usize = 0xd7f850;
+pub(crate) const CSSCALEFORMVALUE_DTOR_RVA: usize = er_game_base::rva::CSSCALEFORMVALUE_DTOR_RVA;
 /// SceneObjProxy layout, corrected 2026-07-04 from the Ghidra dump structures + `ComponentProxy::
 /// ComponentProxy` (dump 0x1407331b0) after the er-effects-rs-7e7 crash: +0x00 vfptr, +0x08/+0x10/
 /// +0x18 an intrusive component-link node (ctor initializes all three to `self`; the resolve links
@@ -34,6 +35,7 @@ pub(crate) const COMPONENT_GET_VALUE_VTABLE_SLOT_OFFSET: usize = 0x8;
 /// (the pre-7e7 bug) stamps a vtable over the component-link node and "releases" whatever
 /// `proxy+0x20` holds -- a UAF corrupter.
 pub(crate) const SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET: usize = 0x28;
+#[cfg(feature = "quit-rows")]
 /// Stack size for an out SceneObjProxy passed to `assignComponentWithName`. The native row-populate
 /// reserves 0x70 bytes; the binder fully constructs the out proxy without reading it, so a zeroed
 /// buffer with headroom is safe.
@@ -65,26 +67,6 @@ pub(crate) const GFX_TEXT_DOC_CONTENT_HEIGHT_OFFSET: usize = 0xc4;
 /// `GFx::TextField`/text document reflow routine. It recomputes layout bounds from the source bounds,
 /// refreshes wrapping/alignment, updates scroll range, and invalidates the backing render state.
 pub(crate) const GFX_TEXT_DOC_REFLOW_RVA: usize = 0x114bf10;
-/// `GFx::TextField::SetSelection(field, begin, end)` -- the caret/selection primitive, and the only
-/// thing that moves the caret in the 02_990 path editor. The native SoftwareKeyboard owns no caret at
-/// all: `EnterName_` (0xe70c00) writes a prompt string, max length and flags, and the set-initial path
-/// (0xe709f0 -> 0x142416ef0) is a pure `DLString` assign. The caret lives in Scaleform, and this is
-/// the function ActionScript's `Selection.setSelection` (impl 0x140f47060) ends up calling once it has
-/// resolved the focused character and checked [`GFX_TEXT_OBJECT_KIND_VTABLE_SLOT`] == 4.
-///
-/// It takes the same text object the native text helpers do (`*(value + 0x88)`), creates the field's
-/// editor kit if absent, clamps both indices to the current text length, then invalidates for redraw.
-/// The clamp is why caret-to-end needs no string length: pass [`GFX_TEXT_FIELD_SELECTION_END`] for
-/// both and the field itself resolves it to the end -- exactly what as does when `setSelection` is
-/// called without an end argument (it defaults end to `i64::MAX`).
-///
-/// Byte-verified against `eldenring-deobf.bin`: `48 89 5c 24 10 48 89 74 24 18 57 48 83 ec 20`
-/// (`MOV [RSP+0x10],RBX; MOV [RSP+0x18],RSI; PUSH RDI; SUB RSP,0x20`), matching the 1.16.2 dump at
-/// the same VA (shift 0). See bd `path-editor-caret-to-end-setselection-141198e50-2026-08-12`.
-pub(crate) const GFX_TEXT_FIELD_SET_SELECTION_RVA: usize = 0x1198e50;
-/// Selection index meaning "end of the text". The native setter clamps to the live text length, so
-/// this is a request for the end rather than a guess at a position.
-pub(crate) const GFX_TEXT_FIELD_SELECTION_END: i64 = i64::MAX;
 /// Re-entrancy guard for the row-populate hook's `ErStats` push (its resolve re-enters the named-child
 /// binder hook): skip the push block while set.
 pub(crate) use er_telemetry_core::counters::PROFILE_STATS_PUSH_IN_PROGRESS;
@@ -118,7 +100,8 @@ pub(crate) use er_telemetry_core::counters::PROFILE_STATS_PUSH_STALE_LAST_VT;
 /// ProfileSelect list row with a per-slot row model. We hook its entry so we can push the correct
 /// slot's attributes before the original runs (the original destroys the row proxy's embedded
 /// `CSScaleformValue` at its end, so a post-call resolve would operate on a released value).
-pub(crate) const PROFILE_ROW_POPULATE_RVA: usize = 0x8757e0;
+pub(crate) const PROFILE_ROW_POPULATE_RVA: usize =
+    er_quit_menu_core::profile_row_chrome::PROFILE_ROW_POPULATE_RVA;
 /// Row-model builder `FUN_1408752c0(rowModel, int slot)` -- the only reader of a slot's
 /// `ProfileSummary` record on the way to a row.
 ///
@@ -153,17 +136,12 @@ pub(crate) const PROFILE_ROW_MODEL_BUILD_RVA: usize = 0x8752c0;
 /// row reaching the per-slot hook with `rowModel + 0x8 == 0` may be this current-player row rather
 /// than save slot 0, and anything keyed on that slot index (a stats-cache lookup, a "is this the
 /// picker?" test) will be wrong for it. Read per-row values off the row model instead.
-pub(crate) const PROFILE_CURRENT_ROW_POPULATE_RVA: usize = 0x951220;
-/// Row-model field holding the profile/save slot index (0-9). The native populate reads
-/// `*(int*)(rowModel + 0x8) + 1` as the `Icon_0` face-sprite frame, i.e. the slot; we read the same
-/// field to index the per-slot stats cache so each row shows its own character's attributes.
-pub(crate) const PROFILE_ROW_MODEL_SLOT_08_OFFSET: usize = 0x8;
-/// Offset of the row model's `PlayerName` `CS::MenuString` inside `CS::MenuSaveDataSummary`.
-/// Static RE of 1.16.2 `FUN_1408757e0`: native row populate resolves `PlayerName`, reads raw
-/// pointer at `rowModel + 0x50`, else falls back to the inline DLString buffer at `rowModel + 0x60`
-/// when the DLString capacity at `rowModel + 0x78` is heap-backed. Stage this field before native
-/// populate so the game's own writer, not a later out-of-band SetText, owns the rendered text.
-pub(crate) const PROFILE_ROW_MODEL_PLAYER_NAME_MENUSTRING_50_OFFSET: usize = 0x50;
+pub(crate) const PROFILE_CURRENT_ROW_POPULATE_RVA: usize =
+    er_quit_menu_core::profile_row_chrome::PROFILE_CURRENT_ROW_POPULATE_RVA;
+// The three row-model offsets that stood here moved to
+// `er_loading_portrait_core::profile_row_model` with the staging primitives that read them. The
+// slot index keeps a name in this crate because the per-slot stats cache indexes by it.
+pub(crate) use er_loading_portrait_core::profile_row_model::PROFILE_ROW_MODEL_SLOT_08_OFFSET;
 
 // === per-slot info fields on a PROFILESELECT row =================================================
 // what produces "Level 0" and "0:00:00" on a row, and therefore why zeroing the staged record could
@@ -198,34 +176,8 @@ pub(crate) const PROFILE_ROW_MODEL_PLAYER_NAME_MENUSTRING_50_OFFSET: usize = 0x5
 /// `FUN_1408759e0(summary, 0, &name, pgd->level)` -- slot 0 with the live level -- so a cache lookup
 /// keyed on that slot would describe save slot 0's character, not the loaded one.
 pub(crate) const PROFILE_ROW_MODEL_LEVEL_88_OFFSET: usize = 0x88;
-pub(crate) const PROFILE_ROW_LEVEL_CAPTION_FIELD_NAME: &str = "StaticText_110502\0";
-pub(crate) const PROFILE_ROW_LEVEL_VALUE_FIELD_NAME: &str = "Level\0";
-pub(crate) const PROFILE_ROW_LOCATION_FIELD_NAME: &str = "Location\0";
-pub(crate) const PROFILE_ROW_PLAYTIME_FIELD_NAME: &str = "PlayTime\0";
-/// Full-width row chrome. The drive row hides both because its independent button frames are the
-/// only truthful click targets; every other row explicitly restores them.
-pub(crate) const PROFILE_ROW_BACKING_FIELD_NAME: &str = "Backing\0";
-/// The fields we added to the row. They need the same per-row-kind visibility statement the native
-/// ones get: the row clips are recycled across the character/browse/drive lists, so a field only one
-/// kind mentions keeps that kind's text when another kind reuses the clip.
-pub(crate) const PROFILE_ROW_ER_STATS_FIELD_NAME: &str = "ErStats\0";
-pub(crate) const PROFILE_ROW_CHAR_STATS_FIELD_NAME: &str = "ErCharStats\0";
-pub(crate) const PROFILE_ROW_DRIVE_CELL_FIELD_NAMES:
-    [&str; er_gfx::title_05_010::DRIVE_CELL_CAPACITY] =
-    er_gfx::title_05_010::DRIVE_CELL_FIELD_NAMES_NUL;
-/// Native button-frame children paired one-to-one with `DriveCell_0..25`. Their visibility must
-/// match the corresponding text field exactly: a blank cell must leave no empty frame, and a
-/// recycled character row must inherit neither the label nor its button chrome.
-pub(crate) const PROFILE_ROW_DRIVE_BUTTON_FIELD_NAMES:
-    [&str; er_gfx::title_05_010::DRIVE_CELL_CAPACITY] =
-    er_gfx::title_05_010::DRIVE_BUTTON_FIELD_NAMES_NUL;
 pub(crate) const PROFILE_ROW_CURRENT_PATH_FIELD_NAME: &str =
     er_gfx::title_05_010::CURRENT_PATH_FIELD_NAME_NUL;
-pub(crate) const PROFILE_ROW_CURRENT_PATH_BUTTON_NAME: &str =
-    er_gfx::title_05_010::CURRENT_PATH_BUTTON_NAME_NUL;
-/// Offset of the row model's `Location` `CS::MenuString` inside `CS::MenuSaveDataSummary`. Same
-/// inline accessor as PlayTime: raw pointer first, else the inline DLString buffer.
-pub(crate) const PROFILE_ROW_MODEL_LOCATION_MENUSTRING_90_OFFSET: usize = 0x90;
 /// Offset of the row model's `PlayTime` `CS::MenuString` inside `CS::MenuSaveDataSummary`. The
 /// struct is `{ wchar_t* rawString; DLString<wchar_t> dLString; }` (Ghidra `CS::MenuString`, 0x38
 /// bytes) and every reader takes `rawString` when it is non-NULL, else the DLString's buffer -- the
@@ -241,11 +193,6 @@ pub(crate) use er_telemetry_core::counters::PROFILE_ROW_LAST_SAVED_ROWS;
 /// Count of rows where the last-saved text could not be staged into the row model (the model field
 /// was unreadable), so the row kept the native playtime string (oracle).
 pub(crate) use er_telemetry_core::counters::PROFILE_ROW_LAST_SAVED_STAGE_FAILURES;
-/// GFx value type (`CSScaleformValue+0x20 & 0x8f`) the visibility setter `FUN_140d844d0` requires:
-/// it returns without doing anything unless the resolved value is a display object (10). Recorded
-/// per call as an oracle so "the fields are still visible in game" is diagnosable from telemetry
-/// instead of guesswork -- a non-10 type means the hide silently no-ops.
-pub(crate) const GFX_VALUE_TYPE_DISPLAY_OBJECT: usize = 10;
 /// `GFx::Value::VT_Undefined` / `VT_Null` -- what a named-child resolve leaves in the out proxy when
 /// the movie has no child by that name.
 ///
@@ -280,8 +227,9 @@ pub(crate) const CSSCALEFORMVALUE_DATATYPE_20_OFFSET: usize = 0x20;
 /// (2026-08-07 17:03:32, `access-violation rva=0xc90082 access=1 fault_addr=0x0`, backtrace
 /// `eldenring.exe+0x251c4b4` -> `+0x251c480` -> our DLL). Ruling these two targets out is what turns
 /// "the object is gone" from a crash into an error string.
-pub(crate) const PURECALL_RVA: usize = 0x251c480;
-pub(crate) const PURECALL_CRASH_HANDLER_RVA: usize = 0xc90080;
+pub(crate) const PURECALL_RVA: usize = er_game_base::rva::PURECALL_RVA;
+pub(crate) const PURECALL_CRASH_HANDLER_RVA: usize =
+    er_game_base::rva::PURECALL_CRASH_HANDLER_RVA;
 
 /// True when an about-to-be-called vtable slot is the pure-virtual trap, i.e. the object behind it
 /// has been destructed. Check this before every indirect call through a resolved component.
@@ -375,8 +323,10 @@ pub(crate) static PLAYER_GAME_DATA_NAME_GETTER_OVERRIDE_LOGGED: AtomicUsize = At
 /// Per-slot stats cache state (oracle): 0 = not attempted, 1 = loaded (`.sl2` read + parsed), 2 =
 /// load failed (save unreadable/too small) -- the hook then falls back to the loaded character.
 pub(crate) use er_telemetry_core::counters::PROFILE_SLOT_STATS_CACHE_STATE;
+#[cfg(feature = "quit-rows")]
 /// Count of per-slot cache drops on a save swap (oracle).
 pub(crate) use er_telemetry_core::counters::PROFILE_SLOT_CACHE_INVALIDATIONS;
+#[cfg(feature = "quit-rows")]
 /// Count of per-slot cache refills from picker-held bytes (oracle).
 pub(crate) use er_telemetry_core::counters::PROFILE_SLOT_CACHE_PREVIEW_RELOADS;
 /// Bitmask of save slots the per-slot cache named but could not decode stats for (oracle): the
@@ -539,6 +489,7 @@ pub(crate) static SOUND_POST_EVENT_LAST_CALLER_RVA: AtomicUsize =
 
 /// Successful runtime-strip serves (native MemoryFile data/len swapped to the derived movie).
 pub(crate) use er_telemetry_core::counters::TITLE_05_000_RUNTIME_STRIP_SERVES;
+pub(crate) use er_telemetry_core::counters::TITLE_05_000_RUNTIME_STRIP_DECLINED;
 /// Runtime-strip failures (unexpected file vtable, unreadable payload, parse/edit/write error).
 /// Every failure falls closed to the untouched native file (vanilla title UI).
 pub(crate) use er_telemetry_core::counters::TITLE_05_000_RUNTIME_STRIP_FAILURES;
@@ -698,7 +649,9 @@ pub(crate) const DESERIALIZE_SLOT_RVA: usize = 0x67b290;
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const SAVE_WRITE_TO_SLOT_RVA: usize = 0x67b750;
 pub(crate) use er_title_flow::GAME_MAN_SAVED_MAP_C30_OFFSET;
+#[cfg(feature = "quit-rows")]
 pub(crate) use er_title_flow::GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET;
+#[cfg(feature = "quit-rows")]
 pub(crate) use er_title_flow::GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY;
 /// submit_play_game 3-phase states: build CSFeMan -> deserialize slot -> re-submit
 /// the real map. Driven one step per game-task tick.

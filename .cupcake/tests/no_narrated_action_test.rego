@@ -67,6 +67,32 @@ test_halt_on_the_dispatch_instance if {
 	narrated in rule_ids(halts)
 }
 
+# --- the sixth instance, 2026-09-11 ---------------------------------------------------------------
+# A first-person progressive hung off the end of a longer sentence rather than heading its own. The
+# turn answered a question and then announced the work in a trailing clause, and stopped. The user:
+# "There's a rego policy that should have caught you saying 'and I'm starting on that now' and
+# introduced a stophook." It was measured before it was widened -- a fixture of that turn replayed
+# through all 17 `last_assistant_*.sh` signals in this repo left every one of them silent.
+test_halt_on_the_trailing_instance if {
+	halts := guard.halt with input as stop_event(replace(
+		narration_facts("No - feature-gate er-quickload instead of forking it, and I'm starting on that now."),
+		"shape=fragment",
+		"shape=trailing",
+	))
+	narrated in rule_ids(halts)
+}
+
+# The shape is recorded for the audit, never required: the classifier has already applied it, so a
+# facts line carrying a shape this policy has never heard of must still halt rather than buy silence.
+test_halt_on_an_unknown_shape if {
+	halts := guard.halt with input as stop_event(replace(
+		narration_facts("Starting on that now."),
+		"shape=fragment",
+		"shape=somethingnew",
+	))
+	narrated in rule_ids(halts)
+}
+
 # --- one case per exemption ----------------------------------------------------------------------
 # The narration carries something measured, so the sentence reports what happened instead of
 # announcing what has not.

@@ -198,6 +198,7 @@ const SWITCH_RELOAD_FD4IO_DRAIN_MAX: usize = 600;
 /// stalled outgoing teardown can never softlock the switch. ~15s at 60fps, well under the runtime cap.
 const OUTGOING_TEARDOWN_WAIT_MAX: usize = 900;
 
+#[cfg(feature = "quit-rows")]
 /// Reset the switch-reload FD4-IO phase machine so a new switch re-runs submit -> drain -> commit.
 /// Without this the one-shot stays claimed after the first switch (phase stuck at commit +
 /// SWITCH_RELOAD_FD4IO_COMMITTED=1), so the second switch's own_load_switch_reload_fire hits the
@@ -212,6 +213,7 @@ pub(crate) fn reset_switch_reload_fd4io_phase() {
     SWITCH_RELOAD_FD4IO_DRAIN_WAITS.store(0, Ordering::SeqCst);
 }
 
+#[cfg(feature = "quit-rows")]
 /// Full per-switch latch reset for an armed switch reload: the FD4-IO phase machine and the Phase-3
 /// outgoing-world teardown latches (baseline snapshot + DONE/WAIT_TICKS/FAILSOFT). Both arm paths --
 /// the programmatic `switch_slot_arm_programmatic` (agent/control-file drive) and the user ProfileSelect
@@ -678,6 +680,7 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
     // bisect showed an arm-time reset is re-consumed by the teardown still in flight and bounces even
     // a single switch. Here the switch is committed and both gates are independently shut (phase idle,
     // bc4 0), so handing the counters back opens nothing until the next arm.
+    #[cfg(feature = "quit-rows")]
     unsafe {
         crate::experiments::system_quit_rearm_switch_for_next_load("own-load-switch-reload-commit")
     };

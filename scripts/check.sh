@@ -638,14 +638,15 @@ python3 "$repo_root/scripts/check-oracle-singleton-globals.py"
 # image when there is one. Only `--selftest` runs: the bare form is a report, and it exits
 # non-zero when no game is installed, which is not a repo defect.
 python3 "$repo_root/scripts/ersc_identify.py" --selftest
-# er-lockon-filter decides who is a hostile phantom from two tables in the game image --
-# `CharacterTypeProperties` and `MultiplayProperties` -- and carries the answer as constants,
-# because reading them at runtime would need two more pinned data addresses for the sake of
-# values that have not moved between builds. This is the gate that keeps the constants honest:
-# it re-reads both tables and fails if the game's own classification stops being the one they
-# were derived from. It exists because the hand-written predecessor was narrower than the game's
-# answer in a way nothing caught -- the crate required chr_type 15/16/18, the live session
-# measured 2, and the feature was silently inert. An absent image is a skip, not a pass.
+# Who the game itself calls a hostile phantom, read from two tables in the game image --
+# `CharacterTypeProperties` and `MultiplayProperties`. This gate re-reads both and fails if the
+# classification stops being the one the recorded sets were derived from. It exists because a
+# hand-written predecessor was narrower than the game's answer in a way nothing caught: it
+# required chr_type 15/16/18, a live session measured 2, and the feature built on it was
+# silently inert. The consumer, er-lockon-filter, was deleted on 2026-09-11 by user directive
+# (findings in docs/recon/lockon-filter-findings.md); the measurement is kept because the
+# tables are the durable half and re-deriving them costs a session. An absent image is a skip,
+# not a pass.
 python3 "$repo_root/scripts/er-character-type-tables.py" --selftest
 # The workspace uses `../fromsoftware-rs` path dependencies, and CI clones that sibling at one
 # pinned revision while a developer's is whatever they have checked out -- often a fork carrying
@@ -730,6 +731,13 @@ python3 "$repo_root/scripts/test-narrated-action-classifier.py"
 # also re-reads the friction stall's own admission patterns out of that signal and fails if a
 # sentence would ever be charged by both rules.
 python3 "$repo_root/scripts/test-admission-with-defence-classifier.py"
+# The other half of the fix-claim guard. Its Rego suite pins what the policy does with a facts line;
+# this pins where the line comes from, which is the half that decides whether the guard convicts an
+# ordinary sentence. The negatives carry the weight: a branch called fix/..., a fixture, the gerund
+# the promissory closer owns, a quoted or backticked word, and a gate fixed by a lint all have to
+# pass. It also asserts the manifest walk still separates the crates that reach a DLL from the two
+# host-only ones -- an empty walk would make every turn innocent and the guard silently inert.
+python3 "$repo_root/scripts/test-fix-claim-classifier.py"
 # The SessionStart/PreCompact prime hook must stay small enough that the harness INLINES it.
 # At 2452 memories it emitted 157.4 KB, which Claude Code persisted to a file and replaced
 # with a 2 KB preview -- so the priming content never reached the agent while still costing
@@ -835,6 +843,7 @@ python3 "$repo_root/scripts/test-stall-on-friction-signal.py"
 python3 "$repo_root/scripts/test-wall-of-text-signal.py"
 python3 "$repo_root/scripts/test-deferred-evidence-read-signal.py"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement_reminder.rego" "$repo_root/.cupcake/tests/no_authority_agreement_test.rego" "$repo_root/.cupcake/tests/no_authority_agreement_reminder_test.rego" "$repo_root/.cupcake/policies/claude/idle_hold.rego" "$repo_root/.cupcake/policies/claude/idle_hold_reminder.rego" "$repo_root/.cupcake/tests/idle_hold_test.rego" "$repo_root/.cupcake/tests/idle_hold_reminder_test.rego" "$repo_root/.cupcake/policies/claude/native_ownership_vocab_reminder.rego" "$repo_root/.cupcake/tests/native_ownership_vocab_reminder_test.rego" "$repo_root/.cupcake/policies/claude/block_manual_pgrep.rego" "$repo_root/.cupcake/tests/block_manual_pgrep_test.rego" "$repo_root/.cupcake/policies/claude/bash_elden_ring_launch_guard.rego" "$repo_root/.cupcake/tests/bash_elden_ring_launch_guard_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion.rego" "$repo_root/.cupcake/tests/block_askuserquestion_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion_reminder.rego" "$repo_root/.cupcake/tests/block_askuserquestion_reminder_test.rego" "$repo_root/.cupcake/policies/claude/no_stall_on_friction.rego" "$repo_root/.cupcake/tests/no_stall_on_friction_test.rego" "$repo_root/.cupcake/policies/claude/no_unexecuted_promise.rego" "$repo_root/.cupcake/tests/no_unexecuted_promise_test.rego" "$repo_root/.cupcake/policies/claude/wall_of_text.rego" "$repo_root/.cupcake/tests/wall_of_text_test.rego"
+opa test "$repo_root/.cupcake/policies/claude/no_mergeable_without_green_ci.rego" "$repo_root/.cupcake/tests/no_mergeable_without_green_ci_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_push.rego" "$repo_root/.cupcake/tests/git_block_main_push_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_commit.rego" "$repo_root/.cupcake/tests/git_block_main_commit_test.rego"
 # The shared executed-text decomposition every git guard now reads (bd
@@ -948,6 +957,10 @@ python3 "$repo_root/scripts/check-no-thread-suspension.py"
 # selftest is part of the suite: the cupcake policy written for this first passed 17 OPA tests
 # and was inert in production, which is why the enforcement is bash the hook calls directly.
 bash "$repo_root/scripts/check-runtime-evidence.sh" --selftest
+# The scan both that hook and the two cupcake signals read: which directories hold a run's logs,
+# and when a `+dirty` build line is still evidence. Its own selftest, because the decision it
+# makes is the one a false accept turns into a DLL pushed unrun.
+python3 "$repo_root/scripts/er-runtime-evidence.py" --selftest
 # A detour's expected prologue must be generated from named iced-x86 instructions in a build.rs,
 # never hand-typed: `mov rax, rsp` has two legal encodings, the game ships 48 8b c4, an assembler
 # left to choose emits 48 89 e0, and a prologue that is one byte off byte-checks its own hook off
@@ -1752,13 +1765,6 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-seamless-bugfixes --lib
 # data and the byte arithmetic is pure.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-convenient-deaths --lib
 
-# er-lockon-filter's rule. The crate is one detour plus one predicate over two integers, and the
-# predicate is the whole feature: which character kinds stop being lock-on targets, and which kinds
-# you have to be for that to happen. It cannot be exercised offline any other way -- the live check
-# needs two players invading one world -- and both of its failure modes are silent, so the host run
-# is the only thing standing between a wrong constant and an invasion spent locking the wrong red.
-cargo test --manifest-path "$repo_root/Cargo.toml" -p er-lockon-filter --lib
-
 # er-hook's raw code-patch primitives. This crate is linked into 15 of the 23 cdylibs, the shipped
 # er_quickload.dll among them, so a defect in a byte-patch primitive here is a defect in all of
 # them at once -- and it is the crate least able to report one: it carries a crate-level
@@ -1985,6 +1991,21 @@ cargo check --manifest-path "$repo_root/Cargo.toml" -p er-shader-viewer
 # host-portable logic, and untestable at all until the gates landed.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-quickload -p er-title-flow --lib
 
+# The two shells whose host-portable logic sits deliberately outside their `#[cfg(windows)]` tree,
+# so it can be decided without the game. Neither was named anywhere until 2026-09-11, and
+# `default-members = ["crates/er-quickload"]` means a bare `cargo test` never selects them:
+# 27 test functions that had never executed.
+#
+#   er-quit-rows      19 lib tests -- the menu-window install decision, the `05_010_ProfileSelect`
+#                     chrome gate, and which title window a switch may ask to close -- plus 2
+#                     integration tests in `tests/no_message_box_is_answered.rs`. Deliberately not
+#                     `--lib`: that file is the assertion that this shell never answers a
+#                     `CS::MessageBoxDialog` on the player's behalf, and `--lib` compiles none of
+#                     it. Its 45 windows-only tests are the copied product tree and run under the
+#                     `cargo xwin test --lib` line in check-rust-build.sh.
+#   er-input-harness  6 lib tests over the title-scan predicates the boot drive waits on.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-quit-rows -p er-input-harness
+
 # Rust format + Windows-target build of the injectable DLL (cross-compiled from Linux via
 # cargo-xwin). A real build (not just `cargo check`) so codegen/link regressions -- including
 # any pre-existing rust breakage -- are caught here, producing the linked er_quickload.dll.
@@ -2018,6 +2039,18 @@ python3 "$repo_root/scripts/check-me3-dll-conflicts.py"
 python3 "$repo_root/scripts/check-shared-hook-rvas.py" --selftest
 python3 "$repo_root/scripts/check-shared-hook-rvas.py"
 
+# Sharing one MinHook instance is only half of sharing a prologue; the other half is that every
+# handler on it agrees with the dispatcher about the ABI. The union dispatchers forward integer
+# registers only and at a fixed width, so a handler declaring a float gets `xmm1` from nowhere,
+# and a handler declaring fewer arguments than its dispatcher cannot forward the ones it never
+# received -- which matters because its `orig` slot holds the next handler as often as it holds
+# the game trampoline. Both had shipped: `TitleTopDialog::update` and
+# `CS::FeSystemAnnounceView::Update` are float targets that reached the union through a helper
+# that took `*mut c_void` and transmuted, so the type checker never saw the declaration it would
+# have refused. That erasure is why this is a source gate rather than a compile error.
+python3 "$repo_root/scripts/check-union-hook-abi.py" --selftest
+python3 "$repo_root/scripts/check-union-hook-abi.py"
+
 # The branch-launch pipeline. Each stage refuses rather than guessing, and each carries its own
 # selftest for the refusal it exists to make -- a stale DLL, an unrankable conflict, a save with
 # no decoded identity, a block printed without the DLL's testimony.
@@ -2050,6 +2083,21 @@ python3 "$repo_root/scripts/er-release-bisect.py" --selftest
 # the default build, staged product payload, or required ME3 native list.
 python3 "$repo_root/scripts/check-single-dll-product-contract.py" --selftest
 python3 "$repo_root/scripts/check-single-dll-product-contract.py"
+
+# A Cargo feature nothing names gates nothing. `default` was trimmed to four features on
+# 2026-09-11, the DLL was rebuilt and relaunched, and the observed result was "that seemed to have
+# no effect" -- five of the six features named zero lines between them, so turning them off could
+# not remove anything. This holds a per-feature count that may only move when the baseline moves
+# with it, and lists the features that still gate nothing along with what is in the way.
+python3 "$repo_root/scripts/check-feature-gates-bite.py" --selftest
+python3 "$repo_root/scripts/check-feature-gates-bite.py"
+
+# ...and the configuration those gates describe has to keep compiling, or the counts above become
+# a record of attributes nobody builds. This is the trim the rows came off for: the autoload, the
+# save picker, the loading cover, the portraits and the menu trace, with no cloned rows.
+cargo xwin check --manifest-path "$repo_root/Cargo.toml" -p er-quickload \
+  --target x86_64-pc-windows-msvc --no-default-features \
+  --features autoload,save-picker,loading-cover,portrait,menu-trace
 
 bash "$repo_root/scripts/check-rust-build.sh"
 

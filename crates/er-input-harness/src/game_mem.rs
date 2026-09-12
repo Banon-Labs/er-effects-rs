@@ -15,8 +15,9 @@
 //! presence (in-world proxy), and top-menu-window presence -- enough to sequence the proven
 //! keyboard-open + submenu edges, not enough to positively identify each pane.
 
-use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU32, AtomicUsize, Ordering};
 
+use crate::log::harness_log;
 use crate::win32::{GetModuleHandleA, read_usize};
 
 // RVAs/offsets ported verbatim from the product's constant tree (image base 0x140000000):
@@ -30,6 +31,26 @@ const CS_MENU_MAN_MENU_DATA_OFFSET: usize = 0x8;
 
 /// Lowest plausible heap/image pointer -- filters null and small sentinel values out of walks.
 const HEAP_LO: usize = 0x10000;
+/// One past the highest address x64 Windows hands to user mode: the canonical-address split puts
+/// every user pointer below `1 << 47`.
+///
+/// Added because `HEAP_LO` alone is a floor, and the value that broke `top_window` came in from
+/// above it. `currentTopMenuJob+0x130` read `0x2f003a00320063` on 1.17.1 -- the UTF-16 for
+/// `c2:/aet/aet050/A...` -- which is `1.3e16`, two orders of magnitude past the last address any
+/// process on this target can map, and it sailed through a floor-only filter into every caller (bd
+/// er-effects-rs-h09b). A ceiling costs one comparison and rejects text, floats and packed field
+/// pairs that a floor cannot.
+const HEAP_HI: usize = 1usize << 47;
+
+/// Whether a qword read out of the game can be a live object pointer at all: inside the user-mode
+/// address range and pointer-aligned.
+///
+/// This is a screen, not proof -- proof is [`crate::rtti::class_name`] resolving the object's own
+/// `CompleteObjectLocator`. It exists so the cheap test runs first, and so no walk in this module
+/// carries its own idea of what a pointer looks like.
+fn plausible_ptr(value: usize) -> bool {
+    (HEAP_LO..HEAP_HI).contains(&value) && value.is_multiple_of(core::mem::align_of::<usize>())
+}
 
 /// The game image base (`GetModuleHandleA(NULL)`), or `None` before the image is mapped.
 pub fn game_base() -> Option<usize> {
@@ -50,8 +71,8 @@ pub fn product_dll_present() -> bool {
 /// This is the one chokepoint every singleton read in this DLL goes through, and its results feed
 /// raw byte stores (`inject_vk` stamps `source+0x88`, the popup request byte at `+0x121`). Every
 /// `.data` global moved on 1.17, so a raw `base + rva` reads whatever now occupies the old slot;
-/// `HEAP_LO` only rejects the low 64 KiB, so a plausible-looking garbage qword passes it and the
-/// store lands somewhere arbitrary. Resolving here makes an unmapped global answer `None` instead,
+/// `plausible_ptr` screens the result but cannot prove it, so a garbage qword inside the user-mode
+/// range still passes and the store lands somewhere arbitrary. Resolving here makes an unmapped global answer `None` instead,
 /// which is a path every caller already has.
 fn deref_singleton(base: usize, rva: usize, what: &'static str) -> Option<usize> {
     let address = er_game_base::mem::game_data_addr(base, rva, what);
@@ -59,7 +80,7 @@ fn deref_singleton(base: usize, rva: usize, what: &'static str) -> Option<usize>
         return None;
     }
     let p = unsafe { read_usize(address) }?;
-    (p >= HEAP_LO).then_some(p)
+    plausible_ptr(p).then_some(p)
 }
 
 /// In-world PROXY: `GameDataMan.playerGameData` (+0x08) is non-null once a character's game data is
@@ -73,8 +94,7 @@ pub fn player_present() -> bool {
     else {
         return false;
     };
-    unsafe { read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }
-        .is_some_and(|pgd| pgd >= HEAP_LO)
+    unsafe { read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }.is_some_and(plausible_ptr)
 }
 
 /// Top-menu-window PROXY: `CSMenuMan.menuData` (+0x8) non-null indicates a menu-data owner exists.
@@ -89,7 +109,7 @@ pub fn menu_data_ptr() -> usize {
         return 0;
     };
     unsafe { read_usize(menu_man + CS_MENU_MAN_MENU_DATA_OFFSET) }
-        .filter(|p| *p >= HEAP_LO)
+        .filter(|p| plausible_ptr(*p))
         .unwrap_or(0)
 }
 
@@ -110,6 +130,17 @@ pub fn play_time_ms() -> i64 {
     unsafe { read_usize(gdm + GAME_DATA_MAN_PLAY_TIME_A0_OFFSET) }
         .map_or(-1, |v| i64::from((v & 0xffff_ffff) as u32))
 }
+
+/// The `currentTopMenuJob` the cached window was resolved from, the window itself, and the vtable it
+/// carried at that moment. The graph walk is bounded but not cheap, and several callers ask for the
+/// window in one frame; the vtable is stored so a freed window cannot be re-validated by a pointer
+/// comparison alone.
+static CACHED_TOP_JOB: AtomicUsize = AtomicUsize::new(0);
+static CACHED_TOP_WINDOW: AtomicUsize = AtomicUsize::new(0);
+static CACHED_TOP_WINDOW_VTABLE: AtomicUsize = AtomicUsize::new(0);
+/// The last root job [`report_top_window`] wrote a line about, so a pane that stays up for a
+/// thousand frames is described once.
+static TOP_WINDOW_REPORTED_JOB: AtomicUsize = AtomicUsize::new(0);
 
 static LAST_PLAY_TIME: AtomicI64 = AtomicI64::new(-1);
 static WORLD_SIM_STREAK: AtomicU32 = AtomicU32::new(0);
@@ -159,6 +190,38 @@ pub fn save_state() -> i32 {
         return -1;
     };
     unsafe { read_usize(gm + GAME_MAN_SAVE_STATE_B80_OFFSET) }.map_or(-1, |v| (v & 0xff) as i32)
+}
+
+/// `GameMan::savedMap` (+0xc30, i32): the `BlockId` of the map the mounted character is in.
+/// Same field the product calls `GAME_MAN_SAVED_MAP_C30_OFFSET`.
+const GAME_MAN_SAVED_MAP_C30_OFFSET: usize = 0xc30;
+/// The map id `GameMan` holds when no character is mounted -- `m10_01_00_00`, the new-game default,
+/// which is also what the title sits on. `er_title_flow::FULLREAD_C30_M10_DEFAULT` and
+/// `er_quit_rows::orphan_title_window::C30_TITLE_DEFAULT` are the same number.
+const GAME_MAN_SAVED_MAP_TITLE_DEFAULT: i32 = 0x0a01_0000;
+/// `GameMan::savedMap` (+0xc30), or -1 when it cannot be read.
+pub fn saved_map() -> i32 {
+    let Some(base) = game_base() else {
+        return -1;
+    };
+    let Some(gm) = deref_singleton(base, GAME_MAN_SINGLETON_RVA, "GAME_MAN_SINGLETON_RVA") else {
+        return -1;
+    };
+    unsafe { read_usize(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }
+        .map_or(-1, |v| (v & 0xffff_ffff) as u32 as i32)
+}
+
+/// True once `GameMan::savedMap` names a real map, i.e. a character's world is being mounted.
+///
+/// The semaphore that replaced `save_state > 0` as the Continue effect check (bd er-effects-rs-9gxt).
+/// `save_state` is the shared save/load device, and the title builds its own profile list by reading
+/// the save through that device -- measured on the 2026-09-11 18:13 run, where `save_state` reached 2
+/// at the title, `Phase::Continue` scored itself advanced 39 frames in, and the session then sat on
+/// the title menu for 152 seconds with `world_sim=0`. This field moves only when a world mounts:
+/// the product's own load log records the transition as `c30 0xa010000->0x1c000000`.
+pub fn world_map_mounted() -> bool {
+    let map = saved_map();
+    map != GAME_MAN_SAVED_MAP_TITLE_DEFAULT && map != -1 && map != 0
 }
 
 /// NowLoading latch (deref base+0x3d60ec8 -> +0xED): set while/after a load screen; a load-activity
@@ -221,7 +284,15 @@ pub fn flip_mode_current() -> i32 {
 // top window's menu_id.
 const CS_MENU_MAN_POPUP_MENU_80_OFFSET: usize = 0x80;
 const CS_POPUP_CURRENT_TOP_JOB_B0_OFFSET: usize = 0xb0;
+/// `CS::MenuWindowJob::owningMenuWindow`, the last field of that class and valid only on that class.
+/// `CS::MenuWindowJob::Run` reads it at `0x1407ad63c`, `er-quit-rows` reads it every frame on the
+/// job `Run` hands it, and `er_title_flow::MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET` is the same number.
+/// See [`resolve_top_window`] for why reading it off `currentTopMenuJob` was reading past the end of
+/// a different object.
 const TOP_JOB_WINDOW_130_OFFSET: usize = 0x130;
+/// `CS::MenuWindow`'s menu id (u16). The engine bounds-checks it against `0x47` before indexing
+/// `CSMenuMan+0x90` with it, in `MenuWindow::MenuWindow` (`0x140741960`), `FUN_140744dd0` and the
+/// job teardown `FUN_1407ada40`; `0xffff` is its "ask the vtable" sentinel rather than a real id.
 const TOP_WINDOW_MENU_ID_180_OFFSET: usize = 0x180;
 /// OptionSetting SettingTabControl (window+0x1870) -> tab view ptr (+0x10, deref) -> selected index (+0xd4).
 const OPTIONSETTING_TAB_CONTROL_1870_OFFSET: usize = 0x1870;
@@ -230,21 +301,37 @@ const OPTIONSETTING_TAB_INDEX_D4_OFFSET: usize = 0xd4;
 /// Return-title request byte within menuData (set when the quit-to-title functor fires) = quit started.
 const MENU_DATA_RETURN_TITLE_5D_OFFSET: usize = 0x5d;
 
-/// In-world menu pane ids read at top_window+0x180 (u16).
+/// In-world menu pane ids read at `top_window+0x180` (u16).
 ///
-/// Retained RE facts, and nothing decides on them any more (2026-09-05). Both are real values off a
-/// reversed 1.16.2 menu-id table, which is why they are kept rather than deleted. But the offset
-/// they are read through, `TOP_WINDOW_MENU_ID_180_OFFSET`, has drifted on 1.17: `top_menu_id()`
-/// returns -1 or garbage there (53724, 25445, -1 measured across br-20260905-041435-e8d0 and
-/// -041731-2bc4) while `pause_menu_open()` was correctly true. Garbage compares `!=` to anything, so
-/// a phase gated on `top_menu_id() != OPTIONSETTING_MENU_ID` advances on its first frame and reports
-/// success for a press it never issued -- which is exactly what `Phase::ActivateLoadFromFile` did
-/// until it moved to the `currentTopMenuJob` pointer-change semaphore. `top_menu_id()` survives as a
-/// log field only. Do not gate anything on either constant until the 1.17 offset is re-measured.
+/// Correction, 2026-09-12. This block used to say the offset had drifted on 1.17, on the evidence
+/// that `top_menu_id()` answered 53724, 25445 and -1 while `pause_menu_open()` was correctly true.
+/// The offset had not drifted: the static RE behind bd er-effects-rs-h09b shows `+0x180` is where
+/// the engine itself reads a `CS::MenuWindow`'s menu id on both builds, and `er-quit-rows` reads it
+/// there on 1.17.1 every frame. What was wrong was the pointer those reads were made through --
+/// `top_window()` was handing them a UTF-16 asset path -- so `top_menu_id()` was reading two bytes
+/// out of the middle of a string and reporting them as a pane.
+///
+/// Still a log field and still not an effect check, because the fix is static and the readings are
+/// behavioural: nothing here has been seen answering `0x25` on a live 1.17.1 session yet. A phase
+/// gated on `top_menu_id() != OPTIONSETTING_MENU_ID` advances on its first frame if the read is
+/// wrong in any way, and reports success for a press it never issued -- which is what
+/// `Phase::ActivateLoadFromFile` did before it moved to the `currentTopMenuJob` pointer-change
+/// semaphore. Gate on these only once a run has shown them reading the ids below.
 #[allow(dead_code)]
 pub const INGAMETOP_MENU_ID: i32 = 0xffff;
 #[allow(dead_code)]
 pub const OPTIONSETTING_MENU_ID: i32 = 0x25;
+///
+/// Kept, and still not an effect check. `optionsetting_tab_index` walks `window+0x1870`, and every
+/// `-1` it has ever returned was measured through the broken `top_window()` -- a chain rooted in a
+/// string answers `-1` whatever its offsets are, so those runs are evidence about the root pointer
+/// and not about `0x1870`. `Phase::TabToQuit` advances on the Quit tab's own rows being readable and
+/// logs the index beside them, which is the line that would show this chain reading a real tab now
+/// that it is rooted in a real window.
+#[expect(
+    dead_code,
+    reason = "the diagnostic that would use it prints the raw index instead"
+)]
 pub const OPTIONSETTING_QUIT_TAB_INDEX: i32 = 8;
 
 fn input_mgr() -> usize {
@@ -303,25 +390,216 @@ pub fn top_menu_job_ptr() -> usize {
     if im == 0 {
         return 0;
     }
-    let Some(popup) =
-        (unsafe { read_usize(im + CS_MENU_MAN_POPUP_MENU_80_OFFSET) }).filter(|p| *p >= HEAP_LO)
+    let Some(popup) = (unsafe { read_usize(im + CS_MENU_MAN_POPUP_MENU_80_OFFSET) })
+        .filter(|p| plausible_ptr(*p))
     else {
         return 0;
     };
     unsafe { read_usize(popup + CS_POPUP_CURRENT_TOP_JOB_B0_OFFSET) }
-        .filter(|p| *p >= HEAP_LO)
+        .filter(|p| plausible_ptr(*p))
         .unwrap_or(0)
 }
 
-/// The top menu window (`currentTopMenuJob+0x130`), or 0.
+/// The mangled RTTI names this walk decides on. They are the whole of its build dependence: a class
+/// name is stable across patches in a way a vtable address is not, which is why the walk carries
+/// these two strings and no address at all.
+const MENU_WINDOW_JOB_CLASS: &str = ".?AVMenuWindowJob@CS@@";
+const MENU_WINDOW_CLASS: &str = ".?AVMenuWindow@CS@@";
+/// How many distinct objects the job-graph walk will visit before giving up. The live graph from
+/// `currentTopMenuJob` to the `MenuWindowJob` is four objects deep and holds single digits of jobs
+/// at each level, so this is roughly an order of magnitude of headroom -- and it is a hard bound,
+/// because every node costs `JOB_OBJECT_SCAN_QWORDS` fault-safe reads.
+const JOB_GRAPH_MAX_NODES: usize = 64;
+/// How deep the walk follows child pointers.
+const JOB_GRAPH_MAX_DEPTH: u8 = 6;
+/// How far into a job object to look for pointers to other jobs. `FixOrderJobSequence` keeps its
+/// job vector at `+0x18..+0x58` with the count at `+0x60`, and the `FinalizeCallbackJob` that
+/// `CSPopupMenu::StartTopMenuJob` installs keeps its inner job at `+0x10`, so `0x100` covers every
+/// link in the chain with room to spare. It deliberately does not reach `MenuWindowJob`'s `+0x130`:
+/// that field is read once the class is known, never scanned for.
+const JOB_OBJECT_SCAN_QWORDS: usize = 32;
+/// How many `MenuWindowJob`s the walk will name in its one-time log line.
+const JOB_GRAPH_REPORT_LIMIT: usize = 4;
+
+/// The top menu window, resolved through the job graph the engine itself builds, or 0.
+///
+/// What was wrong, and it was not the offset (bd er-effects-rs-h09b, static RE 2026-09-12).
+/// `+0x130` is `CS::MenuWindowJob::owningMenuWindow` -- the engine reads it at `0x1407ad63c` inside
+/// `CS::MenuWindowJob::Run`, and the product's own Quit-rows hook reads it every frame on the job
+/// that `Run` hands it. But `popupMenu->currentTopMenuJob` is not that job.
+/// `CSPopupMenu::StartTopMenuJob` (1.16.2 `FUN_1407f0b50`) chains the caller's job with a
+/// wait-frame job and a functor job through `CS::MenuJob::ChainMenuJobs`, wraps the resulting
+/// `FixOrderJobSequence` in a `0x58`-byte `CS::FinalizeCallbackJob` (`FUN_1407a8180` heap-allocates
+/// exactly `0x58`), and assigns that to `+0xb0`. Reading `+0x130` off a `0x58`-byte object is a read
+/// `0xd8` bytes past its end, which is why the live value on 1.17.1 was `0x2f003a00320063` -- the
+/// UTF-16 for `c2:/aet/aet050/A...`, heap text sitting behind the job.
+///
+/// So the walk descends the graph instead: from `currentTopMenuJob`, follow pointers that resolve
+/// to polymorphic objects of this image until one of them is a `CS::MenuWindowJob` by RTTI name,
+/// then read `+0x130` from that. Every hop is validated by a `CompleteObjectLocator` self-RVA check,
+/// so a qword of text cannot be followed, let alone accepted.
+///
+/// The route the brief suggested -- `CSMenuMan+0x90`'s per-menu-id table -- does not exist. That
+/// field is a `byte[0x47]` of shown-flags, not window pointers: `MenuWindowJob::Run` sets
+/// `field99_0x90[menu_id] |= 1`, `FUN_140744dd0` sets `|= 3`, and the teardown `FUN_1407ada40`
+/// writes `0`. There is no live-window registry in `CSMenuManImp` to read.
+///
+/// Fails closed. When no `MenuWindowJob` is in the graph, or the window it owns is not a
+/// `CS::MenuWindow`, this returns 0 and logs the root job's own class name once -- which is the
+/// diagnostic that would name a new wrapper class on a future build, rather than handing a caller
+/// something that merely reads like a pointer.
 fn top_window() -> usize {
     let job = top_menu_job_ptr();
     if job == 0 {
         return 0;
     }
-    unsafe { read_usize(job + TOP_JOB_WINDOW_130_OFFSET) }
-        .filter(|p| *p >= HEAP_LO)
-        .unwrap_or(0)
+    let Some(base) = game_base() else {
+        return 0;
+    };
+    // One BFS per distinct top job, not per call: `top_menu_id`, `pause_menu_grid`,
+    // `optionsetting_current_pane`, `optionsetting_tab_index` and the phase telemetry all ask for
+    // the window within a single frame, and the walk is up to 2048 fault-safe reads.
+    if CACHED_TOP_JOB.load(Ordering::Relaxed) == job {
+        let window = CACHED_TOP_WINDOW.load(Ordering::Relaxed);
+        // A cached refusal is cached too, deliberately. The pane that has no reachable
+        // `MenuWindowJob` is exactly the one whose walk costs the most, and re-running it on every
+        // call -- five or six times a frame between `top_menu_id`, `pause_menu_grid`,
+        // `optionsetting_current_pane`, the tab chain and the phase telemetry -- would turn a
+        // refusal into a frame-rate defect.
+        if window == 0 {
+            return 0;
+        }
+        let vtable = CACHED_TOP_WINDOW_VTABLE.load(Ordering::Relaxed);
+        if unsafe { read_usize(window) } == Some(vtable) {
+            return window;
+        }
+    }
+    let found = resolve_top_window(&crate::rtti::LiveMemory, base, job);
+    report_top_window(&crate::rtti::LiveMemory, base, job, &found);
+    let resolved = found.window;
+    let vtable = if resolved == 0 {
+        0
+    } else {
+        unsafe { read_usize(resolved) }.unwrap_or(0)
+    };
+    CACHED_TOP_JOB.store(job, Ordering::Relaxed);
+    CACHED_TOP_WINDOW.store(resolved, Ordering::Relaxed);
+    CACHED_TOP_WINDOW_VTABLE.store(vtable, Ordering::Relaxed);
+    resolved
+}
+
+/// What [`resolve_top_window`] found: the window to use, and how many `CS::MenuWindowJob`s in the
+/// graph owned one. The count is carried because more than one is the case nobody has observed yet
+/// and the case that would make "the top window" ambiguous -- so the log says it rather than the
+/// walk silently picking.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub(crate) struct TopWindow {
+    pub(crate) window: usize,
+    pub(crate) owners: usize,
+}
+
+/// The graph walk behind [`top_window`], parameterised over the reader and free of side effects so
+/// it can be exercised against a fake address space on a host build.
+pub(crate) fn resolve_top_window<M: crate::rtti::GameMemory>(
+    mem: &M,
+    base: usize,
+    root_job: usize,
+) -> TopWindow {
+    let mut queue = [(0usize, 0u8); JOB_GRAPH_MAX_NODES];
+    let mut windows = [0usize; JOB_GRAPH_REPORT_LIMIT];
+    let mut window_count = 0usize;
+    let mut head = 0usize;
+    queue[0] = (root_job, 0);
+    let mut seen = 1usize;
+
+    while head < seen {
+        let (node, depth) = queue[head];
+        head += 1;
+        if crate::rtti::is_class(mem, base, node, MENU_WINDOW_JOB_CLASS) {
+            let window = mem
+                .read_usize(node + TOP_JOB_WINDOW_130_OFFSET)
+                .filter(|w| plausible_ptr(*w))
+                .unwrap_or(0);
+            if window != 0
+                && crate::rtti::derives_from(mem, base, window, MENU_WINDOW_CLASS)
+                && window_count < JOB_GRAPH_REPORT_LIMIT
+            {
+                windows[window_count] = window;
+                window_count += 1;
+            }
+            // A `MenuWindowJob` owns a window, not more jobs -- descending into it would follow its
+            // `std::function` members for nothing.
+            continue;
+        }
+        if depth >= JOB_GRAPH_MAX_DEPTH {
+            continue;
+        }
+        for slot in 0..JOB_OBJECT_SCAN_QWORDS {
+            if seen >= JOB_GRAPH_MAX_NODES {
+                break;
+            }
+            let Some(child) = mem.read_usize(node + slot * core::mem::size_of::<usize>()) else {
+                continue;
+            };
+            // The cheap screen: a `CompleteObjectLocator` that points at itself, four reads, no
+            // name. Reading the name of every qword in every object would be the same walk at
+            // roughly forty times the cost, on the game thread.
+            if !plausible_ptr(child) || crate::rtti::locator(mem, base, child).is_none() {
+                continue;
+            }
+            if queue[..seen]
+                .iter()
+                .any(|(seen_node, _)| *seen_node == child)
+            {
+                continue;
+            }
+            queue[seen] = (child, depth + 1);
+            seen += 1;
+        }
+    }
+
+    TopWindow {
+        window: windows[..window_count].first().copied().unwrap_or(0),
+        owners: window_count,
+    }
+}
+
+/// One log line per distinct top job, naming what the walk found or what it refused.
+///
+/// The point is the refusal case. Before this, a `top_window` that resolved to garbage was
+/// indistinguishable in the log from one that resolved correctly -- the callers just started
+/// answering `-1` and `no GridControl found`, with nothing saying why. Now a graph with no
+/// `CS::MenuWindowJob` in it prints the root job's own class name, which is exactly what a future
+/// build's new wrapper class would need to be named.
+fn report_top_window<M: crate::rtti::GameMemory>(
+    mem: &M,
+    base: usize,
+    root_job: usize,
+    found: &TopWindow,
+) {
+    if TOP_WINDOW_REPORTED_JOB.swap(root_job, Ordering::Relaxed) == root_job {
+        return;
+    }
+    let root_class = crate::rtti::class_name(mem, base, root_job).map_or_else(
+        || "<not a polymorphic object>".to_string(),
+        |c| c.to_string(),
+    );
+    if found.window == 0 {
+        harness_log!(
+            "top-window: REFUSED -- no CS::MenuWindowJob reachable from currentTopMenuJob \
+             0x{root_job:x} (class {root_class}), so there is no owningMenuWindow to read and every \
+             caller gets 0 rather than whatever +0x130 happens to hold"
+        );
+        return;
+    }
+    let window = found.window;
+    let window_class = crate::rtti::class_name(mem, base, window)
+        .map_or_else(|| "<unnamed>".to_string(), |c| c.to_string());
+    harness_log!(
+        "top-window: resolved 0x{window:x} (class {window_class}) from currentTopMenuJob \
+         0x{root_job:x} (class {root_class}); {} MenuWindowJob(s) in that graph own a window",
+        found.owners
+    );
 }
 
 /// True only when the in-world pause menu (a popup top-job) is up. Replaces the false-positive
@@ -428,7 +706,7 @@ pub fn optionsetting_current_pane() -> usize {
                 + OPTIONSETTING_COMPOSITE_CURRENT_PANE_B8_OFFSET,
         )
     }
-    .filter(|p| *p >= HEAP_LO)
+    .filter(|p| plausible_ptr(*p))
     .unwrap_or(0)
 }
 
@@ -466,7 +744,8 @@ pub fn pause_menu_grid() -> Option<(usize, i32)> {
     let grid_vtable = game_base()? + GRID_CONTROL_VTABLE_RVA_1170;
     for slot in 0..MENU_WINDOW_SCAN_QWORDS {
         let offset = slot * 8;
-        let Some(candidate) = (unsafe { read_usize(window + offset) }).filter(|c| *c >= HEAP_LO)
+        let Some(candidate) =
+            (unsafe { read_usize(window + offset) }).filter(|c| plausible_ptr(*c))
         else {
             continue;
         };
@@ -480,6 +759,58 @@ pub fn pause_menu_grid() -> Option<(usize, i32)> {
     None
 }
 
+/// `PlayerGameData -> EquipGameData` and `EquipGameData -> the carried EquipInventoryData`.
+///
+/// The same two hops `er-build-import-runtime` walks, repeated here because this DLL cannot call
+/// into that one and the harness needs its own answer.
+const PLAYER_GAME_DATA_EQUIP_2B0_OFFSET: usize = 0x2b0;
+const EQUIP_GAME_DATA_INVENTORY_158_OFFSET: usize = 0x158;
+/// `EquipInventoryData.nextSortId`, the monotonic acquisition counter.
+const EQUIP_INVENTORY_NEXT_SORT_ID_84_OFFSET: usize = 0x84;
+
+/// The carried inventory's acquisition counter, or -1 when it cannot be read.
+///
+/// The effect oracle for [`crate::drive`]'s build-import phase, and the reason that phase can
+/// prove anything at all. Every other row on the Quit tab opens a pane, so a changed
+/// `currentTopMenuJob` is evidence the press landed; **Load Build from URL** opens nothing -- it
+/// grants, equips and re-orders the character in place -- so the top job never moves and a
+/// job-pointer check would report the press as never having happened.
+///
+/// This counter is what the import moves, and it moves it a lot: `CS::EquipInventoryData::InsertItem`
+/// stamps `entry.sortId` from it and increments on every insert, and the importer's reorder pass
+/// deposits and retrieves every item the build names. Measured on the live 1.17.1 process at
+/// pid 790212 on 2026-09-10: 13393, with 2225 carried entries holding 2225 distinct sort ids and
+/// the largest at 13392.
+///
+/// It is not a general-purpose "did anything happen" flag: it also rises when the player picks
+/// something up. During a driven run nothing else adds items, which is what makes it usable here.
+pub fn carried_next_sort_id() -> i64 {
+    let Some(base) = game_base() else {
+        return -1;
+    };
+    let Some(gdm) = deref_singleton(base, GAME_DATA_MAN_GLOBAL_RVA, "GAME_DATA_MAN_GLOBAL_RVA")
+    else {
+        return -1;
+    };
+    let Some(pgd) = (unsafe { read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) })
+        .filter(|p| plausible_ptr(*p))
+    else {
+        return -1;
+    };
+    let inventory = pgd + PLAYER_GAME_DATA_EQUIP_2B0_OFFSET + EQUIP_GAME_DATA_INVENTORY_158_OFFSET;
+    unsafe { read_usize(inventory + EQUIP_INVENTORY_NEXT_SORT_ID_84_OFFSET) }
+        .map_or(-1, |v| i64::from((v & 0xffff_ffff) as u32))
+}
+
+/// Row index of **Load Build from URL** on the currently displayed Quit-tab pane, or -1.
+///
+/// Read for the same reason [`optionsetting_load_from_file_row`] is read: the Quit tab carries
+/// *Return to Desktop*, and a guessed row order quits the game instead of importing a build.
+#[cfg(windows)]
+pub fn optionsetting_load_build_url_row() -> i32 {
+    optionsetting_row_of(er_quit_menu_core::rows::QuitRow::LoadBuildFromUrl)
+}
+
 /// Row index of **Load Character from File** on the currently displayed Quit-tab pane, or -1.
 ///
 /// The drive needs this before it presses Confirm, because the Quit tab also carries *Return to
@@ -488,16 +819,30 @@ pub fn pause_menu_grid() -> Option<(usize, i32)> {
 /// pointer when it can and falling back to an ASCII prefix compare (longest-first, so
 /// "Load Character from File" is never mistaken for "Load Character"), which is what makes it usable
 /// from this DLL even though the label arrays live in `er_quickload.dll`'s image.
+#[cfg(windows)]
 pub fn optionsetting_load_from_file_row() -> i32 {
+    optionsetting_row_of(er_quit_menu_core::rows::QuitRow::LoadSaveProfiles)
+}
+
+/// Row index of one of our cloned rows on the currently displayed Quit-tab pane, or -1.
+///
+/// One walk for every caller, so a second row can be driven without a second copy of the scan --
+/// and so the two callers cannot drift into disagreeing about which pane they read.
+///
+/// Windows-only because `er_quit_menu_core::row_identity` is: the label walk it performs reads the
+/// game's own row objects, so the module has nothing to compile on a host build and the import is an
+/// error there rather than dead code.
+#[cfg(windows)]
+fn optionsetting_row_of(wanted: er_quit_menu_core::rows::QuitRow) -> i32 {
     use er_quit_menu_core::row_identity::system_quit_row_label_at;
-    use er_quit_menu_core::rows::{QuitRow, QuitRowLabel};
+    use er_quit_menu_core::rows::QuitRowLabel;
     let dialog = optionsetting_current_pane();
     if dialog == 0 {
         return -1;
     }
     for index in 0..16i32 {
-        if let Some(QuitRowLabel::Ours(QuitRow::LoadSaveProfiles)) =
-            unsafe { system_quit_row_label_at(dialog, index) }
+        if let Some(QuitRowLabel::Ours(row)) = unsafe { system_quit_row_label_at(dialog, index) }
+            && row == wanted
         {
             return index;
         }
@@ -514,7 +859,7 @@ pub fn optionsetting_tab_index() -> i32 {
     let Some(view) = (unsafe {
         read_usize(w + OPTIONSETTING_TAB_CONTROL_1870_OFFSET + OPTIONSETTING_TAB_VIEW_10_OFFSET)
     })
-    .filter(|p| *p >= HEAP_LO) else {
+    .filter(|p| plausible_ptr(*p)) else {
         return -1;
     };
     unsafe { read_usize(view + OPTIONSETTING_TAB_INDEX_D4_OFFSET) }
@@ -542,7 +887,7 @@ pub fn return_title_requested() -> bool {
         return false;
     }
     let Some(md) =
-        (unsafe { read_usize(im + CS_MENU_MAN_MENU_DATA_OFFSET) }).filter(|p| *p >= HEAP_LO)
+        (unsafe { read_usize(im + CS_MENU_MAN_MENU_DATA_OFFSET) }).filter(|p| plausible_ptr(*p))
     else {
         return false;
     };
@@ -597,7 +942,7 @@ pub fn request_return_to_title() -> bool {
         return false;
     }
     let Some(md) =
-        (unsafe { read_usize(im + CS_MENU_MAN_MENU_DATA_OFFSET) }).filter(|p| *p >= HEAP_LO)
+        (unsafe { read_usize(im + CS_MENU_MAN_MENU_DATA_OFFSET) }).filter(|p| plausible_ptr(*p))
     else {
         return false;
     };

@@ -29,6 +29,17 @@
 # They had named the general form twice already in the same session, and `AGENTS.md` names it in
 # the stop-too-early list: "Announcing your own next action instead of taking it".
 #
+# A sixth, one session later, 2026-09-11, which the guard above still missed:
+#
+#   No - feature-gate `er-quickload` instead of forking it, and I'm starting on that now.
+#
+# The user: "There's a rego policy that should have caught you saying 'and I'm starting on that now'
+# and introduced a stophook." The announcement rides in after a comma instead of heading its own
+# sentence, so the anchored first-person arm never reached it -- and a fixture of that turn replayed
+# through all 17 last_assistant_*.sh signals in this repo left every one of them silent. The
+# classifier now carries a trailing arm for it, narrowed by the shape of the sentence rather than by
+# dropping the anchor; see `TRAILING_FIRST_PERSON_RE` in scripts/cupcake_narrated_action.py.
+#
 # Why the neighbouring Stop guards do not catch it
 #   * `last_assistant_future_commitment` needs a first-person future opener ("next run I'll ...",
 #     "I'm going to ..."). A bare participial clause commits nobody and names no future.

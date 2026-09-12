@@ -1,0 +1,39 @@
+# Standalone ME3 shell for the System>Quit **Load Character** row, with no product DLL in the
+# profile. Sibling of `er-quit-menu`, which ships the two build rows the same way: both call
+# `er_quit_menu_core::arm::arm_standalone` with their own `RowSet`, so the row a shell does not
+# have a flow for is never cloned and can never be pressed.
+#
+# It ships ONE of the two character rows on purpose. **Load Character from File** is not armed:
+# its browse surface, its ingest and its save-swap ledger are all still in `er-quickload`
+# (`save_picker_menu.rs`, `save_swap_profile_table.rs`, `loading_cover_save_slot.rs`), and
+# `QuitMenuHost::system_quit_ingest_picked_save` defaults to refusing every pick -- so arming it
+# would put a row on the tab that opens a browser and then rejects whatever the player chooses.
+#
+# This crate contends with `er-quickload` and with `er-quit-menu` on the Quit tab: all three derive
+# the same six-cell `02_040_optionsetting` grid, and `er_gfx::options_02_040::quit6` fail-closes
+# when handed already-derived bytes. `scripts/me3-dll-conflicts.toml` records both pairs as
+# duplicate owners, so a profile carrying two of them is refused rather than half-working.
+[package]
+name = "er-quit-load-character"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_quit_load_character"
+# `cdylib` is the ME3-loadable artifact; `rlib` keeps the tiny DLL shell testable on the
+# host without pulling game deps into the test graph.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+er-quit-menu-core = { path = "../er-quit-menu-core" }
+# Tier A only (zero external deps, host-buildable): the fresh-per-process log writer, so this
+# shell's log describes exactly one run instead of accumulating across launches.
+er-game-base = { path = "../er-game-base" }
+
+# Lint parity with `../fromsoftware-rs` (root `[workspace.lints]`): stock rustc + clippy lint
+# set, denied. Zero violations on the shipping target
+# (`cargo xwin clippy --release --target x86_64-pc-windows-msvc --all-targets`) and on the host
+# build, so the deny carries no `# DEBT:` allows.
+[lints]
+workspace = true

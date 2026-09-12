@@ -40,8 +40,47 @@ import struct
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OLD_IMAGE = os.environ.get("ER_DEOBF_1162", os.path.join(ROOT, "eldenring-deobf.bin"))
-NEW_IMAGE = os.environ.get("ER_DEOBF_1170", os.path.join(ROOT, "eldenring-deobf-1.17.bin"))
+
+
+def _resolve_image(env_var, filename):
+    """Locate a deobf image: explicit env override, then this checkout, then the main worktree.
+
+    Same resolution `scripts/map-rvas-1162-to-1170.py` uses, and here for the same reason. The
+    images are gitignored multi-hundred-MB reverse engineering inputs that live beside the primary
+    checkout and are never copied per worktree. An agent adding a ledger row from a linked
+    worktree therefore got the `"NOT A PASS"` skip -- the gate declining, at exit 0, to run on
+    the one edit it exists to check.
+    """
+    override = os.environ.get(env_var)
+    if override:
+        return override
+    local = os.path.join(ROOT, filename)
+    if os.path.exists(local):
+        return local
+    # `git rev-parse --git-common-dir` resolves to the primary checkout's `.git` from inside a
+    # linked worktree, and to our own otherwise, so its parent is the main working tree.
+    try:
+        import subprocess
+
+        common = subprocess.run(
+            ["git", "-C", ROOT, "rev-parse", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if common.returncode == 0:
+            main_root = os.path.dirname(os.path.abspath(os.path.join(ROOT, common.stdout.strip())))
+            candidate = os.path.join(main_root, filename)
+            if os.path.exists(candidate):
+                return candidate
+    except Exception:
+        pass
+    return local
+
+
+OLD_IMAGE = _resolve_image("ER_DEOBF_1162", "eldenring-deobf.bin")
+NEW_IMAGE = _resolve_image("ER_DEOBF_1170", "eldenring-deobf-1.17.bin")
 BASE = 0x140000000
 UNW_FLAG_CHAININFO = 0x4
 

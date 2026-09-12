@@ -35,6 +35,7 @@ pub(crate) static SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_ORIG: AtomicUsize =
 pub(crate) const SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED: usize = 0;
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED_YES: usize = 1;
+#[cfg(feature = "quit-rows")]
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_LOG_COUNT;
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_INGAME_TOP_WINDOW;
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_OPTION_SETTING_WINDOW;
@@ -45,23 +46,29 @@ pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_SELECT_WINDOW;
 /// while that var is still 0 -- the confirm then escapes msgbox suppression and crashes the game (2026-07-15).
 /// This flag spans the whole flow so `switch_active` in the msgbox builder hook covers that gap.
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE;
-pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_HIDE_REAL_WINDOWS_COUNT;
-pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_RESTORE_REAL_WINDOWS_COUNT;
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_SKIP_RESTORE_AFTER_QUICKLOAD_COUNT;
+#[cfg(feature = "quit-rows")]
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_REAL_WINDOWS_HIDDEN;
+#[cfg(feature = "quit-rows")]
 pub(crate) static SYSTEM_QUIT_WINDOW_LIST_PUSH_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+#[cfg(feature = "quit-rows")]
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED;
+#[cfg(feature = "quit-rows")]
 pub(crate) const SYSTEM_QUIT_WINDOW_LIST_PUSH_NOT_INSTALLED: usize = 0;
+#[cfg(feature = "quit-rows")]
 pub(crate) const SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED_YES: usize = 1;
+#[cfg(feature = "quit-rows")]
 /// Live/deobf `CS::ProfileLoadDialog` activation vtable target (`dump 0x1409a47c0` -> deobf
 /// `0x1409a4670`). This builds/submits the native confirmation dialog for the selected profile.
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_RVA: u32 = 0x9a4670;
+#[cfg(feature = "quit-rows")]
 /// Live/deobf `<lambda_4c99...>::operator()` (`dump 0x1409a4ee0` -> deobf `0x1409a4d90`). This
 /// only writes `*(dialog+0x1cc8+0x14c)=2` and `dialog+0x1e8=Success`; runtime evidence showed the
 /// crash happens before this lambda is reached when the confirmation is accepted, so this transition
 /// is safe to allow after blocking the actual load job.
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_RVA: u32 = 0x9a4d90;
+#[cfg(feature = "quit-rows")]
 /// Live/deobf `CS::MenuJobWithContext<LoadJobContext,...>::Run` (`dump 0x140826e40` -> deobf
 /// `0x140826d50`). This is the load job queued behind the native confirmation dialog; accepting
 /// confirmation reaches this job and then crashed at CSGaitemImp::Deserialize live/deobf `0x14067141a`.
@@ -76,36 +83,15 @@ pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA: u32 = 0x826d50;
 /// `system-quit-profileselect-native-close-B-path` / `menu-job-queue-pump-dequeue-mechanism`.
 pub(crate) const SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA: u32 =
     er_game_base::rva::MENU_WINDOW_CLOSE_WITH_FAILED_RVA as u32;
-/// Native ProfileLoadDialog in-place list rebuild `FUN_1409a5020` (dump `0x1409a5020` -> live/deobf
-/// `0x9a4ed0`, content-unique via dump-deobf-shift). `fn(rcx = dialog)`. The game's own
-/// records-changed refresh, used by the delete-save flow: re-runs the item-list builder
-/// `FUN_140875680` (fresh `GetProfileSummary()` re-read of the live records), copies the new list
-/// into `dialog+0x1260`, and rebinds via `FUN_1409a2e40` -- which rewrites the row count at
-/// `+0xb08`, re-selects a valid cursor, and unconditionally re-decorates every visible row. This
-/// is the sanctioned way to change row text while the 05_010 window stays open (the decorate pass
-/// reads per-row snapshots, so bare record writes are invisible without this rebuild). RE 2026-07-07,
-/// adversarially verified (see bd save-picker RE notes).
-pub(crate) const PROFILE_LOAD_DIALOG_LIST_REBUILD_RVA: u32 = 0x9a4ed0;
-/// Native ProfileSelect item-list builder `FUN_140875590` (1.16.2 dump VA == deobf/live VA, shift 0;
-/// entry bytes `48 8b c4 56 57 41 56 48 81 ec d0 0b 00 00` byte-verified in `eldenring-deobf.bin`).
-/// `fn(rcx = out BasicViewItemList<MenuSaveDataSummary,10>*) -> out`. Builds the visible 10-row list
-/// straight from the live ProfileSummary: occupancy via `FUN_140261cd0` (`saveSlotsStates[slot]`,
-/// summary+0x8+slot) and record pointer via `FUN_140261b80` (summary+0x18+slot*0x2a0). Every point
-/// where records become visible rows funnels through this one function: the ProfileLoadDialog
-/// ctor/bind paths and the delete-flow in-place rebuild (`PROFILE_LOAD_DIALOG_LIST_REBUILD_RVA`)
-/// all call it, so the save-picker re-stage hook at its entry covers every build site.
-pub(crate) const PROFILE_SELECT_LIST_BUILDER_RVA: u32 = 0x875590;
-pub(crate) static SAVE_PICKER_LIST_BUILDER_ORIG: AtomicUsize =
-    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry_core::counters::SAVE_PICKER_LIST_BUILDER_INSTALLED;
+#[cfg(feature = "quit-rows")]
 /// Times the list-builder hook re-staged the browse rows before a native list build (oracle; each
 /// re-stage repairs any game-save record stomp that landed since the previous staging).
-pub(crate) use er_telemetry_core::counters::SAVE_PICKER_LIST_BUILDER_RESTAGE_COUNT;
 /// One-shot latch: set when we have invoked the native ProfileSelect close during a return-title
 /// transition, so the per-tick handler closes it exactly once. Reset with the ProfileSelect state.
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_FIRED;
 /// Telemetry: number of native ProfileSelect close-finalize calls issued (expected 1 per flow).
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_COUNT;
+#[cfg(feature = "quit-rows")]
 /// The load-only save routine `FUN_14067b380` (dump 0x14067b380 -> LIVE/deobf 0x67b290, shift -0xf0),
 /// called by `CS::MoveMapStep::DoSaveStuff` when `GameMan.saveState/b80 == 2`: it reads the slot's save
 /// file and runs `PlayerGameData::Deserialize -> CSGaitemImp::Deserialize` (the in-world deserialize
@@ -116,20 +102,27 @@ pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILESELECT_NATIVE_CLO
 /// the RVA is the live 0x67b290 (game_rva uses the deobf base); the dump 0x67b380 is a different
 /// function -- hooking it silently no-ops (observed 2026-07-01: guard installed but never fired).
 pub(crate) const SYSTEM_QUIT_INWORLD_LOAD_RVA: u32 = 0x67b290;
+#[cfg(feature = "quit-rows")]
 pub(crate) static SYSTEM_QUIT_INWORLD_LOAD_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+#[cfg(feature = "quit-rows")]
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_INWORLD_LOAD_INSTALLED;
+#[cfg(feature = "quit-rows")]
 /// Claim states for [`SYSTEM_QUIT_INWORLD_LOAD_INSTALLED`], read by `mh_install_hook_once`'s
 /// compare-exchange. The guard installs LAZILY (at the moment a switch arms, not at boot) and the
 /// arm can happen many times a session, so the claim is the rolled-back kind: a real failure puts
 /// the flag back to NOT_INSTALLED and the next arm retries.
 pub(crate) const SYSTEM_QUIT_INWORLD_LOAD_NOT_INSTALLED: usize = 0;
+#[cfg(feature = "quit-rows")]
 pub(crate) const SYSTEM_QUIT_INWORLD_LOAD_INSTALLED_YES: usize = 1;
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_INWORLD_LOAD_SKIP_COUNT;
+#[cfg(feature = "quit-rows")]
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_INWORLD_LOAD_ALLOW_COUNT;
+#[cfg(feature = "quit-rows")]
 /// Count of frames the menu-pump Run hook forced GameMan.saveState/b80 back to idle to abort a
 /// half-started in-world load transition so the queued return-title chain can run.
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_INWORLD_LOAD_ABORT_COUNT;
+#[cfg(feature = "quit-rows")]
 /// `CS::GameMan::RequestLoadSlot(slot)` -- the native setter that transitions GameMan.saveState/b80
 /// 0->2 to request an in-world load of an explicit slot 0-9 (dump `FUN_14067b2f0` -> LIVE/deobf
 /// `0x67b200`, shift -0xf0, content-unique). It validates the slot's ProfileSummary then calls the
@@ -145,21 +138,28 @@ pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_INWORLD_LOAD_ABORT_COUNT
 /// FUN_14067b570 (sentinel slot 0xb): those arm the boot/clean-title autoload and must not be blocked.
 /// See bd system-quit-loadjob-success-commits-phantom-load-2026-07-01.
 pub(crate) const SYSTEM_QUIT_REQUEST_LOAD_SLOT_RVA: u32 = 0x67b200;
+#[cfg(feature = "quit-rows")]
 pub(crate) static SYSTEM_QUIT_REQUEST_LOAD_SLOT_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+#[cfg(feature = "quit-rows")]
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_REQUEST_LOAD_SLOT_INSTALLED;
+#[cfg(feature = "quit-rows")]
 /// Claim states for [`SYSTEM_QUIT_REQUEST_LOAD_SLOT_INSTALLED`]; same rolled-back claim as its
 /// in-world-load sibling above, for the same reason (lazy install, re-armed per switch).
 pub(crate) const SYSTEM_QUIT_REQUEST_LOAD_SLOT_NOT_INSTALLED: usize = 0;
+#[cfg(feature = "quit-rows")]
 pub(crate) const SYSTEM_QUIT_REQUEST_LOAD_SLOT_INSTALLED_YES: usize = 1;
 /// Count of in-world load requests we neutralized (returned "not armed") during the switch so
 /// GameMan.saveState/b80 stayed 0 and no NowLoading transition started.
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_REQUEST_LOAD_SLOT_BLOCK_COUNT;
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_REQUEST_LOAD_SLOT_ALLOW_COUNT;
+#[cfg(feature = "quit-rows")]
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+#[cfg(feature = "quit-rows")]
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+#[cfg(feature = "quit-rows")]
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 #[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
@@ -174,14 +174,23 @@ pub(crate) static SYSTEM_QUIT_GAITEM_LOOKUP_ORIG: AtomicUsize =
 #[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static SYSTEM_QUIT_GAITEM_FINALIZE_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+#[cfg(feature = "quit-rows")]
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED;
+#[cfg(feature = "quit-rows")]
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_INSTALLED;
+#[cfg(feature = "quit-rows")]
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_INSTALLED;
+#[cfg(feature = "quit-rows")]
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_NOT_INSTALLED: usize = 0;
+#[cfg(feature = "quit-rows")]
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED_YES: usize = 1;
+#[cfg(feature = "quit-rows")]
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_NOT_INSTALLED: usize = 0;
+#[cfg(feature = "quit-rows")]
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_INSTALLED_YES: usize = 1;
+#[cfg(feature = "quit-rows")]
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_NOT_INSTALLED: usize = 0;
+#[cfg(feature = "quit-rows")]
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_INSTALLED_YES: usize = 1;
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_NOT_INSTALLED: usize = 0;
@@ -217,6 +226,7 @@ pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAS
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_LIST;
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_PROFILE_ID: AtomicUsize =
     AtomicUsize::new(usize::MAX);
+#[cfg(feature = "quit-rows")]
 /// Captured fourth constructor argument for native ProfileSelect LoadJob builder, mirrored from the
 /// consumed LoadJobContext (`job+0x60`, originally `*(ProfileLoadDialog+0x1cc8)`).
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_CONTEXT_ARG: AtomicUsize =
@@ -228,6 +238,7 @@ pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_POST_RETURN_TITLE_FIRED: AtomicUs
 /// GameMan return-title/save flags used by the normal Quit Game confirmation callback without
 /// displaying another confirmation dialog.
 pub(crate) const SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA: u32 = 0x67a3a0;
+#[cfg(feature = "quit-rows")]
 /// Guard on the native title Continue confirm `0x140b0e180` (`CONTINUE_CONFIRM_RVA`): it only reads
 /// GameMan+0xc30 -> owner+0xbc -> SetState(5) and picks no slot, so after a System->Quit switch the
 /// clean-title reload would re-stream the pre-switch GameMan/PlayerGameData state (no fresh
@@ -240,8 +251,11 @@ pub(crate) const SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA: u32 = 0x67a3a0;
 /// a separate trace-set hook -- same precedent as `install_c30_writer_hook`).
 pub(crate) static SYSTEM_QUIT_CONTINUE_CONFIRM_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+#[cfg(feature = "quit-rows")]
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_INSTALLED;
+#[cfg(feature = "quit-rows")]
 pub(crate) static START_SYSTEM_QUIT_CONTINUE_CONFIRM_HOOK: Once = Once::new();
+#[cfg(feature = "quit-rows")]
 pub(crate) static START_SYSTEM_QUIT_CHILD_FINISH_TRACE_HOOK: Once = Once::new();
 /// One-shot per armed switch: 0 = the fresh picked-slot deserialize has not yet run for the active
 /// System->Quit switch (reset by `system_quit_arm_quickload_autoload`); 1 = it succeeded and the
@@ -250,6 +264,7 @@ pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_D
 /// Count of successful fresh picked-slot deserializes driven by the confirm hook (product proof
 /// expects exactly 1 per switch).
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT;
+#[cfg(feature = "quit-rows")]
 /// One-shot guard for the menu-free clean-title switch reload (own_load_switch_reload_fire, 2026-07-18).
 /// The warm-rebuilt TitleTopDialog never reaches Loop post-return-title (press-start SceneObjProxy at
 /// dialog+0xb78 unbound), so the title accept-byte/open-menu path deadlocks. For a genuine in-world

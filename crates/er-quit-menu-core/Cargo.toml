@@ -39,6 +39,12 @@ er-save-picker-core = { path = "../er-save-picker-core", default-features = fals
 ] }
 # BND4 slot walk + PlayerGameData reads for the ProfileSummary preview of a foreign save.
 er-save-loader = { path = "../er-save-loader" }
+# The profile-renderer table this crate's ProfileSelect opener stands on: the 10-slot table
+# accessor, the renderer vtable, the native table builder and the shared `..._DIAG_ORIG` slot. The
+# window the opener submits renders character models, so the table's health is a precondition of
+# opening it at all -- see `profile_table_guard`. Direction stays acyclic: that crate does not
+# reference this one.
+er-loading-portrait-core = { path = "../er-loading-portrait-core" }
 # Shared cross-platform telemetry counters (the oracle_system_quit_* / save_flow_* /
 # save_dest_* / save_picker_* fields).
 er-telemetry-core = { path = "../er-telemetry-core" }
@@ -46,6 +52,10 @@ er-telemetry-core = { path = "../er-telemetry-core" }
 # when it VALIDATES, so the pure host-side parser comes with the row. Data transformation only --
 # the game-side importer stays in er-build-import-runtime.
 er-build-import-core = { path = "../er-build-import-core" }
+# The Scaleform-GFX reader/writer that derives the two movies these rows stand on: the six-cell
+# `02_040_optionsetting` grid the rows are cells of, and the `02_990` link field. Pure-Rust and
+# host-testable, so it comes in on both targets -- the backdrop attestation is a host test.
+er-gfx = { path = "../er-gfx" }
 
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
@@ -57,10 +67,19 @@ fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 er-hook = { path = "../er-hook" }
 # Fault-safe RAM readers, game base/rva resolution, typed game bindings.
 er-game-base = { path = "../er-game-base", features = ["game-types"] }
+# The save picker stages ProfileSummary records as browse rows, and the preview hash it compares
+# against is the one the profile-summary crate already derives.
+er-profile-summary-core = { path = "../er-profile-summary-core" }
 # The game-side importer/exporter, shared with the standalone er-build-import DLL. The
 # System>Quit "Load Build from URL" and "Generate Build Link" rows are the product entry
 # points into it.
 er-build-import-runtime = { path = "../er-build-import-runtime" }
+# The reverse-engineered layout of the menu surfaces these rows live on: the `CS::MenuJob` queue
+# and submit addresses the software keyboard drives, the System dialog's job-queue and window-list
+# offsets, and the two `AddCancelButton` caller return addresses the row cloner tells its two call
+# sites apart by. Each of those is one declaration in that crate; re-declaring any of them here
+# would be a second claim about the same address (`scripts/check-rva-alias-drift.py`).
+er-title-flow = { path = "../er-title-flow" }
 windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
@@ -70,6 +89,14 @@ windows = { version = "0.62", features = [
   "Win32_Storage_FileSystem",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
+] }
+
+# The assembler the build script encodes each pinned prologue with, so the bytes this crate
+# byte-checks are generated from named instructions rather than transcribed.
+[build-dependencies]
+iced-x86 = { version = "1.21", default-features = false, features = [
+  "std",
+  "code_asm",
 ] }
 
 # Lint parity with `../fromsoftware-rs` (root `[workspace.lints]`): stock rustc + clippy lint

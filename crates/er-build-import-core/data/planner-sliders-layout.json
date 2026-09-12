@@ -1,0 +1,1524 @@
+[
+ {
+  "key": "faceModelId",
+  "name": "Face_Model_Id",
+  "offset": 0,
+  "type": "list",
+  "size": 4,
+  "options": {},
+  "hide": true
+ },
+ {
+  "key": "hairModelId",
+  "name": "Hair_Model_Id",
+  "offset": 4,
+  "type": "list",
+  "size": 4,
+  "options": {
+   "0": "1: Mald",
+   "113": "2: Coping",
+   "112": "3",
+   "1": "4",
+   "3": "5",
+   "100": "6",
+   "5": "7",
+   "10": "8",
+   "101": "9",
+   "9": "10: Weeb",
+   "8": "11",
+   "6": "12",
+   "7": "13",
+   "115": "14",
+   "114": "15",
+   "2": "16: Malding",
+   "4": "17: Lenny",
+   "102": "18",
+   "103": "19: Long straight bangs",
+   "104": "20: Long straight",
+   "105": "21",
+   "106": "22: Long",
+   "107": "23: Ponytail",
+   "109": "24: Braided ponytail",
+   "108": "25",
+   "111": "26",
+   "110": "27",
+   "117": "28",
+   "119": "29",
+   "118": "30",
+   "116": "31: Twin braids",
+   "121": "32: Pigtails"
+  }
+ },
+ {
+  "key": "eyeModelId",
+  "name": "Eye_Model_Id",
+  "offset": 8,
+  "type": "list",
+  "size": 4,
+  "options": {}
+ },
+ {
+  "key": "eyebrowModelId",
+  "name": "Eyebrow_Model_Id",
+  "offset": 12,
+  "type": "list",
+  "size": 4,
+  "options": {
+   "0": "1: None",
+   "1": "2",
+   "2": "3",
+   "3": "4",
+   "4": "5",
+   "5": "6",
+   "6": "7",
+   "7": "8",
+   "8": "9",
+   "9": "10",
+   "10": "11",
+   "11": "12",
+   "12": "13",
+   "13": "14",
+   "14": "15",
+   "15": "16",
+   "16": "17"
+  }
+ },
+ {
+  "key": "beardModelId",
+  "name": "Beard_Model_Id",
+  "offset": 16,
+  "type": "list",
+  "size": 4,
+  "options": {
+   "0": "1: None",
+   "1": "2",
+   "2": "3",
+   "3": "4",
+   "4": "5",
+   "5": "6",
+   "6": "7",
+   "7": "8",
+   "8": "9",
+   "9": "10",
+   "10": "11",
+   "11": "12"
+  }
+ },
+ {
+  "key": "accessoriesModelId",
+  "name": "Accessories_Model_Id",
+  "offset": 20,
+  "type": "list",
+  "size": 4,
+  "options": {
+   "0": "1: None",
+   "2": "2: Left eye patch",
+   "1": "3: Right eye patch",
+   "10": "4: Blindfold"
+  }
+ },
+ {
+  "key": "decalModelId",
+  "name": "Decal_Model_Id",
+  "offset": 24,
+  "type": "list",
+  "size": 4,
+  "options": {
+   "0": "1: None",
+   "1": "2",
+   "2": "3",
+   "3": "4",
+   "4": "5",
+   "5": "6",
+   "6": "7",
+   "7": "8",
+   "8": "9",
+   "9": "10",
+   "10": "11",
+   "11": "12",
+   "12": "13",
+   "13": "14",
+   "14": "15",
+   "15": "16",
+   "16": "17",
+   "17": "18",
+   "18": "19",
+   "20": "20",
+   "21": "21",
+   "22": "22",
+   "23": "23",
+   "24": "24",
+   "25": "25",
+   "26": "26",
+   "27": "27",
+   "28": "28",
+   "29": "29",
+   "30": "30",
+   "31": "31",
+   "32": "32",
+   "33": "33",
+   "34": "34",
+   "35": "35",
+   "36": "36",
+   "37": "37",
+   "38": "38"
+  }
+ },
+ {
+  "key": "eyelashModelId",
+  "name": "Eyelash_Model_Id",
+  "offset": 28,
+  "type": "list",
+  "size": 4,
+  "options": {
+   "0": "1",
+   "1": "2",
+   "2": "3",
+   "3": "4"
+  }
+ },
+ {
+  "key": "apparentAge",
+  "name": "Apparent Age",
+  "offset": 32,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "facialAesthetic",
+  "name": "Facial Aesthetic",
+  "offset": 33,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "formEmphasis",
+  "name": "Form Emphasis",
+  "offset": 34,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unkNumen128",
+  "name": "Unk (Numen = 128)",
+  "offset": 35,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "browRidgeHeight",
+  "name": "Brow Ridge Height",
+  "offset": 36,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "innerBrowRidge",
+  "name": "Inner Brow Ridge",
+  "offset": 37,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "outerBrowRidge",
+  "name": "Outer Brow Ridge",
+  "offset": 38,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "cheekboneHeight",
+  "name": "Cheekbone Height",
+  "offset": 39,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "cheekboneDepth",
+  "name": "Cheekbone Depth",
+  "offset": 40,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "cheekboneWidth",
+  "name": "Cheekbone Width",
+  "offset": 41,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "cheekboneProtrusion",
+  "name": "Cheekbone Protrusion",
+  "offset": 42,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "cheeks",
+  "name": "Cheeks",
+  "offset": 43,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "chinTipPosition",
+  "name": "Chin Tip Position",
+  "offset": 44,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "chinLength",
+  "name": "Chin Length",
+  "offset": 45,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "chinProtrusion",
+  "name": "Chin Protrusion",
+  "offset": 46,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "chinDepth",
+  "name": "Chin Depth",
+  "offset": 47,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "chinSize",
+  "name": "Chin Size",
+  "offset": 48,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "chinHeight",
+  "name": "Chin Height",
+  "offset": 49,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "chinWidth",
+  "name": "Chin Width",
+  "offset": 50,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "eyePosition",
+  "name": "Eye Position",
+  "offset": 51,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "eyeSize",
+  "name": "Eye Size",
+  "offset": 52,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "eyeSlant",
+  "name": "EyeSlant",
+  "offset": 53,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "eyeSpacing",
+  "name": "Eye Spacing",
+  "offset": 54,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "noseSize",
+  "name": "Nose Size",
+  "offset": 55,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "noseForeheadRatio",
+  "name": "Nose/Forehead Ratio",
+  "offset": 56,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused0",
+  "name": "UNUSED #0",
+  "offset": 57,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "faceProtrusion",
+  "name": "Face Protrusion",
+  "offset": 58,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "verticalFaceRatio",
+  "name": "Vertical Face Ratio",
+  "offset": 59,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "facialFeatureSlant",
+  "name": "Facial Feature Slant",
+  "offset": 60,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "horizontalFaceRatio",
+  "name": "Horizontal Face Ratio",
+  "offset": 61,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused1",
+  "name": "UNUSED #1",
+  "offset": 62,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "foreheadDepth",
+  "name": "Forehead Depth",
+  "offset": 63,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "foreheadProtrusion",
+  "name": "Forehead Protrusion",
+  "offset": 64,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused2",
+  "name": "UNUSED #2",
+  "offset": 65,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "jawProtrusion",
+  "name": "Jaw Protrusion",
+  "offset": 66,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "jawWidth",
+  "name": "Jaw Width",
+  "offset": 67,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "lowerJaw",
+  "name": "Lower Jaw",
+  "offset": 68,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "jawContour",
+  "name": "Jaw Contour",
+  "offset": 69,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "lipShape",
+  "name": "Lip Shape",
+  "offset": 70,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "lipSize",
+  "name": "Lip Size",
+  "offset": 71,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "lipFullness",
+  "name": "Lip Fullness",
+  "offset": 72,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "mouthExpression",
+  "name": "Mouth Expression",
+  "offset": 73,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "lipProtrusion",
+  "name": "Lip Protrusion",
+  "offset": 74,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "lipThickness",
+  "name": "Lip Thickness",
+  "offset": 75,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "mouthProtrusion",
+  "name": "Mouth Protrusion",
+  "offset": 76,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "mouthSlant",
+  "name": "Mouth Slant",
+  "offset": 77,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "mouthOcclusion",
+  "name": "Mouth Occlusion",
+  "offset": 78,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "mouthPosition",
+  "name": "Mouth Position",
+  "offset": 79,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "mouthWidth",
+  "name": "Mouth Width",
+  "offset": 80,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "mouthChinDistance",
+  "name": "Mouth-Chin Distance",
+  "offset": 81,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "noseRidgeDepth",
+  "name": "Nose Ridge Depth",
+  "offset": 82,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "noseRidgeLength",
+  "name": "Nose Ridge Length",
+  "offset": 83,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "nosePosition",
+  "name": "Nose Position",
+  "offset": 84,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "noseTipHeight",
+  "name": "Nose Tip Height",
+  "offset": 85,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "nostrilSlant",
+  "name": "Nostril Slant",
+  "offset": 86,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "nostrilSize",
+  "name": "Nostril Size",
+  "offset": 87,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "nostrilWidth",
+  "name": "Nostril Width",
+  "offset": 88,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "noseProtrusion",
+  "name": "Nose Protrusion",
+  "offset": 89,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "noseBridgeHeight",
+  "name": "Nose Bridge Height",
+  "offset": 90,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "noseBridgeProtrusion1",
+  "name": "Nose Bridge Protrusion 1",
+  "offset": 91,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "noseBridgeProtrusion2",
+  "name": "Nose Bridge Protrusion 2",
+  "offset": 92,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "noseBridgeWidth",
+  "name": "Nose Bridge Width",
+  "offset": 93,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "noseHeight",
+  "name": "Nose Height",
+  "offset": 94,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "noseSlant",
+  "name": "Nose Slant",
+  "offset": 95,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused3",
+  "name": "UNUSED #3",
+  "offset": 96,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused4",
+  "name": "UNUSED #4",
+  "offset": 97,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused5",
+  "name": "UNUSED #5",
+  "offset": 98,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused6",
+  "name": "UNUSED #6",
+  "offset": 99,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused7",
+  "name": "UNUSED #7",
+  "offset": 100,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused8",
+  "name": "UNUSED #8",
+  "offset": 101,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused9",
+  "name": "UNUSED #9",
+  "offset": 102,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused10",
+  "name": "UNUSED #10",
+  "offset": 103,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused11",
+  "name": "UNUSED #11",
+  "offset": 104,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused12",
+  "name": "UNUSED #12",
+  "offset": 105,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused13",
+  "name": "UNUSED #13",
+  "offset": 106,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused14",
+  "name": "UNUSED #14",
+  "offset": 107,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused15",
+  "name": "UNUSED #15",
+  "offset": 108,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused16",
+  "name": "UNUSED #16",
+  "offset": 109,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused17",
+  "name": "UNUSED #17",
+  "offset": 110,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused18",
+  "name": "UNUSED #18",
+  "offset": 111,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused19",
+  "name": "UNUSED #19",
+  "offset": 112,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused20",
+  "name": "UNUSED #20",
+  "offset": 113,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused21",
+  "name": "UNUSED #21",
+  "offset": 114,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused22",
+  "name": "UNUSED #22",
+  "offset": 115,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused23",
+  "name": "UNUSED #23",
+  "offset": 116,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused24",
+  "name": "UNUSED #24",
+  "offset": 117,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused25",
+  "name": "UNUSED #25",
+  "offset": 118,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused26",
+  "name": "UNUSED #26",
+  "offset": 119,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused27",
+  "name": "UNUSED #27",
+  "offset": 120,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused28",
+  "name": "UNUSED #28",
+  "offset": 121,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused29",
+  "name": "UNUSED #29",
+  "offset": 122,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused30",
+  "name": "UNUSED #30",
+  "offset": 123,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused31",
+  "name": "UNUSED #31",
+  "offset": 124,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused32",
+  "name": "UNUSED #32",
+  "offset": 125,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused33",
+  "name": "UNUSED #33",
+  "offset": 126,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused34",
+  "name": "UNUSED #34",
+  "offset": 127,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused35",
+  "name": "UNUSED #35",
+  "offset": 128,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused36",
+  "name": "UNUSED #36",
+  "offset": 129,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused37",
+  "name": "UNUSED #37",
+  "offset": 130,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused38",
+  "name": "UNUSED #38",
+  "offset": 131,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused39",
+  "name": "UNUSED #39",
+  "offset": 132,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused40",
+  "name": "UNUSED #40",
+  "offset": 133,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused41",
+  "name": "UNUSED #41",
+  "offset": 134,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused42",
+  "name": "UNUSED #42",
+  "offset": 135,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused43",
+  "name": "UNUSED #43",
+  "offset": 136,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused44",
+  "name": "UNUSED #44",
+  "offset": 137,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused45",
+  "name": "UNUSED #45",
+  "offset": 138,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused46",
+  "name": "UNUSED #46",
+  "offset": 139,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused47",
+  "name": "UNUSED #47",
+  "offset": 140,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused48",
+  "name": "UNUSED #48",
+  "offset": 141,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused49",
+  "name": "UNUSED #49",
+  "offset": 142,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused50",
+  "name": "UNUSED #50",
+  "offset": 143,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused51",
+  "name": "UNUSED #51",
+  "offset": 144,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused52",
+  "name": "UNUSED #52",
+  "offset": 145,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused53",
+  "name": "UNUSED #53",
+  "offset": 146,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused54",
+  "name": "UNUSED #54",
+  "offset": 147,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused55",
+  "name": "UNUSED #55",
+  "offset": 148,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused56",
+  "name": "UNUSED #56",
+  "offset": 149,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused57",
+  "name": "UNUSED #57",
+  "offset": 150,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused58",
+  "name": "UNUSED #58",
+  "offset": 151,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused59",
+  "name": "UNUSED #59",
+  "offset": 152,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused60",
+  "name": "UNUSED #60",
+  "offset": 153,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused61",
+  "name": "UNUSED #61",
+  "offset": 154,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused62",
+  "name": "UNUSED #62",
+  "offset": 155,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused63",
+  "name": "UNUSED #63",
+  "offset": 156,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused64",
+  "name": "UNUSED #64",
+  "offset": 157,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused65",
+  "name": "UNUSED #65",
+  "offset": 158,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused66",
+  "name": "UNUSED #66",
+  "offset": 159,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "bodyScaleHead",
+  "name": "Body_Scale_Head",
+  "offset": 160,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "bodyScaleBreast",
+  "name": "Body_Scale_Breast",
+  "offset": 161,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "bodyScaleAbdomen",
+  "name": "Body_Scale_Abdomen",
+  "offset": 162,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "bodyScaleArmRight",
+  "name": "Body_Scale_Arm_Right",
+  "offset": 163,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "bodyScaleLegRight",
+  "name": "Body_Scale_Leg_Right",
+  "offset": 164,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "bodyScaleArmLeft",
+  "name": "Body_Scale_Arm_Left",
+  "offset": 165,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "bodyScaleLegLeft",
+  "name": "Body_Scale_Leg_Left",
+  "offset": 166,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "skinColour",
+  "name": "Skin_Colour",
+  "offset": 167,
+  "type": "colour",
+  "size": 3
+ },
+ {
+  "key": "skinLuster",
+  "name": "Skin_Colour_Luster",
+  "offset": 170,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "skinPores",
+  "name": "Skin_Pores",
+  "offset": 171,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "beardStubble",
+  "name": "Beard_Stubble",
+  "offset": 172,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "skinDarkCircle",
+  "name": "Skin_Dark_Circle",
+  "offset": 173,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "skinDarkCircleColour",
+  "name": "Skin_Dark_Circle_Colour",
+  "offset": 174,
+  "type": "colour",
+  "size": 3
+ },
+ {
+  "key": "cheeksIntensity",
+  "name": "Cheeks Intensity",
+  "offset": 177,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "cheeksColour",
+  "name": "Cheeks_Colour",
+  "offset": 178,
+  "type": "colour",
+  "size": 3
+ },
+ {
+  "key": "eyeliner",
+  "name": "Eyeliner",
+  "offset": 181,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "eyelinerColour",
+  "name": "Eyeliner_Colour",
+  "offset": 182,
+  "type": "colour",
+  "size": 3
+ },
+ {
+  "key": "eyeshadowLower",
+  "name": "Eyeshadow_Lower",
+  "offset": 185,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "eyeshadowLowerColour",
+  "name": "Eyeshadow_Lower_Colour",
+  "offset": 186,
+  "type": "colour",
+  "size": 3
+ },
+ {
+  "key": "eyeshadowUpper",
+  "name": "Eyeshadow_Upper",
+  "offset": 189,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "eyeshadowUpperColour",
+  "name": "Eyeshadow_Upper_Colour",
+  "offset": 190,
+  "type": "colour",
+  "size": 3
+ },
+ {
+  "key": "lipstick",
+  "name": "Lipstick",
+  "offset": 193,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "lipstickColour",
+  "name": "Lipstick_Colour",
+  "offset": 194,
+  "type": "colour",
+  "size": 3
+ },
+ {
+  "key": "decalPositionX",
+  "name": "Decal_Position_x",
+  "offset": 197,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "decalPositionY",
+  "name": "Decal_Position_y",
+  "offset": 198,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "decalAngle",
+  "name": "Decal_Angle",
+  "offset": 199,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "decalScale",
+  "name": "Decal_Scale",
+  "offset": 200,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "decalColour",
+  "name": "Decal_Colour",
+  "offset": 201,
+  "type": "colour",
+  "size": 3
+ },
+ {
+  "key": "unused67",
+  "name": "UNUSED #67",
+  "offset": 204,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "decalFlip",
+  "name": "Decal_Flip",
+  "offset": 205,
+  "type": "boolean",
+  "size": 1
+ },
+ {
+  "key": "bodyHair",
+  "name": "Body_Hair",
+  "offset": 206,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "bodyHairColour",
+  "name": "Body_Hair_Colour",
+  "offset": 207,
+  "type": "colour",
+  "size": 3
+ },
+ {
+  "key": "eyeRightColour",
+  "name": "Eye_Right_Colour",
+  "offset": 210,
+  "type": "colour",
+  "size": 3
+ },
+ {
+  "key": "eyeRightIrisSize",
+  "name": "Eye_Right_Iris_Size",
+  "offset": 213,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "eyeRightClouding",
+  "name": "Eye_Right_Clouding",
+  "offset": 214,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "eyeRightCloudingColour",
+  "name": "Eye_Right_Clouding_Colour",
+  "offset": 215,
+  "type": "colour",
+  "size": 3
+ },
+ {
+  "key": "eyeRightScleraColour",
+  "name": "Eye_Right_Sclera_Colour",
+  "offset": 218,
+  "type": "colour",
+  "size": 3
+ },
+ {
+  "key": "eyeRightPosition",
+  "name": "Eye_Right_Position",
+  "offset": 221,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "eyeLeftColour",
+  "name": "Eye_Left_Colour",
+  "offset": 222,
+  "type": "colour",
+  "size": 3
+ },
+ {
+  "key": "eyeLeftIrisSize",
+  "name": "Eye_Left_Iris_Size",
+  "offset": 225,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "eyeLeftClouding",
+  "name": "Eye_Left_Clouding",
+  "offset": 226,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "eyeLeftCloudingColour",
+  "name": "Eye_Left_Clouding_Colour",
+  "offset": 227,
+  "type": "colour",
+  "size": 3
+ },
+ {
+  "key": "eyeLeftScleraColour",
+  "name": "Eye_Left_Sclera_Colour",
+  "offset": 230,
+  "type": "colour",
+  "size": 3
+ },
+ {
+  "key": "eyeLeftPosition",
+  "name": "Eye_Left_Position",
+  "offset": 233,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "hairColour",
+  "name": "Hair_Colour",
+  "offset": 234,
+  "type": "colour",
+  "size": 3
+ },
+ {
+  "key": "hairLuster",
+  "name": "Hair_Luster",
+  "offset": 237,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "hairColourRootDarkness",
+  "name": "Hair_Colour_Root_Darkness",
+  "offset": 238,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "hairColourWhite",
+  "name": "Hair_Colour_White",
+  "offset": 239,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "beardColour",
+  "name": "Beard_Colour",
+  "offset": 240,
+  "type": "colour",
+  "size": 3
+ },
+ {
+  "key": "beardLuster",
+  "name": "Beard_Colour_Luster",
+  "offset": 243,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "beardColourRootDarkness",
+  "name": "Beard_Colour_Root_Darkness",
+  "offset": 244,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "beardColourWhite",
+  "name": "Beard_Colour_White",
+  "offset": 245,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "eyebrowColour",
+  "name": "Eyebrow_Colour",
+  "offset": 246,
+  "type": "colour",
+  "size": 3
+ },
+ {
+  "key": "eyebrowLuster",
+  "name": "Eyebrow_Colour_Luster",
+  "offset": 249,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "eyebrowColourRootDarkness",
+  "name": "Eyebrow_Colour_Root_Darkness",
+  "offset": 250,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "eyebrowColourWhite",
+  "name": "Eyebrow_Colour_White",
+  "offset": 251,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "eyelashColour",
+  "name": "Eyelash_Colour",
+  "offset": 252,
+  "type": "colour",
+  "size": 3
+ },
+ {
+  "key": "accessoriesColour",
+  "name": "Accessories_Colour",
+  "offset": 255,
+  "type": "colour",
+  "size": 3
+ },
+ {
+  "key": "frenziedFlame",
+  "name": "Frenzied Flame",
+  "offset": 258,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused68",
+  "name": "UNUSED #68",
+  "offset": 259,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused69",
+  "name": "UNUSED #69",
+  "offset": 260,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused70",
+  "name": "UNUSED #70",
+  "offset": 261,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused71",
+  "name": "UNUSED #71",
+  "offset": 262,
+  "type": "number",
+  "size": 1
+ },
+ {
+  "key": "unused72",
+  "name": "UNUSED #72",
+  "offset": 263,
+  "type": "number",
+  "size": 1
+ }
+]

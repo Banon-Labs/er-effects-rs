@@ -90,9 +90,9 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	# Save-picker split crates (docs/plans/save-picker-crate-extraction.md). None is a
 	# default-member, and the two DLL shells are not depended on by anything, so without
 	# this line nothing in any gate would compile them for the shipping target.
-	echo "[check-rust-build] cargo xwin check --tests -p er-save-picker-core -p er-save-picker -p er-quit-menu-core -p er-quit-menu --target $target"
+	echo "[check-rust-build] cargo xwin check --tests -p er-save-picker-core -p er-save-picker -p er-quit-menu-core -p er-quit-menu -p er-quit-load-character --target $target"
 	cargo xwin check --tests \
-		-p er-save-picker-core -p er-save-picker -p er-quit-menu-core -p er-quit-menu \
+		-p er-save-picker-core -p er-save-picker -p er-quit-menu-core -p er-quit-menu -p er-quit-load-character \
 		--manifest-path "$repo_root/Cargo.toml" --target "$target"
 	# The ProfileSummary crate split. Not a default-member, so without this line its
 	# `#[cfg(windows)]` test module -- the runtime `ChrAsm` image reassembly, which is the one
@@ -137,6 +137,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	# which is how four overridden `[lib] name`s went unchecked before.
 	me3_shells=(
 		er-armament-icons:er_armament_icons
+		er-quit-rows:er_quit_rows
 		er-better-refills:er_better_refills
 		er-build-import:er_build_import
 		er-enemynpc-effects:er_enemynpc_effects
@@ -151,7 +152,6 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 		er-invasion-path:er_invasion_path
 		er-invasion-warp:er_invasion_warp
 		er-inventory-sort:er_inventory_sort
-		er-lockon-filter:er_lockon_filter
 		er-refill-all:er_refill_all
 		er-loading-bar:er_loading_bar
 		er-loading-portrait:er_loading_portrait
@@ -159,6 +159,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 		er-npc-possess:er_npc_possess
 		er-player-name-filter:er_player_name_filter
 		er-quit-menu:er_quit_menu
+		er-quit-load-character:er_quit_load_character
 		er-reload-trace:er_reload_trace
 		er-save-disable:er_save_disable
 		er-save-picker:er_save_picker
@@ -261,6 +262,10 @@ if command -v cargo-xwin >/dev/null 2>&1 && command -v wine >/dev/null 2>&1; the
 	#   er-invasion-warp-core   283 / 284
 	#   er-loading-portrait-core 81 / 82
 	#
+	# er-quit-rows joined on 2026-09-11. It is er-quickload copied and reduced to the
+	# System>Quit rows, so it carries the same 45 windows-only lib tests under the same
+	# `#[cfg(windows)] mod` tree; its 19 host-portable ones run from check.sh.
+	#
 	# er-quit-menu-core is the one that shows why crate-level bookkeeping is not enough:
 	# check.sh has run it on the host for weeks, printing "ok. 43 passed", while 30 tests
 	# next to them had never been built. scripts/check-test-target-coverage.py holds this
@@ -268,7 +273,8 @@ if command -v cargo-xwin >/dev/null 2>&1 && command -v wine >/dev/null 2>&1; the
 	CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER=wine WINEDEBUG="${WINEDEBUG:--all}" \
 		cargo xwin test --lib \
 		-p er-quickload -p er-profile-summary-core \
-		-p er-quit-menu-core -p er-invasion-path -p er-invasion-warp-core \
+		-p er-quit-menu-core -p er-quit-load-character -p er-quit-rows \
+		-p er-invasion-path -p er-invasion-warp-core \
 		-p er-loading-portrait-core -p er-better-refills -p er-build-import-runtime \
 		--manifest-path "$repo_root/Cargo.toml" --target "$target"
 

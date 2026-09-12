@@ -12,8 +12,16 @@ use er_game_base::fnv1a::fnv1a64;
 
 pub const VANILLA_LEN: usize = 1141;
 pub const VANILLA_FNV1A64: u64 = 0xe896_37d7_2af0_a2c8;
-/// Installed 1.16.2 MemoryFile payload. It differs from the July extraction corpus by 11 bytes but
-/// retains the same tag/character structure used by the structural edit below.
+/// The MemoryFile payload the running game hands us, which differs from the July extraction corpus
+/// by 11 bytes while retaining the same tag/character structure the structural edit below uses.
+///
+/// These two numbers were first measured under 1.16.2, and the comment used to say "installed
+/// 1.16.2" -- which reads as a version constraint and is not one. The game has been 1.17.1 since
+/// 2026-09-08 and the value has not moved: `is_known_vanilla` fails closed, so a changed payload
+/// would refuse the derivation outright rather than render something wrong, and the link field
+/// rendered in run `br-20260911-002901-a7e0`. The menu `.gfx` assets did not change across that
+/// game update. Re-measure this pair when a `MissingStructure` or `UnknownVanilla` refusal appears
+/// after an update, not on a schedule.
 pub const RUNTIME_VANILLA_LEN: usize = 1152;
 pub const RUNTIME_VANILLA_FNV1A64: u64 = 0x8803_6987_5f1e_8e98;
 pub const INLINE_LEN: usize = 1160;

@@ -12,5 +12,11 @@ publish = false
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# `build.rs` turns the planner's captured `q9` offset table into the Rust one, so it needs the
+# same JSON reader the crate itself uses. No new dependency reaches the shipping graph: this is
+# the version already resolved above, built once for the host.
+[build-dependencies]
+serde_json = "1"
+
 [lints]
 workspace = true

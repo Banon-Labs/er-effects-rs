@@ -352,56 +352,98 @@ pub unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u64) {
         "native_autoload: armed slot={slot_after} b72=1 latch_left={latch_before} b80={save_state} csfeman=0x{csfeman:x} tick={tick}"
     ));
 }
+/// Ask the engine to close the title dialog a switch left standing over the world.
+///
+/// # What this used to call, and why it could not work
+///
+/// It called `TITLE_TOP_DIALOG_CLEANUP_RVA` (1.16.2 `0x1409a8890`) on the dialog at owner+0xe0.
+/// That function is `CS::TitleTopDialog::~TitleTopDialog`: it stores the `TitleTopDialog` vtable
+/// back into the object, frees the +0xd60 allocation, destroys six `CSScaleformValue`s and chains
+/// to `~MenuWindow` at `FUN_1407430c0`. It deregisters nothing and closes nothing. The object
+/// stays in the owner's `DLFixedVector<MenuWindow*>` at owner+0xe0 with its reference count still
+/// 1, so the engine keeps pumping an object whose destructor has run.
+///
+/// Measured on the live process 2026-09-11 19:44 (pid 3031799, the 19:39 run): the call ran at
+/// +27947ms on `dialog=0x318ca880` and returned `0x1429d11d8`, which is the vtable it had just
+/// written back. Six minutes later owner+0xe0 still held `0x318ca880`, owner+0x128 still read 1,
+/// and `0x318ca880+0x3b0` -- the `MenuWindow::Close` re-entry latch -- still read 0, so the window
+/// had never been closed once. `PRESS ANY BUTTON` and the publisher footer were on screen over a
+/// loaded character for that whole stretch.
+///
+/// # Why it now only looks
+///
+/// It was changed on 2026-09-11 to ask the engine's own `CloseAsFailed(MenuWindow*)` instead, and
+/// that was tried live the same evening. It did exactly half a teardown and the half it did was
+/// worse than doing nothing: `title-dialog-close: ... dialog=0x16a66280 owner_window_count 1->1`.
+/// `CloseAsFailed` sets a terminal result and calls `MenuWindow::Close`; the deregistration lives
+/// in `FUN_1407ada40`, which runs only when the window's `MenuWindowJob` is run, and after a switch
+/// commits that job is not run at all. So `PRESS ANY BUTTON` and the footer went away and a
+/// registered, undrawn window stayed behind holding the player's input. The user's report of that
+/// build: "I got spat into the title screen with the logo, but the footer and the press any button
+/// were not visible. I cannot appear to do anything."
+///
+/// # What the same run showed the real defect to be
+///
+/// The title dialog is not a leftover from before the switch. It is built during the switch,
+/// because the switch drops to the title on its way through: the log's world-lost line
+/// (`c30 0xe000000 -> 0xa010000`) at `+136606ms`, the commit at `+136781ms`, and `T_controllable` with
+/// `LOAD-CORRECTNESS name="Vagabond" level=9` at `+138722ms`. The character does load; the title it
+/// passes through builds a dialog that the reload then comes up underneath. That is
+/// `oracle_world_lost_to_title`, and it is the thing to fix. A window closed after the fact is a
+/// symptom being tidied away, and this tidying cost the player their controls.
+///
+/// So this gate reports the orphan and its count and leaves it alone. The number it prints is the
+/// same field `oracle_title_owner_menu_window_count` samples.
 pub unsafe fn cleanup_title_dialog_after_world_once(module_base: usize, frame: u64) {
-    static TITLE_DIALOG_CLEANUP_DONE: AtomicUsize =
+    static CLOSE_REQUESTED_FOR_DIALOG: AtomicUsize =
         AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-    if !cleanup_title_dialog_after_world_enabled()
-        || TITLE_DIALOG_CLEANUP_DONE.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
-            != TITLE_OWNER_SCAN_START_ADDRESS
-    {
+    static NO_OWNER_LOGGED: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+    static WRONG_VTABLE_LOGGED: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+    if !cleanup_title_dialog_after_world_enabled() {
         return;
     }
-    let owner = unsafe { title_owner(module_base) };
-    let Some(owner_ptr) = owner else {
-        append_autoload_debug(format_args!(
-            "title-dialog-cleanup: skipped frame={frame} no title owner"
-        ));
+    let Some(owner_ptr) = (unsafe { title_owner(module_base) }) else {
+        // Once, not every frame: this runs on the game task and the old body could only ever log
+        // here a single time because its own latch had already burned.
+        if NO_OWNER_LOGGED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+            == TITLE_OWNER_SCAN_START_ADDRESS
+        {
+            append_autoload_debug(format_args!(
+                "title-dialog-close: skipped frame={frame} no title owner"
+            ));
+        }
         return;
     };
     let owner_addr = owner_ptr as usize;
     let dialog = unsafe { safe_read_usize(owner_addr + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }
         .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
-    let dialog_vt = if dialog != TITLE_OWNER_SCAN_START_ADDRESS {
-        unsafe { safe_read_usize(dialog) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
-    } else {
-        TITLE_OWNER_SCAN_START_ADDRESS
-    };
-    if dialog_vt
-        != er_game_base::mem::game_data_addr(
-            module_base,
-            TITLE_TOP_DIALOG_VTABLE_RVA,
-            "TITLE_TOP_DIALOG_VTABLE_RVA",
-        )
-    {
-        append_autoload_debug(format_args!(
-            "title-dialog-cleanup: skipped frame={frame} dialog=0x{dialog:x} vt=0x{dialog_vt:x} expected=0x{:x}",
-            er_game_base::mem::game_data_addr(
-                module_base,
-                TITLE_TOP_DIALOG_VTABLE_RVA,
-                "TITLE_TOP_DIALOG_VTABLE_RVA"
-            )
-        ));
+    if dialog == TITLE_OWNER_SCAN_START_ADDRESS {
         return;
     }
-    let cleanup: unsafe extern "system" fn(usize) -> usize = unsafe {
-        std::mem::transmute(
-            match title_fn(TITLE_TOP_DIALOG_CLEANUP_RVA, "TITLE_TOP_DIALOG_CLEANUP_RVA") {
-                Some(address) => address,
-                None => return,
-            },
-        )
-    };
-    let ret = unsafe { cleanup(dialog) };
+    if CLOSE_REQUESTED_FOR_DIALOG.load(Ordering::SeqCst) == dialog {
+        return;
+    }
+    let dialog_vt = unsafe { safe_read_usize(dialog) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    let expected_vt = er_game_base::mem::game_data_addr(
+        module_base,
+        TITLE_TOP_DIALOG_VTABLE_RVA,
+        "TITLE_TOP_DIALOG_VTABLE_RVA",
+    );
+    if dialog_vt != expected_vt {
+        if WRONG_VTABLE_LOGGED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+            == TITLE_OWNER_SCAN_START_ADDRESS
+        {
+            append_autoload_debug(format_args!(
+                "title-dialog-close: skipped frame={frame} dialog=0x{dialog:x} vt=0x{dialog_vt:x} expected=0x{expected_vt:x}"
+            ));
+        }
+        return;
+    }
+    let window_count = unsafe {
+        safe_read_usize(owner_addr + TITLE_OWNER_MENU_WINDOW_COUNT_128_OFFSET)
+    }
+    .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    CLOSE_REQUESTED_FOR_DIALOG.store(dialog, Ordering::SeqCst);
     let mut remaining_slots = TITLE_OWNER_SCAN_START_ADDRESS;
     let mut idx = PROFILE_MODEL_REND_SLOT_START;
     while idx < PROFILE_MODEL_REND_TABLE_SLOTS {
@@ -418,12 +460,7 @@ pub unsafe fn cleanup_title_dialog_after_world_once(module_base: usize, frame: u
         idx += PROFILE_MODEL_REND_SLOT_STEP;
     }
     append_autoload_debug(format_args!(
-        "title-dialog-cleanup: called 0x{:x} frame={frame} owner=0x{owner_addr:x} dialog=0x{dialog:x} ret=0x{ret:x} remaining_profile_rend_slots={remaining_slots}",
-        er_game_base::mem::game_data_addr(
-            module_base,
-            TITLE_TOP_DIALOG_CLEANUP_RVA,
-            "TITLE_TOP_DIALOG_CLEANUP_RVA"
-        )
+        "title-dialog-orphan: observed frame={frame} owner=0x{owner_addr:x} dialog=0x{dialog:x} owner_window_count={window_count} remaining_profile_rend_slots={remaining_slots} -- left alone on purpose; a close with no reaper is worse than the orphan"
     ));
 }
 /// Autonomous press-any-button -> open-menu (zero-input): drive the title to the open main menu
@@ -1008,9 +1045,28 @@ pub unsafe fn maybe_fire_tfc_continue(base: usize) {
         r.is_err()
     ));
 }
-/// Install the TitleTopDialog::update hook once so the Continue build runs in the pump's live frame.
-/// minhook on 0x1409aac10, mirroring install_continue_trace_hooks (queue_enable + MH_ApplyQueued +
-/// mem::forget to keep the hook alive). Gated by `fire_tfc_continue_enabled` at the call site.
+/// Install the `TitleTopDialog::update` hook once so the Continue build runs in the pump's live
+/// frame. Gated by `fire_tfc_continue_enabled` at the call site.
+///
+/// # A bare detour, because argument 2 is a float
+///
+/// `update(this /*rcx*/, float delta /*xmm1*/, const u8* input /*r8*/)`, read out of the image:
+/// `0x1409aac2a` spills `xmm6`, `0x1409aac40` does `movaps xmm6, xmm1` before anything writes
+/// that register, and the value goes back out as argument 2 at `0x1409aae21` and `0x1409aae2c`.
+/// It is single precision -- one callee stores it `movss [rbp-0x20], xmm6` (`0x1407457ec`) and
+/// the other accumulates it `addss xmm6, [rdi+0x188]` (`0x14082d79f`). Argument 3 is a pointer,
+/// dereferenced at `0x1409aac4e` (`movzx eax, byte ptr [r8]`) before any write. There is no
+/// argument 4: its home slot holds a spilled `rbx`.
+///
+/// This used to go through `create_continue_trace_hook`, which transmuted the detour to
+/// `er_hook::UnionFn` -- four `usize`s -- and handed it to the hook union. The union dispatcher
+/// forwards integer registers only, so it neither receives `xmm1` nor passes it on, and the
+/// detour's declared `f32` would have been read from whatever the dispatcher body happened to
+/// leave there. The float made the union unusable, not optional, so this installs its own
+/// [`MhHook`] with the true signature, the same call this repo already makes for
+/// `er-npc-possess`'s `CSFeManImp::UpdatePlayerComponents` and `er-loading-portrait-core`'s
+/// `loading_screen_update_hook`. `scripts/check-union-hook-abi.py` is the gate that keeps a float
+/// handler off the union from here on.
 pub unsafe fn install_title_update_hook(base: usize) {
     if TITLE_UPDATE_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
         != TITLE_OWNER_SCAN_START_ADDRESS
@@ -1026,30 +1082,60 @@ pub unsafe fn install_title_update_hook(base: usize) {
             return;
         }
     }
-    let mut hooks = Vec::new();
-    unsafe {
-        create_continue_trace_hook(
-            &mut hooks,
-            "titletopdialog_update_9aac10",
-            TITLE_TOP_DIALOG_UPDATE_RVA as u32,
+    // Unresolved on purpose: `MhHook::new` owns the single 1.16.2 -> 1.17 resolve, which is why
+    // this is `game_rva_for_hook` and not `game_data_addr`. Resolving here and again inside the
+    // hook API is the double-resolve `scripts/check-double-resolved-hook-targets.py` refuses.
+    let Ok(address) = er_game_base::mem::game_rva_for_hook(TITLE_TOP_DIALOG_UPDATE_RVA as u32)
+    else {
+        append_autoload_debug(format_args!(
+            "title-update-hook: no game module base; TitleTopDialog::update is not hooked"
+        ));
+        return;
+    };
+    let hook = match unsafe {
+        MhHook::new(
+            address as *mut c_void,
             title_update_detour as *mut c_void,
-            &TITLE_UPDATE_ORIG,
-        );
+        )
+    } {
+        Ok(hook) => hook,
+        Err(status) => {
+            append_autoload_debug(format_args!(
+                "title-update-hook: MhHook::new on TitleTopDialog::update failed: {status:?}"
+            ));
+            return;
+        }
+    };
+    TITLE_UPDATE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+    if let Err(status) = unsafe { hook.queue_enable() } {
+        TITLE_UPDATE_ORIG.store(0, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "title-update-hook: queue_enable failed: {status:?}"
+        ));
+        return;
     }
     match unsafe { MH_ApplyQueued() } {
         MH_STATUS::MH_OK => append_autoload_debug(format_args!(
-            "title-update-hook: INSTALLED on TitleTopDialog::update 0x{:x} -- in-context Continue build armed",
+            "title-update-hook: INSTALLED on TitleTopDialog::update 0x{:x} -- in-context Continue build armed; bare detour, not the union, because argument 2 is a float in xmm1",
             er_game_base::mem::game_data_addr(
                 base,
                 TITLE_TOP_DIALOG_UPDATE_RVA,
                 "TITLE_TOP_DIALOG_UPDATE_RVA"
             )
         )),
-        status => append_autoload_debug(format_args!(
-            "title-update-hook: MH_ApplyQueued failed: {status:?}"
-        )),
+        status => {
+            TITLE_UPDATE_ORIG.store(0, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "title-update-hook: MH_ApplyQueued failed: {status:?}"
+            ));
+        }
     }
-    std::mem::forget(hooks);
+    // The handle is deliberately dropped here without ceremony: `MhHook` is three raw pointers
+    // with no `Drop`, and MinHook owns the installed detour keyed by target address -- so letting
+    // the handle go does not uninstall the hook. The `std::mem::forget` that used to sit here was
+    // a no-op that said otherwise, which is what `clippy::forget_non_drop` flags. An explicit
+    // `drop(hook)` would be the same no-op under a different lint (`clippy::drop_non_drop`), so
+    // the binding simply ends with the function.
 }
 /// Gated, fail-closed, one-shot readiness advance past press-any-button. Reads the built job at
 /// `[step+0x130]`; once it is a valid in-image job (we are at press-any-button) and has settled, sets

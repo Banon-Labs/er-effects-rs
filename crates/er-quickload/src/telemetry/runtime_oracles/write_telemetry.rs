@@ -445,6 +445,12 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         "  \"oracle_regist_return_title_disconnect_flag\": {},\n",
         format_optional_u8(regist_return_title_flag_494)
     ));
+    // The dim behind the link field. `_derived` is the asset half (the bytes handed to Scaleform
+    // carried the placement) and `_resolved` is the live half (the running movie's root still has
+    // it); `_stage_rect` names the screen region a luma probe should sample. None of the four is a
+    // pixel, which is why the rectangle is emitted with them.
+    #[cfg(feature = "quit-rows")]
+    body.push_str(&crate::build_url_backdrop_telemetry());
     body.push_str(&format!(
         "  \"autoload_attempts\": {},\n",
         state.autoload.attempts()
@@ -478,7 +484,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         )
     ));
     body.push_str(&format!(
-        "  \"system_quit_profile_load_activate_count\": {},\n  \"system_quit_profile_load_confirmed_block_count\": {},\n  \"system_quit_profile_load_confirmed_allow_count\": {},\n  \"system_quit_profile_load_job_run_block_count\": {},\n  \"system_quit_profile_load_job_run_last_job\": {},\n  \"system_quit_profile_load_job_run_last_list\": {},\n  \"system_quit_profile_load_job_run_last_profile_id\": {},\n  \"system_quit_profile_load_job_post_return_title_fired\": {},\n  \"system_quit_quickload_phase\": {},\n  \"system_quit_quickload_selected_slot\": {},\n  \"system_quit_quickload_return_title_request_count\": {},\n  \"system_quit_return_title_final_functor_call_count\": {},\n  \"system_quit_quickload_native_quit_action_count\": {},\n  \"system_quit_direct_return_title_chain_submit_count\": {},\n  \"system_quit_direct_return_title_chain_ready_block_count\": {},\n  \"system_quit_direct_return_title_chain_last_dialog\": {},\n  \"system_quit_direct_return_title_chain_last_queue_ready\": {},\n  \"system_quit_skip_restore_after_quickload_count\": {},\n  \"system_quit_quickload_title_owner_seen_count\": {},\n  \"system_quit_quickload_autoload_handoff_count\": {},\n  \"system_quit_quickload_last_title_owner\": {},\n  \"system_quit_profile_load_activate_last_dialog\": {},\n  \"system_quit_profile_load_activate_last_cursor\": {},\n  \"system_quit_profile_load_activate_last_bound\": {},\n  \"system_quit_profileselect_native_close_count\": {},\n  \"system_quit_save_game_text_substitution_count\": {},\n  \"system_quit_save_game_action_count\": {},\n  \"system_quit_save_game_confirm_count\": {},\n  \"system_quit_save_game_close_count\": {},\n  \"system_quit_open_save_dir_action_count\": {},\n  \"system_quit_open_save_dir_success_count\": {},\n  \"system_quit_open_save_dir_failure_count\": {},\n  \"system_quit_load_build_url_action_count\": {},\n  \"system_quit_load_build_url_request_count\": {},\n  \"system_quit_load_build_url_refused_count\": {},\n  \"system_quit_load_build_url_failed_count\": {},\n  \"system_quit_load_build_url_imported_count\": {},\n  \"system_quit_load_build_url_editor_open_count\": {},\n  \"system_quit_load_build_url_accepted_count\": {},\n  \"system_quit_load_build_url_rejected_count\": {},\n  \"system_quit_load_build_url_cancelled_count\": {},\n  \"system_quit_load_build_url_last_rejection\": {},\n  \"system_quit_generate_build_link_action_count\": {},\n  \"system_quit_generate_build_link_request_count\": {},\n  \"system_quit_generate_build_link_refused_count\": {},\n  \"system_quit_generate_build_link_stale_latch_count\": {},\n  \"system_quit_generate_build_link_encoded_count\": {},\n  \"system_quit_generate_build_link_last_url_len\": {},\n  \"system_quit_generate_build_link_clipboard_count\": {},\n  \"system_quit_generate_build_link_opened_count\": {},\n  \"system_quit_generate_build_link_failed_count\": {},\n  \"system_quit_save_game_armed_dialog\": {},\n  \"system_quit_request_load_slot_block_count\": {},\n  \"system_quit_request_load_slot_allow_count\": {},\n  \"system_quit_inworld_load_skip_count\": {},\n",
+        "  \"system_quit_profile_load_activate_count\": {},\n  \"system_quit_profile_load_confirmed_block_count\": {},\n  \"system_quit_profile_load_confirmed_allow_count\": {},\n  \"system_quit_profile_load_job_run_block_count\": {},\n  \"system_quit_profile_load_job_run_last_job\": {},\n  \"system_quit_profile_load_job_run_last_list\": {},\n  \"system_quit_profile_load_job_run_last_profile_id\": {},\n  \"system_quit_profile_load_job_post_return_title_fired\": {},\n  \"system_quit_quickload_phase\": {},\n  \"system_quit_quickload_selected_slot\": {},\n  \"system_quit_quickload_return_title_request_count\": {},\n  \"system_quit_return_title_final_functor_call_count\": {},\n  \"system_quit_quickload_native_quit_action_count\": {},\n  \"system_quit_direct_return_title_chain_submit_count\": {},\n  \"system_quit_direct_return_title_chain_ready_block_count\": {},\n  \"system_quit_direct_return_title_chain_last_dialog\": {},\n  \"system_quit_direct_return_title_chain_last_queue_ready\": {},\n  \"system_quit_skip_restore_after_quickload_count\": {},\n  \"system_quit_quickload_title_owner_seen_count\": {},\n  \"system_quit_quickload_autoload_handoff_count\": {},\n  \"system_quit_quickload_last_title_owner\": {},\n  \"system_quit_profile_load_activate_last_dialog\": {},\n  \"system_quit_profile_load_activate_last_cursor\": {},\n  \"system_quit_profile_load_activate_last_bound\": {},\n  \"system_quit_profileselect_native_close_count\": {},\n  \"system_quit_save_game_text_substitution_count\": {},\n  \"system_quit_save_game_action_count\": {},\n  \"system_quit_save_game_confirm_count\": {},\n  \"system_quit_save_game_close_count\": {},\n  \"system_quit_open_save_dir_action_count\": {},\n  \"system_quit_open_save_dir_success_count\": {},\n  \"system_quit_open_save_dir_failure_count\": {},\n  \"system_quit_load_build_url_action_count\": {},\n  \"system_quit_load_build_url_request_count\": {},\n  \"system_quit_load_build_url_refused_count\": {},\n  \"system_quit_load_build_url_failed_count\": {},\n  \"system_quit_load_build_url_imported_count\": {},\n  \"system_quit_load_build_url_editor_open_count\": {},\n  \"system_quit_load_build_url_accepted_count\": {},\n  \"system_quit_load_build_url_rejected_count\": {},\n  \"system_quit_load_build_url_cancelled_count\": {},\n  \"system_quit_load_build_url_last_rejection\": {},\n  \"oracle_build_url_portrait_refresh_attempts\": {},\n  \"oracle_build_url_portrait_record_sync_state\": {},\n  \"oracle_build_url_portrait_record_syncs\": {},\n  \"oracle_build_url_portrait_record_slot_plus1\": {},\n  \"oracle_build_url_portrait_record_level\": {},\n  \"oracle_build_url_portrait_record_fingerprint\": {},\n  \"oracle_build_url_portrait_renderer_fingerprint\": {},\n  \"oracle_build_url_portrait_equip_verdict\": {},\n  \"oracle_build_url_portrait_kicks\": {},\n  \"oracle_build_url_portrait_kick_refusals\": {},\n  \"oracle_build_url_portrait_render_verdict\": {},\n  \"oracle_build_url_portrait_rebuild_verdict\": {},\n  \"oracle_build_url_portrait_model_ins_before\": {},\n  \"oracle_build_url_portrait_model_ins_after\": {},\n  \"oracle_build_url_portrait_model_absent_seen\": {},\n  \"oracle_build_url_portrait_parts_before\": {},\n  \"oracle_build_url_portrait_parts_after\": {},\n  \"oracle_build_url_portrait_steps_seen\": {},\n  \"oracle_build_url_portrait_draw_bits\": {},\n  \"oracle_build_url_portrait_draw_task_calls\": {},\n  \"oracle_build_url_portrait_draw_calls_at_kick\": {},\n  \"oracle_build_url_portrait_modelres_resolved\": {},\n  \"oracle_build_url_portrait_modelres_requested\": {},\n  \"oracle_build_url_portrait_modelres_pending\": {},\n  \"oracle_build_url_quit_face_armed\": {},\n  \"oracle_build_url_quit_face_refresh_owed\": {},\n  \"oracle_build_url_quit_face_attempts\": {},\n  \"oracle_build_url_quit_face_refusals\": {},\n  \"oracle_build_url_quit_face_refusal_reason\": {},\n  \"oracle_build_url_quit_face_calls\": {},\n  \"oracle_build_url_quit_face_dialog\": {},\n  \"oracle_build_url_quit_face_renderer\": {},\n  \"oracle_build_url_quit_face_fingerprint_before\": {},\n  \"oracle_build_url_quit_face_fingerprint_after\": {},\n  \"oracle_build_url_quit_face_live_fingerprint\": {},\n  \"oracle_build_url_quit_face_input_verdict\": {},\n  \"oracle_build_url_quit_face_render_verdict\": {},\n  \"oracle_build_url_quit_face_rebuild_verdict\": {},\n  \"oracle_build_url_quit_face_model_ins_before\": {},\n  \"oracle_build_url_quit_face_model_ins_after\": {},\n  \"oracle_build_url_quit_face_model_absent_seen\": {},\n  \"oracle_build_url_quit_face_parts_before\": {},\n  \"oracle_build_url_quit_face_parts_after\": {},\n  \"oracle_build_url_quit_face_steps_seen\": {},\n  \"oracle_build_url_quit_face_draw_bits\": {},\n  \"oracle_build_url_quit_face_draw_task_calls\": {},\n  \"oracle_build_url_quit_face_draw_calls_at_call\": {},\n  \"system_quit_generate_build_link_action_count\": {},\n  \"system_quit_generate_build_link_request_count\": {},\n  \"system_quit_generate_build_link_refused_count\": {},\n  \"system_quit_generate_build_link_stale_latch_count\": {},\n  \"system_quit_generate_build_link_encoded_count\": {},\n  \"system_quit_generate_build_link_last_url_len\": {},\n  \"system_quit_generate_build_link_clipboard_count\": {},\n  \"system_quit_generate_build_link_opened_count\": {},\n  \"system_quit_generate_build_link_failed_count\": {},\n  \"system_quit_save_game_armed_dialog\": {},\n  \"system_quit_request_load_slot_block_count\": {},\n  \"system_quit_request_load_slot_allow_count\": {},\n  \"system_quit_inworld_load_skip_count\": {},\n",
         SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT.load(Ordering::SeqCst),
@@ -521,6 +527,92 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SYSTEM_QUIT_LOAD_BUILD_URL_REJECTED_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_LOAD_BUILD_URL_CANCELLED_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_LOAD_BUILD_URL_LAST_REJECTION.load(Ordering::SeqCst),
+        // The character panel's portrait after an import. `_equip_verdict` is the one that
+        // says whether the model is being built from the imported gear (0 unmeasured, 1 the
+        // renderer stage agrees with the record, 2 it is still on the previous loadout); the
+        // kick count only says a rebuild was asked for. `_record_slot_plus1` names the slot the
+        // record was re-derived for, which is what distinguishes a character in slot 0 -- whose
+        // record is the one the panel's renderer binds -- from one in any other slot.
+        BUILD_URL_PORTRAIT_REFRESH_ATTEMPTS.load(Ordering::SeqCst),
+        BUILD_URL_PORTRAIT_RECORD_SYNC_STATE.load(Ordering::SeqCst),
+        BUILD_URL_PORTRAIT_RECORD_SYNCS.load(Ordering::SeqCst),
+        BUILD_URL_PORTRAIT_RECORD_SLOT_PLUS1.load(Ordering::SeqCst),
+        BUILD_URL_PORTRAIT_RECORD_LEVEL.load(Ordering::SeqCst),
+        BUILD_URL_PORTRAIT_RECORD_FINGERPRINT.load(Ordering::SeqCst),
+        BUILD_URL_PORTRAIT_RENDERER_FINGERPRINT.load(Ordering::SeqCst),
+        BUILD_URL_PORTRAIT_EQUIP_VERDICT.load(Ordering::SeqCst),
+        BUILD_URL_PORTRAIT_KICKS.load(Ordering::SeqCst),
+        BUILD_URL_PORTRAIT_KICK_REFUSALS.load(Ordering::SeqCst),
+        // The headline. `_equip_verdict` above only says the renderer was handed the right gear,
+        // which on run br-20260911-002901-a7e0 was true over a screen that had not changed; a
+        // state write is not a draw. `_render_verdict` reaches 1 only when the model object was
+        // also torn down and rebuilt with different parts: 0 unproven, 1 proven, 2 the input took
+        // and the image is stale, 3 rebuilt unchanged, 4 the input was wrong.
+        BUILD_URL_PORTRAIT_RENDER_VERDICT.load(Ordering::SeqCst),
+        BUILD_URL_PORTRAIT_REBUILD_VERDICT.load(Ordering::SeqCst),
+        format_scan_ptr(BUILD_URL_PORTRAIT_MODEL_INS_BEFORE.load(Ordering::SeqCst)),
+        format_scan_ptr(BUILD_URL_PORTRAIT_MODEL_INS_AFTER.load(Ordering::SeqCst)),
+        BUILD_URL_PORTRAIT_MODEL_ABSENT_SEEN.load(Ordering::SeqCst),
+        BUILD_URL_PORTRAIT_PARTS_BEFORE.load(Ordering::SeqCst),
+        BUILD_URL_PORTRAIT_PARTS_AFTER.load(Ordering::SeqCst),
+        // Where the step machine went, and whether anything would draw the result.
+        // `_steps_seen` is a bitmask of `renderer+0x40` values: a rebuild walks 6,7,8,1,2,3,4,5,6,
+        // so a mask holding only bit 6 is a renderer that never moved and bits 2 and 4 are the
+        // setup steps. `_draw_bits`: bit0 the per-frame submit task is registered, bit1 the
+        // offscreen scene is registered with the render system, bit2 the model's parts are in a
+        // scene. All three are required before `_render_verdict` may read 1.
+        BUILD_URL_PORTRAIT_STEPS_SEEN.load(Ordering::SeqCst),
+        BUILD_URL_PORTRAIT_DRAW_BITS.load(Ordering::SeqCst),
+        // Registration is not execution. `_draw_task_calls` counts runs of the draw task
+        // `FUN_140bba7d0` for the renderer that was kicked, and only a delta over
+        // `_draw_calls_at_kick` proves the offscreen was rasterized after the rebuild. The
+        // `_modelres_*` pair separates "loaded the old rows" from "the new rows are still
+        // loading": while resolved and requested disagree the parts file has not arrived and
+        // the resource request early-outs.
+        BUILD_URL_PORTRAIT_DRAW_TASK_CALLS.load(Ordering::SeqCst),
+        BUILD_URL_PORTRAIT_DRAW_CALLS_AT_KICK.load(Ordering::SeqCst),
+        BUILD_URL_PORTRAIT_MODELRES_RESOLVED.load(Ordering::SeqCst),
+        BUILD_URL_PORTRAIT_MODELRES_REQUESTED.load(Ordering::SeqCst),
+        BUILD_URL_PORTRAIT_MODELRES_PENDING.load(Ordering::SeqCst),
+        // The System>Quit panel's own portrait, a different renderer from every field above: the
+        // `CS::CSMenuFaceModelRend` at `OptionSettingTopDialog+0x1890` that fills
+        // `SYSTEX_Menu_StatusFace`. `_armed` counts imports that owed it a refresh and
+        // `_refresh_owed` is what the latch still has left; a non-zero `_armed` with zero `_calls`
+        // and zero `_refusals` means the panel was simply never on screen while the latch was live,
+        // which is not a failure -- reopening it runs the constructor. `_refusal_reason` names
+        // which gate closed when it was: 1 an address with no mapping for this build, 2 the window
+        // is not a `CS::OptionSettingTopDialog`, 3 that dialog was built with no portrait, 4 its
+        // renderer slot is empty, 5 the slot holds another class, 6 `CSMenuMan` is absent.
+        //
+        // `_render_verdict` is the field this surface is judged on and it is the same conjunction
+        // as `oracle_build_url_portrait_render_verdict`: only 1 is a pass, and it needs the input
+        // to have taken and the model object to have been torn down and rebuilt. The input here is
+        // `_fingerprint_after` against `_live_fingerprint` -- the renderer keeps its own copy of the
+        // face buffer at `+0x630`, so that is two objects compared, not a value against itself, and
+        // `_fingerprint_before` is the appearance the panel was rendering when the import landed.
+        BUILD_URL_QUIT_FACE_ARMED.load(Ordering::SeqCst),
+        BUILD_URL_QUIT_FACE_REFRESH_OWED.load(Ordering::SeqCst),
+        BUILD_URL_QUIT_FACE_ATTEMPTS.load(Ordering::SeqCst),
+        BUILD_URL_QUIT_FACE_REFUSALS.load(Ordering::SeqCst),
+        BUILD_URL_QUIT_FACE_REFUSAL_REASON.load(Ordering::SeqCst),
+        BUILD_URL_QUIT_FACE_CALLS.load(Ordering::SeqCst),
+        format_scan_ptr(BUILD_URL_QUIT_FACE_DIALOG.load(Ordering::SeqCst)),
+        format_scan_ptr(BUILD_URL_QUIT_FACE_RENDERER.load(Ordering::SeqCst)),
+        BUILD_URL_QUIT_FACE_FINGERPRINT_BEFORE.load(Ordering::SeqCst),
+        BUILD_URL_QUIT_FACE_FINGERPRINT_AFTER.load(Ordering::SeqCst),
+        BUILD_URL_QUIT_FACE_LIVE_FINGERPRINT.load(Ordering::SeqCst),
+        BUILD_URL_QUIT_FACE_INPUT_VERDICT.load(Ordering::SeqCst),
+        BUILD_URL_QUIT_FACE_RENDER_VERDICT.load(Ordering::SeqCst),
+        BUILD_URL_QUIT_FACE_REBUILD_VERDICT.load(Ordering::SeqCst),
+        BUILD_URL_QUIT_FACE_MODEL_INS_BEFORE.load(Ordering::SeqCst),
+        BUILD_URL_QUIT_FACE_MODEL_INS_AFTER.load(Ordering::SeqCst),
+        BUILD_URL_QUIT_FACE_MODEL_ABSENT_SEEN.load(Ordering::SeqCst),
+        BUILD_URL_QUIT_FACE_PARTS_BEFORE.load(Ordering::SeqCst),
+        BUILD_URL_QUIT_FACE_PARTS_AFTER.load(Ordering::SeqCst),
+        BUILD_URL_QUIT_FACE_STEPS_SEEN.load(Ordering::SeqCst),
+        BUILD_URL_QUIT_FACE_DRAW_BITS.load(Ordering::SeqCst),
+        BUILD_URL_QUIT_FACE_DRAW_TASK_CALLS.load(Ordering::SeqCst),
+        BUILD_URL_QUIT_FACE_DRAW_CALLS_AT_CALL.load(Ordering::SeqCst),
         // Generate Build Link. `encoded` counts URLs built, `clipboard`/`opened` count the two
         // things that can independently fail afterwards, and `stale_latch` counts presses that
         // recovered a latch nothing owned -- so "the row did nothing" always has a number

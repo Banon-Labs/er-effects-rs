@@ -37,11 +37,23 @@ use super::{ersc, ersc_module_base};
 /// # Why this now runs without a detour in `ersc.dll`
 ///
 /// It used to be reachable only from the `show` observer, and installing that detour killed the
-/// game 29.5s into run `br-20260909-234159-0a54`. The scan half of `resolve_session` hands back
-/// the same object -- `scan_for_session` accepts an owner only when `osm_tag_matches` agrees, so
-/// the pointer it returns has the `seamless` tag at `+0x68` and a live session at `+0x58`, which
-/// is what `capture_osm` proves for the detour's argument. So the report is driven from there
-/// instead, and nothing is written into Seamless to get it.
+/// game 29.5s into run `br-20260909-234159-0a54`. The scan half of `resolve_session` reaches the
+/// same kind of object with nothing written into Seamless, so the report is driven from there.
+///
+/// What that owner is worth is narrower than the first version of this comment claimed. It said
+/// `scan_for_session` accepts an owner only when `osm_tag_matches` agrees; that is one of its two
+/// arms. The tag arm returns early, and the `owned` fallback beneath it hands back an owner that
+/// failed the tag test. What a returned owner does guarantee is `plausible_session_pointer` and
+/// that `*(owner + NEXT_OBJECT_OFFSET)` identifies as a session. The report survives the
+/// difference because it only reads, through `safe_read_usize`: a mis-identified owner prints
+/// `<unreadable>`, which is a wrong answer rather than a fault.
+///
+/// # An owner is what it waits for, and the first run had none
+///
+/// Run br-20260910-171939-d923 resolved the session and skipped this entirely --
+/// `owner 0x0`, the bare shape, and every offset below is OSM-relative. The owner hunt in
+/// `session_scan::adopt_proven_session` is the answer to that: a session proved by change is one
+/// address, and `owner_among` asked about one address either names its holder or says nothing.
 #[cfg(windows)]
 pub(super) fn report_menu_seams(osm: usize) {
     /// `+0x88` show a message, `+0xa8` open dialog, `+0xb0` clear list, `+0xb8` append row,
@@ -96,9 +108,14 @@ pub(super) fn report_menu_seams(osm: usize) {
     let repository =
         unsafe { er_game_base::mem::safe_read_usize(osm + ersc::MOD_MESSAGE_REPOSITORY_OFFSET) }
             .map_or_else(|| "<unreadable>".to_owned(), |value| format!("0x{value:x}"));
+    // The owner leads the line because run br-20260910-174502-9a38 printed every field
+    // `<unreadable>` and named no address, so the report said the pointer was bad without saying
+    // which pointer. A whole-line miss is itself the answer -- this object is not the OSM -- and
+    // that answer is only actionable with the address in it.
     crate::standalone_log(format_args!(
-        "local-invasion: menu seams -- {} | visible options: {visible} | message repository \
-         @+{:#x}={repository} | the notice to refuse is id {:#x} (YKNX3_BREAKINFAILED)",
+        "local-invasion: menu seams of 0x{osm:x} -- {} | visible options: {visible} | message \
+         repository @+{:#x}={repository} | the notice to refuse is id {:#x} \
+         (YKNX3_BREAKINFAILED)",
         parts.join(" "),
         ersc::MOD_MESSAGE_REPOSITORY_OFFSET,
         ersc::YKNX3_BREAKIN_FAILED_MESSAGE_ID,

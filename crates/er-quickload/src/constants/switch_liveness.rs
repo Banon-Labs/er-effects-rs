@@ -9,11 +9,7 @@
 // ============================================================================================
 pub(crate) use er_title_flow::INPUTMGR_BITMAP_90_OFFSET;
 pub(crate) use er_title_flow::MENU_EVENT_PRESSED_BIT;
-pub(crate) use er_title_flow::MenuEventId;
-
 pub(crate) use er_title_flow::MENU_EVENT_CONFIRM_3D;
-pub(crate) const MENU_EVENT_MOVE_A_00: usize = MenuEventId::MoveA as usize;
-pub(crate) const MENU_EVENT_MOVE_B_45: usize = MenuEventId::MoveB as usize;
 /// Menu list cursor (highlighted index) and item count, on the list object (cursor getter
 /// 0x140739e20 = `mov eax,[rcx+0xd4]`). Used to log the live cursor (diagnostic) while injecting.
 #[repr(C)]

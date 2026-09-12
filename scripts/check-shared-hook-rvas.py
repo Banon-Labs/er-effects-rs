@@ -687,11 +687,54 @@ def selftest() -> int:
     case(f"{len(unresolved)} of {len(resolved)} keys are unresolved names; that was 26 when this "
          "was written, so a jump means the resolver stopped reading declarations",
          len(unresolved) < 60)
-    shared_now = sum(1 for owners in resolved.values() if len(owners) > 1)
-    legacy_shared = len({k for k, owners in LEGACY_COLLIDE(spellings)})
-    case(f"the VALUE key sees {shared_now} shared address(es) and the old NAME key saw "
-         f"{legacy_shared}; if they are equal the fix is doing nothing",
-         shared_now > legacy_shared)
+    # The value key is load-bearing, asserted as a relation between the two sets of addresses
+    # rather than between two counts.
+    #
+    # It used to be `shared_now > legacy_shared`, comparing how many keys each produced, and that
+    # comparison died the moment `er-quit-rows` and `er-quit-load-character` landed -- two shells
+    # carved out of `er-quickload` that inherit its constant spellings verbatim. Measured on this
+    # tree: the name key went from 2 shared tokens to 198, the value key from 36 addresses to 163,
+    # and 198 > 163. Nothing regressed. The two numbers count different things: 37 of those 198
+    # tokens are extra spellings of an address another token already names (four of them --
+    # `SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA`, `PROFILE_LOAD_JOB_RUN_RVA`, `LOAD_JOB_RUN_RVA`,
+    # `CAP_LOAD_JOB_RUN_RVA` -- are one prologue at 0x826d50), so the name key inflates as copies
+    # multiply while the value key stays a count of prologues. Comparing them was only ever a proxy
+    # for the property below, and it was a proxy that a second copy of a crate could invert.
+    #
+    # So assert the property itself, which no amount of copying can make vacuous:
+    #
+    #   Nothing is lost -- every collision the name key finds is still a collision after
+    #   resolution. What this catches is resolution ceasing to be global: were a name to resolve
+    #   through the declarations of the crate that spells it, two shells spelling one prologue
+    #   `PROFILE_LOAD_JOB_RUN_RVA` could resolve to two addresses with one owner each, and the
+    #   collision would dissolve with nothing printed. Mutating `resolve_targets` to drift a
+    #   name's value per crate fails this case and only this case among the three that follow the
+    #   scan. (A name that resolves to nothing is a separate matter, already held by "an
+    #   unresolvable name keeps its spelling as the key" on the fixture above; the 25 such tokens
+    #   two crates share key on their spelling on both sides here, so they cannot move the
+    #   difference either way.)
+    #
+    #   Nothing short of the value key finds the rest -- the difference is non-empty. Both
+    #   addresses in it today (0x836f30, 0x7acb00) are claimed by a named constant in one crate and
+    #   a bare `rva:` table field in another, which is the blind spot that cost this project a day
+    #   and which the name key cannot close by construction. Blinding the scan to bare `rva:`
+    #   fields, or reverting the key to the spelling, empties the difference and fails this.
+    shared_by_value = {key for key, owners in resolved.items() if len(owners) > 1}
+    legacy_tokens = {token for token, _ in LEGACY_COLLIDE(spellings)}
+    legacy_addresses = set(resolve_targets(dict.fromkeys(legacy_tokens, ""), values))
+    case(
+        f"the VALUE key loses one of the {len(legacy_tokens)} collisions the old NAME key found; "
+        "two crates spelling one address the same way must resolve to one key: "
+        f"{sorted(describe(k) for k in legacy_addresses - shared_by_value)}",
+        legacy_addresses <= shared_by_value,
+    )
+    case(
+        f"the VALUE key finds nothing beyond the {len(legacy_addresses)} address(es) the old NAME "
+        "key could reach; two crates spelling one address differently would then collide unseen",
+        legacy_addresses < shared_by_value,
+    )
+    shared_now = len(shared_by_value)
+    legacy_shared = len(legacy_tokens)
 
     # The pair is declared shared (co-loadable), not merely declared -- and the mechanism holds.
     shared_pairs = {
@@ -706,7 +749,9 @@ def selftest() -> int:
     print(
         f"[check-shared-hook-rvas] selftest ok -- {len(crates)} cdylibs, {total_spellings} "
         f"spellings resolving to {len(resolved)} addresses ({len(unresolved)} unresolved), "
-        f"{shared_now} shared by VALUE where the old NAME key saw {legacy_shared}"
+        f"{shared_now} shared by value; the old name key saw {legacy_shared} spellings of "
+        f"{len(legacy_addresses)} of them and could not reach "
+        f"{sorted(describe(k) for k in shared_by_value - legacy_addresses)}"
     )
     return 0
 

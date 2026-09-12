@@ -39,6 +39,7 @@ pub(crate) fn install_profile_and_system_quit_hooks() {
     // pre-switch state (bd system-quit-cleantitle-load-is-stale-restream-not-slot-source-2026-07-02).
     // Installed unconditionally (single MinHook per address -- this detour also carries the
     // continue-trace cap logging); pure passthrough outside an active switch.
+    #[cfg(feature = "quit-rows")]
     START_SYSTEM_QUIT_CONTINUE_CONFIRM_HOOK.call_once(|| {
         let _ = std::thread::Builder::new()
             .name("er-quickload-system-quit-continue-confirm".to_owned())
@@ -48,6 +49,7 @@ pub(crate) fn install_profile_and_system_quit_hooks() {
     // Read-only teardown-requester trace: EzChildStepBase::RequestFinish. Identifies who requests
     // the in-world MoveMapStep child's finish -- the post-switch reload bounce is a stale finish
     // request hitting the freshly-created map session (er-effects-rs-qwj investigation).
+    #[cfg(feature = "quit-rows")]
     START_SYSTEM_QUIT_CHILD_FINISH_TRACE_HOOK.call_once(|| {
         let _ = std::thread::Builder::new()
             .name("er-quickload-system-quit-child-finish-trace".to_owned())

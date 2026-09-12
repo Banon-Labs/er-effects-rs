@@ -314,6 +314,158 @@ provider, painting a fake loading bar over the product's real one. Same conflict
 portrait shell."""
 evidence = "crates/er-loading-bar/src/lib.rs:102"
 
+# RESOLVED 2026-09-12 by a build feature, not by a code fix, and this is where the pair used to
+# be declared a `duplicate-owner` conflict.
+#
+# WHAT IT SAID. Both DLLs armed the System>Quit rows through `er_quit_menu_core::row_cloner::arm`,
+# and two arms in one process is two `AddCancelButton` registrations appending two sets of rows to
+# one dialog, two row tables writing one set of telemetry counters, and two claims on the three
+# routing prologues. Separately, both derived the six-cell Quit panel, and
+# `er_gfx::options_02_040::quit6` fail-closes when handed bytes it has already edited, so whichever
+# ran second refused and the tab carried whichever half won.
+#
+# WHY IT IS NO LONGER TRUE. `quit-rows` came off `er-quickload`'s default feature set. A default
+# build makes neither call: the arm is behind `#[cfg(feature = "quit-rows")]`
+# (`diagnostics/layout_global_hooks.rs`), and the `02_040` derivation went behind the same feature
+# on 2026-09-12 (`loading_cover/profile_table_gfx_files.rs`) precisely so the panel a rows shell
+# fills is a panel it is allowed to widen. So the shell owns the rows and the grid, and the product
+# owns neither.
+#
+# WHAT BRINGS IT BACK. Naming `quit-rows` in a build of `er-quickload`. `check.sh` compiles that
+# configuration, so it is not hypothetical -- a profile that co-loads this shell with a
+# `--features quit-rows` product is the conflict above, word for word. Nothing in this table can
+# see a feature flag, so this stays a reader's warning rather than a check.
+#
+# STILL CONFLICTING, and the reason the complete row set is not available from shells yet:
+# `er-quit-menu` against `er-quit-load-character` (below). `arm` is a process-wide one-shot, so two
+# shells arming halves of the row set is not a way to ship both halves.
+
+[[conflict]]
+a = "er-build-import"
+b = "er-quit-menu"
+kind = "duplicate-owner"
+reason = """The same two-owners-of-one-mutation this table already records between `er-build-import` and the product, for the same reason: both link `er-build-import-runtime`, whose statics are per DLL, and both now register a `CSTaskImp` FrameBegin task that drives its phase machine. The shell imports the configured `build_url` unprompted at character load; the quit-menu shell imports on demand from the **Load Build from URL** row. Two copies of the phase machine, two fetch workers and two tasks mutating one character's inventory, equipment slots and PlayerGameData, with no shared lock.
+
+This entry became true on 2026-09-11, when `er-quit-menu` stopped being a harness that armed nothing. Its `[compatible]` note predicted exactly this: "if the harness ever arms that row, this entry becomes a `duplicate-owner` conflict with `er-build-import` and with `er-quickload`"."""
+evidence = "crates/er-build-import/src/lib.rs:23; crates/er-quit-menu-core/src/game_task.rs"
+
+[[conflict]]
+a = "er-quickload"
+b = "er-quit-rows"
+kind = "duplicate-owner"
+reason = """`er-quit-rows` is a copy of `er-quickload`'s source being reduced to the System>Quit rows, so until that reduction finishes the two are duplicate owners of everything the product owns, not of one surface: the same row cloner arm, the same three routing prologues, the same row-populate and current-summary detours, the same save-redirect hooks, the same autoload phase machine and the same telemetry counters. Every static is per DLL, so co-loading gives each of those two independent copies with no shared lock.
+
+It was duplicated rather than extracted on 2026-09-11 by user directive, after the opposite approach was measured and rejected. `er-quit-load-character` had been built UP from shared crates, and run `br-20260911-205138-default` reached a shell where every moved code path executed and the surface still looked and behaved nothing like the product: right rows, wrong GFX content, no styling, no inserted elements, and a save-file click that did not interact like the product's. Starting from a copy means parity is the default and only what is deleted is lost.
+
+This entry is expected to narrow as the reduction proceeds, but it must never be deleted: even fully reduced, both shells arm the same Quit grid, and `er_gfx::options_02_040::quit6` fail-closes when handed already-derived bytes."""
+evidence = "crates/er-quit-rows/src/lib.rs; crates/er-quickload/src/lib.rs; bd build-a-feature-dll-down-from-quickload-not-up-2026-09-11"
+
+[[conflict]]
+a = "er-quit-rows"
+b = "er-reload-trace"
+kind = "diagnostic-drive"
+reason = """Inherited wholesale from `er-quickload`, whose entry with this same tracer records the \
+mechanism: `er-quit-rows` is a copy of that source, so it claims the same 30 addresses the tracer \
+names as bare `rva:` fields in its `HookSpec` table -- the save dispatch family around 0x67axxx, \
+the menu wrapper trio at 0x82bxxx, the load-job and profile-close prologues, and the MoveMap \
+dispatcher. Each shell links `er-hook` statically, so each owns a separate MinHook instance and \
+whichever installs second overwrites the other's trampoline; the loser reports installed and never \
+runs, which is the failure this table exists to make visible before a run rather than after.
+
+The reduction is expected to shrink this list as whole subsystems leave `er-quit-rows`, but the \
+pair stays declared: the Quit rows themselves route through `SYSTEM_QUIT_REQUEST_LOAD_SLOT_RVA` and \
+`SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_RVA`, which the tracer also names, so no amount of trimming \
+removes the overlap."""
+evidence = "crates/er-quit-rows/src/constants/profile_render.rs; crates/er-reload-trace/src/lib.rs"
+
+[[conflict]]
+a = "er-quit-rows"
+b = "er-input-harness"
+kind = "drives-input"
+reason = """The same relationship `er-quickload` has with the harness, inherited by copying its \
+source: both resolve `FD4_PAD_MANAGER_RVA` and reach the native binding keystate bitmap through it. \
+The harness writes that bitmap to drive menus; a product shell reads it to decide whether the \
+player is holding anything. Two writers of one keystate with no shared lock is a driven input the \
+other side cannot distinguish from a user's, which is why this is declared rather than assumed \
+harmless.
+
+Loading them together is still the intended agent workflow for `er-quickload`, and the conflict \
+entry is what makes the profile generator say so out loud. For `er-quit-rows` there is no such \
+workflow yet: the shell is loaded alone from `~/Elden/quit-rows-trimmed.me3` while it is being \
+reduced."""
+evidence = "crates/er-quit-rows/src/experiments/can_move_probe.rs:172; crates/er-input-harness/src/pad_inject.rs:40"
+
+[[shared]]
+a = "er-quit-rows"
+b = "er-armament-icons"
+target = "er_game_base::rva::TITLE_SCALEFORM_FILE_OPEN_RVA"
+mechanism = "hook-union"
+handler_a = "title_scaleform_file_open_observer_hook"
+handler_b = "file_open_hook"
+reason = """The same union row `er-quickload` and this companion already hold, inherited by \
+copying that source: `er-quit-rows` registers the identical observer through \
+`crate::mh::register_union_hook` rather than a private `MhHook`, so whichever shell reaches the \
+prologue first creates the dispatcher and the other chains into it. Read that entry for the \
+measurement -- 113 file-open hits alone against 0 in an eleven-native profile, with every movie \
+swap silently inert -- because it is the reason both sides are union-shaped at all.
+
+Two further addresses are shared with this companion and are not covered by the union: \
+`CSSCALEFORMVALUE_DTOR_RVA` (0xd7f850) and `TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA` \
+(0x74a2f0), which it spells `SCALEFORM_VALUE_DTOR_RVA` and `ASSIGN_COMPONENT_WITH_NAME_RVA`. \
+Neither side has been measured as the owner, and `er-quit-rows` is a transitional shell loaded \
+alone from `~/Elden/quit-rows-trimmed.me3` while it is reduced, so the pair has never actually \
+co-loaded. Measure them before that changes."""
+evidence = "crates/er-quit-rows/src/experiments/startup_hooks/loading_cover/title_resources_stats_text.rs:110; crates/er-armament-icons/src/gfx_equip_hook.rs:85"
+
+# RESOLVED 2026-09-12, the same way and on the same day as the `er-quit-menu` pair above.
+#
+# WHAT IT SAID. Both called `er_quit_menu_core::row_cloner::arm`, both derived the six-cell Quit
+# grid, and the two disagreed about what a Load Character press means: the product detoured
+# `CS::ProfileLoadDialog::load_activate` and turned a slot pick into its own save-safe switch --
+# return to the title, tear the world down, reload the picked slot -- while the shell installs none
+# of that. In one process the product's detour answered a press on either DLL's row, so the shell's
+# row silently acquired a flow its own DLL does not implement.
+#
+# WHY IT IS NO LONGER TRUE. With `quit-rows` off er-quickload's default features the product arms
+# no rows, derives no grid (the `02_040` call went behind the same feature on 2026-09-12) and
+# installs none of the three ProfileSelect routing detours -- they are all
+# `#[cfg(feature = "quit-rows")]` in `diagnostics/layout_global_hooks.rs`. There is no second owner
+# to disagree with.
+#
+# WHAT IS STILL DIFFERENT, and it is a behaviour limit rather than a co-load hazard: the shell's
+# Load Character opens `05_010_ProfileSelect` and a pick runs the game's own in-world load. Gear and
+# level change in place; the world is never torn down and no character is loaded through the title.
+# The product's save-safe switch is not in a shared crate yet -- bd er-effects-rs-ye3q (P0) carries
+# the extraction, and until it lands a shell row is a native load wearing the product's label.
+#
+# WHAT BRINGS THE CONFLICT BACK. Naming `quit-rows` in a build of `er-quickload`. `check.sh`
+# compiles that configuration; nothing in this table can see a feature flag.
+
+[[conflict]]
+a = "er-quit-menu"
+b = "er-quit-load-character"
+kind = "duplicate-owner"
+reason = """Two standalone shells over one feature crate, each arming a disjoint half of the row \
+set -- and the halves not overlapping is exactly why it looks co-loadable and is not.
+
+MEASURED 2026-09-12, run br-20260912-063030-f214, and the mechanism is worse than the arm latch \
+this entry used to blame. Each cdylib links its OWN copy of `er-quit-menu-core`, so `ROW_SET`, the \
+row table and the arm latch are per DLL: making `row_cloner::arm` additive fixes nothing, because \
+the two hosts never shared the state being merged. Both `AddCancelButton` detours sat on the hook \
+union and both fired, so each shell cloned its pair into the same dialog and then again on the \
+other's pass -- `count 1->2->4`, `4->5->7`, `7->8->10` in one tab build. The six-cell grid ended \
+up holding `item_count=10`, the two row tables disagreed about which index is Return to Desktop \
+(`#3:Ours(LoadSaveProfiles)` against `#7:Ours(GenerateBuildLink)`), and every press resolved \
+`row=AMBIGUOUS reason=row-table-incomplete`. The safety gate then did its job and made the damage \
+visible: Save Game was suppressed, the instant `ExitProcess` refused, and the native \
+Return-to-Desktop confirm appeared behind every cloned row.
+
+The fix is one arm in one process, not two halves: `er-quit-menu` arms `RowSet::ALL` as of the \
+same day, so this shell's rows are already on the tab and loading it adds nothing but a second \
+cloner. It is `[opt_in_only]` for that reason -- co-loadable is not the question when the rows are \
+already there."""
+evidence = "crates/er-quit-menu/src/lib.rs; crates/er-quit-load-character/src/lib.rs; crates/er-quit-menu-core/src/row_cloner.rs; /home/banon/.cache/er-me3-runs/br-20260912-063030-f214"
+
 [[conflict]]
 a = "er-quickload"
 b = "er-build-import"
@@ -370,6 +522,12 @@ evidence = "~/Elden/main-all-dlls.me3 (annotation on the er_reload_trace entry)"
 # whole point is that the code being harmless is not the question.
 # ---------------------------------------------------------------------------
 [opt_in_only]
+"er-quit-load-character" = """REDUNDANT since 2026-09-12, not dangerous on its own: every row it \
+arms is already armed by `er-quit-menu`, which now passes `RowSet::ALL`. Loading both puts a \
+second cloner in the process, and because each cdylib links its own `er-quit-menu-core` the two \
+cannot share a row table -- see the [[conflict]] pair for the measured result (a six-cell grid \
+holding ten items and every press ambiguous). Kept as a shell for a profile that wants the two \
+character rows and nothing else: `--with er-quit-load-character`, without `er-quit-menu`."""
 "mushroom-man-runtime" = """Replaces a protector's param rows so the character wears the mushroom \
 head -- a VISIBLE costume change on whatever character the run loads. Harmless to the process \
 and hooks no prologue, which is exactly why it slipped in: co-loadable is not the same as \
@@ -720,17 +878,7 @@ request ring, which is mutex-guarded by the engine and is consumed by every NPC 
 in-flight request per target, drained on the frame it completes, is the same traffic a handful of \
 extra NPCs would make."""
 "er-player-name-filter" = "Hooks SessionManagerPlayerEntryBase::Copy only; er-quickload no longer carries this hook, and the standalone DLL byte-checks the 1.16.2 prologue before installing."
-"er-quit-menu" = """System>Quit harness. Its detours route through `er_hook::register_union_hook` \
-rather than a bare `MhHook`, and -- the part that actually matters -- none of its targets is claimed \
-by another shell, which `check-shared-hook-rvas.py` re-proves on every run. Note that the union alone \
-would NOT be enough if one were: `register_union_hook` unions handlers within ONE DLL, because its \
-statics and its MinHook instance are per-DLL. Crossing images takes `register_shared_hook`. \
-Since the Generate Build Link row moved into `er-quit-menu-core` this shell also LINKS \
-`er-build-import-runtime`, whose statics are per-DLL for the same reason -- but the harness calls \
-none of it and arms no row, so the second copy of the importer's phase machine never runs. If the \
-harness ever arms that row, this entry becomes a `duplicate-owner` conflict with `er-build-import` \
-and with `er-quickload`, for exactly the reason the `er-quickload`/`er-build-import` pair \
-below already records."""
+
 "er-save-picker" = "Detects the product DLL and stays inert when it is present."
 "er-seamless-bugfixes" = """Own MinHook instance, but on SpecialEffect::HasSpecialEffectId \
 (0x4f9940) and SpecialEffect::Apply (0x4fa8e0) -- prologues no other DLL in this repo hooks \
@@ -741,31 +889,6 @@ comparison and disarms with a log line rather than trampling a trampoline. Both 
 stubs that tail-jump to the original for every non-null container, so a co-loaded run is \
 byte-for-byte vanilla unless the null case occurs."""
 "er-telemetry" = "Read-only oracles on a FrameBegin task; installs no hooks."
-
-"er-lockon-filter" = """Co-loadable with the product and with every other shell here. One \
-detour, on the lock-on system's point-owner resolver (1.16.2 `0x140713db0`, 1.17 `0x140714c00`), \
-and it goes through `er_hook::register_union_hook`, so a second DLL that ever wants that prologue \
-chains rather than overwriting a trampoline. No other crate in this workspace declares that \
-address -- `crates/er-lockon-filter/{build.rs,src/lib.rs}` are the only files that name it -- and \
-`check-shared-hook-rvas.py` keys on resolved values, so that claim stays checkable rather than \
-asserted.
-
-It writes no game memory, patches no param row and touches no swapchain. The param half matters \
-beyond tidiness: a DLL that patches a param row moves the Seamless lobby-key fingerprint and \
-drops the player out of matchmaking, which is what put `er-death-persist` in [opt_in_only] above. \
-This one reads three integers (`ChrIns::chr_type` +0x68, `WorldChrManImp::mainPlayer` +0x1e508, \
-`GameMan::summonParamType` +0xd84) and changes one function's return value. Damage in both \
-directions and nameplates are unchanged.
-
-It fails closed rather than degrading: an unrecognised build gets `REFUSED` and nothing is read or \
-installed, a prologue that is not the verified 13 bytes gets `DISARMED`, and a missing WorldChrMan \
-singleton stops the install. All three land in `er-lockon-filter.log` beside the executable.
-
-It was [opt_in_only] from 2026-09-07 to 2026-09-08 on a consent argument, not a mechanism one -- it \
-changes what happens when the player presses lock-on, and a dependency-closure walk is not consent. \
-The user gave that consent directly on 2026-09-08 ("I can still target other invaders ... it should \
-be included with the quickload by default"), so the entry that withheld it is gone and the DLL is \
-listed in [always] below."""
 
 # ---------------------------------------------------------------------------
 # LOADED WHENEVER THE PRODUCT IS, whether or not this branch touched the crate.
@@ -792,21 +915,10 @@ listed in [always] below."""
 # GATED BY     scripts/check-me3-dll-conflicts.py
 # ---------------------------------------------------------------------------
 [always]
-"er-lockon-filter" = """On by user directive, 2026-09-08: "I can still target other invaders. \
-Are we including that? It should be included with the quickload by default." It had been \
-[opt_in_only] since the day it landed, so it was absent from the 20-DLL profile the user was \
-playing, and the lock-on they were describing was vanilla lock-on -- the filter was never in the \
-process. That is the whole defect this row fixes.
+# Deliberately empty since 2026-09-11. Its only member was er-lockon-filter, and that
+# product was deleted by user directive; the research it carried is in
+# docs/recon/lockon-filter-findings.md. The mechanism is unchanged and still gated --
+# check-me3-dll-conflicts.py and er-dll-closure.py --selftest both cover it against
+# synthetic tables, so an empty table here is a table with no members rather than a
+# feature nobody checks any more.
 
-Reclassifying it [compatible] alone would not have done it. The closure selects on the diff, and \
-`er-quickload` has no reverse dependents, so a branch that edits only the product closes over one \
-shell and the filter would be missing again on the next session -- the same report, a week later.
-
-STILL NOT PROVEN AT RUNTIME, and being default-on does not change that. The seam, the three \
-offsets and the 1.16.2 -> 1.17 pair are byte-proven in both images, and a live Seamless run has \
-the detour installed and its census logging, but the filter has never been observed to fire: that \
-needs two players invading one world. The known risk is the opposite of a crash. Under Seamless \
-the local player has been measured typing as `Local` (0) / `Duelist` (2) with summonParamType \
-0 / -12, none of which is an invader kind, so the gate may simply never arm and the feature would \
-be silently absent while appearing to be loaded. `er-lockon-filter.log` answers that on the first \
-live invasion; see bd seamless-types-the-local-player-duelist-2-summonparam-minus12-2026-09-07."""

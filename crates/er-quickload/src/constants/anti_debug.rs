@@ -120,6 +120,7 @@ pub(crate) use er_title_flow::TITLE_OWNER_STATE_OFFSET;
 pub(crate) use er_title_flow::TITLE_OWNER_STATE_COMMITTED_OFFSET;
 pub(crate) use er_title_flow::TraceSampleLimit;
 
+#[cfg(feature = "quit-rows")]
 pub(crate) use er_title_flow::TITLE_OWNER_SCAN_COUNTDOWN_READY;
 pub(crate) use er_title_flow::MenuTraceRva;
 
@@ -375,15 +376,17 @@ pub(crate) const CS_MENU_MAN_GLOBAL_RVA: usize = er_game_base::rva::CS_MENU_MAN_
 /// that our hide/restore left with DisplayInfo.Visible=0 (the blank Game Options pane).
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const OPTIONSETTING_TAB_SELECT_VISIBILITY_RVA: usize = 0x93b760;
-/// OptionSettingTopDialog (menu_id 0x25) -> embedded CS::CompositeOptionSettingDialog.
-pub(crate) const OPTIONSETTING_COMPOSITE_OFFSET: usize = 0x1768;
-/// Composite -> current pane dialog ptr (`+0xb8`) and the 10-entry per-tab pane-dialog cache (`+0x68`).
-pub(crate) const OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET: usize = 0xb8;
-pub(crate) const OPTIONSETTING_COMPOSITE_PANE_CACHE_OFFSET: usize = 0x68;
-pub(crate) const OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT: usize = 10;
-/// OptionSetting/OptionSetting_Trial window menu_id (indexes CSMenuMan flag byte; gates the pane-reapply).
-pub(crate) const OPTIONSETTING_MENU_ID: u16 = 0x25;
-pub(crate) const TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK: u8 = 0x3;
+// The OptionSetting composite layout now lives in `er-title-flow`, so the standalone quit-menu
+// shells can read the same offsets the product does rather than keeping a second copy.
+// The three composite offsets below are walked only by the rows' OptionSetting pane
+// hide/restore; the visible-flags mask is read by the title-visual suppression, which ships
+// either way. One import for each lifetime rather than a gate inside a brace group.
+#[cfg(feature = "quit-rows")]
+pub(crate) use er_title_flow::{
+    OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET, OPTIONSETTING_COMPOSITE_OFFSET,
+    OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT,
+};
+pub(crate) use er_title_flow::TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK;
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_NOT_INSTALLED: usize = 0;
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED_YES: usize = 1;
 pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_ORIG: AtomicUsize =
@@ -523,10 +526,8 @@ pub(crate) const LOADING_BG_REPLACE_BIND_RVA: usize = 0xd697d0;
 /// from MainHeap/, loadTask=0) -> this`; only inits the FD4FileCap base and zeroes `+0x90`.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const TPF_FILE_CAP_CTOR_RVA: usize = 0x225f60;
-/// Game heap allocator wrapper (dump 0x141eb9ec0 -> deobf 0x141eb9ed0). `fn(size /rcx/, align /rdx/,
-/// allocator_obj /r8/) -> *mut u8`; allocator_obj is the dereferenced DLAllocator* (== the repo's
-/// `runtime_heap_allocator` for MainHeap).
-pub(crate) const GAME_HEAP_ALLOC_RVA: usize = 0x1eb9ed0;
+// `GAME_HEAP_ALLOC_RVA` moved to `er_game_base::rva` with the software keyboard, its only caller,
+// which now lives in `er-quit-menu-core` so a standalone quit-menu shell can open the link field.
 /// `DLString<wchar_t>::substr` (dump 0x140116c90 -> deobf 0x140116c70). `fn(dest /rcx/, src /rdx/,
 /// start /r8 = 0/, count /r9 = usize::MAX = to-end/) -> dest`; copies the symbol into the rti symbol.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.

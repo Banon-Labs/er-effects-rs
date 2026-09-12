@@ -8,8 +8,11 @@ static TEXT_INPUT_02_990_CANONICAL_URL: &[u8] = b"data0:/menu/win/02_990_textinp
 // Second derivation of the same canonical payload, for the System>Quit link field. Separate cache
 // because the two derivations differ: the picker's hides the movie's chrome, this one keeps and
 // widens it.
+#[cfg(feature = "quit-rows")]
 static BUILD_URL_02_990_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceLock::new();
+#[cfg(feature = "quit-rows")]
 static BUILD_URL_02_990_RUNTIME_SERVES: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "quit-rows")]
 static BUILD_URL_02_990_RUNTIME_FAILURES: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) fn install_profile_select_table_diag_hook() {
@@ -736,6 +739,9 @@ pub(crate) unsafe fn text_input_02_990_swap_to_inline(base: usize, file: usize) 
 
 /// Centre `02_990_textinput` over the Quit tab for the **Load Build from URL** link field, with the
 /// movie's own backing plate and frame art kept and widened to hold a planner link.
+///
+/// The field belongs to a cloned row, so the whole derivation goes with the rows.
+#[cfg(feature = "quit-rows")]
 pub(crate) unsafe fn text_input_02_990_swap_to_build_url(base: usize, file: usize) -> bool {
     unsafe {
         text_input_02_990_swap(
@@ -749,6 +755,9 @@ pub(crate) unsafe fn text_input_02_990_swap_to_build_url(base: usize, file: usiz
                 derive: |vanilla| {
                     er_gfx::build_url_02_990::centered_build_url_editor(vanilla)
                         .map_err(|error| error.to_string())
+                        // Read the dim back out of the payload this is about to install, so a
+                        // derivation that lost it is a counter rather than an undimmed field.
+                        .and_then(crate::attest_derived_build_url_backdrop)
                 },
             },
         )
@@ -759,6 +768,7 @@ pub(crate) unsafe fn text_input_02_990_swap_to_build_url(base: usize, file: usiz
 /// MemoryFile swap path, but deliberately has no env/file-backed diagnostic input: the product must not
 /// ship or depend on an external GFx. The derived movie is built from the game's own vanilla payload and
 /// cached for process lifetime so the native MemoryFile's data pointer remains valid.
+#[cfg(feature = "quit-rows")]
 pub(crate) unsafe fn options_02_040_quit6_swap_to_edited(base: usize, file: usize) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if file == 0 || file == null || file == HOOK_ORIGINAL_UNSET {
@@ -815,8 +825,16 @@ pub(crate) unsafe fn options_02_040_quit6_swap_to_edited(base: usize, file: usiz
             match er_gfx::options_02_040::quit6(vanilla) {
                 Ok(out) => {
                     let out_fnv = er_gfx::title_05_000::fnv1a64(&out);
+                    // `in_fnv` is logged because `known_vanilla` comes back false on this path and
+                    // the pair is what would arm it. The fingerprint in `er_gfx` was taken from the
+                    // unpacked file; the loader hands us a payload 9 bytes longer, so the length
+                    // check fails and the derived output is never compared against its golden hash
+                    // -- a changed movie would be edited blind and served. Pinning the runtime
+                    // input's own length and fnv as a second accepted fingerprint closes that, and
+                    // this line is where the number to pin comes from.
+                    let in_fnv = er_gfx::title_05_000::fnv1a64(vanilla);
                     append_autoload_debug(format_args!(
-                        "system-quit-gfx: 02_040 quit6 runtime edit derived in={len} out={} known_vanilla={known} out_fnv=0x{out_fnv:016x}",
+                        "system-quit-gfx: 02_040 quit6 runtime edit derived in={len} in_fnv=0x{in_fnv:016x} out={} known_vanilla={known} out_fnv=0x{out_fnv:016x}",
                         out.len()
                     ));
                     OPTIONS_02_040_QUIT6_RUNTIME_EDITED.get_or_init(|| out)
@@ -916,20 +934,39 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
             // Product-default runtime strip (er-effects-rs-h7x): derive the stripped title
             // movie from the native file's own vanilla payload and swap it in place. On any
             // failure the untouched native file is returned (vanilla title UI, fail-closed).
+            //
+            // This site runs once per process -- the engine opens the movie once and caches what
+            // it parsed -- so it is the wrong place to decide anything per title. The decision is
+            // `title_05_000_strip_default_enabled`, which is now false; see the reason there.
             if is_title_05_000 && TITLE_05_000_RUNTIME_STRIP_ARMED.load(Ordering::SeqCst) != 0 {
                 memory_replacement = unsafe { title_05_000_swap_to_stripped(base, native) };
+            } else if is_title_05_000 {
+                TITLE_05_000_RUNTIME_STRIP_DECLINED.fetch_add(1, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "title-resource-observer: 05_000 title served VANILLA -- the movie keeps its own PRESS ANY BUTTON and menu, and the per-element hides own the boot title (declines={})",
+                    TITLE_05_000_RUNTIME_STRIP_DECLINED.load(Ordering::SeqCst)
+                ));
             }
             // Stats-panel 05_010 edit: same in-place derive-and-swap, same fail-closed shape.
             if is_profile_05_010 && PROFILE_05_010_RUNTIME_EDIT_ARMED.load(Ordering::SeqCst) != 0 {
                 memory_replacement = unsafe { profile_05_010_swap_to_edited(base, native) };
             }
-            // System->Quit four-button GFx edit: product-default, no external asset dependency.
+            // System>Quit six-cell grid, derived from the game's own vanilla payload.
+            //
+            // Behind `quit-rows` because the cells exist to hold cloned rows. A build with no rows
+            // that still widened the panel would show the two vanilla entries and four empty cells,
+            // and it would consume the one derivation `er_gfx::options_02_040::quit6` allows -- the
+            // deriver fail-closes on input it has already edited, so a standalone rows shell loaded
+            // beside this one would be handed widened bytes and correctly refuse to widen them
+            // again. Leaving the panel vanilla is what lets that shell own the grid it fills.
+            #[cfg(feature = "quit-rows")]
             if is_options_02_040 {
                 memory_replacement = unsafe { options_02_040_quit6_swap_to_edited(base, native) };
             }
             if is_path_editor_02_990 {
                 memory_replacement = unsafe { text_input_02_990_swap_to_inline(base, native) };
             }
+            #[cfg(feature = "quit-rows")]
             if is_build_url_02_990 {
                 memory_replacement = unsafe { text_input_02_990_swap_to_build_url(base, native) };
             }

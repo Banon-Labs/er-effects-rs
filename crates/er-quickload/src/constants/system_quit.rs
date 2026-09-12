@@ -442,6 +442,7 @@ pub(crate) use er_telemetry_core::counters::DIRECT_INPUT8_CREATE_ORIG;
 pub(crate) use er_telemetry_core::counters::DIRECT_INPUT_CREATE_DEVICE_ORIG;
 pub(crate) use er_telemetry_core::counters::DIRECT_INPUT_GET_DEVICE_STATE_ORIG;
 pub(crate) use er_telemetry_core::counters::TITLE_HANDOFF_COMPLETE;
+#[cfg(feature = "quit-rows")]
 pub(crate) use er_title_flow::TITLE_OWNER_PTR;
 #[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static FORCE_PLAY_GAME_CALLED: AtomicUsize =
@@ -456,6 +457,7 @@ pub(crate) static SUBMIT_PLAY_GAME_PHASE: std::sync::atomic::AtomicI32 =
 #[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static FORCE_PLAY_GAME_LAST_STATE: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(FORCE_PLAY_GAME_STATE_UNOBSERVED);
+#[cfg(feature = "quit-rows")]
 pub(crate) use er_title_flow::TITLE_ACCEPT_BYTE_GATE_FIRED;
 #[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static INGAMESTEP_PUMP_LAST_D8: std::sync::atomic::AtomicI32 =
@@ -503,6 +505,7 @@ pub(crate) static CRASH_LOGGER_INSTALLED: std::sync::Once = std::sync::Once::new
 #[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static INGAMEINIT_DRIVE_DONE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "quit-rows")]
 pub(crate) use er_title_flow::TITLE_OWNER_SCAN_COUNTDOWN;
 pub(crate) static SAFE_INPUT_CONFIRM_PULSE_SEQ: AtomicUsize =
     AtomicUsize::new(SAFE_INPUT_FIRST_PULSE_INDEX as usize);

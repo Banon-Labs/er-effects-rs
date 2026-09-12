@@ -628,7 +628,13 @@ pub unsafe fn install_loadlist_init_capture_hook(base: usize) {
 /// at which BeginTitle(3) fires natively (and the full state sequence during boot), so we can decide
 /// whether the 05_000_Title build has any headroom to be started earlier (overlap with init) before
 /// risking a forced SetState (which has no double-build guard). bd menu-build-overlap-lever-2026-06-24.
-pub unsafe extern "system" fn title_setstate_trace_detour(owner: usize, state: i32) {
+pub unsafe extern "system" fn title_setstate_trace_detour(
+    owner: usize,
+    state_arg: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let state = state_arg as i32;
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if owner > PAB_MIN_HEAP_PTR {
             TITLE_SETSTATE_TRACE_LAST_OWNER.store(owner, Ordering::SeqCst);
@@ -767,7 +773,7 @@ pub unsafe extern "system" fn title_setstate_trace_detour(owner: usize, state: i
     }));
     let orig = TITLE_SETSTATE_TRACE_ORIG.load(Ordering::SeqCst);
     if orig == TITLE_OWNER_SCAN_START_ADDRESS || orig == 0 {
-        return;
+        return 0;
     }
     // Missing-save in-game picker guard: while no save has been selected, deny only the two
     // world-load entry states (RE-verified 2026-07-07: every path into the world -- Continue,
@@ -780,10 +786,13 @@ pub unsafe extern "system" fn title_setstate_trace_detour(owner: usize, state: i
         append_autoload_debug(format_args!(
             "title-setstate-trace: DENIED SetState(owner=0x{owner:x}, state={state}) -- world entry blocked until the missing-save picker resolves"
         ));
-        return;
+        return 0;
     }
-    let f: unsafe extern "system" fn(usize, i32) = unsafe { std::mem::transmute(orig) };
-    unsafe { f(owner, state) };
+    // Through the union's own shape: `CAP_SETSTATE_RVA` is this same address and
+    // `cap_setstate_hook` chains on it, so this slot holds that four-argument handler whenever it
+    // registered second. Calling through `fn(usize, i32)` left its `r8`/`r9` unset.
+    let f: er_hook::UnionFn = unsafe { std::mem::transmute(orig) };
+    unsafe { f(owner, state_arg, c, d) }
 }
 /// Install the read-only title step-setter trace hook once. Mirrors `install_pab_advance_hook`.
 /// Save-safe: the detour only logs + passes through. bd menu-build-overlap-lever-2026-06-24.

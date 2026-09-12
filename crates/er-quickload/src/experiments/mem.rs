@@ -42,3 +42,26 @@ pub(crate) use er_game_base::pgd::{
 pub(crate) fn gated_game_fn(rva: usize, what: &'static str) -> Option<usize> {
     er_game_base::mem::game_rva_named(rva as u32, what).ok()
 }
+
+/// Whether the UTF-16 string at `ptr` is exactly `ascii`, terminator included.
+///
+/// A fault-safe read per unit, so an unmapped or misread pointer answers `false` rather than
+/// faulting. It stood in `quit_menu/system_quit_dialog_handlers.rs` and has nothing to do with
+/// the rows -- it reads memory, which is what this module is.
+pub(crate) unsafe fn wide_equals_ascii(ptr: usize, ascii: &[u8]) -> bool {
+    if ptr == 0 || ptr == TITLE_OWNER_SCAN_START_ADDRESS || ascii.is_empty() {
+        return false;
+    }
+    for (idx, want) in ascii.iter().copied().enumerate() {
+        let Some(unit) = (unsafe { safe_read_u16(ptr + idx * core::mem::size_of::<u16>()) }) else {
+            return false;
+        };
+        if unit != want as u16 {
+            return false;
+        }
+    }
+    matches!(
+        unsafe { safe_read_u16(ptr + ascii.len() * core::mem::size_of::<u16>()) },
+        Some(0)
+    )
+}

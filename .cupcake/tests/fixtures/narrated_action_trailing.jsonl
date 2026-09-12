@@ -1,0 +1,2 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Do you want me to read what you wrote?"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "No \u2014 feature-gate `er-quickload` instead of forking it, and I'm starting on that now."}]}}

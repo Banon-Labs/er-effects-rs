@@ -1,0 +1,496 @@
+/// Oracle reads for the proof bundle (per the goal): the live in-world facts the harness asserts
+/// on, independent of any agent narrative. Re-fetches the local player (the lib.rs player borrow
+/// has ended before this runs). For a zero-input run, `simulated_button_presses_total` must be 0;
+/// `oracle_grounded` + a valid `oracle_block_id` + finite non-origin `oracle_havok_pos`
+/// distinguish "in the playable world" from "frozen on a loading screen".
+pub(crate) fn write_oracle_telemetry(body: &mut String) {
+    write_title_menu_flow_oracles(body);
+    write_game_module_oracles(body);
+    write_player_presence_oracle(body);
+    write_stepfinish_gate_oracle(body);
+    portrait_loadwin_sample_and_write(body);
+    native_ls_exposure_write(body);
+    cover_after_release_write(body);
+}
+
+/// STEP_Finish sub-gate diagnostic (bd render-handoff-freeze-second-gate-pins-2026-07-18). The
+/// render handoff needs requestCode (InGameStep+0xd8) to advance 1->2, which happens only when
+/// MoveMapStep::STEP_Finish reaches terminal. STEP_Finish is gated on: warmup (+0xb0) >= 2, the
+/// testNetStep child finished (MoveMapStep+0x110 stepper == 0), and the CSRemo-idle gate
+/// (CSRemo[+8]remoMan[+0xd0] pending == 0, remoMan != null). Reading all three here (read-only)
+/// deterministically identifies which sub-gate holds STEP_Finish -- to disambiguate the static
+/// STEP_Finish-gate hypothesis from the runtime return-title-bounce observation (requestCode was seen
+/// briefly reaching 2 then reverting while the return-title request pulsed). MoveMapStep is resolved
+/// via the cached session owner -> InGameStep+0x2e8 -> +0xe8 (same path as gm-snap).
+fn write_stepfinish_gate_oracle(body: &mut String) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let rd = |p: usize| -> Option<usize> { unsafe { crate::experiments::safe_read_usize(p) } };
+    let rdi = |p: usize| -> i64 {
+        unsafe { crate::experiments::safe_read_usize(p) }.map_or(-1, |v| i64::from(v as u32 as i32))
+    };
+    let mut owner = TITLE_OWNER_PTR.load(Ordering::SeqCst);
+    if owner == null {
+        owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
+    }
+    let ingame = if owner != null {
+        rd(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET).filter(|v| *v != null)
+    } else {
+        None
+    };
+    let request_code = ingame.map_or(-1, |ig| rdi(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET));
+    ORACLE_RELIABLE_INGAME_PTR.store(ingame.unwrap_or(0), Ordering::SeqCst);
+    let mms =
+        ingame.and_then(|ig| rd(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET).filter(|v| *v != null));
+    // Publish the reliably-resolved MoveMapStep pointer for the in-world finalize drive to consume:
+    // this resolution tracks load2's true in-world step (18) whereas the game-task's fresh title_owner
+    // scan reads a stale owner -> stale step (bd corrected-title-owner-gate-not-blocker-load2-mms18-
+    // resolution-disagrees-writeoracle-reliable-2026-07-20).
+    ORACLE_RELIABLE_MMS_PTR.store(mms.unwrap_or(0), Ordering::SeqCst);
+    const MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET: usize = 0x12a;
+    let (warmup, testnet_stepper, mms_state, finalize_substate_12a) = match mms {
+        Some(m) => (
+            rdi(m + MOVEMAPSTEP_FINISH_WARMUP_B0_OFFSET),
+            rd(m + MOVEMAPSTEP_TESTNETSTEP_STEPPER_110_OFFSET).unwrap_or(0),
+            rdi(m + MOVEMAPSTEP_STATE_48_RE_OFFSET),
+            unsafe {
+                crate::experiments::safe_read_u8(m + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET)
+            }
+            .map_or(-1, i64::from),
+        ),
+        None => (-1, usize::MAX, -1, -1),
+    };
+    // CSRemo-idle gate inputs (read-only, no vtable call): remoMan present + pending qword.
+    let (csremo, remoman, remo_pending) = if let Ok(base) = crate::experiments::game_module_base() {
+        let csremo = rd(er_game_base::mem::game_data_addr(base, GLOBAL_CSREMO_RVA, "GLOBAL_CSREMO_RVA"))
+            .filter(|v| *v != null)
+            .unwrap_or(0);
+        let remoman = if csremo != 0 {
+            rd(csremo + CSREMO_REMOMAN_08_OFFSET)
+                .filter(|v| *v != null)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let pending = if remoman != 0 {
+            rd(remoman + CSREMOMAN_PENDING_D0_OFFSET).unwrap_or(0)
+        } else {
+            0
+        };
+        (csremo, remoman, pending)
+    } else {
+        (0, 0, 0)
+    };
+    body.push_str(&format!(
+        "  \"oracle_stepfinish_request_code\": {request_code},\n  \"oracle_stepfinish_warmup\": {warmup},\n  \"oracle_stepfinish_testnet_stepper_present\": {},\n  \"oracle_stepfinish_mms_state\": {mms_state},\n  \"oracle_stepfinish_finalize_substate_12a\": {finalize_substate_12a},\n  \"oracle_csremo_present\": {},\n  \"oracle_csremo_remoman_present\": {},\n  \"oracle_csremo_remo_pending\": {},\n",
+        (testnet_stepper != 0 && testnet_stepper != usize::MAX),
+        csremo != 0,
+        remoman != 0,
+        remo_pending != 0
+    ));
+    // Residual-state diagnostic (bd fix-real-gap-is-residual-teardown-state-not-continue-shape): the FD4
+    // scheduler stops ticking load2's MoveMapStep child (mms+0x108) after ~6 ticks while load1's keeps
+    // ticking. Publish the child EzChildStepBase ptr + a header window (vtable + state/flags/links) every
+    // frame so a load1-vs-load2 diff pins the exact field that flips when the child leaves the tick set.
+    // Read-only, fault-safe (null when mms/child unresolved). No behavior change.
+    // CORRECTED: the MoveMapStep child (EzChildStepBase) is embedded at mms+0x108 (its first qword is
+    // the vtable), not a pointer. Read its member fields directly (mms+0x108+off) and the step object it
+    // wraps (*(mms+0x110), i.e. ezcsb+0x8). One of these holds the active/scheduled state the FD4
+    // scheduler reads; ez00 (vtable) is static so it is omitted. Diff load1(ticking) vs load2(dropped).
+    let cbase = mms.map(|m| m + MOVEMAPSTEP_CHILD_EZSTEP_108_OFFSET);
+    let cb = |off: usize| -> String {
+        match cbase.and_then(|c| rd(c + off)) {
+            Some(v) => format!("\"0x{v:x}\""),
+            None => "null".to_owned(),
+        }
+    };
+    let step = cbase.and_then(|c| rd(c + 0x8).filter(|v| *v != null));
+    let sb = |off: usize| -> String {
+        match step.and_then(|s| rd(s + off)) {
+            Some(v) => format!("\"0x{v:x}\""),
+            None => "null".to_owned(),
+        }
+    };
+    let mms_u8 = |off: usize| -> i64 {
+        mms.and_then(|m| unsafe { crate::experiments::safe_read_u8(m + off) })
+            .map_or(-1, i64::from)
+    };
+    let mms_i32 = |off: usize| -> i64 { mms.map_or(-1, |m| rdi(m + off)) };
+    let mms_u32_hex = |off: usize| -> String {
+        match mms.and_then(|m| unsafe { crate::experiments::safe_read_usize(m + off) }) {
+            Some(v) => format!("\"0x{:x}\"", (v as u32)),
+            None => "null".to_owned(),
+        }
+    };
+    let global_move_map_tasks_disabled = crate::experiments::game_module_base()
+        .ok()
+        .and_then(|base| unsafe {
+            crate::experiments::safe_read_u8(er_game_base::mem::game_data_addr(base, MOVEMAPSTEP_GLOBAL_DISABLE_RVA, "MOVEMAPSTEP_GLOBAL_DISABLE_RVA"))
+        })
+        .map_or(-1, i64::from);
+    body.push_str(&format!(
+        "  \"oracle_mms_child_ez08_step\": {},\n  \"oracle_mms_child_ez10\": {},\n  \"oracle_mms_child_ez18\": {},\n  \"oracle_mms_child_ez20\": {},\n  \"oracle_mms_child_ez28\": {},\n  \"oracle_mms_child_step10\": {},\n  \"oracle_mms_child_step18\": {},\n  \"oracle_mms_child_step40\": {},\n  \"oracle_mms_child_step48\": {},\n  \"oracle_mms_next_step_4c\": {},\n  \"oracle_mms_done_flag_50\": {},\n  \"oracle_mms_countdown_100\": {},\n  \"oracle_mms_pause_game_128\": {},\n  \"oracle_mms_disable_tasks_348\": {},\n  \"oracle_mms_force_tasks_349\": {},\n  \"oracle_mms_hold_timer_270_bits\": {},\n  \"oracle_mms_task_registration_4b8\": {},\n  \"oracle_mms_advance_gate_lo_4b8\": {},\n  \"oracle_mms_advance_gate_hi_4b9\": {},\n  \"oracle_mms_control_enable_4ba\": {},\n  \"oracle_mms_global_tasks_disabled\": {global_move_map_tasks_disabled},\n",
+        cb(0x08),
+        cb(0x10),
+        cb(0x18),
+        cb(0x20),
+        cb(0x28),
+        sb(0x10),
+        sb(0x18),
+        sb(0x40),
+        sb(0x48),
+        mms_i32(MOVEMAPSTEP_NEXT_STEP_4C_OFFSET),
+        mms_i32(MOVEMAPSTEP_DONE_FLAG_50_OFFSET),
+        mms_i32(MOVEMAPSTEP_COUNTDOWN_100_OFFSET),
+        mms_u8(MOVEMAPSTEP_PAUSE_GAME_128_OFFSET),
+        mms_u8(MOVEMAPSTEP_DISABLE_TASKS_348_OFFSET),
+        mms_u8(MOVEMAPSTEP_FORCE_TASKS_349_OFFSET),
+        mms_u32_hex(MOVEMAPSTEP_HOLD_TIMER_270_OFFSET),
+        mms_u8(MOVEMAPSTEP_TASK_REGISTRATION_4B8_OFFSET),
+        mms_u8(MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET),
+        mms_u8(MOVEMAPSTEP_ADVANCE_GATE_HI_4B9_OFFSET),
+        mms_u8(MOVEMAPSTEP_CONTROL_ENABLE_4BA_OFFSET),
+    ));
+    // LOAD2 block-streaming discriminator (bd menu-open-works-real-blocker-is-load2-mms18-completion-
+    // block-streaming-0x35): the loadlist is populated yet load2 stalls at WorldResWait, so scan the
+    // block list from FieldArea=mms+0xf0 to see if the target-area block is registered (registration gap
+    // vs present-but-not-streaming). Reuses the proven own_load scan offsets but runs on the current
+    // native-continue/switch path where that observer is dormant. Passive, capped at 64, fault-safe.
+    let field_area = mms.and_then(|m| rd(m + 0xf0)).filter(|&v| v > 0x1_0000);
+    let l2_req_coord = field_area.and_then(|fa| rd(fa + 0x2c)).map(|v| v as u32).unwrap_or(0);
+    let l2_target_area = ((l2_req_coord >> 24) & 0xff) as usize;
+    let l2_resmgr = field_area.and_then(|fa| rd(fa + 0x10)).filter(|&v| v > 0x1_0000);
+    let l2_block_count = l2_resmgr
+        .and_then(|rm| rd(rm + 0xb3140))
+        .map(|v| (v as u32) as i64)
+        .unwrap_or(-1);
+    let mut l2_target_present: i64 = -1;
+    if let Some(rm) = l2_resmgr
+        && l2_block_count > 0 {
+            l2_target_present = 0;
+            let arr = rm + 0xb3030;
+            let cap = l2_block_count.min(64);
+            let mut i: i64 = 0;
+            while i < cap {
+                if let Some(block) = rd(arr + (i as usize) * 8).filter(|&v| v > 0x1_0000)
+                    && let Some(inner) = rd(block + 0x8).filter(|&v| v > 0x1_0000)
+                        && let Some(a) = rd(inner + 0xc)
+                            && ((a as u32) & 0xff) as usize == l2_target_area {
+                                l2_target_present = 1;
+                                break;
+                            }
+                i += 1;
+            }
+        }
+    body.push_str(&format!(
+        "  \"oracle_l2_req_coord\": \"0x{l2_req_coord:x}\",\n  \"oracle_l2_block_count\": {l2_block_count},\n  \"oracle_l2_target_block_present\": {l2_target_present},\n"
+    ));
+}
+const MOVEMAPSTEP_CHILD_EZSTEP_108_OFFSET: usize = 0x108;
+
+fn format_optional_oracle_ptr(value: usize) -> String {
+    if value == TITLE_OWNER_SCAN_START_ADDRESS {
+        "null".to_owned()
+    } else {
+        format!("\"0x{value:x}\"")
+    }
+}
+
+fn write_title_menu_flow_oracles(body: &mut String) {
+    body.push_str(&format!(
+        "  \"simulated_button_presses_total\": {},\n",
+        crate::hooks::SIMULATED_INPUT_PRESSES_TOTAL.load(Ordering::SeqCst)
+    ));
+    let continue_task_node = MENU_CONTINUE_TASK_NODE.load(Ordering::SeqCst);
+    let continue_member_node = MENU_CONTINUE_MEMBER_NODE.load(Ordering::SeqCst);
+    let format_optional_ptr = format_optional_oracle_ptr;
+    body.push_str(&format!(
+        "  \"oracle_continue_task_node\": {},\n  \"oracle_continue_member_node\": {},\n  \"oracle_menu_window_ctor_hits\": {},\n  \"oracle_menu_window_ctor_semantic_hits\": {},\n  \"oracle_menu_window_ctor_last_item\": {},\n  \"oracle_menu_window_ctor_last_vt\": {},\n  \"oracle_menu_window_ctor_last_functor\": {},\n  \"oracle_menu_window_ctor_last_docall\": {},\n  \"oracle_menu_window_ctor_last_accept\": {},\n  \"oracle_menu_window_native_ctor_b_hits\": {},\n  \"oracle_menu_window_native_ctor_b_continue_hits\": {},\n  \"oracle_menu_window_native_ctor_b_last_caller_rva\": {},\n  \"oracle_menu_window_native_ctor_b_last_item\": {},\n  \"oracle_menu_window_native_ctor_b_last_out_slot\": {},\n  \"oracle_menu_window_native_ctor_b_last_vt\": {},\n  \"oracle_menu_window_native_ctor_b_last_functor\": {},\n  \"oracle_menu_window_native_ctor_b_last_docall\": {},\n  \"oracle_menu_window_native_ctor_b_last_accept\": {},\n  \"oracle_menu_window_idle_ctor_hits\": {},\n  \"oracle_menu_window_idle_ctor_continue_hits\": {},\n  \"oracle_menu_window_idle_ctor_continue_last_caller_rva\": {},\n  \"oracle_menu_window_idle_ctor_continue_last_item\": {},\n  \"oracle_menu_window_idle_ctor_continue_last_out_slot\": {},\n  \"oracle_menu_window_idle_ctor_continue_last_docall\": {},\n  \"oracle_menu_window_idle_ctor_continue_last_accept\": {},\n  \"oracle_menu_continue_idle_insert_hits\": {},\n  \"oracle_menu_continue_idle_insert_last_caller_rva\": {},\n  \"oracle_menu_continue_idle_insert_last_arg0\": {},\n  \"oracle_menu_continue_idle_insert_last_arg1\": {},\n  \"oracle_menu_continue_idle_insert_last_ret\": {},\n  \"oracle_menu_continue_idle_insert_last_arg1_update_rva\": {},\n  \"oracle_menu_continue_idle_insert_last_ret_update_rva\": {},\n  \"oracle_task_enqueue_generic_hits\": {},\n  \"oracle_task_enqueue_generic_last_caller_rva\": {},\n  \"oracle_task_enqueue_generic_last_arg0\": {},\n  \"oracle_task_enqueue_generic_last_arg0_pointee\": {},\n  \"oracle_task_enqueue_generic_last_arg1\": {},\n  \"oracle_task_enqueue_generic_last_ret\": {},\n  \"oracle_task_enqueue_generic_sample0_caller_rva\": {},\n  \"oracle_task_enqueue_generic_sample0_arg0\": {},\n  \"oracle_task_enqueue_generic_sample0_arg0_pointee\": {},\n  \"oracle_task_enqueue_generic_sample0_arg1\": {},\n  \"oracle_task_enqueue_generic_sample0_ret\": {},\n  \"oracle_task_enqueue_generic_sample1_caller_rva\": {},\n  \"oracle_task_enqueue_generic_sample1_arg0\": {},\n  \"oracle_task_enqueue_generic_sample1_arg0_pointee\": {},\n  \"oracle_task_enqueue_generic_sample1_arg1\": {},\n  \"oracle_task_enqueue_generic_sample1_ret\": {},\n  \"oracle_task_enqueue_generic_idle_item_match_hits\": {},\n  \"oracle_task_enqueue_generic_idle_item_last_match_kind\": {},\n  \"oracle_menu_window_idle_ctor_last_caller_rva\": {},\n  \"oracle_menu_window_idle_ctor_last_item\": {},\n  \"oracle_menu_window_idle_ctor_last_vt\": {},\n  \"oracle_menu_window_idle_ctor_last_functor\": {},\n  \"oracle_menu_window_idle_ctor_last_docall\": {},\n  \"oracle_menu_window_idle_ctor_last_accept\": {},\n  \"oracle_menu_item_update_hits\": {},\n  \"oracle_menu_item_update_semantic_hits\": {},\n  \"oracle_menu_item_update_last_item\": {},\n  \"oracle_menu_item_update_last_vt\": {},\n  \"oracle_menu_item_update_last_functor\": {},\n  \"oracle_menu_item_update_last_docall\": {},\n  \"oracle_menu_item_update_last_accept\": {},\n  \"oracle_menu_continue_candidate_item\": {},\n  \"oracle_menu_continue_candidate_hits\": {},\n  \"oracle_menu_continue_candidate_idle_accept_hits\": {},\n  \"oracle_menu_continue_candidate_native_accept_hits\": {},\n  \"oracle_menu_continue_candidate_other_accept_hits\": {},\n  \"oracle_menu_continue_candidate_accept_changes\": {},\n  \"oracle_menu_continue_candidate_last_accept\": {},\n  \"oracle_title_native_ready_hits\": {},\n  \"oracle_title_native_ready_last_caller_rva\": {},\n  \"oracle_title_native_ready_last_this\": {},\n  \"oracle_title_native_ready_last_vtable\": {},\n  \"oracle_title_native_ready_last_getter\": {},\n  \"oracle_title_native_ready_last_object\": {},\n  \"oracle_title_native_ready_last_flags\": {},\n  \"oracle_title_native_ready_last_masked\": {},\n  \"oracle_title_native_ready_last_ret\": {},\n  \"oracle_title_langselect_ready_last_object\": {},\n  \"oracle_title_langselect_ready_last_flags\": {},\n  \"oracle_title_langselect_ready_last_masked\": {},\n  \"oracle_title_langselect_ready_last_ret\": {},\n",
+        format_optional_ptr(continue_task_node),
+        format_optional_ptr(continue_member_node),
+        MENU_WINDOW_JOB_CTOR_HITS.load(Ordering::SeqCst),
+        MENU_WINDOW_JOB_CTOR_SEMANTIC_HITS.load(Ordering::SeqCst),
+        format_optional_ptr(MENU_WINDOW_JOB_CTOR_LAST_ITEM.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_CTOR_LAST_VT.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_CTOR_LAST_FUNCTOR.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_CTOR_LAST_DOCALL.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_CTOR_LAST_ACCEPT.load(Ordering::SeqCst)),
+        MENU_WINDOW_JOB_NATIVE_CTOR_B_HITS.load(Ordering::SeqCst),
+        MENU_WINDOW_JOB_NATIVE_CTOR_B_CONTINUE_HITS.load(Ordering::SeqCst),
+        format_optional_ptr(MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_CALLER_RVA.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_ITEM.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_OUT_SLOT.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_VT.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_FUNCTOR.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_DOCALL.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_ACCEPT.load(Ordering::SeqCst)),
+        MENU_WINDOW_JOB_IDLE_CTOR_HITS.load(Ordering::SeqCst),
+        MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_HITS.load(Ordering::SeqCst),
+        format_optional_ptr(MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_CALLER_RVA.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_ITEM.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_OUT_SLOT.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_DOCALL.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_ACCEPT.load(Ordering::SeqCst)),
+        MENU_CONTINUE_IDLE_INSERT_HITS.load(Ordering::SeqCst),
+        format_optional_ptr(MENU_CONTINUE_IDLE_INSERT_LAST_CALLER_RVA.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_CONTINUE_IDLE_INSERT_LAST_ARG0.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_CONTINUE_IDLE_INSERT_LAST_ARG1.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_CONTINUE_IDLE_INSERT_LAST_RET.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_CONTINUE_IDLE_INSERT_LAST_ARG1_UPDATE_RVA.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_CONTINUE_IDLE_INSERT_LAST_RET_UPDATE_RVA.load(Ordering::SeqCst)),
+        TASK_ENQUEUE_GENERIC_HITS.load(Ordering::SeqCst),
+        format_optional_ptr(TASK_ENQUEUE_GENERIC_LAST_CALLER_RVA.load(Ordering::SeqCst)),
+        format_optional_ptr(TASK_ENQUEUE_GENERIC_LAST_ARG0.load(Ordering::SeqCst)),
+        format_optional_ptr(TASK_ENQUEUE_GENERIC_LAST_ARG0_POINTEE.load(Ordering::SeqCst)),
+        format_optional_ptr(TASK_ENQUEUE_GENERIC_LAST_ARG1.load(Ordering::SeqCst)),
+        format_optional_ptr(TASK_ENQUEUE_GENERIC_LAST_RET.load(Ordering::SeqCst)),
+        format_optional_ptr(TASK_ENQUEUE_GENERIC_SAMPLE0_CALLER_RVA.load(Ordering::SeqCst)),
+        format_optional_ptr(TASK_ENQUEUE_GENERIC_SAMPLE0_ARG0.load(Ordering::SeqCst)),
+        format_optional_ptr(TASK_ENQUEUE_GENERIC_SAMPLE0_ARG0_POINTEE.load(Ordering::SeqCst)),
+        format_optional_ptr(TASK_ENQUEUE_GENERIC_SAMPLE0_ARG1.load(Ordering::SeqCst)),
+        format_optional_ptr(TASK_ENQUEUE_GENERIC_SAMPLE0_RET.load(Ordering::SeqCst)),
+        format_optional_ptr(TASK_ENQUEUE_GENERIC_SAMPLE1_CALLER_RVA.load(Ordering::SeqCst)),
+        format_optional_ptr(TASK_ENQUEUE_GENERIC_SAMPLE1_ARG0.load(Ordering::SeqCst)),
+        format_optional_ptr(TASK_ENQUEUE_GENERIC_SAMPLE1_ARG0_POINTEE.load(Ordering::SeqCst)),
+        format_optional_ptr(TASK_ENQUEUE_GENERIC_SAMPLE1_ARG1.load(Ordering::SeqCst)),
+        format_optional_ptr(TASK_ENQUEUE_GENERIC_SAMPLE1_RET.load(Ordering::SeqCst)),
+        TASK_ENQUEUE_GENERIC_IDLE_ITEM_MATCH_HITS.load(Ordering::SeqCst),
+        format_optional_ptr(TASK_ENQUEUE_GENERIC_IDLE_ITEM_LAST_MATCH_KIND.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_IDLE_CTOR_LAST_CALLER_RVA.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_IDLE_CTOR_LAST_ITEM.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_IDLE_CTOR_LAST_VT.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_IDLE_CTOR_LAST_FUNCTOR.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_IDLE_CTOR_LAST_DOCALL.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_IDLE_CTOR_LAST_ACCEPT.load(Ordering::SeqCst)),
+        MENU_ITEM_UPDATE_HITS.load(Ordering::SeqCst),
+        MENU_ITEM_UPDATE_SEMANTIC_HITS.load(Ordering::SeqCst),
+        format_optional_ptr(MENU_ITEM_UPDATE_LAST_ITEM.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_ITEM_UPDATE_LAST_VT.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_ITEM_UPDATE_LAST_FUNCTOR.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_ITEM_UPDATE_LAST_DOCALL.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_ITEM_UPDATE_LAST_ACCEPT.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_CONTINUE_CANDIDATE_ITEM.load(Ordering::SeqCst)),
+        MENU_CONTINUE_CANDIDATE_HITS.load(Ordering::SeqCst),
+        MENU_CONTINUE_CANDIDATE_IDLE_ACCEPT_HITS.load(Ordering::SeqCst),
+        MENU_CONTINUE_CANDIDATE_NATIVE_ACCEPT_HITS.load(Ordering::SeqCst),
+        MENU_CONTINUE_CANDIDATE_OTHER_ACCEPT_HITS.load(Ordering::SeqCst),
+        MENU_CONTINUE_CANDIDATE_ACCEPT_CHANGES.load(Ordering::SeqCst),
+        format_optional_ptr(MENU_CONTINUE_CANDIDATE_LAST_ACCEPT.load(Ordering::SeqCst)),
+        TITLE_NATIVE_READY_PREDICATE_HITS.load(Ordering::SeqCst),
+        format_optional_ptr(TITLE_NATIVE_READY_PREDICATE_LAST_CALLER_RVA.load(Ordering::SeqCst)),
+        format_optional_ptr(TITLE_NATIVE_READY_PREDICATE_LAST_THIS.load(Ordering::SeqCst)),
+        format_optional_ptr(TITLE_NATIVE_READY_PREDICATE_LAST_VTABLE.load(Ordering::SeqCst)),
+        format_optional_ptr(TITLE_NATIVE_READY_PREDICATE_LAST_GETTER.load(Ordering::SeqCst)),
+        format_optional_ptr(TITLE_NATIVE_READY_PREDICATE_LAST_OBJECT.load(Ordering::SeqCst)),
+        TITLE_NATIVE_READY_PREDICATE_LAST_FLAGS.load(Ordering::SeqCst),
+        TITLE_NATIVE_READY_PREDICATE_LAST_MASKED.load(Ordering::SeqCst),
+        TITLE_NATIVE_READY_PREDICATE_LAST_RET.load(Ordering::SeqCst),
+        format_optional_ptr(TITLE_NATIVE_READY_PREDICATE_LAST_OBJECT.load(Ordering::SeqCst)),
+        TITLE_NATIVE_READY_PREDICATE_LAST_FLAGS.load(Ordering::SeqCst),
+        TITLE_NATIVE_READY_PREDICATE_LAST_MASKED.load(Ordering::SeqCst),
+        TITLE_NATIVE_READY_PREDICATE_LAST_RET.load(Ordering::SeqCst)
+    ));
+    body.push_str(&format!(
+        "  \"oracle_native_submit_hits\": {},\n  \"oracle_native_submit_last_result\": {},\n  \"oracle_result_event_handler_hits\": {},\n  \"oracle_result_action_builder_hits\": {},\n  \"oracle_result_event_last_result\": {},\n  \"oracle_result_event_last_event\": {},\n  \"oracle_result_event_last_raw_qword0\": {},\n  \"oracle_result_event_last_fd4_code\": {},\n  \"oracle_result_event_last_fd4_arg\": {},\n  \"oracle_result_action_last_result\": {},\n  \"oracle_result_action_last_event\": {},\n  \"oracle_result_action_last_word0\": {},\n  \"oracle_result_action_last_word1\": {},\n  \"oracle_result_action_insert_hits\": {},\n  \"oracle_result_action_last_insert_arg0\": {},\n  \"oracle_result_action_last_insert_arg1\": {},\n  \"oracle_result_action_last_insert_ret\": {},\n  \"oracle_result_action_last_insert_arg1_update_rva\": {},\n  \"oracle_result_action_last_insert_ret_update_rva\": {},\n  \"oracle_result_action_wrapper_builder_hits\": {},\n  \"oracle_result_action_last_wrapper_builder_rcx\": {},\n  \"oracle_result_action_last_wrapper_builder_rdx\": {},\n  \"oracle_result_action_last_wrapper_builder_r8\": {},\n  \"oracle_result_action_last_wrapper_builder_ret\": {},\n  \"oracle_result_action_last_wrapper_builder_ret_update_rva\": {},\n",
+        NATIVE_SUBMIT_HITS.load(Ordering::SeqCst),
+        format_optional_ptr(NATIVE_SUBMIT_LAST_RESULT.load(Ordering::SeqCst)),
+        RESULT_EVENT_HANDLER_HITS.load(Ordering::SeqCst),
+        RESULT_ACTION_BUILDER_HITS.load(Ordering::SeqCst),
+        format_optional_ptr(RESULT_EVENT_LAST_RESULT.load(Ordering::SeqCst)),
+        format_optional_ptr(RESULT_EVENT_LAST_EVENT.load(Ordering::SeqCst)),
+        format_optional_ptr(RESULT_EVENT_LAST_RAW_QWORD0.load(Ordering::SeqCst)),
+        format_optional_ptr(RESULT_EVENT_LAST_FD4_CODE.load(Ordering::SeqCst)),
+        format_optional_ptr(RESULT_EVENT_LAST_FD4_ARG.load(Ordering::SeqCst)),
+        format_optional_ptr(RESULT_ACTION_LAST_RESULT.load(Ordering::SeqCst)),
+        format_optional_ptr(RESULT_ACTION_LAST_EVENT.load(Ordering::SeqCst)),
+        format_optional_ptr(RESULT_ACTION_LAST_WORD0.load(Ordering::SeqCst)),
+        format_optional_ptr(RESULT_ACTION_LAST_WORD1.load(Ordering::SeqCst)),
+        RESULT_ACTION_INSERT_HITS.load(Ordering::SeqCst),
+        format_optional_ptr(RESULT_ACTION_LAST_INSERT_ARG0.load(Ordering::SeqCst)),
+        format_optional_ptr(RESULT_ACTION_LAST_INSERT_ARG1.load(Ordering::SeqCst)),
+        format_optional_ptr(RESULT_ACTION_LAST_INSERT_RET.load(Ordering::SeqCst)),
+        format_optional_ptr(RESULT_ACTION_LAST_INSERT_ARG1_UPDATE_RVA.load(Ordering::SeqCst)),
+        format_optional_ptr(RESULT_ACTION_LAST_INSERT_RET_UPDATE_RVA.load(Ordering::SeqCst)),
+        RESULT_ACTION_WRAPPER_BUILDER_HITS.load(Ordering::SeqCst),
+        format_optional_ptr(RESULT_ACTION_LAST_WRAPPER_BUILDER_RCX.load(Ordering::SeqCst)),
+        format_optional_ptr(RESULT_ACTION_LAST_WRAPPER_BUILDER_RDX.load(Ordering::SeqCst)),
+        format_optional_ptr(RESULT_ACTION_LAST_WRAPPER_BUILDER_R8.load(Ordering::SeqCst)),
+        format_optional_ptr(RESULT_ACTION_LAST_WRAPPER_BUILDER_RET.load(Ordering::SeqCst)),
+        format_optional_ptr(RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA.load(Ordering::SeqCst))
+    ));
+    body.push_str(&format!(
+        // NOTE: oracle_continue_deser_fired / oracle_continue_confirmed were removed
+        // (2026-06-24): they tracked OWN_STEPPER_DESER_FIRED/OWN_STEPPER_CONFIRMED -- the
+        // own_stepper/native_continue confirm-fire chain -- Not whether the character loaded.
+        // The default zero-input autoload (pab-advance + title-accept-byte natural menu-open)
+        // loads without that chain, so the fields read 0 on success and were repeatedly misread
+        // as "load failed". The real load semaphore is world_loaded (player_present + world_stable
+        // + saved_map_c30), already emitted below. The backing statics stay (they gate block_input
+        // release + own_stepper STAGE2).
+        "  \"oracle_continue_phase\": {},\n  \"oracle_continue_expected_slot\": {},\n  \"oracle_continue_mount_c30\": {},\n  \"oracle_continue_guard_waits\": {},\n",
+        FULLREAD_PHASE.load(Ordering::SeqCst),
+        OWN_STEPPER_EXPECTED_SLOT.load(Ordering::SeqCst),
+        OWN_STEPPER_MOUNT_C30.load(Ordering::SeqCst),
+        FULLREAD_DRAIN_WAITS.load(Ordering::SeqCst)
+    ));
+}
+
+fn write_player_presence_oracle(body: &mut String) {
+    const BLOCK_ID_NONE: i32 = -1;
+    if let Ok(world_chr_man) = unsafe { eldenring::cs::WorldChrMan::instance_mut() } {
+        // Loaded-entity list counts (bd STEP4-4fps-attribution-needs-new-telemetry): the ~4fps is a
+        // heavier game render at identical render-state flags -> test whether the mod SetState5 reload
+        // leaves more entities resident (heavier draw) than the vanilla native-Continue reload. These are
+        // the WorldChrMan world-block/area character-list counts.
+        body.push_str(&format!(
+            "  \"oracle_worldchrman_present\": true,\n  \"oracle_worldchrman_main_player\": \"0x{:x}\",\n  \"oracle_worldchrman_player_chr_set_capacity\": {},\n  \"oracle_wcm_world_area_chr_list_count\": {},\n  \"oracle_wcm_world_block_chr_list_count\": {},\n  \"oracle_wcm_world_grid_area_chr_list_count\": {},\n",
+            world_chr_man
+                .main_player
+                .as_ref()
+                .map(|p| p.as_ptr() as usize)
+                .unwrap_or(0),
+            world_chr_man.player_chr_set.capacity,
+            world_chr_man.world_area_chr_list_count,
+            world_chr_man.world_block_chr_list_count,
+            world_chr_man.world_grid_area_chr_list_count
+        ));
+    } else {
+        body.push_str(
+            "  \"oracle_worldchrman_present\": false,\n  \"oracle_worldchrman_main_player\": \"0x0\",\n  \"oracle_worldchrman_player_chr_set_capacity\": 0,\n",
+        );
+    }
+    if let Ok(player) = unsafe { PlayerIns::local_player_mut() } {
+        let pos = player.chr_ins.modules.physics.position;
+        let grounded = player.chr_ins.modules.physics.standing_on_solid_ground;
+        let block = player.current_block_id.0;
+        let bp = player.block_position;
+        let chr_model_ins_ptr = player.chr_ins.chr_model_ins.as_ptr() as usize;
+        let chr_ctrl_ptr = player.chr_ins.chr_ctrl.as_ptr() as usize;
+        let chr_ctrl_lua_event_flags = unsafe {
+            crate::experiments::safe_read_u8(chr_ctrl_ptr + CHRCTRL_LUA_EVENT_FLAGS_E8_OFFSET)
+        }
+        .unwrap_or(0);
+        let chr_ctrl_disable_move = unsafe {
+            crate::experiments::safe_read_u8(chr_ctrl_ptr + CHRCTRL_DISABLE_MOVE_E9_OFFSET)
+        }
+        .map(|value| value != 0)
+        .unwrap_or(true);
+        // 1.16.2 `ChrCtrl` movement update (`FUN_1403cbff0`) accepts native movement only when
+        // logic-enable bit 5 and MoveMap control-enable bit 6 are both set and disableMove is false.
+        // This is the direct downstream predicate that distinguishes an ignored full-forward pad
+        // packet from a native-control handoff failure.
+        let native_controls_enabled =
+            chr_ctrl_lua_event_flags & 0x60 == 0x60 && !chr_ctrl_disable_move;
+        let chr_draw_group_enabled = player.chr_ins.load_state.draw_group_enabled();
+        let chr_render_group_enabled = player.chr_ins.chr_flags1c4.is_render_group_enabled();
+        let chr_onscreen = player.chr_ins.chr_flags1c4.is_onscreen();
+        let chr_enable_render = player.chr_ins.chr_flags1c5.enable_render();
+        // player_render_ready = the player is actually being RENDERED: model+ctrl instances exist and
+        // the render-group + enable_render flags are on. It intentionally does not require
+        // chr_draw_group_enabled -- that is a load draw-state flag that stays false through a valid
+        // movable reload (run4 load3 moved 115 frames with draw_group=False), which made render_ready a
+        // false-negative reading False while the game presented frames at 20fps (user 2026-07-22:
+        // ">0 fps with render_ready false makes no sense"). draw_group is kept as its own oracle
+        // (oracle_chr_draw_group_enabled): it is the reload "still in loading draw-state" signal, which
+        // stays False for the whole 20fps render-bound reload window and is a candidate FPS-root marker.
+        let player_render_ready = chr_model_ins_ptr != TITLE_OWNER_SCAN_START_ADDRESS
+            && chr_ctrl_ptr != TITLE_OWNER_SCAN_START_ADDRESS
+            && chr_render_group_enabled
+            && chr_enable_render;
+        body.push_str(&format!(
+            "  \"oracle_player_present\": true,\n  \"oracle_havok_pos\": [{}, {}, {}],\n  \"oracle_grounded\": {},\n  \"oracle_block_id\": {},\n  \"oracle_block_id_valid\": {},\n  \"oracle_block_pos\": [{}, {}, {}],\n  \"oracle_chr_model_ins_present\": {},\n  \"oracle_chr_ctrl_present\": {},\n  \"oracle_chr_ctrl_lua_event_flags\": {},\n  \"oracle_chr_ctrl_disable_move\": {},\n  \"oracle_native_controls_enabled\": {},\n  \"oracle_chr_draw_group_enabled\": {},\n  \"oracle_chr_render_group_enabled\": {},\n  \"oracle_chr_onscreen\": {},\n  \"oracle_chr_enable_render\": {},\n  \"oracle_player_render_ready\": {},\n",
+            pos.0,
+            pos.1,
+            pos.2,
+            grounded,
+            block,
+            block != BLOCK_ID_NONE,
+            bp.x,
+            bp.y,
+            bp.z,
+            chr_model_ins_ptr != TITLE_OWNER_SCAN_START_ADDRESS,
+            chr_ctrl_ptr != TITLE_OWNER_SCAN_START_ADDRESS,
+            chr_ctrl_lua_event_flags,
+            chr_ctrl_disable_move,
+            native_controls_enabled,
+            chr_draw_group_enabled,
+            chr_render_group_enabled,
+            chr_onscreen,
+            chr_enable_render,
+            player_render_ready
+        ));
+    } else {
+        body.push_str("  \"oracle_player_present\": false,\n");
+    }
+    // Can-move proof (2026-07-18): input-causes-movement gate. can_move latches once a load sustains
+    // >=60 consecutive frames of injected-forward havok motion; moved_frames is the live consecutive
+    // count. Epoch-GATED: only report can_move for the current load -- when fresh_deser flips (a reload
+    // deserialize commits, mid-loading) CAN_MOVE_CONFIRMED is still latched from the prior load until the
+    // probe's next in-world tick resets it, so gate on MOVE_PROBE_EPOCH == current fresh_deser to avoid
+    // misattributing the prior load's movement to the new one (the false-pass fix).
+    let cur_deser =
+        crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+    let probe_epoch = crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst);
+    let can_move =
+        crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst) && probe_epoch == cur_deser;
+    // SEMAPHORE split (user 2026-07-19): three distinct signals, not one conflated can_move.
+    //  * oracle_can_move           = capability proven (>=60 consecutive moved frames under our input)
+    //  * oracle_supplied_movement_input_frames = did we inject (frames we wrote the forward stick)
+    //  * oracle_did_move_frames    = did the char actually move (cumulative displaced frames)
+    // supplied>0 && did_move==0  => injection layer wrong/ignored (pad stick vs kb+mouse WASD).
+    body.push_str(&format!(
+        "  \"oracle_can_move\": {},\n  \"oracle_move_probe_moved_frames\": {},\n  \"oracle_supplied_movement_input_frames\": {},\n  \"oracle_did_move_frames\": {},\n",
+        can_move,
+        crate::constants::MOVE_PROBE_MOVED_FRAMES.load(Ordering::SeqCst),
+        crate::constants::SUPPLIED_MOVEMENT_INPUT_FRAMES.load(Ordering::Relaxed),
+        crate::constants::DID_MOVE_FRAMES.load(Ordering::Relaxed)
+    ));
+    // Harness-attributed verdict (user 2026-07-20): the contamination-proof movement result -- the
+    // probe alternates inject-on/inject-off windows and requires the char to move under our stick and
+    // stop when we release, so a user moving the char cannot read as proof. Epoch-gated like can_move.
+    // 0=pending 1=proven(harness moved char) 2=DISPROVEN(injection ineffective) 3=contaminated(external).
+    let harness_move_verdict = if probe_epoch == cur_deser {
+        crate::constants::HARNESS_MOVE_VERDICT.load(Ordering::SeqCst)
+    } else {
+        0
+    };
+    body.push_str(&format!(
+        "  \"oracle_harness_move_verdict\": {harness_move_verdict},\n"
+    ));
+    // The keyboard stages ER actually reads (2026-09-05). These five answer the question the RawInput
+    // counters below cannot. `eldenring.exe` 1.17 imports DINPUT8's DirectInput8Create and USER32's
+    // GetKeyState/GetKeyboardState/ToAscii, and imports no RawInput API at all -- GetRawInputData,
+    // GetRawInputBuffer and RegisterRawInputDevices are absent from the image -- so every RawInput
+    // number below is the overlay's traffic, never the game's. That is what made run
+    // br-20260905-031610-5406 unreadable: 150 supplied SendInput frames against 0 RawInput key events,
+    // with no way to tell "the key never arrived" from "the key arrived and did nothing".
+    // `*_fires` = the game asked this stage for the keyboard. `*_stamps` = we answered "held" into the
+    // buffer/return value it was about to read. Stamping happens after the original call, which is what
+    // makes it focus-independent: both stages otherwise report only for the thread that owns focus.
+    body.push_str(&format!(
+        "  \"oracle_dinput_kb_hook_fires\": {},\n  \"oracle_dinput_injected_key_stamps\": {},\n  \"oracle_user32_get_keyboard_state_fires\": {},\n  \"oracle_user32_get_key_state_fires\": {},\n  \"oracle_user32_injected_vk_stamps\": {},\n  \"oracle_user32_get_cursor_pos_fires\": {},\n  \"oracle_dinput_mouse_hook_fires\": {},\n  \"oracle_move_probe_on_disp_milli\": {},\n  \"oracle_move_probe_off_tail_disp_milli\": {},\n  \"oracle_pad_gate_mgr_2f8\": {},\n  \"oracle_pad_gate_mgr_2f9\": {},\n  \"oracle_pad_gate_debug_byte\": {},\n  \"oracle_pad_gate_shut_on_inject_frames\": {},\n",
+        crate::input_blocker::DINPUT_KB_HOOK_FIRES.load(Ordering::Relaxed),
+        crate::input_blocker::DINPUT_INJECTED_KEY_STAMPS.load(Ordering::Relaxed),
+        crate::experiments::USER32_GET_KEYBOARD_STATE_FIRES.load(Ordering::Relaxed),
+        crate::experiments::USER32_GET_KEY_STATE_FIRES.load(Ordering::Relaxed),
+        crate::experiments::USER32_INJECTED_VK_STAMPS.load(Ordering::Relaxed),
+        crate::experiments::USER32_GET_CURSOR_POS_FIRES.load(Ordering::Relaxed),
+        er_telemetry_core::counters::DINPUT_MOUSE_HOOK_FIRES.load(Ordering::Relaxed),
+        er_telemetry_core::counters::ON_DISP_MILLI.load(Ordering::Relaxed),
+        er_telemetry_core::counters::OFF_TAIL_DISP_MILLI.load(Ordering::Relaxed),
+        er_telemetry_core::counters::PAD_GATE_MGR_2F8.load(Ordering::Relaxed),
+        er_telemetry_core::counters::PAD_GATE_MGR_2F9.load(Ordering::Relaxed),
+        er_telemetry_core::counters::PAD_GATE_DEBUG_BYTE.load(Ordering::Relaxed),
+        er_telemetry_core::counters::PAD_GATE_SHUT_ON_INJECT_FRAMES.load(Ordering::Relaxed),
+    ));
+    // RAWINPUT reception (user 2026-07-20): whether the game received user mouse/keyboard input this
+    // run. The input-harness injects via the direct-memory inputmgr (not RawInput), so any nonzero count
+    // here means the user's input reached the game -> the run is contaminated. Cumulative event counts.
+    body.push_str(&format!(
+        "  \"oracle_rawinput_hook_calls\": {},\n  \"oracle_rawinput_mouse_move_events\": {},\n  \"oracle_rawinput_mouse_button_events\": {},\n  \"oracle_rawinput_key_events\": {},\n  \"oracle_rawinput_blocked_unfocused_events\": {},\n",
+        crate::experiments::RAWINPUT_HOOK_CALLS.load(Ordering::Relaxed),
+        crate::experiments::RAWINPUT_MOUSE_MOVE_EVENTS.load(Ordering::Relaxed),
+        crate::experiments::RAWINPUT_MOUSE_BUTTON_EVENTS.load(Ordering::Relaxed),
+        crate::experiments::RAWINPUT_KEY_EVENTS.load(Ordering::Relaxed),
+        crate::experiments::RAWINPUT_BLOCKED_UNFOCUSED_EVENTS.load(Ordering::Relaxed),
+    ));
+}

@@ -953,10 +953,24 @@ def main() -> int:
             failures.append("GET_CURRENT_MAP_ID_RVA did not parse to 0x5eefb0")
         rows, _missing = select(args.repo)
         observed = observed_rvas(args.repo / OBSERVED)
-        if observed and not any(old in observed for _n, old, _new in rows):
-            failures.append("no runtime-observed refusal made it into the selection")
-        if not any(old == 0x5EEFB0 for _n, old, _new in rows):
-            failures.append("0x5eefb0 is not in the selection; the live crasher would stay unmapped")
+        # `functions.tsv` is gitignored -- 94,111 pairs machine-derived from the two Ghidra dumps,
+        # regenerated on a box that has them and never committed. A fresh checkout therefore has
+        # none of it: `read_map` returns an empty forward map, `select()` puts every wanted address
+        # into `missing` instead of `rows`, and the two checks below would fail on every clean
+        # checkout no matter how correct the rest of this module is -- that is a missing local
+        # input read as a defect, not one. Skip them, the same way `check-singleton-field-offsets.py`
+        # skips when its own gitignored images are absent, and say so rather than printing two
+        # false failures that look like this module misbehaved. Everything else in this selftest
+        # reads only `crates/`, the tracked ledgers and `build.rs`, so it still runs and still means
+        # something.
+        if not (args.repo / FUNCTIONS).is_file():
+            print(f"SKIPPED (NOT A PASS): {FUNCTIONS} is absent, so the two selection checks below did not run")
+            print("  it is gitignored -- generated from the 1.16.2/1.17 Ghidra dumps; run this where they exist")
+        else:
+            if observed and not any(old in observed for _n, old, _new in rows):
+                failures.append("no runtime-observed refusal made it into the selection")
+            if not any(old == 0x5EEFB0 for _n, old, _new in rows):
+                failures.append("0x5eefb0 is not in the selection; the live crasher would stay unmapped")
 
         # The wholesale-regeneration guard. Asserted on a fabricated table rather than on the
         # tracked file, so it keeps failing after the real file's hand rows are all absorbed. The

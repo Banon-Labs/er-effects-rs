@@ -1,6 +1,12 @@
 [workspace]
 members = [
   "crates/er-quickload",
+  # A copy of `er-quickload` being reduced down to the System>Quit rows and nothing else
+  # (2026-09-11, user directive). The previous attempt built the same shell UP from shared crates
+  # and reached something that ran every moved code path and still looked and behaved nothing like
+  # the product on screen -- so this one starts at parity by construction and loses only what is
+  # deleted. The two must never load together; `scripts/me3-dll-conflicts.toml` records the pair.
+  "crates/er-quit-rows",
   # Offline answer to the exact question the DLL now asks before it will wait on a Continue slot:
   # which character slots does this save container actually hold? Same parser
   # (`er_save_loader::bnd4::active_character_slots`), so a runtime refusal can be predicted and
@@ -56,7 +62,6 @@ members = [
   # lock-on system's point-owner resolver, which answers "no character owns this point" for
   # another invader -- its own value for a point with nobody behind it. Standalone shell with
   # no product dependency; writes no game memory and touches no other targeting rule.
-  "crates/er-lockon-filter",
   "crates/er-save-disable",
   "crates/er-save-suppress",
   "crates/mushroom-man-runtime",
@@ -93,6 +98,11 @@ members = [
   # the loading-screen portrait). Was four files of the er-quickload shim, one verb each.
   "crates/er-profile-summary-core",
   "crates/er-quit-menu",
+  # Standalone ME3 shell for the System>Quit **Load Character** row: the same derived Quit grid and
+  # the same row cloner as `er-quit-menu`, armed with a different `RowSet`. It ships one of the two
+  # character rows; **Load Character from File** stays with the product until its browse surface,
+  # its ingest and the save-swap ledger leave `er-quickload`.
+  "crates/er-quit-load-character",
   # World-map invasion-spawn warp targets (bd er-effects-rs-5es,
   # docs/plans/world-map-invasion-warp.md). Feature crate + thin ME3-loadable shell, same
   # split as er-loading-portrait-core / er-loading-portrait.

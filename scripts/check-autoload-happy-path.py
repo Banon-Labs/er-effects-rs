@@ -19,6 +19,7 @@ EXPERIMENTS = RUNTIME_SRC / "experiments.rs"  # legacy single-file fallback
 # (docs/plans/title-flow-crate-extraction.md). It is the same logical module the
 # checks below were written against, so it stays part of the concatenated source.
 TITLE_FLOW_DIR = REPO_ROOT / "crates" / "er-title-flow" / "src"
+QUIT_MENU_CORE_DIR = REPO_ROOT / "crates" / "er-quit-menu-core" / "src"
 LIB = RUNTIME_SRC / "lib.rs"
 CONSTANTS = RUNTIME_SRC / "constants.rs"
 TELEMETRY = RUNTIME_SRC / "telemetry.rs"
@@ -92,8 +93,28 @@ def read_title_flow() -> str:
     return read_module_tree(TITLE_FLOW_DIR / "lib.rs", TITLE_FLOW_DIR)
 
 
+def read_quit_menu_core() -> str:
+    """The er-quit-menu-core crate, for the same reason `read_title_flow` is included.
+
+    The System>Quit row cloner, the row router, the shared software keyboard and the two 02_990
+    Scaleform helpers moved out of `er-quickload/src/experiments` on 2026-09-11 so a standalone
+    `er-quit-menu` shell can arm the build rows with no product DLL in the profile. Nothing about
+    the feature changed, and the product still installs the same code -- it now calls
+    `er_quit_menu_core::row_cloner::arm` instead of holding a private copy. A substring assertion
+    that stopped matching because of that move would be this checker reporting a refactor as
+    feature removal.
+    """
+    return read_module_tree(QUIT_MENU_CORE_DIR / "lib.rs", QUIT_MENU_CORE_DIR)
+
+
 def read_experiments() -> str:
-    return read_module_tree(EXPERIMENTS, EXPERIMENTS_DIR) + "\n" + read_title_flow()
+    return (
+        read_module_tree(EXPERIMENTS, EXPERIMENTS_DIR)
+        + "\n"
+        + read_title_flow()
+        + "\n"
+        + read_quit_menu_core()
+    )
 
 
 def rust_fn_body(source: str, name: str) -> str:
@@ -652,9 +673,16 @@ def main() -> int:
         and "result_event_handler_746e80" in experiments
         and "result_action_builder_746a00" in experiments
         and "result_event_wrapper_builder_744a60" in experiments
-        and "call_result_void1_original" in experiments
-        and "call_result_void2_original" in experiments
-        and "call_wrapper_builder_original" in experiments
+        # One forwarder, not three. `call_result_void1_original`, `call_result_void2_original`
+        # and `call_wrapper_builder_original` were three copies of "load the trampoline slot,
+        # refuse if it is unset, call it"; they were replaced by the single
+        # `menu_trace_hooks::call_union_original`, which every one of these four detours now
+        # forwards through. The assertion is unchanged in substance -- each detour must reach the
+        # original rather than shortcut -- so it names the forwarder that exists.
+        and "call_union_original(&NATIVE_SUBMIT_ORIG" in experiments
+        and "call_union_original(&RESULT_EVENT_HANDLER_ORIG" in experiments
+        and "call_union_original(&RESULT_ACTION_BUILDER_ORIG" in experiments
+        and "call_union_original(&RESULT_EVENT_WRAPPER_BUILDER_ORIG" in experiments
         and "continue_load" not in native_submit_body.lower()
         and "continue_load" not in result_event_body.lower()
         and "continue_load" not in result_action_body.lower(),

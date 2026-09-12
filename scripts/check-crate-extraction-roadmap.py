@@ -38,6 +38,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 EXPERIMENTS = ROOT / "crates/er-quickload/src/experiments"
 SOURCE = ROOT / "crates/er-quickload/src"
+# Roots a partition function may legitimately be defined in. The whole point of the roadmap is
+# that code leaves `er-quickload/src`, so a required edge whose definition has already moved into
+# its extracted crate is the refactor working, not a missing function. The caller side is still
+# checked against `SOURCE` alone: an edge is only an edge while the product still drives it.
+DEFINITION_ROOTS = (SOURCE, ROOT / "crates/er-quit-menu-core/src")
 ROADMAP = ROOT / "docs/plans/crate-extraction-execution-roadmap.md"
 ROW = re.compile(r"^\| `([^`]+\.rs)` \| ([0-9,]+) \|", re.MULTILINE)
 TOTAL = re.compile(r"^\| all `experiments/\*\*` \| ([0-9,]+) \| ([0-9,]+) \|$", re.MULTILINE)
@@ -70,9 +75,11 @@ REQUIRED_EDGES = {
     "profile_editor_runtime_tick": {
         "experiments/startup_hooks/loading_cover/title_resources_stats_text.rs"
     },
-    "save_picker_request_path_editor": {
-        "experiments/startup_hooks/quit_menu/save_picker_menu.rs"
-    },
+    # Left experiments/** entirely on 2026-09-11: the in-game save picker moved to
+    # `er-quit-menu-core`, so both the function and its caller now live outside this scan root.
+    # An empty set is the honest entry, the same way `own_load_switch_reload_fire` spells it --
+    # naming the old path would assert an edge that cannot exist.
+    "save_picker_request_path_editor": set(),
     "save_picker_menu_pump_path_editor": {
         "experiments/startup_hooks/quit_menu/profile_rows_system_quit_menu.rs"
     },
@@ -98,7 +105,11 @@ def current_inventory(root: Path = EXPERIMENTS) -> dict[str, int]:
 
 def source_has_function(function: str) -> bool:
     pattern = re.compile(rf"\bfn\s+{re.escape(function)}\s*[<(]")
-    return any(pattern.search(path.read_text(encoding="utf-8", errors="replace")) for path in SOURCE.rglob("*.rs"))
+    return any(
+        pattern.search(path.read_text(encoding="utf-8", errors="replace"))
+        for root in DEFINITION_ROOTS
+        for path in root.rglob("*.rs")
+    )
 
 
 def source_has_call(caller: str, function: str) -> bool:

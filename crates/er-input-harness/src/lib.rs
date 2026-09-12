@@ -30,10 +30,21 @@ mod game_mem;
 mod input_inject;
 mod key_inject;
 mod log;
+// Windows-only for the same reason `drive`, `pad_inject` and `title_scan` above and below are:
+// every line of them is a game-memory walk or a MinHook install, and both reach for the `windows`
+// crate and `er-hook`'s `#[cfg(windows)]` surface directly. Leaving them ungated made `cargo check`
+// and `cargo test` fail on the host with twelve unresolved imports, so the crate had no host gate at
+// all -- a scoped `cargo test -p er-input-harness` could only ever report a build failure.
+#[cfg(windows)]
 mod menu_query;
 #[cfg(windows)]
 mod pad_inject;
+#[cfg(windows)]
 mod repl;
+/// Host-compilable on purpose: the RTTI walk it performs is pure arithmetic over a reader trait, so
+/// it carries the unit tests that pin the job-graph resolution -- including the one that proves a
+/// qword of UTF-16 text is refused as a window.
+mod rtti;
 #[cfg(windows)]
 mod title_scan;
 mod win32;

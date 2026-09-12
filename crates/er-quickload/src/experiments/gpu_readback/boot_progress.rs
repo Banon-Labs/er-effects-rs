@@ -1222,6 +1222,7 @@ fn boot_view_reset_cover_window() {
     BOOT_VIEW_DRAWN_BG_ACTIVE.store(usize::MAX, Ordering::SeqCst);
 }
 
+#[cfg(feature = "quit-rows")]
 /// Start a new load EPOCH: everything `boot_view_reset_cover_window` does, plus the state that only a
 /// genuinely new load may reset -- the phase walk, the displayed fill, the label high-water, and the
 /// baselines for counters that are sticky for the whole process.
@@ -1313,6 +1314,7 @@ pub(crate) fn boot_view_epoch_ms_if_anchored() -> Option<u64> {
         .map(|epoch| epoch.elapsed().as_millis().min(u64::MAX as u128) as u64)
 }
 
+#[cfg(feature = "quit-rows")]
 /// Reopen the first-start custom loading bar for an own-menu character switch. The original boot view
 /// deliberately stops forever once the first loading window/world takes over; the custom System->Quit
 /// ProfileSelect path reuses the title/autoload pipeline later in the same process, so it needs a
