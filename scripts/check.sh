@@ -2084,6 +2084,21 @@ python3 "$repo_root/scripts/er-release-bisect.py" --selftest
 python3 "$repo_root/scripts/check-single-dll-product-contract.py" --selftest
 python3 "$repo_root/scripts/check-single-dll-product-contract.py"
 
+# A Cargo feature nothing names gates nothing. `default` was trimmed to four features on
+# 2026-09-11, the DLL was rebuilt and relaunched, and the observed result was "that seemed to have
+# no effect" -- five of the six features named zero lines between them, so turning them off could
+# not remove anything. This holds a per-feature count that may only move when the baseline moves
+# with it, and lists the features that still gate nothing along with what is in the way.
+python3 "$repo_root/scripts/check-feature-gates-bite.py" --selftest
+python3 "$repo_root/scripts/check-feature-gates-bite.py"
+
+# ...and the configuration those gates describe has to keep compiling, or the counts above become
+# a record of attributes nobody builds. This is the trim the rows came off for: the autoload, the
+# save picker, the loading cover, the portraits and the menu trace, with no cloned rows.
+cargo xwin check --manifest-path "$repo_root/Cargo.toml" -p er-quickload \
+  --target x86_64-pc-windows-msvc --no-default-features \
+  --features autoload,save-picker,loading-cover,portrait,menu-trace
+
 bash "$repo_root/scripts/check-rust-build.sh"
 
 # The launch-time freshness gate, shared by five launch scripts as `require_fresh_dlls`. Its

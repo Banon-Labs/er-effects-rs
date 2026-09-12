@@ -1390,6 +1390,7 @@ pub(crate) fn load_profile_slot_caches_from_bytes(sl2: &[u8], source: &str) -> u
     decoded
 }
 
+#[cfg(feature = "quit-rows")]
 /// Drop both per-slot caches so the next row populate re-reads the save that is actually active.
 ///
 /// The CACHES used to be a process-lifetime latch. `ensure_profile_slot_stats_cached` returned early
@@ -1603,7 +1604,12 @@ pub(crate) unsafe extern "system" fn profile_current_row_populate_hook(
     // loaded character's identity here puts their name (and level, and weapon level) on somebody
     // else's row. Slot 0 of the previewed save is the honest answer then, which is what the cache
     // now holds.
+    #[cfg(feature = "quit-rows")]
     let foreign_preview = crate::experiments::startup_hooks::system_quit_foreign_preview_active();
+    // Without the rows nothing can put a foreign save on screen, so the loaded character's own
+    // identity is always the honest answer here.
+    #[cfg(not(feature = "quit-rows"))]
+    let foreign_preview = false;
     let identity = match build_loaded_char_name() {
         Some(name) if !foreign_preview => Some((
             name,

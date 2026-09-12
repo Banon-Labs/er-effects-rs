@@ -120,6 +120,7 @@ pub(crate) use er_title_flow::TITLE_OWNER_STATE_OFFSET;
 pub(crate) use er_title_flow::TITLE_OWNER_STATE_COMMITTED_OFFSET;
 pub(crate) use er_title_flow::TraceSampleLimit;
 
+#[cfg(feature = "quit-rows")]
 pub(crate) use er_title_flow::TITLE_OWNER_SCAN_COUNTDOWN_READY;
 pub(crate) use er_title_flow::MenuTraceRva;
 
@@ -377,10 +378,15 @@ pub(crate) const CS_MENU_MAN_GLOBAL_RVA: usize = er_game_base::rva::CS_MENU_MAN_
 pub(crate) const OPTIONSETTING_TAB_SELECT_VISIBILITY_RVA: usize = 0x93b760;
 // The OptionSetting composite layout now lives in `er-title-flow`, so the standalone quit-menu
 // shells can read the same offsets the product does rather than keeping a second copy.
+// The three composite offsets below are walked only by the rows' OptionSetting pane
+// hide/restore; the visible-flags mask is read by the title-visual suppression, which ships
+// either way. One import for each lifetime rather than a gate inside a brace group.
+#[cfg(feature = "quit-rows")]
 pub(crate) use er_title_flow::{
     OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET, OPTIONSETTING_COMPOSITE_OFFSET,
-    OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT, TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK,
+    OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT,
 };
+pub(crate) use er_title_flow::TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK;
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_NOT_INSTALLED: usize = 0;
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED_YES: usize = 1;
 pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_ORIG: AtomicUsize =

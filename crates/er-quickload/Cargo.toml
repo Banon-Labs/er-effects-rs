@@ -14,8 +14,12 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [features]
-# Everything, which is what the product DLL ships and what every existing build gets.
-default = ["autoload", "quit-rows", "save-picker", "loading-cover", "portrait", "menu-trace"]
+# The rows come off the default set. A plain build is the autoload, the save picker the autoload
+# needs, the loading cover, the portraits and the menu trace -- the System>Quit tab keeps exactly
+# the rows the game ships. `quit-rows` is still written, still compiled by check.sh, and still
+# one word away: name it here, or pass --features quit-rows, and the three cloned rows and the
+# switch behind them come back.
+default = ["autoload", "save-picker", "loading-cover", "portrait", "menu-trace"]
 # Reach a clean title and deserialise a slot: the own-stepper, the Continue driver, the fullread.
 # The thing the crate is named after.
 autoload = []

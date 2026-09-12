@@ -719,6 +719,8 @@ pub(crate) unsafe extern "system" fn menu_window_job_finalize_hook(
 ) {
     // Preserve the exact active ProfileSelect identity before native finalization clears job+0x130.
     // This is lifecycle evidence, not a pointer retained for later dereference.
+    // Read only so the gated note below can name the window the finalize just cleared.
+    #[cfg(feature = "quit-rows")]
     let finalized_profile_window = if job != 0 {
         let window =
             unsafe { safe_read_usize(job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET) }.unwrap_or(0);
@@ -757,6 +759,7 @@ pub(crate) unsafe extern "system" fn menu_window_job_finalize_hook(
     let f: unsafe extern "system" fn(usize, usize, usize, usize) =
         unsafe { std::mem::transmute(orig) };
     unsafe { f(job, rdx, r8, r9) };
+    #[cfg(feature = "quit-rows")]
     if let Some(window) = finalized_profile_window {
         system_quit_note_profile_select_finalized(window);
     }
@@ -854,6 +857,8 @@ pub(crate) fn install_menu_window_job_dtor_guard() {
     }
 }
 
+/// Records the ProfileSelect window's append/list position so a cloned row's Back can restore it.
+#[cfg(feature = "quit-rows")]
 pub(crate) fn install_system_quit_window_list_push_hook() {
     if SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED.load(Ordering::SeqCst)
         != SYSTEM_QUIT_WINDOW_LIST_PUSH_NOT_INSTALLED
@@ -1034,7 +1039,7 @@ pub(crate) fn install_system_quit_save_game_text_hook() {
     match unsafe {
         MhHook::new(
             addr as *mut c_void,
-            system_quit_save_game_get_and_format_hook as *mut c_void,
+            crate::experiments::system_quit_save_game_get_and_format_hook as *mut c_void,
         )
     } {
         Ok(hook) => {
@@ -1090,7 +1095,7 @@ pub(crate) fn install_system_quit_save_game_confirm_hook() {
     match unsafe {
         MhHook::new(
             addr as *mut c_void,
-            system_quit_save_game_return_title_request_hook as *mut c_void,
+            crate::experiments::system_quit_save_game_return_title_request_hook as *mut c_void,
         )
     } {
         Ok(hook) => {
@@ -1124,6 +1129,7 @@ pub(crate) fn install_system_quit_save_game_confirm_hook() {
     }
 }
 
+#[cfg(feature = "quit-rows")]
 pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
     dialog: usize,
     b: usize,
@@ -1251,6 +1257,9 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
     // (phase != idle), for an out-of-range cursor, or for an empty slot (arming an empty slot would
     // tear down to a clean title then fail the deserialize).
     let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    // The direct arm is the cloned rows' load path: a pick here becomes a character switch.
+    // Without the rows the native activation is forwarded unchanged, which is vanilla.
+    #[cfg(feature = "quit-rows")]
     if phase == SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
         && let Some(slot) = row_slot
     {

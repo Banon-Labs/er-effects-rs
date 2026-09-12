@@ -859,6 +859,13 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
         "oracle_title_05_000_runtime_strip_serves",
         TITLE_05_000_RUNTIME_STRIP_SERVES.load(Ordering::SeqCst),
     );
+    // Non-zero means a title after boot kept its own prompt and menu. Zero after a return to
+    // title is the black-screen shape: stripped movie, no cover, nothing to press.
+    push_json_usize(
+        body,
+        "oracle_title_05_000_runtime_strip_declined",
+        TITLE_05_000_RUNTIME_STRIP_DECLINED.load(Ordering::SeqCst),
+    );
     push_json_usize(
         body,
         "oracle_title_05_000_runtime_strip_failures",

@@ -1299,7 +1299,14 @@ CONTROL_RVA = 0x11CED80
 # ...and a control for the indirect shape, which is the one a naive matcher fails: the address is
 # never written next to the installer. `game_rva(PLAYER_GAME_DATA_NAME_GETTER_RVA as u32)` binds a
 # local ten lines above the `MhHook::new(addr as *mut c_void, ...)` that consumes it.
-CONTROL_INDIRECT_SITE = "crates/er-quickload/src/experiments/startup_hooks/quit_menu/profile_rows_system_quit_menu.rs"
+# Moved 2026-09-12: `quit_menu/` was demuxed into the features it held, and the player-name getter
+# went with the title visuals rather than with the rows -- the old path now exists only inside
+# `er-quit-rows`, the copy. What the control pins is the shape, not the file: `addr` is bound by a
+# `let Ok(addr) = game_rva_for_hook(..) else` six lines above the `MhHook::new(addr, ..)` that uses
+# it, which is exactly what the naive matcher cannot see.
+CONTROL_INDIRECT_SITE = (
+    "crates/er-quickload/src/experiments/startup_hooks/loading_cover/title_visual_hooks.rs"
+)
 CONTROL_INDIRECT_RVA = 0x25F8E0
 # ...and the third control, which is the one the seven-minute failure is about.
 # `LOADING_SCREEN_GFX_FADEOUT_RVA` reaches its `MhHook::new` through four separate mechanisms --

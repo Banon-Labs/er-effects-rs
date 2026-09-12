@@ -173,7 +173,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         remember_picker_dir: crate::config::remember_preferred_save_picker_dir,
         game_main_window: game_main_window_handle_usize,
         save_file_core_hooks_live: crate::experiments::save_file_core_hooks_live,
-        windows_path_for_log: crate::experiments::system_quit_windows_path_for_log,
+        windows_path_for_log: er_quit_menu_core::row_text::system_quit_windows_path_for_log,
         save_dest_commit_window_armed: crate::experiments::save_dest_commit_window_armed,
     });
     // Quit-menu crate split: wire product (B)'s seam before its moved hook code can run.
@@ -184,13 +184,18 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         append_crash_log: crate::telemetry::append_crash_log,
         game_main_window: game_main_window_handle_usize,
         os_native_picker_active: crate::experiments::os_native_picker_active,
-        windows_path_for_log: crate::experiments::system_quit_windows_path_for_log,
+        windows_path_for_log: er_quit_menu_core::row_text::system_quit_windows_path_for_log,
         system_dialog_from_action_obj: system_dialog_from_action_obj_usize,
+        // Three fields below belong to the cloned rows. With those off the struct update at the
+        // bottom supplies the seam's own default, which is the honest answer: no rows, no save
+        // swap, no picked save to ingest, no build import to redraw a portrait for.
+        #[cfg(feature = "quit-rows")]
         system_quit_save_swap_restore_profile_summary:
             crate::experiments::system_quit_save_swap_restore_profile_summary,
         system_quit_save_swap_arm_original:
             crate::experiments::system_quit_save_swap_arm_original,
         save_picker_start_dir: crate::experiments::save_picker_start_dir,
+        #[cfg(feature = "quit-rows")]
         system_quit_ingest_picked_save: crate::experiments::system_quit_ingest_picked_save,
         save_dest_start_dir: save_dest_start_dir_for_quit_menu,
         save_dest_set_target: crate::experiments::save_dest_set_target,
@@ -204,12 +209,22 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         // half of it now reaches the picker's own browse surface through the seam.
         save_picker_stage_row_records: crate::experiments::save_picker_stage_row_records,
         reset_path_editor_caret_latch: crate::experiments::reset_path_editor_caret_latch,
+        #[cfg(feature = "quit-rows")]
         build_import_applied: crate::experiments::build_url_refresh_character_portrait,
         ..er_quit_menu_core::QuitMenuHost::defaults()
     });
     // Title-flow crate split: wire the er-title-flow seam to the real product fns, same
     // rules as the portrait seam above (installed before any hook install or task spawn
     // can execute moved code; pure fn-pointer writes).
+    // `TitleFlowHost` is built field by field with no struct update, so the off-feature value is
+    // named here rather than inherited. Nothing commits a foreign save without the rows, so there
+    // is nothing to re-apply after the return-title save -- which is what the seam default does.
+    #[cfg(feature = "quit-rows")]
+    let save_swap_recommit_after_title_save =
+        crate::experiments::system_quit_save_swap_recommit_after_return_title_save;
+    #[cfg(not(feature = "quit-rows"))]
+    let save_swap_recommit_after_title_save = er_title_flow::TitleFlowHost::defaults()
+        .system_quit_save_swap_recommit_after_return_title_save;
     er_title_flow::install_host(er_title_flow::TitleFlowHost {
         append_autoload_debug: crate::telemetry::append_autoload_debug,
         append_crash_log: crate::telemetry::append_crash_log,
@@ -266,8 +281,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         fake_loading_screen_visible: crate::experiments::fake_loading_screen_visible,
         now_loading_active: crate::experiments::now_loading_active,
         force_profile_render_tick: crate::experiments::force_profile_render_tick,
-        system_quit_save_swap_recommit_after_return_title_save:
-            crate::experiments::system_quit_save_swap_recommit_after_return_title_save,
+        system_quit_save_swap_recommit_after_return_title_save: save_swap_recommit_after_title_save,
         title_update_detour: crate::experiments::title_update_detour,
         pab_node_update_detour: crate::experiments::pab_node_update_detour,
     });

@@ -549,6 +549,7 @@ static REQUEST_MOVE_MAP_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET
 pub(crate) use er_telemetry_core::counters::REQUEST_MOVE_MAP_ARM_COUNTDOWN;
 /// One-shot install guard.
 pub(crate) use er_telemetry_core::counters::REQUEST_MOVE_MAP_HOOK_INSTALLED;
+#[cfg(feature = "quit-rows")]
 /// How many RequestMoveMap calls after a load trigger stay eligible for the fixup. Generous enough to
 /// skip benign intervening calls but bounded so the arm never leaks into unrelated later transitions.
 const REQUEST_MOVE_MAP_ARM_WINDOW: usize = 8;
@@ -561,6 +562,7 @@ pub(crate) use er_telemetry_core::counters::REQUEST_MOVE_MAP_HOOK_CALLS;
 pub(crate) use er_telemetry_core::counters::REQUEST_MOVE_MAP_LAST_BEFORE;
 pub(crate) use er_telemetry_core::counters::REQUEST_MOVE_MAP_LAST_C30;
 
+#[cfg(feature = "quit-rows")]
 /// Arm the RequestMoveMap BlockId fixup for the next load. Call this at a load trigger (own-load
 /// continue / boot autoload SetState5) after the saved map is deserialized into GameMan+0xc30, so the
 /// upcoming STEP_PlayGame -> RequestMoveMap gets a valid target BlockId even if the confirm handler
@@ -902,6 +904,7 @@ pub(crate) fn arm_worldreswait_hold() {
     ));
 }
 
+#[cfg(feature = "quit-rows")]
 /// Clear the per-switch WorldResWait hold latches so each new switch gets a fresh hold. Called from
 /// `reset_switch_reload_latches` on every switch arm. The run-cumulative outcome counters (engaged,
 /// HELD_FRAMES, RELEASED_ON_*) are deliberately not reset here so a run's outcome stays attributable.
@@ -1039,6 +1042,8 @@ pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
     // configured-direct branch below -- because in direct mode the CreateFileW redirect does not cover the
     // native builder's `read_dir` enumeration (see the native-builder note below), so relying on the dir
     // walk to observe the just-committed bytes is timing/redirect fragile.
+    // A foreign save can only be committed by a cloned row's pick.
+    #[cfg(feature = "quit-rows")]
     if let Some(committed_path) = system_quit_committed_foreign_save_path() {
         match std::fs::read(&committed_path) {
             Ok(mut bytes)

@@ -337,6 +337,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     if let Ok(base) = game_module_base() {
                         unsafe { profile_editor_necromancy_tick(base) };
                     }
+                    #[cfg(feature = "quit-rows")]
                     unsafe { system_quit_profile_select_top_menu_tick() };
                     // Product autoload: run the native title open-menu predicate + minimal
                     // native save-load core from the recurring game task, before the idx10
@@ -721,6 +722,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
         // unconditionally and from boot because it is inert until a row press queues a build: the
         // runtime's tick returns immediately unless its phase is `Ready`, so the cost of an idle
         // frame is one atomic load.
+        #[cfg(feature = "quit-rows")]
         cs_task.run_recurring(
             move |_task_data: &FD4TaskData| {
                 // Safety: FrameBegin runs on the game task thread, the context the runtime requires;
@@ -735,6 +737,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
         // repository, none of which may be touched off the game thread. Also inert until pressed --
         // and it deliberately ticks even when idle, because its tick counter is the witness the
         // stale-latch check measures against (see `er_build_import_runtime::export`).
+        #[cfg(feature = "quit-rows")]
         cs_task.run_recurring(
             move |_task_data: &FD4TaskData| {
                 // Safety: FrameBegin runs on the game task thread; every step inside is

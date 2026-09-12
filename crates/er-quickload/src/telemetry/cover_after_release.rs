@@ -17,6 +17,7 @@ pub(crate) fn cover_after_release_record(base: usize, now_ms: u64) {
     er_loading_portrait_core::cover_after_release::cover_after_release_record(base, now_ms)
 }
 
+#[cfg(feature = "quit-rows")]
 /// Note one `02_000_IngameTop` `MenuWindowJob::Run` tick, and stamp the ones that start a menu
 /// session. Called from the product `MenuWindowJob::Run` post-hook.
 pub(crate) fn in_game_menu_note_run_tick(job: usize, window: usize) {

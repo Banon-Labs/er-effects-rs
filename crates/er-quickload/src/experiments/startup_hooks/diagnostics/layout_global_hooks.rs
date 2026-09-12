@@ -45,6 +45,7 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     // winner, pab_node_update_detour, so this contender is removed to keep PAB the deterministic sole owner
     // (otherwise a rare System->Quit win would starve pab_advance_try, the autoload driver). See that detour.
     // install_system_quit_menu_window_job_run_hook();
+    #[cfg(feature = "quit-rows")]
     install_system_quit_window_list_push_hook();
     install_system_quit_save_game_text_hook();
     // The three routing detours this used to install are part of the shared arm call below
@@ -54,8 +55,13 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     // Save Game confirm is read from the game's own `MenuJobResult` instead of guessed from
     // dialog fields (the 2026-07-28 defect where a fresh box resolved itself to No).
     install_menu_job_emit_result_hook();
+    // The three ProfileSelect routing detours exist to carry a cloned row's press into the
+    // switch. Without the rows there is no press to carry.
+    #[cfg(feature = "quit-rows")]
     install_system_quit_profile_load_activate_hook();
+    #[cfg(feature = "quit-rows")]
     install_system_quit_profile_load_confirmed_hook();
+    #[cfg(feature = "quit-rows")]
     install_system_quit_profile_load_job_run_hook();
     // Save-picker browse-row integrity (er-effects-rs-xlqh): re-stage the picker's browse rows at
     // the entry of the native ProfileSelect list builder, so an in-world game save that rewrote the
@@ -65,47 +71,59 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     // The picker itself lives in `er-quit-menu-core` since 2026-09-11. These are the steps only a
     // host with a save-swap ledger, a save flow and a live-layout editor behind it can perform; a
     // standalone shell installs none of them and the picker still browses and picks.
-    super::super::quit_menu::save_picker_menu::install_product_save_picker_hooks();
+    super::super::save_picker::save_picker_menu::install_product_save_picker_hooks();
     install_save_picker_list_builder_hook();
-    if SYSTEM_QUIT_DUPLICATE_INSTALLED.load(Ordering::SeqCst) != SYSTEM_QUIT_DUPLICATE_NOT_INSTALLED
+    // Everything below clones rows onto the Quit tab. With the feature off the tab keeps exactly
+    // what the game ships, and the installs above -- the telemetry, the vanilla Save Game hooks
+    // and the picker -- still run.
+    #[cfg(feature = "quit-rows")]
     {
-        return;
-    }
-    // One arm call, shared with the standalone `er-quit-menu` shell (2026-09-11). The cloner, the
-    // row router and the three routing detours all moved to `er_quit_menu_core::row_cloner`, so the
-    // product and a shell install the same code rather than two implementations of it -- which is
-    // what makes the shell's path testable by running the product. Every detour goes through the
-    // `er-hook` union: `AddCancelButton` takes five arguments, and until `er_hook::UnionFn5`
-    // existed this prologue was the one row-building hook holding MinHook's single slot by itself.
-    //
-    // The product arms every row and supplies the four flows this crate does not own. A shell arms
-    // `RowSet::BUILD_ROWS_ONLY` and supplies none, so a row whose flow it lacks is never on the tab.
-    let armed = unsafe {
-        er_quit_menu_core::row_cloner::arm(
-            er_quit_menu_core::row_cloner::RowSet::ALL,
-            er_quit_menu_core::row_cloner::QuitRowActions {
-                open_profile_load_dialog: Some(system_quit_open_profile_load_dialog),
-                open_save_picker_menu: Some(open_save_picker_menu_for_row),
-                save_game_start_flow: Some(system_quit_save_game_start_flow),
-                save_game_request_save_only: Some(system_quit_save_game_request_save_only),
-                // No product half: the moved reset already clears the row table, the link
-                // field and the export latch, which is everything this side used to do.
-                row_table_reset: None,
-                note_drive_strip_click_event: Some(save_picker_note_drive_strip_click_event),
-            },
-        )
-    };
-    match armed {
-        Ok(()) => SYSTEM_QUIT_DUPLICATE_INSTALLED
-            .store(SYSTEM_QUIT_DUPLICATE_INSTALLED_YES, Ordering::SeqCst),
-        // The flag is only raised on success, so a failure leaves it at
-        // `SYSTEM_QUIT_DUPLICATE_NOT_INSTALLED` and a later call retries.
-        Err(error) => append_autoload_debug(format_args!(
-            "system-quit-dup: arming the Quit rows failed: {error:?} -- no rows will be cloned"
-        )),
+        if SYSTEM_QUIT_DUPLICATE_INSTALLED.load(Ordering::SeqCst)
+            != SYSTEM_QUIT_DUPLICATE_NOT_INSTALLED
+        {
+            return;
+        }
+        // One arm call, shared with the standalone `er-quit-menu` shell (2026-09-11). The cloner, the
+        // row router and the three routing detours all moved to `er_quit_menu_core::row_cloner`, so the
+        // product and a shell install the same code rather than two implementations of it -- which is
+        // what makes the shell's path testable by running the product. Every detour goes through the
+        // `er-hook` union: `AddCancelButton` takes five arguments, and until `er_hook::UnionFn5`
+        // existed this prologue was the one row-building hook holding MinHook's single slot by itself.
+        //
+        // The product arms every row and supplies the four flows this crate does not own. A shell arms
+        // `RowSet::BUILD_ROWS_ONLY` and supplies none, so a row whose flow it lacks is never on the tab.
+        let armed = unsafe {
+            er_quit_menu_core::row_cloner::arm(
+                er_quit_menu_core::row_cloner::RowSet::ALL,
+                er_quit_menu_core::row_cloner::QuitRowActions {
+                    open_profile_load_dialog: Some(system_quit_open_profile_load_dialog),
+                    open_save_picker_menu: Some(open_save_picker_menu_for_row),
+                    save_game_start_flow: Some(
+                        crate::experiments::system_quit_save_game_start_flow,
+                    ),
+                    save_game_request_save_only: Some(
+                        crate::experiments::system_quit_save_game_request_save_only,
+                    ),
+                    // No product half: the moved reset already clears the row table, the link
+                    // field and the export latch, which is everything this side used to do.
+                    row_table_reset: None,
+                    note_drive_strip_click_event: Some(save_picker_note_drive_strip_click_event),
+                },
+            )
+        };
+        match armed {
+            Ok(()) => SYSTEM_QUIT_DUPLICATE_INSTALLED
+                .store(SYSTEM_QUIT_DUPLICATE_INSTALLED_YES, Ordering::SeqCst),
+            // The flag is only raised on success, so a failure leaves it at
+            // `SYSTEM_QUIT_DUPLICATE_NOT_INSTALLED` and a later call retries.
+            Err(error) => append_autoload_debug(format_args!(
+                "system-quit-dup: arming the Quit rows failed: {error:?} -- no rows will be cloned"
+            )),
+        }
     }
 }
 
+#[cfg(feature = "quit-rows")]
 /// The row router's save-picker arm, adapted to the action table's shape.
 ///
 /// # Safety

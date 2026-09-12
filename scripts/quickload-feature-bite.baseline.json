@@ -1,0 +1,12 @@
+{
+  "gated": {
+    "menu-trace": 2,
+    "quit-rows": 118
+  },
+  "ungated": {
+    "autoload": "everything else is built on it, so it comes off last if ever -- a build with no autoload is a different product, not a trim of this one",
+    "loading-cover": "the tree is separable now (startup_hooks/loading_cover/ owns the title visuals and the profile-render drive that used to sit under quit_menu/), but nothing names the feature yet; gating it is its own slice",
+    "portrait": "the capture pipeline and the compositors live in er-loading-portrait-core and the drive is in loading_cover/profile_render_drive.rs, so the seam exists; no cfg names the feature yet",
+    "save-picker": "the surfaces are all under startup_hooks/save_picker/ now, and er-quit-menu-core already takes every product step as an Option hook, so the shape is there; no cfg names the feature yet"
+  }
+}

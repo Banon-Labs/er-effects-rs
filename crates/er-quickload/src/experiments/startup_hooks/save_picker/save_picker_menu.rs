@@ -56,7 +56,13 @@ pub(crate) fn install_product_save_picker_hooks() {
     er_quit_menu_core::save_picker_menu::install_hooks(
         er_quit_menu_core::save_picker_menu::SavePickerMenuHooks {
             preferred_save_picker_dir_now: Some(crate::config::preferred_save_picker_dir_now),
+            // The staged rows this re-stages are the cloned rows' ledger. Without them the
+            // picker has nothing to restore and answers `None` -- the same absence a standalone
+            // shell already hands it.
+            #[cfg(feature = "quit-rows")]
             restore_staged_row_records: Some(save_picker_restore_staged_row_records),
+            #[cfg(not(feature = "quit-rows"))]
+            restore_staged_row_records: None,
             save_flow_box_set_host_dialog: Some(save_flow_box_set_host_dialog),
             save_flow_submit_box: Some(save_flow_submit_box),
             profile_editor_field_font_height: Some(profile_editor_field_font_height),

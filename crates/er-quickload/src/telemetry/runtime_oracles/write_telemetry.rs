@@ -449,6 +449,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // carried the placement) and `_resolved` is the live half (the running movie's root still has
     // it); `_stage_rect` names the screen region a luma probe should sample. None of the four is a
     // pixel, which is why the rectangle is emitted with them.
+    #[cfg(feature = "quit-rows")]
     body.push_str(&crate::build_url_backdrop_telemetry());
     body.push_str(&format!(
         "  \"autoload_attempts\": {},\n",

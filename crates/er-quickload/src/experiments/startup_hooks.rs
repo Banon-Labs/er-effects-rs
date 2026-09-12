@@ -33,6 +33,7 @@ pub(crate) use er_quit_menu_core::save_flow_boxes::{
 };
 pub(crate) use er_telemetry_core::counters::BOOT_SAVE_CONTAINER_MATCHES_RUNTIME;
 pub(crate) use er_telemetry_core::counters::CORRUPTED_SAVE_SEEN_COUNT;
+#[cfg(feature = "quit-rows")]
 pub(crate) use er_telemetry_core::counters::MSGBOX_BUILDS_AT_SWITCH_ARM;
 pub(crate) use er_telemetry_core::counters::NETWORK_CHECK_SHORTCIRCUIT_COUNT;
 pub(crate) use er_telemetry_core::counters::PORTRAIT_EQUIP_BAD_FRAMES;
@@ -98,7 +99,13 @@ pub(crate) use er_telemetry_core::counters::WINRECONFIG_SET_WINDOW_POS_CALLS;
 mod loading_cover;
 pub(crate) use loading_cover::*;
 
+// The cloned System>Quit rows: Load Character, Load Character from File, Load Build from URL,
+// and the switch machine behind them. Off by feature, the directory is not compiled and no
+// stub stands in for it -- a row that silently installs nothing is a worse lie than a missing
+// symbol, so every caller is gated at its own site instead.
+#[cfg(feature = "quit-rows")]
 mod quit_menu;
+#[cfg(feature = "quit-rows")]
 pub(crate) use quit_menu::*;
 
 mod save_picker;

@@ -930,8 +930,20 @@ pub(crate) unsafe fn portrait_render_slot_semaphore(base: usize, render_target_s
 
 pub(crate) use er_telemetry_core::counters::PORTRAIT_FACE_IDENTITY_CHECKS;
 pub(crate) use er_telemetry_core::counters::PORTRAIT_FACE_IDENTITY_MISMATCHES;
+#[cfg(feature = "quit-rows")]
 pub(crate) const SYSTEM_QUIT_SAVE_SWAP_POLL_INTERVAL_TICKS: usize = 30;
 
+/// The save-swap ledger, which two different features write halves of.
+///
+/// `rows_staged` / `rows_summary_ptr` / `rows_snapshot` are the save picker's staged browse
+/// rows and are written whenever the picker is open. Everything else -- the armed flag, the
+/// original bytes and stamp, the candidate and its preview -- is the character switch's, and
+/// only a cloned row can start one. So with the rows off the struct is still constructed and
+/// still carries the picker's half, while the swap half has no writer and no reader.
+///
+/// Splitting it in two is the better answer and is not this change: the halves are taken
+/// under one lock today, and separating them is a locking change, not a move.
+#[cfg_attr(not(feature = "quit-rows"), allow(dead_code))]
 #[derive(Default)]
 pub(crate) struct SystemQuitSaveSwapState {
     pub(crate) armed: bool,
