@@ -245,8 +245,16 @@ pub unsafe fn apply_row_slot_info_visibility(
 
 /// The per-slot row populate `FUN_1408758d0(rowModel, rowProxy, ...)`, and the current-player
 /// summary builder `FUN_140951220(param, rowProxy)` nested around it.
-const PROFILE_ROW_POPULATE_RVA: usize = 0x8757e0;
-const PROFILE_CURRENT_ROW_POPULATE_RVA: usize = 0x951220;
+///
+/// Public because both shells that hook these rows -- `er-quickload` and `er-quit-rows` -- derive
+/// their own names from these two rather than writing the addresses out again. This crate is the
+/// shared floor they already depend on, and one literal per address is what keeps a 1.17
+/// correction from having to be found in three places. The fuller reverse-engineering note on what
+/// each function writes lives beside the derived name in
+/// `er-quickload/src/constants/stats_panel_text.rs`.
+pub const PROFILE_ROW_POPULATE_RVA: usize = 0x8757e0;
+/// The current-player summary builder, documented with the address above.
+pub const PROFILE_CURRENT_ROW_POPULATE_RVA: usize = 0x951220;
 
 static PROFILE_ROW_POPULATE_ORIG: AtomicUsize = AtomicUsize::new(0);
 static PROFILE_CURRENT_ROW_POPULATE_ORIG: AtomicUsize = AtomicUsize::new(0);

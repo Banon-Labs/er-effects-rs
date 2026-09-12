@@ -1417,7 +1417,7 @@ pub const TITLE_TOP_DIALOG_IS_IN_STATE_RVA: usize = TitleDialogRva::IsInState as
 /// menu-list-active node the registrar transitions to. bd titletopdialog-fadein-gate-...-2026.
 pub const TITLE_STATE_DESC_FADEIN_RVA: usize = 0x2a90500;
 
-pub const TITLE_STATE_DESC_LOOP_RVA: usize = 0x2a8f9e8;
+pub use er_game_base::rva::TITLE_STATE_DESC_LOOP_RVA;
 
 pub const TITLE_STATE_DESC_TEXTFADEOUT_RVA: usize = 0x2b264f0;
 
@@ -2099,7 +2099,7 @@ pub const TITLE_STEP_END_FLOW_WAIT: i32 = TitleStepState::EndFlowWait as i32;
 /// entry is 0x1409b24e0.)
 #[repr(usize)]
 pub enum TitleDialogRva {
-    IsInState = 0x749b20,
+    IsInState = er_game_base::rva::TITLE_TOP_DIALOG_IS_IN_STATE_RVA,
     LiveDialogFactory = 0x81ead0,
     Cleanup = 0x9a8890,
     OpenMenu = 0x9b24e0,

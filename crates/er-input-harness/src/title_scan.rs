@@ -60,14 +60,14 @@ const TITLE_CURSOR_CONTINUE_ROW: i32 = 0;
 /// declared here rather than imported because this shell deliberately carries no `er-title-flow`
 /// dependency, the way the four title constants above it already do.
 const TITLETOP_DIALOG_STATE_MACHINE_A60_OFFSET: usize = 0xa60;
-/// `FD4StateMachine::is_in_state(sm, state_descriptor) -> bool`
-/// (`er_title_flow::TITLE_TOP_DIALOG_IS_IN_STATE_RVA`). A read-only predicate with no side effects,
-/// which is what makes it safe to call from a per-frame task.
-const TITLETOP_DIALOG_IS_IN_STATE_RVA: usize = 0x749b20;
 /// The `Loop` state descriptor (`er_title_flow::TITLE_STATE_DESC_LOOP_RVA`): the title dialog has
 /// finished fading in and is sitting still. Anything else -- `FadeIn`, `TextFadeOut`, the transient
 /// states a return-to-title teardown passes through -- is a dialog that is not ready to be pressed.
-const TITLE_STATE_DESC_LOOP_RVA: usize = 0x2a8f9e8;
+use er_game_base::rva::TITLE_STATE_DESC_LOOP_RVA;
+/// `FD4StateMachine::is_in_state(sm, state_descriptor) -> bool`
+/// (`er_title_flow::TITLE_TOP_DIALOG_IS_IN_STATE_RVA`). A read-only predicate with no side effects,
+/// which is what makes it safe to call from a per-frame task.
+use er_game_base::rva::TITLE_TOP_DIALOG_IS_IN_STATE_RVA as TITLETOP_DIALOG_IS_IN_STATE_RVA;
 
 // --- scan tuning ---
 /// One `ReadProcessMemory` per 64KB keeps the address-space walk fast.

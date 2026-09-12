@@ -137,6 +137,12 @@ fn the_direct_codec_consumers_match_the_decision_evidence() {
         // rows are cells of and the `02_990` link-field movie are derived here, so a standalone
         // quit-menu shell can serve them with no product DLL in the profile.
         "er-quit-menu-core".to_owned(),
+        // Added 2026-09-11 with the quit-rows shell: `er-quit-rows` is the product crate copied
+        // and reduced to the System>Quit rows (commit 28ca8f89), so it carries the same direct
+        // reads of the `05_000` and `05_010` edits that `er-quickload` does. The edge is a second
+        // consumer of the codec, not a new coupling shape, and it disappears when the shared
+        // machinery named in bd er-effects-rs-ejfl is extracted out of both shells.
+        "er-quit-rows".to_owned(),
     ]);
     if workspace_root()
         .join("crates/er-scaleform-hooks/Cargo.toml")

@@ -262,6 +262,10 @@ if command -v cargo-xwin >/dev/null 2>&1 && command -v wine >/dev/null 2>&1; the
 	#   er-invasion-warp-core   283 / 284
 	#   er-loading-portrait-core 81 / 82
 	#
+	# er-quit-rows joined on 2026-09-11. It is er-quickload copied and reduced to the
+	# System>Quit rows, so it carries the same 45 windows-only lib tests under the same
+	# `#[cfg(windows)] mod` tree; its 19 host-portable ones run from check.sh.
+	#
 	# er-quit-menu-core is the one that shows why crate-level bookkeeping is not enough:
 	# check.sh has run it on the host for weeks, printing "ok. 43 passed", while 30 tests
 	# next to them had never been built. scripts/check-test-target-coverage.py holds this
@@ -269,7 +273,7 @@ if command -v cargo-xwin >/dev/null 2>&1 && command -v wine >/dev/null 2>&1; the
 	CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER=wine WINEDEBUG="${WINEDEBUG:--all}" \
 		cargo xwin test --lib \
 		-p er-quickload -p er-profile-summary-core \
-		-p er-quit-menu-core -p er-quit-load-character \
+		-p er-quit-menu-core -p er-quit-load-character -p er-quit-rows \
 		-p er-invasion-path -p er-invasion-warp-core \
 		-p er-loading-portrait-core -p er-better-refills -p er-build-import-runtime \
 		--manifest-path "$repo_root/Cargo.toml" --target "$target"

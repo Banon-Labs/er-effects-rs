@@ -98,7 +98,8 @@ pub(crate) use er_telemetry_core::counters::PROFILE_STATS_PUSH_STALE_LAST_VT;
 /// ProfileSelect list row with a per-slot row model. We hook its entry so we can push the correct
 /// slot's attributes before the original runs (the original destroys the row proxy's embedded
 /// `CSScaleformValue` at its end, so a post-call resolve would operate on a released value).
-pub(crate) const PROFILE_ROW_POPULATE_RVA: usize = 0x8757e0;
+pub(crate) const PROFILE_ROW_POPULATE_RVA: usize =
+    er_quit_menu_core::profile_row_chrome::PROFILE_ROW_POPULATE_RVA;
 /// Row-model builder `FUN_1408752c0(rowModel, int slot)` -- the only reader of a slot's
 /// `ProfileSummary` record on the way to a row.
 ///
@@ -133,7 +134,8 @@ pub(crate) const PROFILE_ROW_MODEL_BUILD_RVA: usize = 0x8752c0;
 /// row reaching the per-slot hook with `rowModel + 0x8 == 0` may be this current-player row rather
 /// than save slot 0, and anything keyed on that slot index (a stats-cache lookup, a "is this the
 /// picker?" test) will be wrong for it. Read per-row values off the row model instead.
-pub(crate) const PROFILE_CURRENT_ROW_POPULATE_RVA: usize = 0x951220;
+pub(crate) const PROFILE_CURRENT_ROW_POPULATE_RVA: usize =
+    er_quit_menu_core::profile_row_chrome::PROFILE_CURRENT_ROW_POPULATE_RVA;
 // The three row-model offsets that stood here moved to
 // `er_loading_portrait_core::profile_row_model` with the staging primitives that read them. The
 // slot index keeps a name in this crate because the per-slot stats cache indexes by it.

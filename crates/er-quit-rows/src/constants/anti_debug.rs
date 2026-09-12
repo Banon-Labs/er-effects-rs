@@ -370,7 +370,11 @@ pub(crate) const MENU_WINDOW_JOB_RUN_RVA: usize = 0x7ad1c0;
 ///
 /// `orphan_title_window` decides who may be asked. See that module for why the title's windows
 /// outlive a `System>Quit -> Load Character` switch.
-pub(crate) const MENU_WINDOW_CLOSE_AS_FAILED_RVA: usize = 0x7ac890;
+/// Derived, not re-declared: `er_game_base::rva` already owns this address under the name
+/// `MENU_WINDOW_CLOSE_WITH_FAILED_RVA`, and a second literal is how the two come to disagree
+/// on the next build. The local name is the role this crate calls it in.
+pub(crate) const MENU_WINDOW_CLOSE_AS_FAILED_RVA: usize =
+    er_game_base::rva::MENU_WINDOW_CLOSE_WITH_FAILED_RVA;
 /// `CS::TitleStep+0x128` -- the element count of the `DLFixedVector<MenuWindow*>` at `TitleStep+0xe0`
 /// that `STEP_MenuJobWait` pumps through `FUN_140733f20`.
 ///

@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 76 | 43,373 |
+| all `experiments/**` | 76 | 43,379 |
 | excluding `startup_hooks/**` | 43 | 25,089 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 24,599 |
 | lifecycle S10 split | 5 | 2,275 |
@@ -136,7 +136,7 @@ somebody's in-flight edit.
 
 | file | +lines | landed in |
 |---|---:|---|
-| `startup_hooks/quit_menu/save_swap_profile_table.rs` | 1,407 | dead-counter census |
+| `startup_hooks/quit_menu/save_swap_profile_table.rs` | 1,413 | dead-counter census |
 | `startup_hooks/quit_menu/save_picker_menu.rs` | 75 | dead-counter census |
 | `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 1,051 | dead-counter census |
 | `own_load/loaders/switch_reload.rs` | 769 | stale-RVA call-site closure |
@@ -305,7 +305,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/quit_menu/save_flow_boxes.rs` | 712 | System>Quit confirmation-box family | R18-R20 |
 | `startup_hooks/quit_menu/save_picker_menu.rs` | 75 | native picker, destination, and row-builder families | R17-R19 |
 | `startup_hooks/quit_menu/save_picker_path_editor.rs` | 9 | R13B1-R13B4 families listed in section 4.3 | R13A-R13B4 |
-| `startup_hooks/quit_menu/save_swap_profile_table.rs` | 1,407 | product profile renderer and quit swap families | R18-R19 |
+| `startup_hooks/quit_menu/save_swap_profile_table.rs` | 1,413 | product profile renderer and quit swap families | R18-R19 |
 | `startup_hooks/quit_menu/system_quit_dialog_handlers.rs` | 711 | System>Quit dialog implementation and picker adapter; the row TEXT layer moved to `er_quit_menu_core::row_text` | R10 and R18 |
 | `startup_hooks/quit_menu/system_quit_hooks.rs` | 712 | product hooks, deletion candidates, and quit/title hook families | R2, R19, R22 |
 | `startup_hooks/quit_menu/system_quit_ownership_repro.rs` | 1,299 | ownership, telemetry, quit, and portrait families | R19 |
