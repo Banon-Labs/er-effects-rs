@@ -229,7 +229,13 @@ def load_allowlist(root: Path) -> Allowlist:
 #   er-gfx                    `include!` + integration targets         host 162
 #   er-build-import-runtime   whole crate `#![cfg(windows)]`           host - / win 2
 LIVE_PROPERTIES: list[tuple[str, str, str]] = [
-    ("er-quickload", "lib.host_runnable == 0 and lib.windows_only > 50",
+    # The bound was `> 50` until 2026-09-11, when this crate measured 45. Nothing broke: the
+    # count falls as the extraction roadmap moves modules into crates, and it had gone 91 -> 45
+    # in eleven days. What the property is watching is the mechanism -- a crate whose every test
+    # is invisible to the host -- so the floor is set well under the current count rather than
+    # re-pinned to it, because a bound that tracks the census has to be edited by whoever shrinks
+    # the crate, which is the "bump the number" habit these properties were written to avoid.
+    ("er-quickload", "lib.host_runnable == 0 and lib.windows_only > 10",
      "`#[cfg(windows)] mod` in lib.rs hides every test from the host"),
     ("er-quit-menu-core", "lib.host_runnable > 20 and lib.windows_only > 20",
      "a mixed tree: some tests host-visible, some windows-only"),

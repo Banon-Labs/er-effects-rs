@@ -98,7 +98,8 @@ pub(crate) use er_telemetry_core::counters::PROFILE_STATS_PUSH_STALE_LAST_VT;
 /// ProfileSelect list row with a per-slot row model. We hook its entry so we can push the correct
 /// slot's attributes before the original runs (the original destroys the row proxy's embedded
 /// `CSScaleformValue` at its end, so a post-call resolve would operate on a released value).
-pub(crate) const PROFILE_ROW_POPULATE_RVA: usize = 0x8757e0;
+pub(crate) const PROFILE_ROW_POPULATE_RVA: usize =
+    er_quit_menu_core::profile_row_chrome::PROFILE_ROW_POPULATE_RVA;
 /// Row-model builder `FUN_1408752c0(rowModel, int slot)` -- the only reader of a slot's
 /// `ProfileSummary` record on the way to a row.
 ///
@@ -133,17 +134,12 @@ pub(crate) const PROFILE_ROW_MODEL_BUILD_RVA: usize = 0x8752c0;
 /// row reaching the per-slot hook with `rowModel + 0x8 == 0` may be this current-player row rather
 /// than save slot 0, and anything keyed on that slot index (a stats-cache lookup, a "is this the
 /// picker?" test) will be wrong for it. Read per-row values off the row model instead.
-pub(crate) const PROFILE_CURRENT_ROW_POPULATE_RVA: usize = 0x951220;
-/// Row-model field holding the profile/save slot index (0-9). The native populate reads
-/// `*(int*)(rowModel + 0x8) + 1` as the `Icon_0` face-sprite frame, i.e. the slot; we read the same
-/// field to index the per-slot stats cache so each row shows its own character's attributes.
-pub(crate) const PROFILE_ROW_MODEL_SLOT_08_OFFSET: usize = 0x8;
-/// Offset of the row model's `PlayerName` `CS::MenuString` inside `CS::MenuSaveDataSummary`.
-/// Static RE of 1.16.2 `FUN_1408757e0`: native row populate resolves `PlayerName`, reads raw
-/// pointer at `rowModel + 0x50`, else falls back to the inline DLString buffer at `rowModel + 0x60`
-/// when the DLString capacity at `rowModel + 0x78` is heap-backed. Stage this field before native
-/// populate so the game's own writer, not a later out-of-band SetText, owns the rendered text.
-pub(crate) const PROFILE_ROW_MODEL_PLAYER_NAME_MENUSTRING_50_OFFSET: usize = 0x50;
+pub(crate) const PROFILE_CURRENT_ROW_POPULATE_RVA: usize =
+    er_quit_menu_core::profile_row_chrome::PROFILE_CURRENT_ROW_POPULATE_RVA;
+// The three row-model offsets that stood here moved to
+// `er_loading_portrait_core::profile_row_model` with the staging primitives that read them. The
+// slot index keeps a name in this crate because the per-slot stats cache indexes by it.
+pub(crate) use er_loading_portrait_core::profile_row_model::PROFILE_ROW_MODEL_SLOT_08_OFFSET;
 
 // === per-slot info fields on a PROFILESELECT row =================================================
 // what produces "Level 0" and "0:00:00" on a row, and therefore why zeroing the staged record could
@@ -178,34 +174,8 @@ pub(crate) const PROFILE_ROW_MODEL_PLAYER_NAME_MENUSTRING_50_OFFSET: usize = 0x5
 /// `FUN_1408759e0(summary, 0, &name, pgd->level)` -- slot 0 with the live level -- so a cache lookup
 /// keyed on that slot would describe save slot 0's character, not the loaded one.
 pub(crate) const PROFILE_ROW_MODEL_LEVEL_88_OFFSET: usize = 0x88;
-pub(crate) const PROFILE_ROW_LEVEL_CAPTION_FIELD_NAME: &str = "StaticText_110502\0";
-pub(crate) const PROFILE_ROW_LEVEL_VALUE_FIELD_NAME: &str = "Level\0";
-pub(crate) const PROFILE_ROW_LOCATION_FIELD_NAME: &str = "Location\0";
-pub(crate) const PROFILE_ROW_PLAYTIME_FIELD_NAME: &str = "PlayTime\0";
-/// Full-width row chrome. The drive row hides both because its independent button frames are the
-/// only truthful click targets; every other row explicitly restores them.
-pub(crate) const PROFILE_ROW_BACKING_FIELD_NAME: &str = "Backing\0";
-/// The fields we added to the row. They need the same per-row-kind visibility statement the native
-/// ones get: the row clips are recycled across the character/browse/drive lists, so a field only one
-/// kind mentions keeps that kind's text when another kind reuses the clip.
-pub(crate) const PROFILE_ROW_ER_STATS_FIELD_NAME: &str = "ErStats\0";
-pub(crate) const PROFILE_ROW_CHAR_STATS_FIELD_NAME: &str = "ErCharStats\0";
-pub(crate) const PROFILE_ROW_DRIVE_CELL_FIELD_NAMES:
-    [&str; er_gfx::title_05_010::DRIVE_CELL_CAPACITY] =
-    er_gfx::title_05_010::DRIVE_CELL_FIELD_NAMES_NUL;
-/// Native button-frame children paired one-to-one with `DriveCell_0..25`. Their visibility must
-/// match the corresponding text field exactly: a blank cell must leave no empty frame, and a
-/// recycled character row must inherit neither the label nor its button chrome.
-pub(crate) const PROFILE_ROW_DRIVE_BUTTON_FIELD_NAMES:
-    [&str; er_gfx::title_05_010::DRIVE_CELL_CAPACITY] =
-    er_gfx::title_05_010::DRIVE_BUTTON_FIELD_NAMES_NUL;
 pub(crate) const PROFILE_ROW_CURRENT_PATH_FIELD_NAME: &str =
     er_gfx::title_05_010::CURRENT_PATH_FIELD_NAME_NUL;
-pub(crate) const PROFILE_ROW_CURRENT_PATH_BUTTON_NAME: &str =
-    er_gfx::title_05_010::CURRENT_PATH_BUTTON_NAME_NUL;
-/// Offset of the row model's `Location` `CS::MenuString` inside `CS::MenuSaveDataSummary`. Same
-/// inline accessor as PlayTime: raw pointer first, else the inline DLString buffer.
-pub(crate) const PROFILE_ROW_MODEL_LOCATION_MENUSTRING_90_OFFSET: usize = 0x90;
 /// Offset of the row model's `PlayTime` `CS::MenuString` inside `CS::MenuSaveDataSummary`. The
 /// struct is `{ wchar_t* rawString; DLString<wchar_t> dLString; }` (Ghidra `CS::MenuString`, 0x38
 /// bytes) and every reader takes `rawString` when it is non-NULL, else the DLString's buffer -- the
@@ -221,11 +191,6 @@ pub(crate) use er_telemetry_core::counters::PROFILE_ROW_LAST_SAVED_ROWS;
 /// Count of rows where the last-saved text could not be staged into the row model (the model field
 /// was unreadable), so the row kept the native playtime string (oracle).
 pub(crate) use er_telemetry_core::counters::PROFILE_ROW_LAST_SAVED_STAGE_FAILURES;
-/// GFx value type (`CSScaleformValue+0x20 & 0x8f`) the visibility setter `FUN_140d844d0` requires:
-/// it returns without doing anything unless the resolved value is a display object (10). Recorded
-/// per call as an oracle so "the fields are still visible in game" is diagnosable from telemetry
-/// instead of guesswork -- a non-10 type means the hide silently no-ops.
-pub(crate) const GFX_VALUE_TYPE_DISPLAY_OBJECT: usize = 10;
 /// `GFx::Value::VT_Undefined` / `VT_Null` -- what a named-child resolve leaves in the out proxy when
 /// the movie has no child by that name.
 ///

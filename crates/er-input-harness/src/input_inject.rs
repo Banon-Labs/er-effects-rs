@@ -164,6 +164,22 @@ pub fn input_manager(base: usize) -> Option<usize> {
 /// `FUN_140801cb0` deobf: Equipment pause-row MenuJob factory
 /// `(DLReferencePointer<CS::MenuJob>* out, ComponentStack* popup+0x10) -> out`.
 const EQUIP_TOP_JOB_FACTORY_RVA: usize = 0x801bc0;
+/// The System pause-row MenuJob factory, deobf `0x1408024d0` (1.17.0 `0x140803350`, the ledger row
+/// added 2026-09-12). Same `(DLReferencePointer<CS::MenuJob>* out, ComponentStack&)` signature as
+/// the two above, and it is the System entry of the same `st_pauseMenuClickHandlerInfoList` that
+/// `FUN_14090e9d0` builds -- so submitting its job is the press of that row, not an imitation of it.
+///
+/// Chain, read statically: `0x1408024d0` tail-calls `0x140807ce0`, which calls
+/// `0x1408087e0(out, stack, 1)`, which builds a `CS::MenuWindowJob` for the resource
+/// `02_040_OptionSetting` and whose window lambda `0x1408065b0` constructs a
+/// `CS::OptionSettingTopDialog` -- the class whose `MenuWindow` base carries menu id `0x25`.
+///
+/// The third argument that call passes is the in-game flag (`1` here, `0` on the title path
+/// `0x140807d20`), not a tab index: `OptionSettingTopDialog`'s ctor takes it as its fourth
+/// parameter and hands its `MenuWindow` base a literal `0`. The window therefore always opens on
+/// tab 0, and reaching the Quit tab is a separate problem -- see
+/// `crate::drive::Phase::TabToQuit`.
+const OPTIONSETTING_JOB_FACTORY_RVA: usize = 0x8024d0;
 /// `InventoryUiLoad` deobf (dump 0x140801e40): Inventory pause-row MenuJob factory,
 /// same `(out, ComponentStack*)` signature -- builds the 02_020_Inventory union job.
 const INVENTORY_JOB_FACTORY_RVA: usize = 0x801d50;
@@ -244,6 +260,19 @@ pub fn native_open_equip_menu(_base: usize, input_manager_ptr: usize) -> bool {
 /// cells carry the bottom-left ArtsIcon child, bd er-effects-rs-pe98 GFX geometry).
 pub fn native_open_inventory_menu(_base: usize, input_manager_ptr: usize) -> bool {
     native_open_top_menu(input_manager_ptr, INVENTORY_JOB_FACTORY_RVA)
+}
+
+/// Native open of the System menu (`02_040_OptionSetting`), the pane the Quit tab lives on.
+///
+/// This is the row `Phase::NavToOptionSetting` used to try to reach with an injected Confirm, and
+/// the reason it is a native call instead is measured rather than assumed: on 2026-09-12 a live
+/// `er-quit-rows` session took `openmenu` (the native `CSPopupMenu+0x121` request) and opened
+/// IngameTop in one frame, while the DirectInput scancode for Confirm, the scancodes for the cursor
+/// keys, and the `force` menu-event channel all reported delivered and moved the pause menu's
+/// `CS::GridControl` not at all -- `selected_cell` stayed 0 across every attempt. A Confirm that
+/// never lands cannot activate a row, so the row is activated the way the game activates it.
+pub fn native_open_optionsetting_menu(_base: usize, input_manager_ptr: usize) -> bool {
+    native_open_top_menu(input_manager_ptr, OPTIONSETTING_JOB_FACTORY_RVA)
 }
 
 /// Tap one menu event into the keystate bitmap (edge or). Fault-safe: only writes once the target

@@ -81,13 +81,341 @@ pub fn set_named_child_bind_trampoline(address: usize) {
 /// Every direct call goes through here for the reason `er-hook` refuses an unrecognised build: a
 /// hand-built `base + rva` asks nothing, and on a build where the function moved it transfers
 /// control into the middle of an unrelated one.
-fn gated_game_fn(rva: usize, what: &'static str) -> Option<usize> {
+pub(crate) fn gated_game_fn(rva: usize, what: &'static str) -> Option<usize> {
     game_rva_named(rva as u32, what).ok()
 }
 
 /// Did a `CSScaleformValue` resolve to a real display object?
 pub fn gfx_value_type_is_resolved(datatype: usize) -> bool {
     datatype != GFX_VALUE_TYPE_UNDEFINED && datatype != GFX_VALUE_TYPE_NULL
+}
+
+/// GFx value type (`CSScaleformValue+0x20 & 0x8f`) the native visibility setter `FUN_140d844d0`
+/// requires: it returns without doing anything unless the resolved value is a display object (10).
+/// Recorded per call as an oracle, so "the fields are still on screen" is diagnosable from
+/// telemetry rather than guesswork -- a type other than this means the hide silently did nothing.
+pub const GFX_VALUE_TYPE_DISPLAY_OBJECT: usize = 10;
+
+/// GFx value type of the child `name` on `row_proxy`, or `None` when the resolve itself could not
+/// be run.
+///
+/// `Some(0)` means the resolve ran and found nothing -- see [`gfx_value_type_is_resolved`]. That
+/// distinction is the whole point of returning a type rather than a bool: the native resolve always
+/// hands back a fully constructed out proxy whose component slot points at itself, so a movie
+/// without the child is indistinguishable from one with it on every other observable.
+///
+/// Unlike [`resolve_row_child_proxy`] this reports the miss instead of refusing it, which is what a
+/// caller asking "is this row one of ours?" needs.
+///
+/// # Safety
+///
+/// `row_proxy` must be a live `SceneObjProxy` inside the `MenuWindowJob::Run` context that owns it,
+/// and `name` must be nul-terminated.
+pub unsafe fn row_child_gfx_value_type(base: usize, row_proxy: usize, name: &str) -> Option<usize> {
+    debug_assert!(name.ends_with('\0'), "field name must be nul-terminated");
+    if row_proxy == 0 || row_proxy == NULL_POINTER {
+        return None;
+    }
+    let assign = named_child_bind(base);
+    let dtor: unsafe extern "system" fn(usize) = unsafe {
+        std::mem::transmute(gated_game_fn(
+            er_game_base::rva::CSSCALEFORMVALUE_DTOR_RVA,
+            "CSSCALEFORMVALUE_DTOR_RVA",
+        )?)
+    };
+    let mut proxy_buf = [0u8; SCENE_OBJ_PROXY_STACK_BYTES];
+    let out = unsafe {
+        assign(
+            row_proxy,
+            proxy_buf.as_mut_ptr() as usize,
+            name.as_ptr() as usize,
+        )
+    };
+    if out == 0 || out == NULL_POINTER {
+        return None;
+    }
+    let datatype = unsafe { resolved_value_type(out) };
+    // Release exactly what the resolve constructed, exactly as the native populate does per field.
+    unsafe { dtor(out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET) };
+    datatype
+}
+
+/// Show or hide the child `name` on `row_proxy` through the game's own setter, returning whether
+/// the setter was actually dispatched.
+///
+/// # Why the answer is returned rather than assumed
+///
+/// This fails soft in two places, and both were observed. The out proxy's vtable is checked against
+/// `CS::SceneObjProxy` and a mismatch skips the dispatch fail-closed; and per
+/// [`GFX_VALUE_TYPE_DISPLAY_OBJECT`] the native setter itself does nothing unless the resolved
+/// value is a display object. So a caller that logs "I called the hide" is reporting intent, not
+/// effect, and will claim success while the field is still on screen. That exact false positive was
+/// reported as working twice before the user's own eyes settled it (2026-08-07).
+///
+/// # Safety
+///
+/// As [`row_child_gfx_value_type`].
+pub unsafe fn set_row_field_visible(
+    base: usize,
+    row_proxy: usize,
+    name: &str,
+    visible: bool,
+) -> bool {
+    debug_assert!(name.ends_with('\0'), "field name must be nul-terminated");
+    let assign = named_child_bind(base);
+    let Some(set_visible) = gated_game_fn(
+        er_title_flow::TITLE_PRESS_START_SET_VISIBLE_RVA,
+        "TITLE_PRESS_START_SET_VISIBLE_RVA",
+    ) else {
+        return false;
+    };
+    let set_visible: unsafe extern "system" fn(usize, u8) =
+        unsafe { std::mem::transmute(set_visible) };
+    let Some(dtor) = gated_game_fn(
+        er_game_base::rva::CSSCALEFORMVALUE_DTOR_RVA,
+        "CSSCALEFORMVALUE_DTOR_RVA",
+    ) else {
+        return false;
+    };
+    let dtor: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(dtor) };
+    let mut proxy_buf = [0u8; SCENE_OBJ_PROXY_STACK_BYTES];
+    let out = unsafe {
+        assign(
+            row_proxy,
+            proxy_buf.as_mut_ptr() as usize,
+            name.as_ptr() as usize,
+        )
+    };
+    if out == 0 || out == NULL_POINTER {
+        er_telemetry_core::counters::PROFILE_ROW_SLOT_INFO_VIS_SKIPS.fetch_add(1, Ordering::SeqCst);
+        return false;
+    }
+    let proxy_vt = unsafe { safe_read_usize(out) }.unwrap_or(0);
+    // The resolved value the setter will act on, so its GFx type is observable as telemetry: the
+    // named-child ctor writes the child straight into the proxy's embedded `CSScaleformValue` and
+    // links no foreign component, so this is the value `GetScaleformValue2` returns.
+    if let Some(datatype) = unsafe { resolved_value_type(out) } {
+        er_telemetry_core::counters::PROFILE_ROW_SLOT_INFO_LAST_DATATYPE
+            .store(datatype, Ordering::SeqCst);
+        if datatype != GFX_VALUE_TYPE_DISPLAY_OBJECT {
+            let n = er_telemetry_core::counters::PROFILE_ROW_SLOT_INFO_NON_DISPLAY
+                .fetch_add(1, Ordering::SeqCst)
+                + 1;
+            if n <= 4 {
+                append_autoload_debug(format_args!(
+                    "save-picker: row field {} resolved GFx type {datatype} (not display object {GFX_VALUE_TYPE_DISPLAY_OBJECT}) -- the native visibility setter will ignore it (n={n})",
+                    name.trim_end_matches('\0')
+                ));
+            }
+        }
+    }
+    let want_vt = game_data_addr(
+        base,
+        er_title_flow::SCENE_OBJ_PROXY_VTABLE_RVA,
+        "SCENE_OBJ_PROXY_VTABLE_RVA",
+    );
+    let vtable_ok = proxy_vt == want_vt;
+    if vtable_ok {
+        unsafe { set_visible(out, u8::from(visible)) };
+    } else {
+        let n = er_telemetry_core::counters::PROFILE_ROW_SLOT_INFO_VIS_SKIPS
+            .fetch_add(1, Ordering::SeqCst)
+            + 1;
+        if n <= 4 {
+            append_autoload_debug(format_args!(
+                "save-picker: row field {} visibility skipped fail-closed -- out proxy 0x{out:x} vtable 0x{proxy_vt:x} is not CS::SceneObjProxy 0x{want_vt:x} (n={n})",
+                name.trim_end_matches('\0')
+            ));
+        }
+    }
+    unsafe { dtor(out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET) };
+    vtable_ok
+}
+
+/// The two steps around a text push that only a host with a live layout editor can perform.
+///
+/// A standalone shell installs neither and the push still lands -- it simply writes the text it was
+/// handed, with no font/align hot-reload wrapped around it and no field-target cache behind it.
+/// Wrap a field's text in Scaleform HTML for the live editor's current font and alignment. Handing
+/// the input straight back is the neutral answer.
+pub type LiveTextForField = fn(&str, &[u16]) -> Vec<u16>;
+
+/// Record which component a field's text last went to, tagged with the surface that wrote it, so
+/// the editor can re-drive that field between populates.
+pub type RememberFieldTarget = fn(&str, usize, &[u16], &'static str);
+
+#[derive(Clone, Copy, Default)]
+pub struct RowTextHooks {
+    pub live_text_for_field: Option<LiveTextForField>,
+    pub remember_field_target: Option<RememberFieldTarget>,
+}
+
+static ROW_TEXT_HOOKS: std::sync::OnceLock<RowTextHooks> = std::sync::OnceLock::new();
+
+/// Install the host's row-text steps. First caller wins, as every seam in this crate does.
+pub fn install_row_text_hooks(hooks: RowTextHooks) -> bool {
+    ROW_TEXT_HOOKS.set(hooks).is_ok()
+}
+
+fn row_text_hooks() -> RowTextHooks {
+    ROW_TEXT_HOOKS.get().copied().unwrap_or_default()
+}
+
+/// Push `utf16` onto the row's `name` field with the game's own machinery, exactly as the native
+/// row-populate does per field: resolve the named child (`assignComponentWithName`, via the
+/// installed hook's trampoline when there is one so the resolve is not double-instrumented),
+/// SetText through the null-guarded wrapper `FUN_14074a0f0`, then release the resolved value with
+/// `CSScaleformValue::~CSScaleformValue` on the proxy's embedded value at `+0x28` -- mirroring the
+/// native `~CSScaleformValue(&SStack_70.scaleformValue)`. Returns whether SetText was accepted.
+///
+/// # Two guards, each of which was a crash or a lie
+///
+/// The SetText wrapper's first act is `rcx = *(proxy+0x8); call *0x8(*rcx)` -- an unvalidated
+/// virtual dispatch on the linked component. On the first in-world ProfileSelect open the component
+/// linked for the injected `ErStats` field was a stale menu-arena object with a garbage heap
+/// vtable, and that dispatch jumped into `.rdata`. So component, vtable and slot target are all
+/// checked game-image-plausible, `_purecall` included, before the wrapper is allowed to dispatch
+/// (er-effects-rs-7e7).
+///
+/// And the component checks cannot answer whether the name resolved at all: on a miss the
+/// named-child ctor leaves the out proxy's component slot pointing at itself, so the component is
+/// non-null and its vtable is the game's own `CS::SceneObjProxy` -- live by every test here. Only
+/// the GFx value type separates a hit from a miss, and without that check every push reported
+/// success on every movie: 109,035 "successful" `ErCharStats` writes were logged against the
+/// System>Quit panel, which has no such field, while the visibility hides that travelled with them
+/// landed for real.
+///
+/// # Safety
+///
+/// As [`row_child_gfx_value_type`], and `utf16` must be nul-terminated.
+pub unsafe fn push_stats_text_on_row(
+    base: usize,
+    row_proxy: usize,
+    name: &str,
+    utf16: &[u16],
+) -> bool {
+    debug_assert!(name.ends_with('\0'), "field name must be nul-terminated");
+    let assign = named_child_bind(base);
+    let Some(settext) = gated_game_fn(
+        er_game_base::rva::PROFILE_SETTEXT_RVA,
+        "PROFILE_SETTEXT_RVA",
+    ) else {
+        return false;
+    };
+    let settext: unsafe extern "system" fn(usize, usize) = unsafe { std::mem::transmute(settext) };
+    let Some(dtor) = gated_game_fn(
+        er_game_base::rva::CSSCALEFORMVALUE_DTOR_RVA,
+        "CSSCALEFORMVALUE_DTOR_RVA",
+    ) else {
+        return false;
+    };
+    let dtor: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(dtor) };
+    // The binder fully constructs the out proxy without reading it (both its ctor-or-resolve paths
+    // initialise before use); a zeroed buffer mirrors the native uninitialised 0x70-byte stack slot
+    // with headroom. The name is a plain string -- the binder treats it as a printf format, and no
+    // field name here carries a `%`.
+    let mut proxy_buf = [0u8; SCENE_OBJ_PROXY_STACK_BYTES];
+    let out = unsafe {
+        assign(
+            row_proxy,
+            proxy_buf.as_mut_ptr() as usize,
+            name.as_ptr() as usize,
+        )
+    };
+    if out == 0 || out == NULL_POINTER {
+        return false;
+    }
+    let component_slot = out + SCENE_OBJ_PROXY_COMPONENT_SLOT_OFFSET;
+    let comp = unsafe { safe_read_usize(component_slot) }.unwrap_or(0);
+    let comp_vt = if comp != 0 && comp != NULL_POINTER {
+        unsafe { safe_read_usize(comp) }.unwrap_or(0)
+    } else {
+        0
+    };
+    let slot_fn = if comp_vt != 0 {
+        unsafe { safe_read_usize(comp_vt + COMPONENT_GET_VALUE_VTABLE_SLOT_OFFSET) }.unwrap_or(0)
+    } else {
+        0
+    };
+    if !unsafe { resolved_value_type(out) }.is_some_and(gfx_value_type_is_resolved) {
+        let n = er_telemetry_core::counters::PROFILE_STATS_PUSH_MISSING_FIELD
+            .fetch_add(1, Ordering::SeqCst)
+            + 1;
+        if n <= 4 || n.is_power_of_two() {
+            append_autoload_debug(format_args!(
+                "stats-text: push refused -- the movie has no child '{}' on row=0x{row_proxy:x} (missing_field={n})",
+                name.trim_end_matches('\0')
+            ));
+        }
+        unsafe { dtor(out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET) };
+        return false;
+    }
+    let component_live = comp_vt != 0
+        && vtable_in_game_image(comp_vt, base)
+        && vtable_in_game_image(slot_fn, base)
+        && !dispatch_target_is_purecall(slot_fn, base);
+    let accepted = if component_live {
+        let hooks = row_text_hooks();
+        // The wrapper copies the UTF-16 into a DLString synchronously. Under a live editor the
+        // font/align hot-reload rides this same guarded path by wrapping the text in Scaleform
+        // HTML; field width stays a movie-definition edit either way.
+        let live_text = match hooks.live_text_for_field {
+            Some(wrap) => wrap(name, utf16),
+            None => utf16.to_vec(),
+        };
+        unsafe { settext(component_slot, live_text.as_ptr() as usize) };
+        if let Some(remember) = hooks.remember_field_target {
+            remember(name, comp, utf16, "last-row-settext");
+        }
+        true
+    } else {
+        let skips = er_telemetry_core::counters::PROFILE_STATS_PUSH_STALE_SKIPS
+            .fetch_add(1, Ordering::SeqCst)
+            + 1;
+        er_telemetry_core::counters::PROFILE_STATS_PUSH_STALE_LAST_COMP
+            .store(comp, Ordering::SeqCst);
+        er_telemetry_core::counters::PROFILE_STATS_PUSH_STALE_LAST_VT
+            .store(comp_vt, Ordering::SeqCst);
+        if skips <= 8 {
+            append_autoload_debug(format_args!(
+                "stats-text: push skipped fail-closed (er-effects-rs-7e7 guard): the resolved component is not live -- comp=0x{comp:x} vt=0x{comp_vt:x} slot_fn=0x{slot_fn:x} row=0x{row_proxy:x} (skips={skips})"
+            ));
+        }
+        false
+    };
+    // Destroy the proxy's embedded `CSScaleformValue` exactly like the native populate. An earlier
+    // version ran the dtor on `+0x8`, the component slot, corrupting the link node and
+    // mis-releasing `proxy+0x20` -- a second latent use-after-free even when SetText succeeded.
+    unsafe { dtor(out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET) };
+    accepted
+}
+
+/// `SceneObjProxy::assignComponentWithName`, preferring the trampoline when this process detoured
+/// it -- calling the detour from inside it would recurse.
+fn named_child_bind(base: usize) -> unsafe extern "system" fn(usize, usize, usize) -> usize {
+    let addr = match NAMED_CHILD_BIND_TRAMPOLINE.load(Ordering::SeqCst) {
+        orig if orig != NULL_POINTER => orig,
+        _ => game_data_addr(
+            base,
+            er_game_base::rva::TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
+            "TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA",
+        ),
+    };
+    unsafe { std::mem::transmute(addr) }
+}
+
+/// The masked GFx type of the value a resolve wrote into `out`'s embedded slot.
+///
+/// # Safety
+///
+/// `out` must be the proxy a native named-child resolve returned, before its destructor runs.
+unsafe fn resolved_value_type(out: usize) -> Option<usize> {
+    unsafe {
+        safe_read_i32(
+            out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET + CSSCALEFORMVALUE_DATATYPE_OFFSET,
+        )
+    }
+    .map(|raw| (raw as u32 & CSSCALEFORMVALUE_DISPLAY_TYPE_MASK as u32) as usize)
 }
 
 /// Is `target` one of the two pure-virtual traps a destructed object's vtable slot points at?

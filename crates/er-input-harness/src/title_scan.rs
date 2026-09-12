@@ -24,7 +24,7 @@ use windows::Win32::System::Memory::{
 };
 
 use crate::log::harness_log;
-use crate::win32::{read_u8, read_usize};
+use crate::win32::{read_u8, read_u32, read_usize};
 
 // --- RVAs / offsets off the game image base (0x140000000), bd title-continue-is-accept-byte-not-keystate ---
 /// Title-owner vtable RVA -- `[owner+0x00]` equals `base + this`.
@@ -43,6 +43,31 @@ const TITLETOP_DIALOG_VTABLE_RVA: usize = er_game_base::rva::TITLE_TOP_DIALOG_VT
 /// TitleTopDialog discriminator (`dialog+0xa40`, u8): 0 = press any button parked / 1 = Continue-Load
 /// menu built (both are outer state 10 -- this byte is the difference).
 const TITLETOP_DIALOG_A40_OFFSET: usize = 0xa40;
+/// The title menu's row cursor (`dialog+0xb0c`, i32) -- field `+0xd4` of the `CS::GridControl`
+/// embedded at `dialog+0xa38`, which is why `er_title_flow` spells the offset
+/// `DIALOG_SLOT_CURSOR_B0C_OFFSET` (`0xa38 + 0xd4 == 0xb0c`). The Continue selector reads it to
+/// decide which row an accept activates, and it is written rather than navigated because the title
+/// is a producer of the keystate bitmap, not a consumer: an injected Move never reaches it (bd
+/// `TITLE-CONTINUE-is-accept-byte-not-keystate-...-2026-07-22`).
+const TITLETOP_DIALOG_CURSOR_B0C_OFFSET: usize = 0xb0c;
+/// The row count that cursor is bounded by (`dialog+0xb08`, the same `GridControl`'s extent). Read
+/// before writing, so a cursor is never written into a menu whose rows have not been built.
+const TITLETOP_DIALOG_ROW_BOUND_B08_OFFSET: usize = 0xb08;
+/// Continue is the first row of the title menu.
+const TITLE_CURSOR_CONTINUE_ROW: i32 = 0;
+/// `CS::TitleTopDialog`'s own FD4 state machine (`dialog+0xa60`), the argument `is_in_state` takes.
+/// Same offset the product reads (`er_title_flow::TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET`); it is
+/// declared here rather than imported because this shell deliberately carries no `er-title-flow`
+/// dependency, the way the four title constants above it already do.
+const TITLETOP_DIALOG_STATE_MACHINE_A60_OFFSET: usize = 0xa60;
+/// The `Loop` state descriptor (`er_title_flow::TITLE_STATE_DESC_LOOP_RVA`): the title dialog has
+/// finished fading in and is sitting still. Anything else -- `FadeIn`, `TextFadeOut`, the transient
+/// states a return-to-title teardown passes through -- is a dialog that is not ready to be pressed.
+use er_game_base::rva::TITLE_STATE_DESC_LOOP_RVA;
+/// `FD4StateMachine::is_in_state(sm, state_descriptor) -> bool`
+/// (`er_title_flow::TITLE_TOP_DIALOG_IS_IN_STATE_RVA`). A read-only predicate with no side effects,
+/// which is what makes it safe to call from a per-frame task.
+use er_game_base::rva::TITLE_TOP_DIALOG_IS_IN_STATE_RVA as TITLETOP_DIALOG_IS_IN_STATE_RVA;
 
 // --- scan tuning ---
 /// One `ReadProcessMemory` per 64KB keeps the address-space walk fast.
@@ -60,6 +85,9 @@ static OWNER_LOGGED: AtomicBool = AtomicBool::new(false);
 /// One line per process for a refused needle. The refusal is a property of the build, not of the
 /// moment, so re-stating it on every throttle boundary would say nothing new.
 static NEEDLE_REFUSAL_LOGGED: AtomicBool = AtomicBool::new(false);
+/// Same one-per-process rule as the needle refusal above, for the `is_in_state` predicate: an
+/// unmapped address is a property of the build, so repeating the line every frame says nothing new.
+static IN_STATE_REFUSAL_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// The current-process pseudo handle (`-1`) for `ReadProcessMemory`.
 fn cur_proc() -> HANDLE {
@@ -254,12 +282,104 @@ pub fn title_dialog_a40(base: usize) -> i32 {
     }
 }
 
-/// Press any button ready and the menu not yet opened: state == 10 && dialog a40 == 0.
+/// Press any button ready and the menu not yet opened: outer state == 10, dialog a40 == 0, and the
+/// dialog's own state machine settled in `Loop`.
+///
+/// The third clause was added 2026-09-12 (bd er-effects-rs-9gxt). Without it this reports "parked"
+/// for a dialog that is still fading in or still tearing down, and the phase that gates on it hands
+/// the next phase a title that cannot accept a press -- which is how `press_any_button` came to
+/// report success one frame after entering.
 pub fn title_pab_parked(base: usize) -> bool {
-    title_state(base) == 10 && title_dialog_a40(base) == 0
+    title_state(base) == 10 && title_ready_for_accept(base)
 }
 
 /// The Continue/Load menu has been built (dialog a40 == 1).
 pub fn title_menu_up(base: usize) -> bool {
     title_dialog_a40(base) == 1
+}
+
+/// True when the `TitleTopDialog`'s own state machine is settled in `Loop`.
+///
+/// Why a state-machine call and not another byte read. `title_state` and `title_dialog_a40` are both
+/// satisfiable while the dialog is mid-transition: on a return-to-title teardown the a40 latch is
+/// transiently non-zero before the dialog has settled, and during the boot fade-in the dialog exists
+/// with a40 == 0 while nothing it owns will answer an accept yet. The product gates its own
+/// accept-byte write on exactly this predicate for exactly that reason
+/// (`er_title_flow::product_autoload_gates::maybe_set_title_accept_byte`), and the harness writes the
+/// same byte, so it has the same precondition.
+///
+/// Returns false when the dialog is absent or the predicate has no verified address on this build --
+/// the conservative answer, because every caller uses it to decide whether to write into the game.
+pub fn title_dialog_in_loop(base: usize) -> bool {
+    let Some(dialog) = title_dialog(base) else {
+        return false;
+    };
+    let Ok(predicate) = er_game_base::mem::game_rva_named(
+        TITLETOP_DIALOG_IS_IN_STATE_RVA as u32,
+        "TITLETOP_DIALOG_IS_IN_STATE_RVA",
+    ) else {
+        if !IN_STATE_REFUSAL_LOGGED.swap(true, Ordering::SeqCst) {
+            harness_log!(
+                "title_scan: is_in_state has no verified address on this build -- reporting the \
+                 title dialog as not settled, so the accept byte is never written into a \
+                 mid-transition title"
+            );
+        }
+        return false;
+    };
+    let loop_desc = er_game_base::mem::game_data_addr(
+        base,
+        TITLE_STATE_DESC_LOOP_RVA,
+        "TITLE_STATE_DESC_LOOP_RVA",
+    );
+    if loop_desc == 0 {
+        return false;
+    }
+    let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
+        unsafe { core::mem::transmute(predicate) };
+    // SAFETY: `dialog` was validated against the `CS::TitleTopDialog` vtable above, so
+    // `dialog + 0xa60` is that object's own FD4 state machine, and the callee is a read-only
+    // `is_in_state` predicate resolved through the build gate.
+    unsafe { is_in_state(dialog + TITLETOP_DIALOG_STATE_MACHINE_A60_OFFSET, loop_desc) != 0 }
+}
+
+/// The title menu's row cursor (`dialog+0xb0c`), or -1 when there is no dialog to read.
+pub fn title_cursor(base: usize) -> i32 {
+    match title_dialog(base) {
+        Some(dialog) => {
+            unsafe { crate::win32::read_u32(dialog + TITLETOP_DIALOG_CURSOR_B0C_OFFSET) }
+                .map_or(-1, |v| v as i32)
+        }
+        None => -1,
+    }
+}
+
+/// Put the title menu's cursor on Continue, returning whether the write was made.
+///
+/// Refuses when the dialog is absent or its row bound is not yet a positive count -- a menu whose
+/// rows have not been built has no row 0 to select, and writing one there is a write into a
+/// half-constructed `CS::GridControl` rather than a press.
+pub fn set_title_cursor_continue(base: usize) -> bool {
+    let Some(dialog) = title_dialog(base) else {
+        return false;
+    };
+    let bound =
+        unsafe { read_u32(dialog + TITLETOP_DIALOG_ROW_BOUND_B08_OFFSET) }.map_or(0, |v| v as i32);
+    if bound <= TITLE_CURSOR_CONTINUE_ROW {
+        return false;
+    }
+    unsafe {
+        crate::win32::write_i32(
+            dialog + TITLETOP_DIALOG_CURSOR_B0C_OFFSET,
+            TITLE_CURSOR_CONTINUE_ROW,
+        )
+    }
+}
+
+/// The title is parked at press any button and ready to be pressed: settled in `Loop` with the menu
+/// not yet open. This is the precondition for writing the global accept byte -- the game's own
+/// `TitleTopDialog::update` opens the menu when the byte is non-zero and a40 is still 0, so a write
+/// made outside this window is consumed by nothing and the phase that made it has pressed nothing.
+pub fn title_ready_for_accept(base: usize) -> bool {
+    title_dialog_a40(base) == 0 && title_dialog_in_loop(base)
 }

@@ -33,12 +33,12 @@ pub enum PickerOpenOutcome {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DestRoute {
+pub enum DestRoute {
     ConfirmOverwrite,
     CommitDirect,
 }
 
-fn save_dest_route_picked_target(target: &Path) -> DestRoute {
+pub fn save_dest_route_picked_target(target: &Path) -> DestRoute {
     if target.is_file() {
         DestRoute::ConfirmOverwrite
     } else {

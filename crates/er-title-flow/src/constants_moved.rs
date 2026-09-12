@@ -1231,6 +1231,21 @@ pub const TITLE_OWNER_BEGINLOGO_LIST_GATE_B8_OFFSET: usize =
 pub const TITLE_OWNER_MENU_HOLDER_E0_OFFSET: usize =
     core::mem::offset_of!(TitleOwnerLayout, menu_holder);
 
+/// owner+0x128 = the element count of the inline `DLFixedVector<MenuWindow*>` that starts at
+/// owner+0xe0.
+///
+/// Read out of the engine's own two accessors rather than guessed. `FUN_140733f20` (the per-frame
+/// pump) takes the vector base and indexes `base + (-(int)base & 7) + count * 8 - 8`, reading its
+/// count from `base+0x48`; `FUN_140733d70` (the erase the window teardown calls) uses the same
+/// `base+0x48` and decrements it. So the array is inline at the base with capacity 9 and the count
+/// sits 0x48 past it -- for this owner, 0xe0 + 0x48 = 0x128.
+///
+/// In a live world the number is the whole title-over-the-world defect: non-zero while
+/// `GameMan+0xc30` names a real map means title windows are still being pumped over a loaded
+/// character, which is what `PRESS ANY BUTTON` and the publisher footer are.
+pub const TITLE_OWNER_MENU_WINDOW_COUNT_128_OFFSET: usize =
+    core::mem::offset_of!(TitleOwnerLayout, menu_window_count);
+
 /// owner+0x130 = where STEP_BeginLogo commits the main-menu list (Continue/Load d180/NewGame).
 /// Decoded from the commit fn 0x140b0e530: `lea rcx,[owner+0x130]; call 0x1407a9460` stores the
 /// 0x14081f180-built list there, then SetState(owner,10). So the Load-Game d180 item lives under
@@ -1402,7 +1417,7 @@ pub const TITLE_TOP_DIALOG_IS_IN_STATE_RVA: usize = TitleDialogRva::IsInState as
 /// menu-list-active node the registrar transitions to. bd titletopdialog-fadein-gate-...-2026.
 pub const TITLE_STATE_DESC_FADEIN_RVA: usize = 0x2a90500;
 
-pub const TITLE_STATE_DESC_LOOP_RVA: usize = 0x2a8f9e8;
+pub use er_game_base::rva::TITLE_STATE_DESC_LOOP_RVA;
 
 pub const TITLE_STATE_DESC_TEXTFADEOUT_RVA: usize = 0x2b264f0;
 
@@ -1857,7 +1872,8 @@ pub struct TitleOwnerLayout {
     pub play_game_slot: i32,
     pub unknown_c0: [u8; 0x20],
     pub menu_holder: usize,
-    pub unknown_e8: [u8; 0x48],
+    pub unknown_e8: [u8; 0x40],
+    pub menu_window_count: usize,
     pub menu_list: usize,
     pub unknown_138: [u8; 0x14c],
     pub new_game_flag: u8,
@@ -2083,7 +2099,7 @@ pub const TITLE_STEP_END_FLOW_WAIT: i32 = TitleStepState::EndFlowWait as i32;
 /// entry is 0x1409b24e0.)
 #[repr(usize)]
 pub enum TitleDialogRva {
-    IsInState = 0x749b20,
+    IsInState = er_game_base::rva::TITLE_TOP_DIALOG_IS_IN_STATE_RVA,
     LiveDialogFactory = 0x81ead0,
     Cleanup = 0x9a8890,
     OpenMenu = 0x9b24e0,

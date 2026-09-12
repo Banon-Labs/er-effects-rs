@@ -20,7 +20,7 @@
 #   `MISSING`    no run did. This is the case that denies.
 #   `NOTRUNTIME` the commits about to be pushed touch no crate that ships in a DLL, so there is
 #                nothing for a run to prove. Never denies.
-#   `UNKNOWN`    the signal could not measure (no git, no run root, unreadable). Never denies:
+#   `UNKNOWN`    the signal could not measure (no git, no log directory, unreadable). Never denies:
 #                a guard that cannot see must not invent a verdict, and the pre-push hook plus
 #                CI still stand behind it.
 #
@@ -29,6 +29,11 @@
 # never inspects. The header used to justify this differently -- that every parsing form tried in
 # rego was inert -- and that was wrong: the policy was dead because of `sprintf`, which cupcake's
 # WASM runtime does not implement, not because of anything to do with parsing or `input.signals`.
+#
+# Which logs count, and what a `+dirty` line means, is decided in one place for all three readers
+# of this evidence: `scripts/er-runtime-evidence.py`. It reads the run root and the game directory
+# both -- a run launched through `~/Elden/launch.sh` writes only into the second, and reading only
+# the first refused a push on 2026-09-11 that a live run had proven. Its header carries the rest.
 #
 # What decides the answer is the sha in the log, never a timestamp. The first version compared
 # mtimes and answered `OK` on a log written by a build two commits old that happened to still be
@@ -47,6 +52,8 @@ if [ -n "${CUPCAKE_RUNTIME_EVIDENCE_OVERRIDE:-}" ]; then
   printf '%s' "$CUPCAKE_RUNTIME_EVIDENCE_OVERRIDE"
   exit 0
 fi
+
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd)" || exit 0
 
 command -v git >/dev/null 2>&1 || exit 0
 git rev-parse --git-dir >/dev/null 2>&1 || exit 0
@@ -71,70 +78,28 @@ if ! printf '%s\n' "$changed" | grep -q '^crates/'; then
   exit 0
 fi
 
-run_root="${ER_ME3_RUN_ROOT:-$HOME/.cache/er-me3-runs}"
-if [ ! -d "$run_root" ]; then
+# The changed paths go in on stdin because the scan needs them: a `+dirty` log is only accepted
+# when the shell that wrote it compiles every crate this push changes.
+evidence="$(printf '%s\n' "$changed" |
+  python3 "$repo_root/scripts/er-runtime-evidence.py" --head "$head_sha" 2>/dev/null)"
+status=$?
+
+case "$status" in
+0)
+  printf 'OK'
+  exit 0
+  ;;
+2)
   printf 'UNKNOWN'
   exit 0
-fi
-
-# A DLL log names the commit it was built from on its first line:
-#
-#   build git=b6b459560dfa module=er_invasion_warp.dll base=0x... pe=0x... (2026-09-09T02:05:18Z)
-#
-# That sha, not the file's mtime, is what ties a run to code. The first version of this signal
-# compared mtimes and immediately answered OK for head 0e084240 on a log whose own first line read
-# `build git=b6b459560dfa` -- a DLL two commits older, still running and still writing, so its log
-# was newer than the commit it could not possibly have executed. Reading a clock and calling it
-# provenance is the same mistake this guard exists to stop, made inside the guard.
-#
-# `+dirty` disqualifies the run as well. It means the tree carried uncommitted changes when that DLL
-# was built, so the binary is not the commit even when the sha matches.
-python3 - "$run_root" "$head_sha" <<'PY'
-import os
-import pathlib
-import re
-import subprocess
-import sys
-
-run_root = pathlib.Path(sys.argv[1])
-head_sha = sys.argv[2]
-
-BUILD_LINE = re.compile(r"^build git=([0-9a-f]+)(\+dirty)?\b")
-
-
-def names_head(built):
-    return built.startswith(head_sha) or head_sha.startswith(built)
-
-
-# Newest run first, and stop as soon as there are enough candidates. Run directory names are
-# `br-<timestamp>-<id>`, so a reverse sort is newest first. Scanning every directory meant opening
-# the first line of several hundred logs on every Bash tool call; the pre-push copy does the
-# exhaustive walk, where paying for it once is fine.
-CANDIDATES = 2
-
-clean_builds = []
-
-for run in sorted(run_root.iterdir(), reverse=True):
-    if not run.is_dir():
-        continue
-    if len(dict.fromkeys(clean_builds)) >= CANDIDATES:
-        break
-    for artifact in sorted(run.glob("er-*.log")):
-        try:
-            with artifact.open(encoding="utf-8", errors="replace") as handle:
-                first = handle.readline()
-        except OSError:
-            continue
-        found = BUILD_LINE.match(first)
-        if not found:
-            continue
-        built, dirty = found.group(1), bool(found.group(2))
-        if dirty:
-            continue
-        if names_head(built):
-            print("OK", end="")
-            raise SystemExit(0)
-        clean_builds.append(built)
+  ;;
+1) ;;
+*)
+  # The scanner itself failed. That is not a verdict.
+  printf 'UNKNOWN'
+  exit 0
+  ;;
+esac
 
 # No log names this commit, but a run may still have executed the same code. The tip proves out
 # when it adds nothing cargo would compile on top of a sha that ran -- otherwise this guard demands
@@ -148,18 +113,36 @@ for run in sorted(run_root.iterdir(), reverse=True):
 # scripts/check-runtime-evidence.sh by construction: two enforcement points that answer differently
 # about one push teach the next agent to ignore whichever is louder.
 #
-# Deduplicated and capped, which the pre-push copy does not need to be. This signal runs on every
-# single Bash tool call, and every attempt is a whole reverse-dependency walk: the first version
-# tried one per matching log line, and the run root here holds hundreds of them across a dozen
-# builds. It took over 45 seconds to answer, on a signal whose header promises three git reads and a
-# stat. The newest builds are the only ones a live branch can carry forward from anyway -- an older
-# sha reaches the tip across strictly more commits, so if the newest cannot forgive the diff, an
-# older one cannot either.
+# Deduplicated and capped by the scanner, which the pre-push copy does not need to be. This signal
+# runs on every single Bash tool call, and every attempt is a whole reverse-dependency walk: the
+# first version tried one per matching log line, and the run root here holds hundreds of them across
+# a dozen builds. It took over 45 seconds to answer, on a signal whose header promises three git
+# reads and a stat. The newest builds are the only ones a live branch can carry forward from anyway
+# -- an older sha reaches the tip across strictly more commits, so if the newest cannot forgive the
+# diff, an older one cannot either.
 # Memoised, because one gate charges this signal 176 times. `scripts/test-cupcake-policies.py`
 # drives that many `cupcake eval` spawns and every one of them runs every signal, so a walk that
 # costs half a second lands as minutes on the suite. The answer is a pure function of the two
 # commit shas -- `--rev` reads the commit, not the working tree -- so it is safe to keep, and it is
 # keyed by both shas so it cannot be served for a different pair.
+# The candidate lines go in as an argument rather than on stdin: the heredoc below is itself the
+# program, so a pipe into it would be swallowed (shellcheck SC2259) and every carry-forward would
+# quietly find no candidates at all.
+python3 - "$head_sha" "$repo_root" "$evidence" <<'PY'
+import os
+import pathlib
+import subprocess
+import sys
+
+head_sha = sys.argv[1]
+repo_root = pathlib.Path(sys.argv[2])
+
+candidates = []
+for line in sys.argv[3].splitlines():
+    parts = line.split()
+    if len(parts) >= 2 and parts[0] == "candidate" and parts[1] not in candidates:
+        candidates.append(parts[1])
+
 cache_dir = pathlib.Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "er-mods-rs-evidence"
 try:
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -200,7 +183,7 @@ def adds_no_cargo_work(built):
     probe = subprocess.run(
         [
             "python3",
-            "scripts/er-change-scope.py",
+            str(repo_root / "scripts" / "er-change-scope.py"),
             "--rust-touched",
             "--base",
             built,
@@ -219,7 +202,7 @@ def adds_no_cargo_work(built):
     return verdict
 
 
-for built in list(dict.fromkeys(clean_builds))[:CANDIDATES]:
+for built in candidates:
     if adds_no_cargo_work(built):
         print("OK", end="")
         raise SystemExit(0)

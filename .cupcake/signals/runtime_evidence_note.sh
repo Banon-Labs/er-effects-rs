@@ -22,12 +22,20 @@
 # string equality against a word, and leaves the sentence a human reads free to change without
 # touching a rule.
 #
+# Both signals now read `scripts/er-runtime-evidence.py`, which is the point: this file used to
+# carry its own scan, and the two could disagree about which log the verdict came from. On
+# 2026-09-11 a refusal named `er-quickload-autoload-debug.log` as "built from a DIRTY tree" -- the
+# newest file by mtime, written by a module the sentence never mentioned -- and the agent reading
+# it went hunting the wrong log. The sentence now names the module as well as the file, and comes
+# from the same scan that produced the verdict.
+#
 # What decides the answer is the sha a DLL log names on its own `build git=` line, never a
 # timestamp. The first version compared mtimes and answered `OK` on a log written by a build two
 # commits old that happened to still be running -- newer file, older code -- which is the exact
 # failure being guarded, made inside the guard.
 #
-# Safe to run on every Bash call: three git reads and one directory stat, no network, no writes.
+# Safe to run on every Bash call: three git reads and a bounded directory scan, no network, no
+# writes.
 set -uo pipefail
 
 # The regression tests drive the policy through this, the same way the branch guards use
@@ -37,12 +45,12 @@ if [ -n "${CUPCAKE_RUNTIME_EVIDENCE_NOTE_OVERRIDE:-}" ]; then
   exit 0
 fi
 
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd)" || exit 0
+
 command -v git >/dev/null 2>&1 || exit 0
 git rev-parse --git-dir >/dev/null 2>&1 || exit 0
 
 head_sha="$(git rev-parse --short HEAD 2>/dev/null)" || exit 0
-head_epoch="$(git log -1 --format=%ct HEAD 2>/dev/null)" || exit 0
-[ -n "$head_epoch" ] || exit 0
 
 # Which commits are about to go out. `origin/main` is the merge base for every branch in this repo;
 # when it is unknown, fall back to the tip alone rather than guessing a range.
@@ -60,72 +68,10 @@ if ! printf '%s\n' "$changed" | grep -q '^crates/'; then
   exit 0
 fi
 
-run_root="${ER_ME3_RUN_ROOT:-$HOME/.cache/er-me3-runs}"
-if [ ! -d "$run_root" ]; then
-  printf 'no run root at %s' "$run_root"
-  exit 0
-fi
-
-# A DLL log names the commit it was built from on its first line:
-#
-#   build git=b6b459560dfa module=er_invasion_warp.dll base=0x... pe=0x... (2026-09-09T02:05:18Z)
-#
-# That sha, not the file's mtime, is what ties a run to code. The first version of this signal
-# compared mtimes and immediately answered OK for head 0e084240 on a log whose own first line read
-# `build git=b6b459560dfa` -- a DLL two commits older, still running and still writing, so its log
-# was newer than the commit it could not possibly have executed. Reading a clock and calling it
-# provenance is the same mistake this guard exists to stop, made inside the guard.
-#
-# `+dirty` disqualifies the run as well. It means the tree carried uncommitted changes when that DLL
-# was built, so the binary is not the commit even when the sha matches.
-python3 - "$run_root" "$head_sha" "$head_epoch" <<'PY'
-import pathlib
-import re
-import sys
-
-run_root = pathlib.Path(sys.argv[1])
-head_sha = sys.argv[2]
-head_epoch = int(sys.argv[3])
-
-BUILD_LINE = re.compile(r"^build git=([0-9a-f]+)(\+dirty)?\b")
-
-newest_epoch = 0
-newest_run = "-"
-note = "no DLL log under any run directory"
-matched = None
-
-for run in sorted(run_root.iterdir()):
-    if not run.is_dir():
-        continue
-    for artifact in run.glob("er-*.log"):
-        try:
-            mtime = int(artifact.stat().st_mtime)
-            with artifact.open(encoding="utf-8", errors="replace") as handle:
-                first = handle.readline()
-        except OSError:
-            continue
-        found = BUILD_LINE.match(first)
-        if not found:
-            continue
-        built, dirty = found.group(1), bool(found.group(2))
-        if mtime > newest_epoch:
-            newest_epoch, newest_run = mtime, run.name
-            if dirty:
-                note = f"{artifact.name} was built from a DIRTY tree at {built[:8]}"
-            elif not (built.startswith(head_sha) or head_sha.startswith(built)):
-                note = f"{artifact.name} was built from {built[:8]}, not {head_sha}"
-            else:
-                note = f"{artifact.name} was built from {head_sha} and ran"
-        if not dirty and (built.startswith(head_sha) or head_sha.startswith(built)):
-            matched = (run.name, mtime, artifact.name)
-
-if matched:
-    run_name, mtime, name = matched
-    print(
-        f"{matched[2]} was built from {head_sha} and ran", end="",
-    )
-else:
-    print(
-        note, end="",
-    )
-PY
+# One `note` line always comes back, whatever the verdict: it is the sentence, and the caller
+# already has the verdict from the sibling signal.
+printf '%s\n' "$changed" |
+  python3 "$repo_root/scripts/er-runtime-evidence.py" --head "$head_sha" 2>/dev/null |
+  sed -n 's/^note //p' |
+  head -1 |
+  tr -d '\n'

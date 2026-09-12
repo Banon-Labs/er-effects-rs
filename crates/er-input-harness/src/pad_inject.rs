@@ -164,6 +164,10 @@ static PAD_MENU_AXIS_OBSERVED: AtomicU32 = AtomicU32::new(0);
 // itself dereferenced, which needs no reimplementation of FUN_1402414a0's red-black walk.
 
 /// Request a menu list-scroll axis value. `rows` is signed; 0 releases.
+#[expect(
+    dead_code,
+    reason = "the pause menu stopped reading this channel; measured 2026-09-12, see crate::drive::Phase::NavToOptionSetting"
+)]
 pub fn set_menu_scroll(rows: i32) {
     DESIRED_MENU_AXIS.store((rows * PAD_MENU_SCROLL_UNIT) as u32, Ordering::SeqCst);
 }
@@ -459,6 +463,10 @@ static DESIRED_MENU_BUTTONS: AtomicU32 = AtomicU32::new(0);
 static MENU_BUTTON_READER_CALLS: AtomicU32 = AtomicU32::new(0);
 
 /// Hold (or release, with 0) the menu buttons. Bit 0 = `+0x08`, bit 1 = `+0x10`.
+#[expect(
+    dead_code,
+    reason = "the pause menu stopped reading this channel; measured 2026-09-12, see crate::drive::Phase::NavToOptionSetting"
+)]
 pub fn set_menu_buttons(mask: u32) {
     DESIRED_MENU_BUTTONS.store(mask, Ordering::SeqCst);
 }

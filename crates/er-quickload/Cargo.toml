@@ -5,10 +5,38 @@ edition = "2024"
 publish = false
 
 [lib]
-crate-type = ["cdylib"]
+# `rlib` beside the DLL so a feature-selected subset of this crate can be linked into a smaller
+# shell. `er-quickload` is a bespoke bundle: it began as "autoload my character at boot" and
+# accumulated the quit rows, the save picker, the loading cover, the portrait and the tracing. The
+# installer this repo is heading for hands a user the features they chose, which means one
+# implementation compiled several ways -- not one fork per shell, which would put two copies of the
+# row cloner and the hook union in one workspace.
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# Everything, which is what the product DLL ships and what every existing build gets.
+default = ["autoload", "quit-rows", "save-picker", "loading-cover", "portrait", "menu-trace"]
+# Reach a clean title and deserialise a slot: the own-stepper, the Continue driver, the fullread.
+# The thing the crate is named after.
+autoload = []
+# The cloned System>Quit rows and the flows behind them.
+quit-rows = []
+# The in-game save-file browser the Load Character from File row opens.
+save-picker = []
+# The loading-screen cover and the title visuals.
+loading-cover = []
+# The character portraits on the loading screen and the Quit panel.
+portrait = []
+# Menu construction and native-result tracing. Diagnostics: no product surface depends on it.
+menu-trace = []
 
 [dependencies]
 # Shared cross-platform telemetry counters used by host checks and the Windows DLL.
+# The crash record's own format, read back. `crashlog/veh_exit_hooks.rs` decides whether the
+# newest `er-crash-latest.txt` describes THIS run, and the field spellings it needs -- `fatal=`,
+# `record_index=`, `utc=` -- belong to the crate that writes them. Depending on the writer for the
+# parse keeps one owner of the format and puts the decision somewhere the host can test it.
+er-crash-logging-core = { path = "../er-crash-logging-core" }
 er-telemetry-core = { path = "../er-telemetry-core" }
 er-title-flow = { path = "../er-title-flow" }
 

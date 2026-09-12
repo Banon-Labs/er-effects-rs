@@ -41,7 +41,11 @@ use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
 mod save_redirect;
 pub(crate) use save_redirect::*;
 
+// Diagnostics, and the first subsystem behind a feature (2026-09-11). Two external references in
+// 4,300 lines, so it is the cheapest proof that this crate can be compiled as a subset at all.
+#[cfg(feature = "menu-trace")]
 mod trace;
+#[cfg(feature = "menu-trace")]
 pub(crate) use trace::*;
 
 mod startup_hooks;

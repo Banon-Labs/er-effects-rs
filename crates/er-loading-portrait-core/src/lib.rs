@@ -174,6 +174,12 @@ pub use title_stats_text::*;
 
 pub mod profile_row_label;
 
+// Windows-only: the staged write reads the field back through `ReadProcessMemory` first, so a
+// host build has no symbol to link. Its tests run under wine from the `cargo xwin test --lib` list
+// in `scripts/check-rust-build.sh`, where every other windows-only unit test in this repo runs.
+#[cfg(windows)]
+pub mod profile_row_model;
+
 #[cfg(windows)]
 pub mod stats_loading_text;
 #[cfg(windows)]

@@ -68,11 +68,80 @@ pub static TITLE_TIME_DESER_LAST_SLOT: AtomicUsize = AtomicUsize::new(0);
 /// incoming child inherits it, walks 18->20, and `STEP_GameStepWait` tears the world down).
 pub static SWITCH_RETURN_TITLE_REQUEST_RETIRED_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-/// Times a genuinely loaded world reverted to the title/new-game map default -- the black screen,
-/// counted as a transition (real map id -> `FULLREAD_C30_M10_DEFAULT`) rather than as a level, so
-/// the long stretch of every boot that legitimately sits at the default cannot trip it.
+/// Menu-pump ticks in which a title surface (`05_000_Title`, `05_001_Title_Logo`,
+/// `05_020_TitleInformation`) was still running its `MenuWindowJob` while a real map was mounted
+/// and a switch reload had committed.
 ///
-/// This is the run-stopping oracle for the second-load teardown. It is deliberately blind to how
-/// the switch was driven, so a run driven through the real ProfileSelect rows and a run driven by
-/// the diagnostic control file are scored by the same measurement.
+/// The switch term is measured, not defensive. Without it the counter read 36 on a 2026-09-11 boot
+/// that reached its world through the title's own Continue and took no switch: the title's windows
+/// legitimately run for a fraction of a second after `GameMan+0xc30` names the incoming map, while
+/// the title tears down as it always has. A defect counter whose pass value is 0 cannot carry a
+/// floor of 36 on a clean load.
+///
+/// This is the defect as a number, read from the game's own data: the resource name comes from
+/// `MenuWindowJob+0x60` and the map id from `GameMan+0xc30`. A `System>Quit -> Load Character`
+/// switch that ends with this at 0 left no title window over the world; any non-zero value is the
+/// `PRESS ANY BUTTON` prompt and the publisher footer drawn on top of a live character, which is
+/// what a person would otherwise have to look at the screen to find out.
+pub static TITLE_SURFACE_RUN_TICKS_IN_WORLD: AtomicUsize = AtomicUsize::new(0);
+
+/// Times this crate asked the native per-window close to take an orphaned title window.
+///
+/// Counts the request, not the outcome: the window answers by setting its own result a tick or more
+/// later, so a run that dies inside the close still leaves the number behind. Paired with
+/// `TITLE_SURFACE_RUN_TICKS_IN_WORLD`, which must stop growing once the requests land.
+pub static ORPHAN_TITLE_WINDOW_CLOSE_REQUESTS: AtomicUsize = AtomicUsize::new(0);
+
+/// Live element count of the title's own `DLFixedVector<MenuWindow*>` at `TitleStep+0xe0`, sampled
+/// at `TitleStep+0x128`, as of the last telemetry write.
+///
+/// `usize::MAX` means never sampled -- no title owner was resolvable -- which is "not proven", not
+/// "proven zero". In a world reached through a switch the pass value is 0.
+pub static TITLE_OWNER_MENU_WINDOW_COUNT: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+/// Times a genuinely loaded world reverted to the title/new-game map default, counted as a
+/// transition (real map id -> `FULLREAD_C30_M10_DEFAULT`) rather than as a level, so the long
+/// stretch of every boot that legitimately sits at the default cannot trip it.
+///
+/// # It is not a defect count on a `System>Quit -> Load Character` switch
+///
+/// This doc used to open "the black screen" and call itself the run-stopping oracle for the
+/// second-load teardown. On the switch flow that reading is wrong, and it misled a reader the day
+/// it was measured: a switch tears the world down on purpose before rebuilding it, so a **working**
+/// load raises this twice. The 2026-09-11 20:24 run reached 4 across two consecutive switches while
+/// every load succeeded -- `oracle_load_correctness_seen` 1, `T_controllable` on each, and the
+/// player confirmed all three characters loaded.
+///
+/// So read it as a transition count, not a verdict. It says the world went back to the title map;
+/// whether that was the switch doing its job or a load collapsing is answered by what follows it,
+/// which is `T_controllable` and `oracle_load_correctness_seen`. The name is kept because
+/// `scripts/check-world-lost.py` and `scripts/er-switch-timeline.py` read it, and a rename would
+/// silently change what they score.
+///
+/// It is deliberately blind to how the switch was driven, so a run driven through the real
+/// ProfileSelect rows and a run driven by the diagnostic control file are scored by the same
+/// measurement.
 pub static WORLD_LOST_TO_TITLE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Times a `CS::MessageBoxDialog` was built at the title after its menu had opened, with no world
+/// mounted -- the shape of a load that was refused and put a modal on screen instead.
+///
+/// This is the semaphore for "Failed to load save data. Select OK to try again.", which is
+/// otherwise invisible to every watcher here: the harness reports its Continue phase derailing on a
+/// budget, the product log reports a message box being built like any other, and nothing connects
+/// the two. Measured 2026-09-11 18:41 on `er-quit-rows`: the title reported its menu opening at
+/// `+18277ms`, and at `+18961ms` the log carried `msgbox-builder #0 ... in_world=false`, after
+/// which `GameMan+0xc30` never left the title default for the rest of the run.
+///
+/// The caller rva beside this count is the discriminator, not the count itself. A terms-of-service,
+/// connection error or patch notice is also built before any world exists, and they are told apart
+/// by which game function built them.
+pub static TITLE_LOAD_BLOCKED_BY_MODAL_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Game-image RVA of the immediate caller that built the box counted above, or 0.
+///
+/// Recorded because "a modal blocked the load" is the symptom and the caller is the lead: the
+/// 2026-09-11 box came back through `game+0x7b1347` / `game+0x7ae13c`, which is a different family
+/// from the network-check path that produces the offline modal, and a future occurrence with a
+/// different caller is a different defect wearing the same words.
+pub static TITLE_LOAD_BLOCKED_MODAL_CALLER_RVA: AtomicUsize = AtomicUsize::new(0);

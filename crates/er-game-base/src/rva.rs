@@ -728,3 +728,20 @@ pub const PURECALL_CRASH_HANDLER_RVA: usize = 0xc90080;
 /// tail-jumps through the allocator vtable. Every native object this repo constructs on the game's
 /// heap -- the `CS::SoftwareKeyboard` job among them -- is allocated through it.
 pub const GAME_HEAP_ALLOC_RVA: usize = 0x1eb9ed0;
+
+/// `FD4StateMachine::is_in_state(sm, state_descriptor) -> bool`, a read-only predicate with no
+/// side effects, which is what makes it safe to call from a per-frame task.
+///
+/// Owned here because two shells need it and a literal in each is how two shells come to disagree:
+/// `scripts/check-rva-alias-drift.py` counts a second declaration of the same address as drift, and
+/// it is right to. `er-title-flow` reaches it through `TitleDialogRva::IsInState`, and
+/// `er-input-harness` has no `er-title-flow` dependency, so the shared floor both already depend on
+/// is this crate.
+pub const TITLE_TOP_DIALOG_IS_IN_STATE_RVA: usize = 0x749b20;
+
+/// The `Loop` state descriptor: the title dialog has finished fading in and is sitting still.
+///
+/// Anything else -- `FadeIn`, `TextFadeOut`, the transient states a return-to-title teardown passes
+/// through -- is a dialog that is not ready to be pressed. Owned here for the same reason as the
+/// predicate above.
+pub const TITLE_STATE_DESC_LOOP_RVA: usize = 0x2a8f9e8;

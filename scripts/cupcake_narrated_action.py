@@ -153,6 +153,23 @@ LEAD = r"(?:(?:and|so|then|now|next|first|also|meanwhile|separately|quickly)\s*,
 
 HEAD_RE = re.compile(r"^" + LEAD + r"(" + VERB_ALTERNATION + r")\b", re.IGNORECASE)
 
+# Adverbs that can sit between the subject and the participle without changing the announcement.
+PROGRESSIVE_ADVERB = r"(?:now\s+|just\s+|also\s+|currently\s+|already\s+|still\s+)?"
+
+
+def progressive(prefix: str) -> str:
+    """The first-person progressive, behind whatever has to come in front of it.
+
+    One definition, two positions. The arms below differ only in what they require to the left of
+    the subject, and writing the progressive twice is how the two would drift into disagreeing
+    about which verbs count.
+    """
+    return (
+        prefix + r"i(?:'|’)?m\s+" + PROGRESSIVE_ADVERB + r"(" + VERB_ALTERNATION + r")\b"
+        r"|" + prefix + r"i\s+am\s+" + PROGRESSIVE_ADVERB + r"(" + VERB_ALTERNATION + r")\b"
+    )
+
+
 # The first-person progressive, the same announcement with a subject attached.
 #
 # Anchored at the start of the sentence, which is not cosmetic: an unanchored search read two
@@ -160,13 +177,40 @@ HEAD_RE = re.compile(r"^" + LEAD + r"(" + VERB_ALTERNATION + r")\b", re.IGNORECA
 # (2800 and 1336 ...), er-npc-possess compiles again, and I'm restarting the full 26-shell relink"
 # and a two-clause summary ending "and the next measurement I'm reading is ...". A trailing clause
 # inside a report is a report; the shape the directive names heads its own sentence.
-FIRST_PERSON_RE = re.compile(
-    r"^" + LEAD + r"i(?:'|’)?m\s+(?:now\s+|just\s+|also\s+|currently\s+|already\s+|still\s+)?"
-    r"(" + VERB_ALTERNATION + r")\b"
-    r"|^" + LEAD + r"i\s+am\s+(?:now\s+|just\s+|also\s+|currently\s+|already\s+|still\s+)?"
-    r"(" + VERB_ALTERNATION + r")\b",
-    re.IGNORECASE,
-)
+FIRST_PERSON_RE = re.compile(progressive(r"^" + LEAD), re.IGNORECASE)
+
+# The same progressive hung off the end of a longer sentence, which is how the 2026-09-11 instance
+# was spelled, verbatim:
+#
+#     No - feature-gate `er-quickload` instead of forking it, and I'm starting on that now.
+#
+# The user's words: "There's a rego policy that should have caught you saying 'and I'm starting on
+# that now' and introduced a stophook." Measured rather than argued -- a fixture of that turn was
+# replayed through all 17 `last_assistant_*.sh` signals in this repo and every one of them was
+# silent, so the announcement was the last sentence of a turn that then stopped, and nothing saw it.
+# The sentence answers a question first and rides the announcement in after a comma, so the anchor
+# above cannot reach it.
+#
+# Dropping the anchor is not the fix: it is there because an unanchored search convicted the two
+# reports quoted above. The trailing clause is accepted only under conditions that neither of those
+# two meets, all three required:
+#   * a clause boundary in front of the subject -- a comma, a semicolon, a colon or a spaced dash,
+#     optionally with a coordinator after it. "the next measurement I'm reading is ..." has no
+#     boundary at all and is never seen;
+#   * the sentence closes on one of the two announcing shapes the participial arm already requires,
+#     an end-anchored "now" or a colon. "..., and I'm restarting the full 26-shell relink" ends on
+#     neither;
+#   * nothing but the announcement to the right of it. A comma after the verb means another clause
+#     follows, and the "now" that closes the sentence belongs to that one rather than to this --
+#     "..., and I'm reading the decompile, but the answer is in the log now" is a report whose last
+#     word this rule would otherwise borrow.
+TRAILING_SEPARATOR = r"(?:[,;:]|\s[\u2013\u2014-]+)\s*"
+
+TRAILING_FIRST_PERSON_RE = re.compile(progressive(TRAILING_SEPARATOR + LEAD), re.IGNORECASE)
+
+# A second clause to the right of the announcement, which takes the closing "now" with it. A bare
+# comma is enough to spot one: the announcement this rule convicts runs to the end of its sentence.
+CLAUSE_CONTINUES = ","
 
 # A colon closing the sentence is the announce-then-do shape: the tool call was meant to follow it,
 # and at turn-end nothing did. Three of the five verbatim instances end this way, and the user's
@@ -234,6 +278,15 @@ def narrated_action(closing_text: str) -> tuple[str, str, str] | None:
     if first:
         verb = (first.group(1) or first.group(2)).lower()
         return quote(tail[-1]), ACTION_CLASS[verb], "firstperson"
+
+    trailing = TRAILING_FIRST_PERSON_RE.search(sentence)
+    if (
+        trailing
+        and accepting_shape(sentence) in ("colon", "now")
+        and CLAUSE_CONTINUES not in sentence[trailing.end():]
+    ):
+        verb = (trailing.group(1) or trailing.group(2)).lower()
+        return quote(tail[-1]), ACTION_CLASS[verb], "trailing"
     return None
 
 

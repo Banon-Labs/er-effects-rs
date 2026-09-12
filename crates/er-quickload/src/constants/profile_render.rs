@@ -45,8 +45,6 @@ pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_SELECT_WINDOW;
 /// while that var is still 0 -- the confirm then escapes msgbox suppression and crashes the game (2026-07-15).
 /// This flag spans the whole flow so `switch_active` in the msgbox builder hook covers that gap.
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE;
-pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_HIDE_REAL_WINDOWS_COUNT;
-pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_RESTORE_REAL_WINDOWS_COUNT;
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_SKIP_RESTORE_AFTER_QUICKLOAD_COUNT;
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_REAL_WINDOWS_HIDDEN;
 pub(crate) static SYSTEM_QUIT_WINDOW_LIST_PUSH_ORIG: AtomicUsize =
@@ -76,31 +74,8 @@ pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA: u32 = 0x826d50;
 /// `system-quit-profileselect-native-close-B-path` / `menu-job-queue-pump-dequeue-mechanism`.
 pub(crate) const SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA: u32 =
     er_game_base::rva::MENU_WINDOW_CLOSE_WITH_FAILED_RVA as u32;
-/// Native ProfileLoadDialog in-place list rebuild `FUN_1409a5020` (dump `0x1409a5020` -> live/deobf
-/// `0x9a4ed0`, content-unique via dump-deobf-shift). `fn(rcx = dialog)`. The game's own
-/// records-changed refresh, used by the delete-save flow: re-runs the item-list builder
-/// `FUN_140875680` (fresh `GetProfileSummary()` re-read of the live records), copies the new list
-/// into `dialog+0x1260`, and rebinds via `FUN_1409a2e40` -- which rewrites the row count at
-/// `+0xb08`, re-selects a valid cursor, and unconditionally re-decorates every visible row. This
-/// is the sanctioned way to change row text while the 05_010 window stays open (the decorate pass
-/// reads per-row snapshots, so bare record writes are invisible without this rebuild). RE 2026-07-07,
-/// adversarially verified (see bd save-picker RE notes).
-pub(crate) const PROFILE_LOAD_DIALOG_LIST_REBUILD_RVA: u32 = 0x9a4ed0;
-/// Native ProfileSelect item-list builder `FUN_140875590` (1.16.2 dump VA == deobf/live VA, shift 0;
-/// entry bytes `48 8b c4 56 57 41 56 48 81 ec d0 0b 00 00` byte-verified in `eldenring-deobf.bin`).
-/// `fn(rcx = out BasicViewItemList<MenuSaveDataSummary,10>*) -> out`. Builds the visible 10-row list
-/// straight from the live ProfileSummary: occupancy via `FUN_140261cd0` (`saveSlotsStates[slot]`,
-/// summary+0x8+slot) and record pointer via `FUN_140261b80` (summary+0x18+slot*0x2a0). Every point
-/// where records become visible rows funnels through this one function: the ProfileLoadDialog
-/// ctor/bind paths and the delete-flow in-place rebuild (`PROFILE_LOAD_DIALOG_LIST_REBUILD_RVA`)
-/// all call it, so the save-picker re-stage hook at its entry covers every build site.
-pub(crate) const PROFILE_SELECT_LIST_BUILDER_RVA: u32 = 0x875590;
-pub(crate) static SAVE_PICKER_LIST_BUILDER_ORIG: AtomicUsize =
-    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry_core::counters::SAVE_PICKER_LIST_BUILDER_INSTALLED;
 /// Times the list-builder hook re-staged the browse rows before a native list build (oracle; each
 /// re-stage repairs any game-save record stomp that landed since the previous staging).
-pub(crate) use er_telemetry_core::counters::SAVE_PICKER_LIST_BUILDER_RESTAGE_COUNT;
 /// One-shot latch: set when we have invoked the native ProfileSelect close during a return-title
 /// transition, so the per-tick handler closes it exactly once. Reset with the ProfileSelect state.
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_FIRED;

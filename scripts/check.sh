@@ -731,6 +731,13 @@ python3 "$repo_root/scripts/test-narrated-action-classifier.py"
 # also re-reads the friction stall's own admission patterns out of that signal and fails if a
 # sentence would ever be charged by both rules.
 python3 "$repo_root/scripts/test-admission-with-defence-classifier.py"
+# The other half of the fix-claim guard. Its Rego suite pins what the policy does with a facts line;
+# this pins where the line comes from, which is the half that decides whether the guard convicts an
+# ordinary sentence. The negatives carry the weight: a branch called fix/..., a fixture, the gerund
+# the promissory closer owns, a quoted or backticked word, and a gate fixed by a lint all have to
+# pass. It also asserts the manifest walk still separates the crates that reach a DLL from the two
+# host-only ones -- an empty walk would make every turn innocent and the guard silently inert.
+python3 "$repo_root/scripts/test-fix-claim-classifier.py"
 # The SessionStart/PreCompact prime hook must stay small enough that the harness INLINES it.
 # At 2452 memories it emitted 157.4 KB, which Claude Code persisted to a file and replaced
 # with a 2 KB preview -- so the priming content never reached the agent while still costing
@@ -950,6 +957,10 @@ python3 "$repo_root/scripts/check-no-thread-suspension.py"
 # selftest is part of the suite: the cupcake policy written for this first passed 17 OPA tests
 # and was inert in production, which is why the enforcement is bash the hook calls directly.
 bash "$repo_root/scripts/check-runtime-evidence.sh" --selftest
+# The scan both that hook and the two cupcake signals read: which directories hold a run's logs,
+# and when a `+dirty` build line is still evidence. Its own selftest, because the decision it
+# makes is the one a false accept turns into a DLL pushed unrun.
+python3 "$repo_root/scripts/er-runtime-evidence.py" --selftest
 # A detour's expected prologue must be generated from named iced-x86 instructions in a build.rs,
 # never hand-typed: `mov rax, rsp` has two legal encodings, the game ships 48 8b c4, an assembler
 # left to choose emits 48 89 e0, and a prologue that is one byte off byte-checks its own hook off
@@ -1979,6 +1990,21 @@ cargo check --manifest-path "$repo_root/Cargo.toml" -p er-shader-viewer
 # `-p er-title-flow --lib` additionally runs boot_hold's predicates -- the crate's only
 # host-portable logic, and untestable at all until the gates landed.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-quickload -p er-title-flow --lib
+
+# The two shells whose host-portable logic sits deliberately outside their `#[cfg(windows)]` tree,
+# so it can be decided without the game. Neither was named anywhere until 2026-09-11, and
+# `default-members = ["crates/er-quickload"]` means a bare `cargo test` never selects them:
+# 27 test functions that had never executed.
+#
+#   er-quit-rows      19 lib tests -- the menu-window install decision, the `05_010_ProfileSelect`
+#                     chrome gate, and which title window a switch may ask to close -- plus 2
+#                     integration tests in `tests/no_message_box_is_answered.rs`. Deliberately not
+#                     `--lib`: that file is the assertion that this shell never answers a
+#                     `CS::MessageBoxDialog` on the player's behalf, and `--lib` compiles none of
+#                     it. Its 45 windows-only tests are the copied product tree and run under the
+#                     `cargo xwin test --lib` line in check-rust-build.sh.
+#   er-input-harness  6 lib tests over the title-scan predicates the boot drive waits on.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-quit-rows -p er-input-harness
 
 # Rust format + Windows-target build of the injectable DLL (cross-compiled from Linux via
 # cargo-xwin). A real build (not just `cargo check`) so codegen/link regressions -- including

@@ -12,8 +12,9 @@ It imports `scripts/cupcake_narrated_action.py`, the single definition that
 classifier production does not run.
 
 Five things are pinned:
-  * narrated_action    -- the five verbatim closers convict, and a gerund that is the subject of an
-                          ordinary sentence never does;
+  * narrated_action    -- the six verbatim closers convict -- the five participial ones from
+                          2026-09-10 and the trailing first-person one from 2026-09-11 -- and a
+                          gerund that is the subject of an ordinary sentence never does;
   * reported_outcome   -- a measured outcome beside the narration exempts;
   * launch_banner      -- the banner `AGENTS.md` mandates, in both spellings this repo writes it in;
   * externally_blocked -- a dependency the agent cannot dissolve;
@@ -55,6 +56,10 @@ DISPATCH = (
     "by narrowing the guard to the case where the engine has no session to protect:"
 )
 
+# The sixth, one session later, 2026-09-11. The user: "There's a rego policy that should have
+# caught you saying 'and I'm starting on that now' and introduced a stophook."
+TRAILING = "No — feature-gate `er-quickload` instead of forking it, and I'm starting on that now."
+
 NARRATION_CASES = [
     ("the rerun closer", RERUN, True),
     ("the rebuild closer", REBUILD, True),
@@ -64,6 +69,12 @@ NARRATION_CASES = [
     ("a bare fragment", "Measuring it now.", True),
     ("a two-word dispatch", "Dispatching on it.", True),
     ("a first-person progressive", "I'm instrumenting the child teardown next.", True),
+    ("the trailing first-person progressive, verbatim", TRAILING, True),
+    (
+        "the same trailing clause closing on a colon",
+        "The union is the wrong seam — dispatching a subagent, and I'm reading the builder rows:",
+        True,
+    ),
     ("a lead adverb in front of the participle", "Now checking the three call sites:", True),
     (
         "a semicolon clause is its own sentence",
@@ -94,6 +105,30 @@ NARRATION_CASES = [
         False,
     ),
     ("a code-change gerund belongs to the promissory closer", "Wiring the detour entry now.", False),
+    # The two reports that made `FIRST_PERSON_RE` anchored in the first place, measured over 763
+    # real turns. The trailing arm must not bring either of them back: neither closes on "now" and
+    # neither closes on a colon.
+    (
+        "a report ending on a trailing clause with no announcing shape",
+        "Both are now repinned to measured values (2800 and 1336, read out of type errors rather "
+        "than guessed), er-npc-possess compiles again, and I'm restarting the full 26-shell relink",
+        False,
+    ),
+    (
+        "a trailing progressive with no clause boundary in front of it",
+        "The gate is green on both images, and the next measurement I'm reading is the shift.",
+        False,
+    ),
+    (
+        "a second clause owns the closing now",
+        "I checked the offsets, and I'm reading the decompile, but the answer is in the log now.",
+        False,
+    ),
+    (
+        "a past-tense report that happens to end on now",
+        "I rebuilt the DLL and relaunched it, and the ledger has 26 rows now.",
+        False,
+    ),
     ("a plain report", "The ledger picked up 26 rows and the newest entry is br-20260910.", False),
     ("an empty closing", "", False),
     (
@@ -111,6 +146,7 @@ REPORTED_CASES = [
     ("an address", "Bringing it up at 0x14074a970 now.", True),
     ("the five verbatim closers carry nothing measured", RERUN, False),
     ("nor does the dispatch closer", DISPATCH, False),
+    ("nor does the trailing closer", TRAILING, False),
     ("a single digit is a count of work, not a result", "Checking the 3 call sites now.", False),
 ]
 
@@ -143,6 +179,7 @@ BLOCKED_CASES = [
     ("a live game", "Reading the chain needs the game running.", True),
     ("an ordinary narration names no blocker", DISPATCH, False),
     ("nor does the rerun closer", RERUN, False),
+    ("nor does the trailing closer", TRAILING, False),
 ]
 
 

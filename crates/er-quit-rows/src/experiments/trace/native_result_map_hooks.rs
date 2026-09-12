@@ -1,0 +1,826 @@
+use std::{ffi::c_void, sync::atomic::Ordering};
+
+use er_game_base::mem::{game_module_base, safe_read_usize};
+
+use crate::{
+    constants::{
+        CAP_MENU_INSERT_LOG_FIRST, COMBINED_LOAD_ORIG, CONTINUE_LOAD_ORIG, CURRENT_SLOT_LOAD_ORIG,
+        HOOK_FALSE_RETURN, HOOK_ORIGINAL_UNSET, MAP_LOAD_ORIG, MEMBERFUNCJOB_VTABLE_RVA,
+        MENU_CONTINUE_MEMBER_NODE, MENU_CONTINUE_TASK_NODE, NATIVE_SUBMIT_HITS,
+        NATIVE_SUBMIT_LAST_RESULT, NATIVE_SUBMIT_ORIG, NO_SAFE_INPUT_CONFIRM_FRAMES,
+        OWN_STEPPER_CALL_INC, PE_DOS_LFANEW_OFFSET, PE_FILE_NUM_SECTIONS_OFFSET,
+        PE_FILE_SIZE_OPT_HEADER_OFFSET, PE_OPT_HEADER_OFFSET, PE_SECTION_HEADER_SIZE,
+        PE_SECTION_SCAN_START, PE_SECTION_VADDR_OFFSET, PE_SECTION_VSIZE_OFFSET,
+        PE_TEXT_SECTION_NAME, PE_U16_MASK, PE_U32_MASK, REQUEST_SAVE_ORIG,
+        RESULT_ACTION_BUILDER_HITS, RESULT_ACTION_BUILDER_ORIG, RESULT_ACTION_INSERT_HITS,
+        RESULT_ACTION_LAST_EVENT, RESULT_ACTION_LAST_INSERT_ARG0, RESULT_ACTION_LAST_INSERT_ARG1,
+        RESULT_ACTION_LAST_INSERT_ARG1_UPDATE_RVA, RESULT_ACTION_LAST_INSERT_RET,
+        RESULT_ACTION_LAST_INSERT_RET_UPDATE_RVA, RESULT_ACTION_LAST_RESULT,
+        RESULT_ACTION_LAST_WORD0, RESULT_ACTION_LAST_WORD1, RESULT_ACTION_LAST_WRAPPER_BUILDER_R8,
+        RESULT_ACTION_LAST_WRAPPER_BUILDER_RCX, RESULT_ACTION_LAST_WRAPPER_BUILDER_RDX,
+        RESULT_ACTION_LAST_WRAPPER_BUILDER_RET, RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA,
+        RESULT_ACTION_WRAPPER_BUILDER_HITS, RESULT_EVENT_HANDLER_HITS, RESULT_EVENT_HANDLER_ORIG,
+        RESULT_EVENT_LAST_EVENT, RESULT_EVENT_LAST_FD4_ARG, RESULT_EVENT_LAST_FD4_CODE,
+        RESULT_EVENT_LAST_RAW_QWORD0, RESULT_EVENT_LAST_RESULT, RESULT_EVENT_WRAPPER_BUILDER_ORIG,
+        SAFE_INPUT_CONFIRM_FRAMES_REMAINING, SAFE_INPUT_CONFIRM_PULSE_SEQ,
+        SAVE_LOAD_STATE_INIT_ORIG, SAVE_REQUEST_PROFILE_ORIG, SET_SAVE_SLOT_ORIG,
+        TASK_ENQUEUE_ORIG, TASK_ENQUEUE_TRACE_COUNT, TASK_ENQUEUE_TRACE_INCREMENT,
+        TASK_ENQUEUE_TRACE_LIMIT, TITLE_HANDOFF_COMPLETE, TITLE_HANDOFF_COMPLETE_VALUE,
+        TITLE_OWNER_SCAN_START_ADDRESS, TRACE_MENU_CONTINUE_WRAPPER_RVA, TRACE_TASK_ENQUEUE_RVA,
+        menu_continue_idle_insert_call_site, menu_continue_idle_insert_caller_band,
+        result_action_builder_trace_band,
+    },
+    crashlog::{
+        callstack_contains_game_rva, object_vtable_summary, trace_callers_summary,
+        trace_first_game_caller_rva,
+    },
+    experiments::{
+        menu_diag::decode_thunk_hop,
+        product_core_own_stepper::{
+            MENU_CONTINUE_IDLE_INSERT_HITS, MENU_CONTINUE_IDLE_INSERT_LAST_ARG0,
+            MENU_CONTINUE_IDLE_INSERT_LAST_ARG1, MENU_CONTINUE_IDLE_INSERT_LAST_ARG1_UPDATE_RVA,
+            MENU_CONTINUE_IDLE_INSERT_LAST_CALLER_RVA, MENU_CONTINUE_IDLE_INSERT_LAST_RET,
+            MENU_CONTINUE_IDLE_INSERT_LAST_RET_UPDATE_RVA,
+            MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_ITEM,
+            MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_OUT_SLOT, TASK_ENQUEUE_GENERIC_HITS,
+            TASK_ENQUEUE_GENERIC_IDLE_ITEM_LAST_MATCH_KIND,
+            TASK_ENQUEUE_GENERIC_IDLE_ITEM_MATCH_HITS, TASK_ENQUEUE_GENERIC_LAST_ARG0,
+            TASK_ENQUEUE_GENERIC_LAST_ARG0_POINTEE, TASK_ENQUEUE_GENERIC_LAST_ARG1,
+            TASK_ENQUEUE_GENERIC_LAST_CALLER_RVA, TASK_ENQUEUE_GENERIC_LAST_RET,
+            TASK_ENQUEUE_GENERIC_SAMPLE0_ARG0, TASK_ENQUEUE_GENERIC_SAMPLE0_ARG0_POINTEE,
+            TASK_ENQUEUE_GENERIC_SAMPLE0_ARG1, TASK_ENQUEUE_GENERIC_SAMPLE0_CALLER_RVA,
+            TASK_ENQUEUE_GENERIC_SAMPLE0_RET, TASK_ENQUEUE_GENERIC_SAMPLE1_ARG0,
+            TASK_ENQUEUE_GENERIC_SAMPLE1_ARG0_POINTEE, TASK_ENQUEUE_GENERIC_SAMPLE1_ARG1,
+            TASK_ENQUEUE_GENERIC_SAMPLE1_CALLER_RVA, TASK_ENQUEUE_GENERIC_SAMPLE1_RET,
+        },
+    },
+    telemetry::{append_autoload_debug, append_continue_trace},
+};
+
+use crate::experiments::trace::{
+    menu_constructor_capture::log_menu_insert_details,
+    menu_trace_hooks::{call_union_original, game_man_trace_summary},
+};
+
+fn format_optional_usize_hex(value: usize) -> String {
+    if value == TITLE_OWNER_SCAN_START_ADDRESS {
+        "null".to_owned()
+    } else {
+        format!("0x{value:x}")
+    }
+}
+
+unsafe fn result_built_flag(result: usize) -> usize {
+    const RESULT_BUILT_3B0_OFFSET: usize = 0x3b0;
+    const U8_MASK: usize = 0xff;
+    if result == TITLE_OWNER_SCAN_START_ADDRESS {
+        TITLE_OWNER_SCAN_START_ADDRESS
+    } else {
+        unsafe { safe_read_usize(result + RESULT_BUILT_3B0_OFFSET) }
+            .map_or(TITLE_OWNER_SCAN_START_ADDRESS, |value| value & U8_MASK)
+    }
+}
+
+unsafe fn native_result_event_words(event: usize) -> (usize, usize) {
+    const EVENT_WORD0_OFFSET: usize = 0;
+    const EVENT_WORD1_OFFSET: usize = core::mem::size_of::<usize>();
+    if event == TITLE_OWNER_SCAN_START_ADDRESS {
+        return (
+            TITLE_OWNER_SCAN_START_ADDRESS,
+            TITLE_OWNER_SCAN_START_ADDRESS,
+        );
+    }
+    let word0 = unsafe { safe_read_usize(event + EVENT_WORD0_OFFSET) }
+        .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    let word1 = unsafe { safe_read_usize(event + EVENT_WORD1_OFFSET) }
+        .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    (word0, word1)
+}
+
+fn fd4_event_code_arg(raw_qword0: usize) -> (usize, usize) {
+    const U32_MASK: usize = 0xffff_ffff;
+    if raw_qword0 == TITLE_OWNER_SCAN_START_ADDRESS {
+        return (
+            TITLE_OWNER_SCAN_START_ADDRESS,
+            TITLE_OWNER_SCAN_START_ADDRESS,
+        );
+    }
+    (raw_qword0 & U32_MASK, (raw_qword0 >> 32) & U32_MASK)
+}
+
+pub(crate) unsafe extern "system" fn native_submit_hook(
+    result: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    const TRACE_FIRST: usize = 16;
+    let seq =
+        NATIVE_SUBMIT_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) + OWN_STEPPER_CALL_INC;
+    NATIVE_SUBMIT_LAST_RESULT.store(result, Ordering::SeqCst);
+    if seq <= TRACE_FIRST {
+        append_continue_trace(format_args!(
+            "native_submit_7ac890 seq={seq} phase=ENTER result=0x{result:x} built={} {}",
+            format_optional_usize_hex(unsafe { result_built_flag(result) }),
+            trace_callers_summary()
+        ));
+    }
+    let ret = unsafe { call_union_original(&NATIVE_SUBMIT_ORIG, result, b, c, d) };
+    if seq <= TRACE_FIRST {
+        append_continue_trace(format_args!(
+            "native_submit_7ac890 seq={seq} phase=LEAVE result=0x{result:x} built={} {}",
+            format_optional_usize_hex(unsafe { result_built_flag(result) }),
+            game_man_trace_summary()
+        ));
+    }
+    ret
+}
+
+pub(crate) unsafe extern "system" fn result_event_handler_hook(
+    result: usize,
+    event: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    const TRACE_FIRST: usize = 16;
+    let seq = RESULT_EVENT_HANDLER_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        + OWN_STEPPER_CALL_INC;
+    RESULT_EVENT_LAST_RESULT.store(result, Ordering::SeqCst);
+    RESULT_EVENT_LAST_EVENT.store(event, Ordering::SeqCst);
+    let (event_raw_qword0, _) = unsafe { native_result_event_words(event) };
+    let (fd4_code, fd4_arg) = fd4_event_code_arg(event_raw_qword0);
+    RESULT_EVENT_LAST_RAW_QWORD0.store(event_raw_qword0, Ordering::SeqCst);
+    RESULT_EVENT_LAST_FD4_CODE.store(fd4_code, Ordering::SeqCst);
+    RESULT_EVENT_LAST_FD4_ARG.store(fd4_arg, Ordering::SeqCst);
+    let built_before = unsafe { result_built_flag(result) };
+    if seq <= TRACE_FIRST {
+        append_continue_trace(format_args!(
+            "result_event_handler_746e80 seq={seq} phase=ENTER result=0x{result:x} event=0x{event:x} event_raw_qword0={} fd4_code={} fd4_arg={} built_before={} {}",
+            format_optional_usize_hex(event_raw_qword0),
+            format_optional_usize_hex(fd4_code),
+            format_optional_usize_hex(fd4_arg),
+            format_optional_usize_hex(built_before),
+            trace_callers_summary()
+        ));
+    }
+    let ret = unsafe { call_union_original(&RESULT_EVENT_HANDLER_ORIG, result, event, c, d) };
+    let built_after = unsafe { result_built_flag(result) };
+    if seq <= TRACE_FIRST {
+        append_continue_trace(format_args!(
+            "result_event_handler_746e80 seq={seq} phase=LEAVE result=0x{result:x} event=0x{event:x} built_after={} {}",
+            format_optional_usize_hex(built_after),
+            game_man_trace_summary()
+        ));
+    }
+    ret
+}
+
+pub(crate) unsafe extern "system" fn result_event_wrapper_builder_hook(
+    rcx: usize,
+    rdx: usize,
+    r8: usize,
+    r9: usize,
+) -> usize {
+    const TRACE_FIRST: usize = 16;
+    // Resolved for the running build: raw, this compared a live frame against a 1.16.2 RVA and
+    // simply never matched off 1.16.2, so the trace went quiet without ever saying why.
+    let from_result_action_builder = result_action_builder_trace_band()
+        .is_some_and(|band| callstack_contains_game_rva(band.start, band.end));
+    let mut result =
+        unsafe { call_union_original(&RESULT_EVENT_WRAPPER_BUILDER_ORIG, rcx, rdx, r8, r9) };
+    if RESULT_EVENT_WRAPPER_BUILDER_ORIG.load(Ordering::SeqCst) == HOOK_ORIGINAL_UNSET {
+        result = rcx;
+    }
+    if from_result_action_builder {
+        let seq = RESULT_ACTION_WRAPPER_BUILDER_HITS
+            .fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+            + OWN_STEPPER_CALL_INC;
+        let base = game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+        let ret_update_rva = if base == TITLE_OWNER_SCAN_START_ADDRESS {
+            TITLE_OWNER_SCAN_START_ADDRESS
+        } else {
+            unsafe { task_node_update_rva(base, result) }
+        };
+        RESULT_ACTION_LAST_WRAPPER_BUILDER_RCX.store(rcx, Ordering::SeqCst);
+        RESULT_ACTION_LAST_WRAPPER_BUILDER_RDX.store(rdx, Ordering::SeqCst);
+        RESULT_ACTION_LAST_WRAPPER_BUILDER_R8.store(r8, Ordering::SeqCst);
+        RESULT_ACTION_LAST_WRAPPER_BUILDER_RET.store(result, Ordering::SeqCst);
+        RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA.store(ret_update_rva, Ordering::SeqCst);
+        if seq <= TRACE_FIRST {
+            append_continue_trace(format_args!(
+                "result_event_wrapper_builder_744a60 seq={seq} rcx=0x{rcx:x} rdx=0x{rdx:x} r8=0x{r8:x} ret=0x{result:x} ret_update_rva={} -- passive wrapper-builder call from result action builder",
+                format_optional_usize_hex(ret_update_rva)
+            ));
+        }
+    }
+    result
+}
+
+pub(crate) unsafe extern "system" fn result_action_builder_hook(
+    result: usize,
+    event: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    const TRACE_FIRST: usize = 16;
+    let seq = RESULT_ACTION_BUILDER_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        + OWN_STEPPER_CALL_INC;
+    RESULT_ACTION_LAST_RESULT.store(result, Ordering::SeqCst);
+    RESULT_ACTION_LAST_EVENT.store(event, Ordering::SeqCst);
+    let (event_word0, event_word1) = unsafe { native_result_event_words(event) };
+    RESULT_ACTION_LAST_WORD0.store(event_word0, Ordering::SeqCst);
+    RESULT_ACTION_LAST_WORD1.store(event_word1, Ordering::SeqCst);
+    if seq <= TRACE_FIRST {
+        append_continue_trace(format_args!(
+            "result_action_builder_746a00 seq={seq} phase=ENTER result=0x{result:x} event=0x{event:x} event_word0={} event_word1={} built={} {}",
+            format_optional_usize_hex(event_word0),
+            format_optional_usize_hex(event_word1),
+            format_optional_usize_hex(unsafe { result_built_flag(result) }),
+            trace_callers_summary()
+        ));
+    }
+    let ret = unsafe { call_union_original(&RESULT_ACTION_BUILDER_ORIG, result, event, c, d) };
+    if seq <= TRACE_FIRST {
+        append_continue_trace(format_args!(
+            "result_action_builder_746a00 seq={seq} phase=LEAVE result=0x{result:x} event=0x{event:x} built={} {}",
+            format_optional_usize_hex(unsafe { result_built_flag(result) }),
+            game_man_trace_summary()
+        ));
+    }
+    ret
+}
+
+unsafe fn text_section_bounds(base: usize) -> Option<(usize, usize)> {
+    let e_lfanew = unsafe { safe_read_usize(base + PE_DOS_LFANEW_OFFSET) }? & PE_U32_MASK;
+    let nt = base + e_lfanew;
+    let num_sections = unsafe { safe_read_usize(nt + PE_FILE_NUM_SECTIONS_OFFSET) }? & PE_U16_MASK;
+    let size_opt = unsafe { safe_read_usize(nt + PE_FILE_SIZE_OPT_HEADER_OFFSET) }? & PE_U16_MASK;
+    let sections = nt + PE_OPT_HEADER_OFFSET + size_opt;
+    let mut index = PE_SECTION_SCAN_START;
+    while index < num_sections {
+        let header = sections + index * PE_SECTION_HEADER_SIZE;
+        let name = unsafe { safe_read_usize(header) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+        if name.to_le_bytes().starts_with(PE_TEXT_SECTION_NAME) {
+            let vsize = unsafe { safe_read_usize(header + PE_SECTION_VSIZE_OFFSET) }? & PE_U32_MASK;
+            let vaddr = unsafe { safe_read_usize(header + PE_SECTION_VADDR_OFFSET) }? & PE_U32_MASK;
+            return Some((base + vaddr, vsize));
+        }
+        index += OWN_STEPPER_CALL_INC;
+    }
+    None
+}
+
+unsafe fn update_target_in_text(base: usize, update: usize) -> bool {
+    if update < base {
+        return false;
+    }
+    let Some((text_start, text_len)) = (unsafe { text_section_bounds(base) }) else {
+        return false;
+    };
+    update >= text_start && update < text_start.saturating_add(text_len)
+}
+
+unsafe fn raw_task_node_update_rva(base: usize, node: usize) -> usize {
+    const TASK_NODE_UPDATE_VTABLE_SLOT: usize = 0x10;
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let Some(vtable) = (unsafe { safe_read_usize(node) }) else {
+        return null;
+    };
+    let Some(update) = (unsafe { safe_read_usize(vtable + TASK_NODE_UPDATE_VTABLE_SLOT) }) else {
+        return null;
+    };
+    if unsafe { update_target_in_text(base, update) } {
+        update - base
+    } else {
+        null
+    }
+}
+
+pub(crate) unsafe fn task_node_update_rva(base: usize, node: usize) -> usize {
+    let direct = unsafe { raw_task_node_update_rva(base, node) };
+    if direct != TITLE_OWNER_SCAN_START_ADDRESS {
+        return direct;
+    }
+    let Some(shared_pointee) = (unsafe { safe_read_usize(node) }) else {
+        return TITLE_OWNER_SCAN_START_ADDRESS;
+    };
+    unsafe { raw_task_node_update_rva(base, shared_pointee) }
+}
+
+unsafe fn qword_window_summary(ptr: usize) -> String {
+    const QWORDS: usize = 6;
+    const START: usize = 0;
+    const STEP: usize = 1;
+    const STRIDE: usize = core::mem::size_of::<usize>();
+    let mut out = String::new();
+    let mut i = START;
+    while i < QWORDS {
+        let off = i * STRIDE;
+        let value = unsafe { safe_read_usize(ptr + off) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+        let _ = core::fmt::write(&mut out, format_args!(" +0x{off:x}=0x{value:x}"));
+        i += STEP;
+    }
+    out
+}
+
+pub(super) unsafe fn menu_item_action_summary(ptr: usize) -> String {
+    const OFFSETS: [usize; 14] = [
+        0x0, 0x8, 0x10, 0x40, 0x50, 0x68, 0xa8, 0xb0, 0xe8, 0xf0, 0xf8, 0x100, 0x130, 0x138,
+    ];
+    let mut out = String::new();
+    for off in OFFSETS {
+        let value = unsafe { safe_read_usize(ptr + off) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+        let _ = core::fmt::write(&mut out, format_args!(" +0x{off:x}=0x{value:x}"));
+        if value != TITLE_OWNER_SCAN_START_ADDRESS {
+            let _ = core::fmt::write(
+                &mut out,
+                format_args!(" ->{{{}}}", unsafe { qword_window_summary(value) }),
+            );
+        }
+    }
+    out
+}
+
+unsafe fn task_node_raw_summary(ptr: usize) -> String {
+    const QWORDS: usize = 8;
+    const START: usize = 0;
+    const STEP: usize = 1;
+    const STRIDE: usize = core::mem::size_of::<usize>();
+    let mut out = String::new();
+    let mut first = TITLE_OWNER_SCAN_START_ADDRESS;
+    let mut second = TITLE_OWNER_SCAN_START_ADDRESS;
+    let mut i = START;
+    while i < QWORDS {
+        let off = i * STRIDE;
+        let value = unsafe { safe_read_usize(ptr + off) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+        if i == START {
+            first = value;
+        } else if i == STEP {
+            second = value;
+        }
+        let _ = core::fmt::write(&mut out, format_args!(" +0x{off:x}=0x{value:x}"));
+        i += STEP;
+    }
+    if first != TITLE_OWNER_SCAN_START_ADDRESS {
+        let _ = core::fmt::write(
+            &mut out,
+            format_args!(" | *q0{{{}}}", unsafe { qword_window_summary(first) }),
+        );
+    }
+    if second != TITLE_OWNER_SCAN_START_ADDRESS {
+        let _ = core::fmt::write(
+            &mut out,
+            format_args!(" | *q8{{{}}}", unsafe { qword_window_summary(second) }),
+        );
+    }
+    out
+}
+
+unsafe fn capture_continue_task_node_candidate(base: usize, candidate: usize, label: &str) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if candidate == null {
+        return;
+    }
+    let update_rva = unsafe { task_node_update_rva(base, candidate) };
+    // `task_node_update_rva` returns a live RVA (`update - base`), so comparing it to the 1.16.2
+    // constant is the same stale-address defect as a raw `base + RVA` with the base cancelled off
+    // both sides -- and invisible to any scan for `base +`. The Continue task wrapper moved on
+    // 1.17 (0x82bac0 -> 0x82cab0), so no task node was ever captured. Compare addresses instead.
+    let want_wrapper = er_game_base::mem::game_data_addr(
+        base,
+        TRACE_MENU_CONTINUE_WRAPPER_RVA as usize,
+        "TRACE_MENU_CONTINUE_WRAPPER_RVA",
+    );
+    if update_rva == null || want_wrapper == null || base + update_rva != want_wrapper {
+        return;
+    }
+    if MENU_CONTINUE_TASK_NODE
+        .compare_exchange(null, candidate, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        append_continue_trace(format_args!(
+            "CAP continue_task_node {label}=0x{candidate:x} update_rva=0x{update_rva:x} -- captured native Continue menu task wrapper"
+        ));
+        append_autoload_debug(format_args!(
+            "product-core-autoload: captured native Continue task node from {label}=0x{candidate:x} update_rva=0x{update_rva:x}"
+        ));
+    }
+}
+
+unsafe fn capture_continue_member_node_candidate(base: usize, candidate: usize, label: &str) {
+    const MEMBER_DIALOG_10: usize = core::mem::size_of::<usize>() + core::mem::size_of::<usize>();
+    const MEMBER_FN_18: usize = 0x18;
+    const MEMBER_ADJ_20: usize = 0x20;
+    const JMP_HOPS: usize = 6;
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if candidate == null {
+        return;
+    }
+    let node_vt = unsafe { safe_read_usize(candidate) }.unwrap_or(null);
+    if node_vt
+        != er_game_base::mem::game_data_addr(
+            base,
+            MEMBERFUNCJOB_VTABLE_RVA,
+            "MEMBERFUNCJOB_VTABLE_RVA",
+        )
+    {
+        return;
+    }
+    let member_fn = unsafe { safe_read_usize(candidate + MEMBER_FN_18) }.unwrap_or(null);
+    if member_fn == null {
+        return;
+    }
+    // Same constant, same 1.17 move (0x82bac0 -> 0x82cab0): the raw form matched nothing, so the
+    // registered TitleTopDialog Continue `MenuMemberFuncJob` was never captured. Refuse rather
+    // than compare 0 -- `target` walks to 0 on an unreadable hop.
+    let continue_wrapper = er_game_base::mem::game_data_addr(
+        base,
+        TRACE_MENU_CONTINUE_WRAPPER_RVA as usize,
+        "TRACE_MENU_CONTINUE_WRAPPER_RVA",
+    );
+    if continue_wrapper == null {
+        return;
+    }
+    let mut target = member_fn;
+    let mut hop = 0;
+    while hop < JMP_HOPS && target != null {
+        if target == continue_wrapper {
+            let member_dialog =
+                unsafe { safe_read_usize(candidate + MEMBER_DIALOG_10) }.unwrap_or(null);
+            let member_adjust =
+                unsafe { safe_read_usize(candidate + MEMBER_ADJ_20) }.unwrap_or(null);
+            if MENU_CONTINUE_MEMBER_NODE
+                .compare_exchange(null, candidate, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                append_continue_trace(format_args!(
+                    "CAP continue_member_node {label}=0x{candidate:x} node_vt=0x{node_vt:x} member_dialog=0x{member_dialog:x} member_fn=0x{member_fn:x} member_adjust=0x{member_adjust:x} -- captured registered TitleTopDialog Continue MenuMemberFuncJob"
+                ));
+                append_autoload_debug(format_args!(
+                    "product-core-autoload: captured registered TitleTopDialog Continue MenuMemberFuncJob from {label}=0x{candidate:x} member_fn=0x{member_fn:x}"
+                ));
+            }
+            return;
+        }
+        match unsafe { decode_thunk_hop(target) } {
+            Some(next) => target = next,
+            None => break,
+        }
+        hop += 1;
+    }
+}
+
+pub(crate) unsafe extern "system" fn task_enqueue_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let arg0 = a as *mut c_void;
+    let arg1 = b as *mut c_void;
+    let caller_rva = trace_first_game_caller_rva();
+    let trace_index = TASK_ENQUEUE_TRACE_COUNT
+        .fetch_add(TASK_ENQUEUE_TRACE_INCREMENT, Ordering::SeqCst)
+        + TASK_ENQUEUE_TRACE_INCREMENT;
+    let should_trace = trace_index <= TASK_ENQUEUE_TRACE_LIMIT
+        || SAFE_INPUT_CONFIRM_FRAMES_REMAINING.load(Ordering::SeqCst)
+            > NO_SAFE_INPUT_CONFIRM_FRAMES;
+    if should_trace {
+        append_continue_trace(format_args!(
+            "menu_task_enqueue seq={trace_index} phase=ENTER hook_rva=0x{:x} list={arg0:p} node={arg1:p} node_{} raw{{{}}} confirm_active={} pulse={} {} {}",
+            TRACE_TASK_ENQUEUE_RVA,
+            unsafe { object_vtable_summary(arg1) },
+            unsafe { task_node_raw_summary(arg1 as usize) },
+            SAFE_INPUT_CONFIRM_FRAMES_REMAINING.load(Ordering::SeqCst)
+                > NO_SAFE_INPUT_CONFIRM_FRAMES,
+            SAFE_INPUT_CONFIRM_PULSE_SEQ.load(Ordering::SeqCst),
+            trace_callers_summary(),
+            game_man_trace_summary()
+        ));
+    }
+    let result = if TASK_ENQUEUE_ORIG.load(Ordering::SeqCst) == HOOK_ORIGINAL_UNSET {
+        arg1
+    } else {
+        unsafe { call_union_original(&TASK_ENQUEUE_ORIG, a, b, c, d) as *mut c_void }
+    };
+    let arg0_pointee = if arg0 as usize != TITLE_OWNER_SCAN_START_ADDRESS {
+        unsafe { safe_read_usize(arg0 as usize) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+    } else {
+        TITLE_OWNER_SCAN_START_ADDRESS
+    };
+    let generic_hit = TASK_ENQUEUE_GENERIC_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+    TASK_ENQUEUE_GENERIC_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+    TASK_ENQUEUE_GENERIC_LAST_ARG0.store(arg0 as usize, Ordering::SeqCst);
+    TASK_ENQUEUE_GENERIC_LAST_ARG0_POINTEE.store(arg0_pointee, Ordering::SeqCst);
+    TASK_ENQUEUE_GENERIC_LAST_ARG1.store(arg1 as usize, Ordering::SeqCst);
+    TASK_ENQUEUE_GENERIC_LAST_RET.store(result as usize, Ordering::SeqCst);
+    match generic_hit {
+        1 => {
+            TASK_ENQUEUE_GENERIC_SAMPLE0_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+            TASK_ENQUEUE_GENERIC_SAMPLE0_ARG0.store(arg0 as usize, Ordering::SeqCst);
+            TASK_ENQUEUE_GENERIC_SAMPLE0_ARG0_POINTEE.store(arg0_pointee, Ordering::SeqCst);
+            TASK_ENQUEUE_GENERIC_SAMPLE0_ARG1.store(arg1 as usize, Ordering::SeqCst);
+            TASK_ENQUEUE_GENERIC_SAMPLE0_RET.store(result as usize, Ordering::SeqCst);
+        }
+        2 => {
+            TASK_ENQUEUE_GENERIC_SAMPLE1_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+            TASK_ENQUEUE_GENERIC_SAMPLE1_ARG0.store(arg0 as usize, Ordering::SeqCst);
+            TASK_ENQUEUE_GENERIC_SAMPLE1_ARG0_POINTEE.store(arg0_pointee, Ordering::SeqCst);
+            TASK_ENQUEUE_GENERIC_SAMPLE1_ARG1.store(arg1 as usize, Ordering::SeqCst);
+            TASK_ENQUEUE_GENERIC_SAMPLE1_RET.store(result as usize, Ordering::SeqCst);
+        }
+        _ => {}
+    }
+    // Both were raw 1.16.2 return addresses compared against live frames. They now name the
+    // containing function and an offset, resolved for the running build; when this build has no
+    // pair for that function both come back `None` and the two caller-shaped matches below are
+    // skipped, leaving the three object-identity matches -- which do not depend on a game version
+    // at all and were always the stronger evidence.
+    let idle_call_site = menu_continue_idle_insert_call_site();
+    let idle_caller_band = menu_continue_idle_insert_caller_band();
+    let idle_ctor_out_slot =
+        MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_OUT_SLOT.load(Ordering::SeqCst);
+    let idle_ctor_item = MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_ITEM.load(Ordering::SeqCst);
+    let arg0_points_to_idle_item = arg0_pointee == idle_ctor_item;
+    const TASK_ENQUEUE_IDLE_MATCH_CALLER_EXACT: usize = 1;
+    const TASK_ENQUEUE_IDLE_MATCH_CALLER_RANGE: usize = 2;
+    const TASK_ENQUEUE_IDLE_MATCH_ARG0_OUT_SLOT: usize = 3;
+    const TASK_ENQUEUE_IDLE_MATCH_ARG0_POINTEE: usize = 4;
+    const TASK_ENQUEUE_IDLE_MATCH_ARG1_ITEM: usize = 5;
+    let stack_contains_idle_caller =
+        idle_caller_band.is_some_and(|band| callstack_contains_game_rva(band.start, band.end));
+    let idle_match_kind = if idle_call_site == Some(caller_rva) {
+        TASK_ENQUEUE_IDLE_MATCH_CALLER_EXACT
+    } else if stack_contains_idle_caller {
+        TASK_ENQUEUE_IDLE_MATCH_CALLER_RANGE
+    } else if idle_ctor_out_slot != TITLE_OWNER_SCAN_START_ADDRESS
+        && arg0 as usize == idle_ctor_out_slot
+    {
+        TASK_ENQUEUE_IDLE_MATCH_ARG0_OUT_SLOT
+    } else if idle_ctor_item != TITLE_OWNER_SCAN_START_ADDRESS && arg0_points_to_idle_item {
+        TASK_ENQUEUE_IDLE_MATCH_ARG0_POINTEE
+    } else if idle_ctor_item != TITLE_OWNER_SCAN_START_ADDRESS && arg1 as usize == idle_ctor_item {
+        TASK_ENQUEUE_IDLE_MATCH_ARG1_ITEM
+    } else {
+        TITLE_OWNER_SCAN_START_ADDRESS
+    };
+    let idle_continue_insert_match = idle_match_kind != TITLE_OWNER_SCAN_START_ADDRESS;
+    if idle_continue_insert_match {
+        TASK_ENQUEUE_GENERIC_IDLE_ITEM_MATCH_HITS.fetch_add(1, Ordering::SeqCst);
+        TASK_ENQUEUE_GENERIC_IDLE_ITEM_LAST_MATCH_KIND.store(idle_match_kind, Ordering::SeqCst);
+    }
+    if idle_continue_insert_match {
+        let hit = MENU_CONTINUE_IDLE_INSERT_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+        let base = game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+        let arg1_update_rva = if base == TITLE_OWNER_SCAN_START_ADDRESS {
+            TITLE_OWNER_SCAN_START_ADDRESS
+        } else {
+            unsafe { task_node_update_rva(base, arg1 as usize) }
+        };
+        let ret_update_rva = if base == TITLE_OWNER_SCAN_START_ADDRESS {
+            TITLE_OWNER_SCAN_START_ADDRESS
+        } else {
+            unsafe { task_node_update_rva(base, result as usize) }
+        };
+        MENU_CONTINUE_IDLE_INSERT_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+        MENU_CONTINUE_IDLE_INSERT_LAST_ARG0.store(arg0 as usize, Ordering::SeqCst);
+        MENU_CONTINUE_IDLE_INSERT_LAST_ARG1.store(arg1 as usize, Ordering::SeqCst);
+        MENU_CONTINUE_IDLE_INSERT_LAST_RET.store(result as usize, Ordering::SeqCst);
+        MENU_CONTINUE_IDLE_INSERT_LAST_ARG1_UPDATE_RVA.store(arg1_update_rva, Ordering::SeqCst);
+        MENU_CONTINUE_IDLE_INSERT_LAST_RET_UPDATE_RVA.store(ret_update_rva, Ordering::SeqCst);
+        if hit <= CAP_MENU_INSERT_LOG_FIRST as u64 {
+            append_continue_trace(format_args!(
+                "MENU-CONTINUE-IDLE-INSERT seq={hit} caller_rva=0x{caller_rva:x} arg0={arg0:p} arg1={arg1:p} arg1_update_rva={} ret={result:p} ret_update_rva={} -- passive disabled Continue insert edge via 0x{:x}",
+                format_optional_usize_hex(arg1_update_rva),
+                format_optional_usize_hex(ret_update_rva),
+                TRACE_TASK_ENQUEUE_RVA
+            ));
+        }
+    }
+    if result_action_builder_trace_band()
+        .is_some_and(|band| callstack_contains_game_rva(band.start, band.end))
+    {
+        let hit = RESULT_ACTION_INSERT_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+            + OWN_STEPPER_CALL_INC;
+        RESULT_ACTION_LAST_INSERT_ARG0.store(arg0 as usize, Ordering::SeqCst);
+        RESULT_ACTION_LAST_INSERT_ARG1.store(arg1 as usize, Ordering::SeqCst);
+        RESULT_ACTION_LAST_INSERT_RET.store(result as usize, Ordering::SeqCst);
+        let base = game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+        let arg1_update_rva = if base == TITLE_OWNER_SCAN_START_ADDRESS {
+            TITLE_OWNER_SCAN_START_ADDRESS
+        } else {
+            unsafe { task_node_update_rva(base, arg1 as usize) }
+        };
+        let ret_update_rva = if base == TITLE_OWNER_SCAN_START_ADDRESS {
+            TITLE_OWNER_SCAN_START_ADDRESS
+        } else {
+            unsafe { task_node_update_rva(base, result as usize) }
+        };
+        RESULT_ACTION_LAST_INSERT_ARG1_UPDATE_RVA.store(arg1_update_rva, Ordering::SeqCst);
+        RESULT_ACTION_LAST_INSERT_RET_UPDATE_RVA.store(ret_update_rva, Ordering::SeqCst);
+        if hit <= CAP_MENU_INSERT_LOG_FIRST {
+            append_continue_trace(format_args!(
+                "result_action_builder_insert seq={hit} arg0={arg0:p} arg1={arg1:p} arg1_update_rva={} ret={result:p} ret_update_rva={} -- passive downstream action node insert via 0x{:x}",
+                format_optional_usize_hex(arg1_update_rva),
+                format_optional_usize_hex(ret_update_rva),
+                TRACE_TASK_ENQUEUE_RVA
+            ));
+        }
+    }
+    if let Ok(base) = game_module_base() {
+        unsafe { capture_continue_task_node_candidate(base, arg1 as usize, "arg1") };
+        unsafe { capture_continue_task_node_candidate(base, result as usize, "ret") };
+        unsafe { capture_continue_member_node_candidate(base, arg1 as usize, "arg1") };
+        unsafe { capture_continue_member_node_candidate(base, result as usize, "ret") };
+    }
+    unsafe {
+        log_menu_insert_details(
+            arg0 as usize,
+            arg1 as usize,
+            TITLE_OWNER_SCAN_START_ADDRESS,
+            TITLE_OWNER_SCAN_START_ADDRESS,
+            result as usize,
+        );
+    }
+    if should_trace {
+        append_continue_trace(format_args!(
+            "menu_task_enqueue seq={trace_index} phase=LEAVE ret={result:p} ret_{} raw{{{}}} {}",
+            unsafe { object_vtable_summary(result) },
+            unsafe { task_node_raw_summary(result as usize) },
+            game_man_trace_summary()
+        ));
+    }
+    result as usize
+}
+
+pub(crate) unsafe extern "system" fn set_save_slot_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let slot = a as i32;
+    append_continue_trace(format_args!(
+        "ENTER set_save_slot slot={slot} {} {}",
+        trace_callers_summary(),
+        game_man_trace_summary()
+    ));
+    let ret = unsafe { call_union_original(&SET_SAVE_SLOT_ORIG, a, b, c, d) };
+    append_continue_trace(format_args!(
+        "LEAVE set_save_slot {}",
+        game_man_trace_summary()
+    ));
+    ret
+}
+
+pub(crate) unsafe extern "system" fn save_request_profile_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let enabled = a as u8;
+    append_continue_trace(format_args!(
+        "ENTER save_request_profile enabled={enabled} {} {}",
+        trace_callers_summary(),
+        game_man_trace_summary()
+    ));
+    let ret = unsafe { call_union_original(&SAVE_REQUEST_PROFILE_ORIG, a, b, c, d) };
+    append_continue_trace(format_args!(
+        "LEAVE save_request_profile {}",
+        game_man_trace_summary()
+    ));
+    ret
+}
+
+pub(crate) unsafe extern "system" fn request_save_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let enabled = a as u8;
+    append_continue_trace(format_args!(
+        "ENTER request_save enabled={enabled} {} {}",
+        trace_callers_summary(),
+        game_man_trace_summary()
+    ));
+    let ret = unsafe { call_union_original(&REQUEST_SAVE_ORIG, a, b, c, d) };
+    append_continue_trace(format_args!(
+        "LEAVE request_save {}",
+        game_man_trace_summary()
+    ));
+    ret
+}
+
+pub(crate) unsafe extern "system" fn current_slot_load_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let arg0 = a as i32;
+    let arg1 = b as u8;
+    let arg2 = c as u8;
+    append_continue_trace(format_args!(
+        "ENTER current_slot_load_67b570 arg0={arg0} arg1={arg1} arg2={arg2} {} {}",
+        trace_callers_summary(),
+        game_man_trace_summary()
+    ));
+    let ret = unsafe { call_union_original(&CURRENT_SLOT_LOAD_ORIG, a, b, c, d) };
+    append_continue_trace(format_args!(
+        "LEAVE current_slot_load_67b570 ret={} {}",
+        ret as u8,
+        game_man_trace_summary()
+    ));
+    ret
+}
+
+pub(crate) unsafe extern "system" fn continue_load_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let slot = a as i32;
+    let arg1 = b as u8;
+    let arg2 = c as u8;
+    append_continue_trace(format_args!(
+        "ENTER continue_load_67b750 slot={slot} arg1={arg1} arg2={arg2} {} {}",
+        trace_callers_summary(),
+        game_man_trace_summary()
+    ));
+    let ret = unsafe { call_union_original(&CONTINUE_LOAD_ORIG, a, b, c, d) };
+    append_continue_trace(format_args!(
+        "LEAVE continue_load_67b750 ret={} {}",
+        ret as u8,
+        game_man_trace_summary()
+    ));
+    ret
+}
+
+pub(crate) unsafe extern "system" fn combined_load_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let slot = a as i32;
+    let arg1 = b as u8;
+    let arg2 = c as u8;
+    append_continue_trace(format_args!(
+        "ENTER combined_load_67b940 slot={slot} arg1={arg1} arg2={arg2} {} {}",
+        trace_callers_summary(),
+        game_man_trace_summary()
+    ));
+    let ret = unsafe { call_union_original(&COMBINED_LOAD_ORIG, a, b, c, d) };
+    append_continue_trace(format_args!(
+        "LEAVE combined_load_67b940 ret={} {}",
+        ret as u8,
+        game_man_trace_summary()
+    ));
+    ret
+}
+
+pub(crate) unsafe extern "system" fn map_load_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    append_continue_trace(format_args!(
+        "ENTER map_load_67bc10 {} {}",
+        trace_callers_summary(),
+        game_man_trace_summary()
+    ));
+    let ret = unsafe { call_union_original(&MAP_LOAD_ORIG, a, b, c, d) };
+    if ret as u8 != HOOK_FALSE_RETURN {
+        TITLE_HANDOFF_COMPLETE.store(TITLE_HANDOFF_COMPLETE_VALUE, Ordering::SeqCst);
+    }
+    append_continue_trace(format_args!(
+        "LEAVE map_load_67bc10 ret={} {}",
+        ret as u8,
+        game_man_trace_summary()
+    ));
+    ret
+}
+
+pub(crate) unsafe extern "system" fn save_load_state_init_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    append_continue_trace(format_args!(
+        "ENTER save_load_state_init_67b030 {} {}",
+        trace_callers_summary(),
+        game_man_trace_summary()
+    ));
+    let ret = unsafe { call_union_original(&SAVE_LOAD_STATE_INIT_ORIG, a, b, c, d) };
+    append_continue_trace(format_args!(
+        "LEAVE save_load_state_init_67b030 ret={} {}",
+        ret as u8,
+        game_man_trace_summary()
+    ));
+    ret
+}

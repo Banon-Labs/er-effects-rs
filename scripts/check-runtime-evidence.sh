@@ -16,8 +16,12 @@
 # file was newer than the commit it could not possibly have executed. Reading a clock and calling it
 # provenance is the exact mistake this exists to stop.
 #
-# `+dirty` on that line disqualifies the run: the tree carried uncommitted changes when the DLL was
-# built, so the binary is not the commit even when the sha matches.
+# Which directories hold those logs, and when a `+dirty` line still counts, are decided by
+# `scripts/er-runtime-evidence.py` rather than here -- the same module the two cupcake signals read,
+# so the pre-push hook and the tool-call guard cannot answer differently about one push. Its header
+# carries the reasoning; the short version is that the game directory counts as well as the run root
+# (a `~/Elden/launch.sh` run writes only there), and that a `+dirty` log is evidence only when a
+# provenance record proves the shell's own dependency closure was committed.
 #
 # Three things it deliberately leaves alone:
 #   * a push that changes no crate. Docs, scripts and policies have nothing for a run to prove, and
@@ -30,61 +34,30 @@
 # The override is `ER_ALLOW_UNPROVEN_PUSH=1`, and it prints what is being waived.
 set -uo pipefail
 
-# evidence_for <tip sha> -> 0 evidence, 1 no evidence, 2 unmeasurable. Prints one line of prose.
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# evidence_for <tip sha> [changed-paths file] -> 0 evidence, 1 no evidence, 2 unmeasurable.
+# Prints one line of prose on stdout and the carry-forward candidates on stderr, in the
+# `candidate <sha> <where>` shape `main` parses below.
+#
+# The changed-paths file is how the scan learns what this push contains, which it needs before it
+# can accept a `+dirty` log: such a log counts only when the shell that wrote it compiles every
+# crate the push changes. Without the file no `+dirty` log is ever accepted, which is the safe
+# direction for a caller that does not know its own diff.
 evidence_for() {
-	local tip="$1"
-	local run_root="${ER_ME3_RUN_ROOT:-$HOME/.cache/er-me3-runs}"
-	if [ ! -d "$run_root" ]; then
-		printf 'no run root at %s -- cannot measure\n' "$run_root"
-		return 2
+	local tip="$1" changed_file="${2:-}"
+	local out status
+	if [ -n "$changed_file" ] && [ -f "$changed_file" ]; then
+		out="$(python3 "$repo_root/scripts/er-runtime-evidence.py" --head "$tip" --exhaustive \
+			<"$changed_file" 2>/dev/null)"
+	else
+		out="$(python3 "$repo_root/scripts/er-runtime-evidence.py" --head "$tip" --exhaustive \
+			</dev/null 2>/dev/null)"
 	fi
-	python3 - "$run_root" "$tip" <<'PY'
-import pathlib
-import re
-import sys
-
-run_root = pathlib.Path(sys.argv[1])
-tip = sys.argv[2]
-BUILD_LINE = re.compile(r"^build git=([0-9a-f]+)(\+dirty)?\b")
-
-seen = []
-for run in sorted(run_root.iterdir()):
-    if not run.is_dir():
-        continue
-    for artifact in sorted(run.glob("er-*.log")):
-        try:
-            with artifact.open(encoding="utf-8", errors="replace") as handle:
-                first = handle.readline()
-        except OSError:
-            continue
-        found = BUILD_LINE.match(first)
-        if not found:
-            continue
-        built, dirty = found.group(1), bool(found.group(2))
-        seen.append((run.name, artifact.name, built, dirty))
-        if not dirty and (built.startswith(tip) or tip.startswith(built)):
-            print(f"{run.name}/{artifact.name} was built from {tip} and ran")
-            raise SystemExit(0)
-
-if not seen:
-    print("no DLL log under any run directory carries a build line")
-else:
-    run_name, name, built, dirty = seen[-1]
-    state = "a dirty tree at " if dirty else ""
-    print(f"the newest run {run_name} ran {name}, built from {state}{built[:8]}, not {tip}")
-
-# Candidates for the carry-forward below: every clean build sha a run actually executed, each named
-# once. The caller decides whether the tip adds anything cargo would compile on top of one of them,
-# and that decision costs a reverse-dependency walk apiece -- so emitting the same sha once per log
-# file made the check take longer than its own caller's timeout. One run writes 26 logs.
-emitted = set()
-for run_name, name, built, dirty in seen:
-    if dirty or built in emitted:
-        continue
-    emitted.add(built)
-    print(f"candidate {built} {run_name}/{name}", file=sys.stderr)
-raise SystemExit(1)
-PY
+	status=$?
+	printf '%s\n' "$out" | sed -n 's/^note //p' | head -1
+	printf '%s\n' "$out" | grep '^candidate ' >&2 || true
+	return "$status"
 }
 
 # A run proves the tip when the tip adds nothing cargo would compile on top of what ran.
@@ -158,36 +131,64 @@ selftest() {
 		fi
 	}
 
+	# Every case names both log directories. Leaving the game directory unset would let this
+	# machine's real logs into a fixture, and a test whose result depends on what someone last
+	# launched proves nothing about the logic.
+	mkdir -p "$tmp/nogame"
+
+	# A run directory holds the logs; a file sitting loose in the run root is not a run. The
+	# three fixtures below used to write their log straight into the root, where the scan skips
+	# it, so they passed on an empty directory rather than on the case they name.
 	mkdir -p "$tmp/runs/br-good"
 	printf 'build git=deadbeef1234 module=er_invasion_warp.dll base=0x1 pe=0x2 (t)\nmore\n' \
 		>"$tmp/runs/br-good/er-invasion-warp.log"
-	ER_ME3_RUN_ROOT="$tmp/runs" expect 0 "a log whose build sha is the commit counts as evidence" \
+	ER_ME3_RUN_ROOT="$tmp/runs" ER_GAME_DIR="$tmp/nogame" \
+		expect 0 "a log whose build sha is the commit counts as evidence" \
 		evidence_for "deadbeef1234"
-	ER_ME3_RUN_ROOT="$tmp/runs" expect 0 "an abbreviated tip sha matches the log's full sha" \
+	ER_ME3_RUN_ROOT="$tmp/runs" ER_GAME_DIR="$tmp/nogame" \
+		expect 0 "an abbreviated tip sha matches the log's full sha" \
 		evidence_for "deadbeef"
-	ER_ME3_RUN_ROOT="$tmp/runs" expect 1 "a log from a different build is refused" \
+	ER_ME3_RUN_ROOT="$tmp/runs" ER_GAME_DIR="$tmp/nogame" \
+		expect 1 "a log from a different build is refused" \
 		evidence_for "0e0842402b18"
 
-	mkdir -p "$tmp/dirty"
-	printf 'build git=deadbeef1234+dirty module=er_invasion_warp.dll\n' \
-		>"$tmp/dirty/er-invasion-warp.log"
-	ER_ME3_RUN_ROOT="$tmp/dirty" expect 1 "a dirty build is refused even with a matching sha" \
+	# The gap that refused a proven push on 2026-09-11: a run launched through
+	# `~/Elden/launch.sh` writes its logs into the game directory and nowhere else, and only the
+	# run root was read. Both count now, and the second case keeps the sha doing the deciding.
+	mkdir -p "$tmp/game"
+	printf 'build git=cafebabe5678 module=er_quit_rows.dll base=0x1 pe=0x2 (t)\nmore\n' \
+		>"$tmp/game/er-quit-rows-debug.log"
+	ER_ME3_RUN_ROOT="$tmp/nonexistent" ER_GAME_DIR="$tmp/game" \
+		expect 0 "a clean game-directory log naming the commit counts as evidence" \
+		evidence_for "cafebabe5678"
+	ER_ME3_RUN_ROOT="$tmp/nonexistent" ER_GAME_DIR="$tmp/game" \
+		expect 1 "a game-directory log built from a different sha is still refused" \
+		evidence_for "0e0842402b18"
+
+	mkdir -p "$tmp/dirty/br-dirty"
+	printf 'build git=deadbeef1234+dirty module=er_invasion_warp.dll base=0x1 pe=0x2 (t)\n' \
+		>"$tmp/dirty/br-dirty/er-invasion-warp.log"
+	ER_ME3_RUN_ROOT="$tmp/dirty" ER_GAME_DIR="$tmp/nogame" \
+		expect 1 "a dirty build with a matching sha is refused when nothing proves its closure" \
 		evidence_for "deadbeef1234"
 
 	# The mtime trap, as a regression: a file newer than the commit, from an older build.
-	mkdir -p "$tmp/mtime"
-	printf 'build git=aaaaaaaaaaaa module=er_invasion_warp.dll\n' >"$tmp/mtime/er-old-build.log"
-	touch -d '+1 hour' "$tmp/mtime/er-old-build.log" 2>/dev/null ||
-		touch "$tmp/mtime/er-old-build.log"
-	ER_ME3_RUN_ROOT="$tmp/mtime" expect 1 "a newer file from an older build is still refused" \
+	mkdir -p "$tmp/mtime/br-old"
+	printf 'build git=aaaaaaaaaaaa module=er_invasion_warp.dll\n' >"$tmp/mtime/br-old/er-old.log"
+	touch -d '+1 hour' "$tmp/mtime/br-old/er-old.log" 2>/dev/null ||
+		touch "$tmp/mtime/br-old/er-old.log"
+	ER_ME3_RUN_ROOT="$tmp/mtime" ER_GAME_DIR="$tmp/nogame" \
+		expect 1 "a newer file from an older build is still refused" \
 		evidence_for "deadbeef1234"
 
-	ER_ME3_RUN_ROOT="$tmp/nonexistent" expect 2 "an absent run root reports unmeasurable, not refused" \
+	ER_ME3_RUN_ROOT="$tmp/nonexistent" ER_GAME_DIR="$tmp/nonexistent" \
+		expect 2 "with neither log directory present the answer is unmeasurable, not refused" \
 		evidence_for "deadbeef1234"
 
-	mkdir -p "$tmp/nobuild"
-	printf 'some other log\n' >"$tmp/nobuild/er-thing.log"
-	ER_ME3_RUN_ROOT="$tmp/nobuild" expect 1 "a log with no build line is not evidence" \
+	mkdir -p "$tmp/nobuild/br-nobuild"
+	printf 'some other log\n' >"$tmp/nobuild/br-nobuild/er-thing.log"
+	ER_ME3_RUN_ROOT="$tmp/nobuild" ER_GAME_DIR="$tmp/nogame" \
+		expect 1 "a log with no build line is not evidence" \
 		evidence_for "deadbeef1234"
 
 	# The carry-forward, against this repository's own history rather than a fixture: the scope
@@ -204,6 +205,26 @@ selftest() {
 			carried_forward "$ran_sha" "$tip_sha"
 		expect 1 "a run does NOT carry forward across a change cargo compiles" \
 			carried_forward "$other_sha" "$tip_sha"
+
+		# The cupcake signal keeps its own copy of that decision, in python inside a heredoc, and
+		# the plumbing that hands it the candidate list is easy to break in silence: a pipe into a
+		# heredoc is swallowed, and the copy then answers `MISSING` having seen no candidates at all.
+		# That is SC2259, caught by the linter on the way in. So the copy is driven here, over
+		# the same fixture commits, because two enforcement points that disagree about one push
+		# teach the next agent to ignore whichever is louder.
+		local signal="$repo_root/.cupcake/signals/runtime_evidence_for_head.sh"
+		if [ -f "$signal" ]; then
+			sed -n "/<<'PY'/,/^PY\$/p" "$signal" | sed '1d;$d' >"$tmp/carry.py"
+			signal_carries() { # signal_carries <tip> <candidate sha>
+				[ "$(python3 "$tmp/carry.py" "$1" "$repo_root" "candidate $2 br-x/er-a.log")" = OK ]
+			}
+			expect 0 "the signal's copy carries forward from the same run" \
+				signal_carries "$tip_sha" "$ran_sha"
+			expect 1 "the signal's copy refuses across a change cargo compiles" \
+				signal_carries "$tip_sha" "$other_sha"
+			expect 1 "the signal's copy refuses when it was handed no candidates" \
+				signal_carries "$tip_sha" ""
+		fi
 		# The `.github/` case, which the scope tool alone answers wrongly for this question: it
 		# widens to everything on a workflow edit, so a commit touching only check.yml was told
 		# to rebuild and relaunch the game to prove a `curl` flag.
@@ -289,26 +310,35 @@ main() {
 		return 0
 	fi
 
-	local note rc candidates
+	local note rc candidates changed_file
 	candidates="$(mktemp)"
-	note="$(evidence_for "$tip" 2>"$candidates")"
+	changed_file="$(mktemp)"
+	printf '%s\n' "$changed" >"$changed_file"
+	note="$(evidence_for "$tip" "$changed_file" 2>"$candidates")"
 	rc=$?
+	rm -f "$changed_file"
 
 	# No log names the tip, but a run may still have executed the same code. Ask the scope tool,
 	# newest run first, and take the first sha whose diff to the tip provably reaches no cargo.
+	# The candidates arrive newest first, so they are read in the order they were written.
+	local carried_sha="" carried_where=""
 	if [ "$rc" -eq 1 ]; then
 		local sha where
 		while read -r _ sha where; do
 			[ -n "$sha" ] || continue
 			if carried_forward "$sha" "$tip"; then
-				printf 'pre-push: runtime evidence for %s carried forward -- %s ran %s, and %s adds nothing cargo compiles on top of it\n' \
-					"$tip" "$where" "${sha:0:8}" "$tip" >&2
-				rm -f "$candidates"
-				return 0
+				carried_sha="$sha"
+				carried_where="$where"
+				break
 			fi
-		done < <(tac "$candidates" 2>/dev/null || cat "$candidates")
+		done <"$candidates"
 	fi
 	rm -f "$candidates"
+	if [ -n "$carried_sha" ]; then
+		printf 'pre-push: runtime evidence for %s carried forward -- %s ran %s, and %s adds nothing cargo compiles on top of it\n' \
+			"$tip" "$carried_where" "${carried_sha:0:8}" "$tip" >&2
+		return 0
+	fi
 
 	if [ "$rc" -eq 0 ]; then
 		printf 'pre-push: runtime evidence for %s -- %s\n' "$tip" "$note" >&2
@@ -331,10 +361,17 @@ main() {
 		printf '  evidence  %s\n' "$note"
 		printf '\n'
 		printf '  A DLL log names the commit it was built from on its first line, and no log names\n'
-		printf '  this one. Build it, launch it, and let the DLL write:\n'
+		printf '  this one -- neither under the run root nor in the game directory, both of which\n'
+		printf '  were read. Build it, launch it, and let the DLL write:\n'
 		printf '\n'
 		printf '    bash scripts/er-build-dlls.sh --all\n'
 		printf '    python3 scripts/er-run-branch.py --save <save>:<slot>\n'
+		printf '\n'
+		printf '  A launcher run counts too -- its logs land in the game directory rather than the\n'
+		printf '  run root. Commit before you build: the sha is stamped at build time, so building\n'
+		printf '  first leaves the artifact carrying the previous commit (scripts/er-ship.sh does\n'
+		printf '  the ordering for you). A tree left dirty in some other crate is fine; a tree\n'
+		printf '  dirty inside the shell under test is not, and the evidence line above says which.\n'
 		printf '\n'
 		printf '  Or push a commit that does not change game code.\n'
 		printf '  Deliberate override, which says so in the log: ER_ALLOW_UNPROVEN_PUSH=1\n'

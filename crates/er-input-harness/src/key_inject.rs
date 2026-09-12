@@ -30,9 +30,39 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::win32::{GetModuleHandleA, GetProcAddress};
 
-/// The product DLL by base name, matched the way `er-hook` matches it -- me3 loads natives from
-/// paths that differ per install, so the name is the only stable handle.
-const PRODUCT_DLL_NAME: &[u8] = b"er_quickload.dll\0";
+/// The modules that can carry the product's input exports, by base name, matched the way `er-hook`
+/// matches them -- me3 loads natives from paths that differ per install, so the name is the only
+/// stable handle.
+///
+/// There is more than one because the product's source is sometimes loaded under another artifact
+/// name. `er_quit_rows.dll` is a copy of `er-quickload` being reduced to the System>Quit rows
+/// (`scripts/me3-dll-conflicts.toml` records the pair), and it exports the same symbols, so a
+/// harness run against it resolved nothing and reported `delivered=false` for every key -- which
+/// reads as a broken input channel rather than as an absent module. Measured 2026-09-11 while
+/// driving a menu in `~/Elden/quit-rows-harness.me3`.
+///
+/// Order matters only in that the product comes first: it is the common case, and when both are
+/// loaded the conflict table already says that is a configuration to fix rather than to choose
+/// between.
+const PRODUCT_DLL_NAMES: [&[u8]; 2] = [b"er_quickload.dll\0", b"er_quit_rows.dll\0"];
+
+/// The first loaded candidate that exports `export`, or null when none does.
+///
+/// Resolving per export rather than per module is what makes the list safe to grow: a module that
+/// is loaded but does not carry the symbol is skipped instead of ending the search.
+fn product_export(export: &[u8]) -> *mut c_void {
+    for name in PRODUCT_DLL_NAMES {
+        let module = unsafe { GetModuleHandleA(name.as_ptr()) };
+        if module.is_null() {
+            continue;
+        }
+        let address = unsafe { GetProcAddress(module, export.as_ptr()) };
+        if !address.is_null() {
+            return address;
+        }
+    }
+    std::ptr::null_mut()
+}
 const HOLD_KEY_EXPORT: &[u8] = b"er_quickload_hold_dinput_key\0";
 const HOLD_CURSOR_EXPORT: &[u8] = b"er_quickload_hold_cursor_pos\0";
 const HOLD_VK_EXPORT: &[u8] = b"er_quickload_hold_vk\0";
@@ -56,12 +86,7 @@ fn resolve() -> Option<HoldKeyFn> {
         // process lifetime, so the pointer stays valid and the C-ABI shape is fixed by the export.
         return Some(unsafe { std::mem::transmute::<usize, HoldKeyFn>(cached) });
     }
-    let module = unsafe { GetModuleHandleA(PRODUCT_DLL_NAME.as_ptr()) };
-    let address = if module.is_null() {
-        std::ptr::null_mut()
-    } else {
-        unsafe { GetProcAddress(module, HOLD_KEY_EXPORT.as_ptr()) }
-    };
+    let address = product_export(HOLD_KEY_EXPORT);
     if address.is_null() {
         // Do not latch absent here. The harness's first nav frame can precede me3's LoadLibrary of
         // the product only in a hand-written profile, but a latch would make that ordering permanent
@@ -113,11 +138,7 @@ fn call_cursor(packed: u64) -> bool {
     let address = if cached != 0 {
         cached as *mut c_void
     } else {
-        let module = unsafe { GetModuleHandleA(PRODUCT_DLL_NAME.as_ptr()) };
-        if module.is_null() {
-            return false;
-        }
-        let resolved = unsafe { GetProcAddress(module, HOLD_CURSOR_EXPORT.as_ptr()) };
+        let resolved = product_export(HOLD_CURSOR_EXPORT);
         if resolved.is_null() {
             return false;
         }
@@ -142,11 +163,7 @@ pub fn hold_vk(vk: u8) -> bool {
     let address = if cached != 0 {
         cached as *mut c_void
     } else {
-        let module = unsafe { GetModuleHandleA(PRODUCT_DLL_NAME.as_ptr()) };
-        if module.is_null() {
-            return false;
-        }
-        let resolved = unsafe { GetProcAddress(module, HOLD_VK_EXPORT.as_ptr()) };
+        let resolved = product_export(HOLD_VK_EXPORT);
         if resolved.is_null() {
             return false;
         }
@@ -173,11 +190,7 @@ pub fn save_picker_dialog() -> usize {
     let address = if cached != 0 {
         cached as *mut c_void
     } else {
-        let module = unsafe { GetModuleHandleA(PRODUCT_DLL_NAME.as_ptr()) };
-        if module.is_null() {
-            return 0;
-        }
-        let resolved = unsafe { GetProcAddress(module, PICKER_DIALOG_EXPORT.as_ptr()) };
+        let resolved = product_export(PICKER_DIALOG_EXPORT);
         if resolved.is_null() {
             return 0;
         }

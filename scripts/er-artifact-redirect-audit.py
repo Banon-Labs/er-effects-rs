@@ -241,6 +241,39 @@ def _resolver_body(text: str, start: int) -> str:
     return text[start : end if end >= 0 else start + 1200]
 
 
+MUTUALLY_EXCLUSIVE_KINDS = frozenset({"duplicate-owner"})
+
+
+def _never_co_loaded() -> set[frozenset[str]]:
+    """Crate pairs `me3-dll-conflicts.toml` says can never share a profile.
+
+    Read from the table rather than listed here, so a pair that stops being mutually exclusive
+    stops being exempt on the same commit that changes the table -- and so this file carries no
+    second copy of a fact the table already owns.
+    """
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # pragma: no cover -- 3.11+ everywhere this runs
+        return set()
+    table_path = REPO_ROOT / "scripts" / "me3-dll-conflicts.toml"
+    if not table_path.is_file():
+        return set()
+    table = tomllib.loads(table_path.read_text(encoding="utf-8"))
+    return {
+        frozenset({entry["a"], entry["b"]})
+        for entry in table.get("conflict", [])
+        if entry.get("kind") in MUTUALLY_EXCLUSIVE_KINDS
+        and "a" in entry
+        and "b" in entry
+    }
+
+
+def _crate_name(relative: str) -> str:
+    """The crate a `crates/<name>/...` path belongs to, or the path itself."""
+    parts = Path(relative).parts
+    return parts[1] if len(parts) > 1 and parts[0] == "crates" else relative
+
+
 def _record(
     found: dict[str, Knob], env: str, name: str, relative: str
 ) -> None:
@@ -250,6 +283,16 @@ def _record(
     elif existing.default_name != name:
         # Two crates disagreeing on a knob's default is a real defect, not a display issue:
         # a launcher redirects one and the other silently keeps writing to GAME_DIR.
+        #
+        # Unless the two can never be in one profile. `er-quickload` and `er-quit-rows` are
+        # recorded in `me3-dll-conflicts.toml` as `duplicate-owner` -- the second is a copy of the
+        # first being reduced, and the profile generator refuses to emit a profile carrying both --
+        # so no launcher ever has to satisfy the pair at once, and each wants its own log name.
+        # Renaming the knob to split them would break every tool that already resolves the shell's
+        # log through it.
+        pair = frozenset({_crate_name(existing.source), _crate_name(relative)})
+        if pair in _never_co_loaded():
+            return
         raise SystemExit(
             f"{env} resolves to {existing.default_name!r} in {existing.source} but to "
             f"{name!r} in {relative}; one launcher redirect cannot satisfy both"

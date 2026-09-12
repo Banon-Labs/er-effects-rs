@@ -117,3 +117,107 @@
 0x4589390   todo:centralize-global-rva    # RuntimeGlobalRva::IoDeviceSingleton (er-title-flow), SL_IODEV_GLOBAL_RVA (er-game-base)  || er-game-base's own doc says both aliases "now derive from here (2026-08-01)" -- but the enum discriminant still writes the literal, so that dedupe was incomplete. Finish it.
 0x47ef360   todo:centralize-global-rva    # GX_DRAW_CONTEXT_RVA (er-loading-portrait-core), TitleSessionRva::GxDrawContextSingleton (er-title-flow)  || RESOLVED 2026-08-30 (was "NAMES ARE IRRECONCILABLE"): 1.16.2 dump names the global `g_GxDrawContext`, typed `GxDrawContext*`. Of 1242 xrefs exactly 2 are writes (ctor/dtor pair @0x1419e6340/0x1419e63a0, HeapAlloc size 0x1010 == sizeof(GxDrawContext)); zero writers in the move-map/load region. Never null at the title -- CSMovieGxTexture's ctor derefs it with no null check for the title background movie. NOT the session/readiness singleton; that is the unrelated 0x4588e98 (TitleSessionRva::SaveSafeBeginLogoSession), which title_tick_cover.rs correctly gates on. Names now agree; still two literal declarations to centralize.
 0x4853048   todo:centralize-global-rva    # FD4_IO_POOL_RVA (er-title-flow constants_autoload_state.rs), RuntimeGlobalRva::Fd4IoPool (er-title-flow constants_moved.rs)  || SAME CRATE, two tables, same name, two literals. Purely mechanical to collapse.
+
+# ---------------------------------------------------------------------------------------------
+# `er-quit-rows`, the second copy of the product's source (2026-09-11)
+#
+# `er-quit-rows` was created by commit 28ca8f89 as `er-quickload` copied whole and then reduced to
+# the System>Quit rows. Every row below is one address that the copy left written out in both
+# crates, in a file that is still the same relative path in each -- which is exactly the drift this
+# gate exists to catch: a 1.17 correction to one of them leaves the other pointing at whatever now
+# sits at the old address, and nothing would say so.
+#
+# They are `todo:`, not `exempt:`. The debt is real and it clears the way every other duplicate
+# here clears: when the shared switch machinery is extracted out of both shells into a crate, one
+# declaration survives and these lines are deleted. bd `er-effects-rs-ejfl` measures what that
+# extraction costs today -- roughly 5,000 to 10,500 lines, blocked on splitting
+# `system_quit_menu_window_run_post`, which is the only menu-pump-ownership context in the process.
+# So this is deferred with a reason and a shape, not parked.
+#
+# The three `exempt:not-an-address` rows below arrived the same way and are classified by what they
+# are rather than by how they got here, following the rows at the top of this file: a Windows flag
+# word and two range bounds carry no version to drift against.
+0x100010   exempt:not-an-address     # CONTEXT_DEBUG_REGISTERS_FLAG  || the Windows `CONTEXT_AMD64 | CONTEXT_DEBUG_REGISTERS` flag word, not a game RVA.
+0x2a00000   exempt:not-an-address     # AV_GAME_TEXT_RVA_MAX  || an upper bound on a plausible `.text` RVA, used to filter a stack scan.
+0x5000000   exempt:not-an-address     # SW_BP_RVA_LIMIT  || a bound the breakpoint config normalizer accepts, not an address.
+0x116c70    todo:quit-rows-copy       # DLSTRING_WCHAR_SUBSTR_RVA  || src/constants/anti_debug.rs
+0x1f2b20    todo:quit-rows-copy       # CREATE_LOADLISTLIST_FILECAP_RVA  || src/constants/render_handoff.rs
+0x225f60    todo:quit-rows-copy       # TPF_FILE_CAP_CTOR_RVA  || src/constants/anti_debug.rs
+0x25f8e0    todo:quit-rows-copy       # PLAYER_GAME_DATA_NAME_GETTER_RVA  || src/constants/stats_panel_text.rs
+0x614870    todo:quit-rows-copy       # WORLDBLOCKRES_UPDATE_RE_RVA  || src/constants/render_handoff.rs
+0x624bd0    todo:quit-rows-copy       # WORLDRESWAIT_FIELDAREA_GATE_RVA  || src/constants/render_handoff.rs
+0x66e2e4    todo:quit-rows-copy       # STREAMING_ENABLE_RVA  || src/constants/gaitem_restore.rs
+0x671130    todo:quit-rows-copy       # SYSTEM_QUIT_GAITEM_DESERIALIZE_RVA  || src/constants/stats_panel_text.rs
+0x671670    todo:quit-rows-copy       # SYSTEM_QUIT_GAITEM_FINALIZE_RVA  || src/constants/stats_panel_text.rs
+0x671810    todo:quit-rows-copy       # SYSTEM_QUIT_GAITEM_LOOKUP_RVA  || src/constants/stats_panel_text.rs
+0x672560    todo:quit-rows-copy       # CSGAITEM_REMOVE_INS_RVA  || src/constants/gaitem_restore.rs
+0x678a50    todo:quit-rows-copy       # SLOT_MGR_PEEK_RVA  || src/experiments/own_stepper/bootstrap_drive.rs
+0x679340    todo:quit-rows-copy       # GET_MOVEMAP_STEP_BLOCKID_RVA  || src/constants/render_handoff.rs
+0x679560    todo:quit-rows-copy       # SAVE_REQUEST_RETRACT_B73_VA  || build.rs
+0x679590    todo:quit-rows-copy       # SAVE_REQUEST_RETRACT_B72_VA  || build.rs
+0x67a3a0    todo:quit-rows-copy       # SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA  || src/constants/profile_render.rs
+0x67b100    todo:quit-rows-copy       # READ_67B100_RVA  || src/experiments/own_load/drive.rs
+0x67b1a0    todo:quit-rows-copy       # B80_FULL_LOAD_INITIATOR_RVA  || src/constants/stats_panel_text.rs
+0x67b4e0    todo:quit-rows-copy       # BLANK_SAVE_CONTAINER_REQUEST_RVA  || src/constants/stats_panel_text.rs
+0x67bd70    todo:quit-rows-copy       # SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_RVA  || src/constants/stats_panel_text.rs
+0x71fd60    todo:quit-rows-copy       # INGAMEINIT_MAP_PARSER_RVA  || src/constants/system_quit.rs
+0x720210    todo:quit-rows-copy       # IS_NON_DEBUG_AREA_RVA  || src/constants/render_handoff.rs
+0x744a60    todo:quit-rows-copy       # RESULT_EVENT_WRAPPER_BUILDER_RVA  || src/constants/anti_debug.rs
+0x745510    todo:quit-rows-copy       # WRAP_UPDATE_RVA  || src/experiments/own_stepper/load_steps.rs
+0x746a00    todo:quit-rows-copy       # RESULT_ACTION_BUILDER_RVA  || src/constants/anti_debug.rs
+0x764290    todo:quit-rows-copy       # MENU_CONTINUE_IDLE_INSERT_CALLER_FN_RVA  || src/constants/anti_debug.rs
+0x764b80    todo:quit-rows-copy       # MENU_TITLE_CONTINUE_DOCALL_RVA  || src/constants/stage2_menu_drive.rs
+0x78d2c0    todo:quit-rows-copy       # REBUILD_ROWS_RVA  || src/constants/system_quit.rs
+0x78eea0    todo:quit-rows-copy       # APPEND_ONE_RVA  || src/constants/system_quit.rs
+0x7931e0    todo:quit-rows-copy       # IFELSE_UPDATE_RVA  || src/experiments/own_stepper/load_steps.rs
+0x793b20    todo:quit-rows-copy       # TITLE_CUSTOM_COVER_BLACK_WRAPPER_RVA  || src/constants/anti_debug.rs
+0x7a3900    todo:quit-rows-copy       # SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_RVA  || src/constants/profile_render.rs
+0x7a91e0    todo:quit-rows-copy       # FD4_EVENT_CONSTRUCTOR_RVA  || src/constants/stage2_menu_drive.rs
+0x7a9560    todo:quit-rows-copy       # MENUJOB_ASSIGN_RVA  || src/constants/gaitem_restore.rs
+0x7add70    todo:quit-rows-copy       # MENU_ITEM_ACCEPT_IDLE_RVA  || src/experiments/continue_load/product_continue.rs
+0x821310    todo:quit-rows-copy       # NETWORK_CHECK_JOB_RUN_RVA  || src/experiments/startup_hooks/loading_cover/startup_modals_menu_cover.rs
+0x8349c0    todo:quit-rows-copy       # SHOW_PROGRESS_JOB_RUN_RVA  || src/experiments/startup_hooks/loading_cover/startup_modals_menu_cover.rs
+0x8752c0    todo:quit-rows-copy       # PROFILE_ROW_MODEL_BUILD_RVA  || src/constants/stats_panel_text.rs
+0x9a4d90    todo:quit-rows-copy       # SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_RVA  || src/constants/profile_render.rs
+0x9a62a0    todo:quit-rows-copy       # TITLE_LOGO_BACK_VIEW_PARTS_FADEIN_RVA  || src/constants/stats_panel_text.rs
+0x9ac760    todo:quit-rows-copy       # CAP_LOAD_ACTIVATE2_RVA  || src/experiments/trace/menu_trace_hooks.rs
+0xa9cca0    todo:quit-rows-copy       # CSREMO_IDLE_GATE_RVA_ESTIMATE  || src/constants/render_handoff.rs
+0xaebdc0    todo:quit-rows-copy       # REQUEST_MOVE_MAP_RVA  || src/constants/gaitem_restore.rs
+0xaec050    todo:quit-rows-copy       # MMS_STEP_FINISH_RVA  || src/experiments/trace/menu_trace_hooks.rs
+0xaec120    todo:quit-rows-copy       # MMS_STEP_INIT_RVA  || src/experiments/trace/menu_trace_hooks.rs
+0xaecc10    todo:quit-rows-copy       # STEP_REQUEST_WAIT_RVA  || src/constants/render_handoff.rs
+0xaed380    todo:quit-rows-copy       # COMMON_FINALIZE_RVA  || src/experiments/own_load/drive.rs
+0xaed820    todo:quit-rows-copy       # REQUEST_SUBMIT_RVA  || src/constants/gaitem_restore.rs
+0xaf5750    todo:quit-rows-copy       # MMS_CHILD_CLEANUP_RVA  || src/experiments/trace/menu_trace_hooks.rs
+0xaf5a20    todo:quit-rows-copy       # STEP_MOVEMAP_FINISH_RVA  || src/constants/render_handoff.rs
+0xaf9cf0    todo:quit-rows-copy       # STEP_WORLDRESWAIT_RVA  || src/constants/render_handoff.rs
+0xaff640    todo:quit-rows-copy       # MOVEMAPSTEP_UPDATE_RVA  || src/constants/stats_panel_text.rs
+0xb0a1f0    todo:quit-rows-copy       # INGAMEINIT_HANDLER_RVA  || src/constants/system_quit.rs
+0xb0a980    todo:quit-rows-copy       # WORLD_WORKER_BUILD_RVA  || src/constants/gaitem_restore.rs
+0xb0bd60    todo:quit-rows-copy       # STEP_PUMP_DRIVER_RVA  || src/constants/system_quit.rs
+0xb0e180    todo:quit-rows-copy       # CONTINUE_CONFIRM_RVA  || src/constants/gaitem_restore.rs
+0xd697d0    todo:quit-rows-copy       # LOADING_BG_REPLACE_BIND_RVA  || src/constants/anti_debug.rs
+0xd78630    todo:quit-rows-copy       # TITLE_MENU_RESOURCE_ACQUIRE_RVA  || src/constants/stats_panel_text.rs
+0xd82570    todo:quit-rows-copy       # TITLE_LOGO_GFX_CURRENT_FRAME_RVA  || src/constants/stats_panel_text.rs
+0xe53220    todo:quit-rows-copy       # IS_ENABLE_CONTROL_ON_DISACTIVE_RVA  || src/experiments/can_move_probe.rs
+0x1140ec0    todo:quit-rows-copy       # SCALEFORM_DLSTRING_CHAR_COPY_RVA  || src/constants/stats_panel_text.rs
+0x114bf10    todo:quit-rows-copy       # GFX_TEXT_DOC_REFLOW_RVA  || src/constants/stats_panel_text.rs
+0x116a910    todo:quit-rows-copy       # TITLE_SCALEFORM_RESOURCE_CTOR_RVA  || src/constants/stats_panel_text.rs
+0x1eb97a0    todo:quit-rows-copy       # ASSERT_WRAPPER_RVA  || src/constants/anti_debug.rs
+0x1f6bad0    todo:quit-rows-copy       # FD4_PAD_DEVICE_POLL_RVA  || src/experiments/can_move_probe.rs
+0x223a130    todo:quit-rows-copy       # SOUND_POST_EVENT_CORE_RVA  || src/constants/stats_panel_text.rs
+0x240a1f0    todo:quit-rows-copy       # STATE_INDEX_GETTER_RVA  || src/experiments/own_stepper/bootstrap_drive.rs
+0x2a7e030    todo:quit-rows-copy       # RESMGR_EXPECTED_VTABLE_RVA  || src/constants/gaitem_restore.rs
+0x2a93a60    todo:quit-rows-copy       # MENU_WINDOW_VTABLE_RVA  || src/constants/stats_panel_background.rs
+0x2a94318    todo:quit-rows-copy       # MENU_WINDOW_PROXY_VTABLE_RVA  || src/constants/stats_panel_background.rs
+0x2aa2958    todo:quit-rows-copy       # MENUJOB_IFELSE_VTABLE_DUMP_VA  || src/constants/gaitem_restore.rs
+0x2afa070    todo:quit-rows-copy       # ROUTER_THIS_VTABLE_RVA  || src/constants/system_quit.rs
+0x2b26500    todo:quit-rows-copy       # TITLE_PRESS_START_NAME_RVA  || src/constants/stats_panel_text.rs
+0x2b62c70    todo:quit-rows-copy       # DEFAULT_MAP_STRING_RVA  || src/constants/system_quit.rs
+0x3d675c0    todo:quit-rows-copy       # GLOBAL_CS_DIST_VIEW_MANAGER_RVA  || src/telemetry/runtime_oracles/oracles_portrait_pipeline.rs
+0x3d69ba8    todo:quit-rows-copy       # WORLD_SINGLETON_B_RVA  || src/constants/gaitem_restore.rs
+0x3d6ea58    todo:quit-rows-copy       # GLOBAL_CSREMO_RVA  || src/constants/render_handoff.rs
+0x3d70847    todo:quit-rows-copy       # MOVEMAPSTEP_GLOBAL_DISABLE_RVA  || src/constants/render_handoff.rs
+0x3d71620    todo:quit-rows-copy       # TITLE_STEP_IDX10_SLOT_RVA  || src/constants/gaitem_restore.rs
+0x3d87358    todo:quit-rows-copy       # SLLOADCONTENT_SRC_RVA  || src/experiments/own_stepper/bootstrap_drive.rs
+0x4593250    todo:quit-rows-copy       # SCALEFORM_MEMORY_GLOBAL_RVA  || src/constants/stats_panel_text.rs

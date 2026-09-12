@@ -103,6 +103,7 @@ portable	-	check-cupcake-wasm-builtins.py --selftest	source/AST/text analysis on
 portable	-	check-cupcake-wasm-builtins.py	source/AST/text analysis only
 portable	-	test-cupcake-hook-shim.py	source/AST/text analysis only
 portable	-	test-cupcake-stop-guards.py	source/AST/text analysis only
+portable	-	test-fix-claim-classifier.py	pure python over fixed strings; no game image, no cupcake binary
 portable	-	test-authority-agreement-signal.py	source/AST/text analysis only
 portable	-	test-idle-hold-signal.py	source/AST/text analysis only
 portable	-	test-unexecuted-promise-signal.py	source/AST/text analysis only
@@ -237,7 +238,8 @@ portable	-	conventional-commit-subject.py --selftest	source/AST/text analysis on
 portable	-	test-described-next-step-signal.py	drives the signal script under mktemp; source/text only
 portable	-	check-no-thread-suspension.py --selftest	source/AST/text analysis only
 portable	-	check-no-thread-suspension.py	source/AST/text analysis only; silent and rc 0 in both the clone and the developer tree
-partial	git-baseline	check-runtime-evidence.sh --selftest	seven fixture cases run under mktemp and say PASS; the two carry-forward cases print 'skip' on a depth-1 checkout, which does not carry the commits they diff. fetch-depth: 0 runs them.
+partial	git-baseline	check-runtime-evidence.sh --selftest	nine fixture cases run under mktemp and say PASS -- both log directories are pointed at fixtures, so the machine's own runs cannot leak in; the four carry-forward cases print 'skip' on a depth-1 checkout, which does not carry the commits they diff. fetch-depth: 0 runs them.
+partial	build-artifact	er-runtime-evidence.py --selftest	seventeen of eighteen cases run with no game, no git history and no built DLL: the log scan runs against mktemp fixtures and the dirty-log proof against substituted collaborators. The last case reads a real DLL's pe stamp and prints 'skip  no built DLL' without one.
 portable	-	er-character-type-tables.py --selftest	source/AST/text analysis only
 portable	-	test-challenged-convention-classifier.py	source/AST/text analysis only
 portable	-	test-narrated-action-classifier.py	source/AST/text analysis only

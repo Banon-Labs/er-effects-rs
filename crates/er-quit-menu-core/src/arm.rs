@@ -16,6 +16,15 @@
 //!
 //! Each is installed by its own module and reported separately, because each fails differently and
 //! a run has to be able to say which one was missing.
+//!
+//! # Only the machinery the row set actually uses
+//!
+//! Items 2 and 3 exist for the link field and the importer behind it, and both cost a real detour:
+//! the pump claims `MenuWindowJob::Run`, and the task registers on `CSTaskImp`. A shell arming no
+//! build row has no field to drive and nothing to import, so installing them would put two claims
+//! on the process for work that can never be requested. They are therefore installed only when the
+//! row set contains a build row, and reported as [`None`] -- not as a failure and not as a success
+//! -- when it does not. The grid and the rows themselves are needed by every row set.
 
 use core::sync::atomic::Ordering;
 
@@ -29,37 +38,50 @@ pub struct StandaloneArm {
     pub gfx_served: bool,
     /// The row cloner and the row router are installed.
     pub rows_armed: bool,
-    /// The link field has a menu pump.
-    pub menu_pump: bool,
-    /// The import and the export have a game task to finish on.
-    pub game_task: bool,
+    /// The link field has a menu pump. `None` when this row set has no field to drive.
+    pub menu_pump: Option<bool>,
+    /// The import and the export have a game task to finish on. `None` when this row set has
+    /// nothing to import or export.
+    pub game_task: Option<bool>,
+    /// The profile-renderer table is guarded, so opening `05_010_ProfileSelect` cannot fault in the
+    /// native refresh. `None` when no row in this set opens that window.
+    pub profile_table_guard: Option<bool>,
 }
 
 impl StandaloneArm {
-    /// True only when every part a row needs to work is in place.
+    /// True only when every part this row set needs is in place.
+    ///
+    /// A [`None`] is not a missing part: it is machinery the armed rows never reach, so it is
+    /// neither installed nor required. Only `Some(false)` -- asked for and refused -- fails.
     pub fn is_complete(&self) -> bool {
-        self.gfx_served && self.rows_armed && self.menu_pump && self.game_task
+        self.gfx_served
+            && self.rows_armed
+            && self.menu_pump != Some(false)
+            && self.game_task != Some(false)
+            && self.profile_table_guard != Some(false)
     }
 }
 
-/// Arm `rows` with no product behind them.
+/// Arm `rows` with no product behind them, routing presses to `actions`.
 ///
 /// Call from a bootstrap thread, not from `DllMain`: the game-task registration waits for the
 /// game's task manager to exist, and waiting inside the loader lock deadlocks the process.
 ///
-/// The row actions are left at their defaults on purpose. A shell has no character-switch flow, no
-/// save browser and no Save Game commit, and the rows that would reach them are not in `rows` -- so
-/// the table stays empty rather than carrying a pointer to something that does not exist.
+/// `actions` must carry an entry for every row in `rows` that this crate does not drive itself.
+/// The build rows are driven from inside the crate and need none; the two character rows need the
+/// opener a shell supplies. A `None` beside a row that is in the set is a row that appears and does
+/// nothing, which is worse than absent -- so a shell that cannot supply a flow must leave that row
+/// out of `rows` rather than out of `actions`.
 ///
 /// # Safety
 ///
 /// Bootstrap thread, once per process, before the Quit tab has built a dialog.
-pub unsafe fn arm_standalone(rows: RowSet) -> StandaloneArm {
+pub unsafe fn arm_standalone(rows: RowSet, actions: QuitRowActions) -> StandaloneArm {
     // First, because it is the only one with a deadline: the movie is served the first time the
     // Quit tab is opened, and a swap registered after that shows a vanilla two-cell grid until the
     // panel is rebuilt.
     let gfx_served = unsafe { crate::gfx_swap::install_quit_menu_gfx_swap_hook() };
-    let rows_armed = match unsafe { crate::row_cloner::arm(rows, QuitRowActions::default()) } {
+    let rows_armed = match unsafe { crate::row_cloner::arm(rows, actions) } {
         Ok(()) => true,
         Err(ArmError::AlreadyArmed) => {
             append_autoload_debug(format_args!(
@@ -74,17 +96,58 @@ pub unsafe fn arm_standalone(rows: RowSet) -> StandaloneArm {
             false
         }
     };
-    let menu_pump = unsafe { crate::menu_pump::install_quit_menu_window_run_hook() };
-    let game_task = crate::game_task::install_build_row_game_task();
+    // The link field and the importer are the only reasons the game task exists, so a row set
+    // without a build row neither installs nor needs it.
+    let build_rows = rows.load_build_from_url || rows.generate_build_link;
+    let game_task = build_rows.then(crate::game_task::install_build_row_game_task);
+    // Both character rows open `05_010_ProfileSelect`, and that window renders a character model
+    // per slot. The native refresh that draws them walks the renderer table without a null check,
+    // so a host arming either row has to own the guard or the first press is an access violation
+    // rather than a row -- measured 2026-09-11, `0xc0000005` at `eldenring.exe+0x9ab874`.
+    // The product installs the same body from its own private detour and must not call this.
+    let character_rows = rows.load_character || rows.load_character_from_file;
+    let profile_table_guard = character_rows
+        .then(|| unsafe { crate::profile_table_guard::install_profile_table_guard() });
+    // One detour, two reasons to want it. The link field needs a menu pump to submit its keyboard
+    // job; a character row needs the same post-run moment to hide the pause menu behind the picker
+    // it just opened and to put it back when the picker closes. Neither is the product's hook --
+    // this is the shell's own, chained onto the same address through the union.
+    crate::menu_pump::set_character_rows_armed(character_rows);
+    let menu_pump = (build_rows || character_rows)
+        .then(|| unsafe { crate::menu_pump::install_quit_menu_window_run_hook() });
+    // The row-populate detour is what dresses a browse row: it hides the `Level` caption and the
+    // bottom `PlayTime` that would otherwise read "Level 0" and "0:00:00" about a character that
+    // does not exist, repurposes the top-right `Location` for the file's last-saved time, and
+    // writes the drive strip and the current-path bar. Without it the picker opens onto the game's
+    // own character presentation.
+    //
+    // The product installs the same two detours from its own private copy, and the two must never
+    // both run: `scripts/me3-dll-conflicts.toml` records the pair as duplicate owners and the
+    // profile generator refuses to emit a profile carrying both, so one owner per process is a
+    // property of the conflict table rather than an assumption made here.
+    if character_rows {
+        crate::profile_row_chrome::install_profile_row_populate_hooks();
+    }
     let arm = StandaloneArm {
         gfx_served,
         rows_armed,
         menu_pump,
         game_task,
+        profile_table_guard,
+    };
+    // `not-required` rather than `None`: the line is read by a person looking for what went wrong,
+    // and a bare `None` beside three booleans reads as a failure that printed oddly.
+    let describe = |part: Option<bool>| match part {
+        Some(true) => "yes",
+        Some(false) => "FAILED",
+        None => "not-required",
     };
     append_autoload_debug(format_args!(
-        "system-quit-dup: standalone arm complete={} gfx_served={gfx_served} rows_armed={rows_armed} menu_pump={menu_pump} game_task={game_task} rows={rows:?}",
-        arm.is_complete()
+        "system-quit-dup: standalone arm complete={} gfx_served={gfx_served} rows_armed={rows_armed} menu_pump={} game_task={} profile_table_guard={} rows={rows:?}",
+        arm.is_complete(),
+        describe(menu_pump),
+        describe(game_task),
+        describe(profile_table_guard)
     ));
     arm
 }

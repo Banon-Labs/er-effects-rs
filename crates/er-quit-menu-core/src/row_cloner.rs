@@ -79,8 +79,8 @@ use crate::row_text::{
     set_build_url_row_help, set_generate_build_link_row_help,
 };
 use crate::rows::{
-    PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_STORAGE_OFFSET,
-    QUIT_ROW_TABLE_ROWS as SYSTEM_QUIT_ROW_TABLE_ROWS, QuitRow, QuitRowVerdict,
+    NativeRowAction, PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_STORAGE_OFFSET,
+    QUIT_ROW_TABLE_ROWS as SYSTEM_QUIT_ROW_TABLE_ROWS, QuitRow, QuitRowVerdict, native_row_action,
     quit_controller_of_action_alias as system_quit_controller_of_action_alias,
     quit_row_verdict_text as system_quit_row_verdict_text,
 };
@@ -205,6 +205,13 @@ pub struct QuitRowActions {
     /// Record a same-row drive-strip click while the save picker owns ProfileSelect.
     pub note_drive_strip_click_event: Option<unsafe fn(usize)>,
 }
+
+/// Presses forwarded without resolving a row while a row table was captured. Not an error on its
+/// own -- the thunk vtable is shared -- but it is the only unexamined path to the native Return to
+/// Desktop, so it is counted rather than invisible.
+static SYSTEM_QUIT_FOREIGN_DIALOG_FORWARDS: AtomicUsize = AtomicUsize::new(0);
+/// Log the first few and then only count. A shared thunk can fire every frame in some menus.
+const FOREIGN_DIALOG_FORWARD_LOG_LIMIT: usize = 8;
 
 static ROW_SET: AtomicUsize = AtomicUsize::new(0);
 static ROW_ACTIONS: std::sync::OnceLock<QuitRowActions> = std::sync::OnceLock::new();
@@ -355,6 +362,21 @@ pub unsafe fn system_quit_route_button_action_or_forward(
     // oracles.
     let table_dialog = SYSTEM_QUIT_ROW_TABLE_DIALOG.load(Ordering::SeqCst);
     if dialog == 0 || table_dialog == 0 || dialog != table_dialog {
+        // The one forward in this function that happens without resolving a row, and the action
+        // behind the second Quit row's thunk is the irreversible Return to Desktop -- so a mismatch
+        // here can quit the process with nothing in the log to say it did. A genuinely foreign
+        // dialog (no table captured at all) stays silent, because this thunk vtable is shared with
+        // menus that have nothing to do with the Quit tab and logging those would bury the run.
+        // What is worth a line is a DISAGREEMENT: a table exists and this press belongs to some
+        // other dialog, which is either a stale table or a second dialog wearing the same thunk.
+        if table_dialog != 0 && dialog != 0 {
+            let seen = SYSTEM_QUIT_FOREIGN_DIALOG_FORWARDS.fetch_add(1, Ordering::SeqCst) + 1;
+            if seen <= FOREIGN_DIALOG_FORWARD_LOG_LIMIT {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: {hook_name} forwarding UNRESOLVED action_alias=0x{action_obj:x} controller=0x{controller:x} dialog=0x{dialog:x} table_dialog=0x{table_dialog:x} cursor={cursor}; this press belongs to a dialog the row table was not built for, and the native action behind this thunk may be Return to Desktop (line {seen} of {FOREIGN_DIALOG_FORWARD_LOG_LIMIT}; total in `SYSTEM_QUIT_FOREIGN_DIALOG_FORWARDS`)"
+                ));
+            }
+        }
         if orig == HOOK_ORIGINAL_UNSET {
             append_autoload_debug(format_args!(
                 "system-quit-save: {hook_name} action trampoline is unset for action_alias=0x{action_obj:x} dialog=0x{dialog:x} table_dialog=0x{table_dialog:x}; fail-open return 0"
@@ -443,6 +465,47 @@ pub unsafe fn system_quit_route_button_action_or_forward(
                 ));
                 return 0;
             }
+            // A load with no Save Game flow must not swallow this row. The press is positively
+            // the native first row, and its own thunk still holds the game's action, so forwarding
+            // leaves the row exactly as vanilla built it -- label and behaviour together. Replacing
+            // it with nothing is what a standalone shell used to do: measured 2026-09-11 on an
+            // product-less profile arming this row alone, where the tab's first row read "Quit Game"
+            // and did nothing at all, because this arm suppressed the native action unconditionally
+            // and then had no flow to run in its place.
+            //
+            // Both halves of the identity have to agree before anything is forwarded. The cursor
+            // naming this row is not enough on its own: the visible buttons dispatch through only
+            // two controllers, so a press can arrive carrying the other native row's thunk, and the
+            // action behind that one is the irreversible Return to Desktop. The captured first-row
+            // controller is the second half, and without it this falls through to the suppression
+            // it always did.
+            let save_game_controller =
+                SYSTEM_QUIT_NATIVE_SAVE_GAME_CONTROLLER_LAST_OBJECT.load(Ordering::SeqCst);
+            match native_row_action(
+                row_actions().save_game_start_flow.is_some(),
+                orig != HOOK_ORIGINAL_UNSET,
+                save_game_controller,
+                controller,
+            ) {
+                NativeRowAction::RunFlow => {}
+                NativeRowAction::ForwardNative => {
+                    SYSTEM_QUIT_SAVE_GAME_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "system-quit-save: native first Quit row FORWARDED at {hook_name} action_alias=0x{action_obj:x} controller=0x{controller:x} cursor={cursor} {verdict_text}; this load supplies no Save Game flow, so the row keeps the game's own action rather than becoming a row that does nothing"
+                    ));
+                    // Safety: the union slot holds either the game trampoline or the next handler,
+                    // both callable under the union signature; the same call the foreign-dialog
+                    // path above makes.
+                    let original: er_hook::UnionFn = unsafe { std::mem::transmute(orig) };
+                    return unsafe { original(action_obj, 0, 0, 0) };
+                }
+                NativeRowAction::Suppress => {
+                    append_autoload_debug(format_args!(
+                        "system-quit-save: native first Quit row SUPPRESSED at {hook_name} action_alias=0x{action_obj:x} controller=0x{controller:x} captured_save_game_controller=0x{save_game_controller:x} cursor={cursor} {verdict_text}; no Save Game flow and the dispatching controller is not the captured first row's, so the native action behind this thunk may be Return to Desktop"
+                    ));
+                    return 0;
+                }
+            }
             SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG.store(0, Ordering::SeqCst);
             SYSTEM_QUIT_SAVE_GAME_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
             let started = match row_actions().save_game_start_flow {
@@ -481,9 +544,42 @@ pub unsafe fn system_quit_route_button_action_or_forward(
             if !system_quit_row_gate_instant_quit(verdict, hook_name) {
                 return 0;
             }
-            if let Some(request_save) = row_actions().save_game_request_save_only {
-                unsafe { request_save() };
-            }
+            // The instant `ExitProcess(0)` is only safe because the product persists the character
+            // first. A load that cannot do that must not take this path: it would terminate the
+            // process on a character whose progress since the last autosave has never been written,
+            // which is the one failure on this tab the player cannot undo. Forward the game's own
+            // Return to Desktop instead -- slower, and it renders the teardown this path exists to
+            // skip, but it is the vanilla quit and it saves. Same two-half identity as the first
+            // row: the cursor must name this row and the press must carry the captured second-row
+            // controller.
+            let return_desktop_controller =
+                SYSTEM_QUIT_NATIVE_RETURN_DESKTOP_CONTROLLER_LAST_OBJECT.load(Ordering::SeqCst);
+            let request_save = match native_row_action(
+                row_actions().save_game_request_save_only.is_some(),
+                orig != HOOK_ORIGINAL_UNSET,
+                return_desktop_controller,
+                controller,
+            ) {
+                NativeRowAction::RunFlow => row_actions()
+                    .save_game_request_save_only
+                    .expect("RunFlow is only returned when the save request is present"),
+                NativeRowAction::ForwardNative => {
+                    append_autoload_debug(format_args!(
+                        "quit-to-desktop: native Return to Desktop FORWARDED at {hook_name} controller=0x{controller:x} cursor={cursor} {verdict_text}; this load cannot request a save, so the instant ExitProcess(0) is refused and the game's own quit runs instead"
+                    ));
+                    // Safety: as above -- the union slot under the union signature.
+                    let original: er_hook::UnionFn = unsafe { std::mem::transmute(orig) };
+                    return unsafe { original(action_obj, 0, 0, 0) };
+                }
+                NativeRowAction::Suppress => {
+                    SYSTEM_QUIT_QUIT_REFUSED_AMBIGUOUS_ROW_COUNT.fetch_add(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "quit-to-desktop: REFUSING the quit at {hook_name} controller=0x{controller:x} captured_return_desktop_controller=0x{return_desktop_controller:x} cursor={cursor} {verdict_text}; no save request available and the dispatching controller is not the captured second row's"
+                    ));
+                    return 0;
+                }
+            };
+            unsafe { request_save() };
             release_input_block_now();
             append_autoload_debug(format_args!(
                 "quit-to-desktop: Return-to-Desktop confirmed at {hook_name} controller=0x{controller:x} action_alias=0x{action_obj:x} cursor={cursor} {verdict_text}; requested save + released cursor clip; INSTANT ExitProcess(0) before world teardown (no loading screen)"

@@ -84,13 +84,34 @@ pub mod gfx_swap;
 #[cfg(windows)]
 pub mod menu_pump;
 #[cfg(windows)]
+pub mod profile_load_dialog;
+/// Which fields of a `05_010_ProfileSelect` row are on screen, and whether the row is one of ours.
+#[cfg(windows)]
+pub mod profile_row_chrome;
+#[cfg(windows)]
+pub mod profile_table_guard;
+#[cfg(windows)]
 pub mod row_cloner;
+/// The snapshot that restores the game's records after the picker borrows them for browse rows.
+#[cfg(windows)]
+pub mod row_staging;
 #[cfg(windows)]
 pub mod save_dest_commit_runtime;
+/// The in-game save-file picker rendered through `05_010_ProfileSelect`.
+#[cfg(windows)]
+pub mod save_picker_menu;
+/// The native `05_010` list's own input and geometry, rebased for a sliding ten-row window.
+#[cfg(windows)]
+pub mod save_picker_native_scroll_input;
+/// The Scaleform-HTML string shapes a ProfileSelect row's text is written in.
+pub mod scaleform_html;
 #[cfg(windows)]
 pub mod scaleform_proxy;
 #[cfg(windows)]
 pub mod software_keyboard;
+/// The `02_000_IngameTop` / `02_040_OptionSetting` hide and restore a ProfileSelect overlay needs.
+#[cfg(windows)]
+pub mod system_windows;
 #[cfg(windows)]
 pub use dim::*;
 #[cfg(windows)]
