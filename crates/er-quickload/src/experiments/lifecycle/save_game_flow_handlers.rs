@@ -24,6 +24,9 @@ pub(crate) unsafe extern "system" fn system_quit_save_game_get_and_format_hook(
     fmg_name: usize,
     abbrev: usize,
 ) -> usize {
+    // Every message the game formats passes here, so this is where a dialog's text ids can be
+    // recorded for the `msgbox-builder` line that follows a few frames later.
+    unsafe { crate::experiments::note_msg_text_id(text_id, abbrev) };
     let replacement = if text_id == SYSTEM_QUIT_FIRST_ROW_MENU_TEXT_ID
         && unsafe { wide_equals_ascii(abbrev, b"GRMT") }
     {
