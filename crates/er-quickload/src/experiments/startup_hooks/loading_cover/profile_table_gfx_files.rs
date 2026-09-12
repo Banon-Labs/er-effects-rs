@@ -934,33 +934,15 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
             // movie from the native file's own vanilla payload and swap it in place. On any
             // failure the untouched native file is returned (vanilla title UI, fail-closed).
             //
-            // Only while the cover is drawing. The strip removes the title's own chrome -- the
-            // `PRESS ANY BUTTON` prompt and the menu it opens -- because the boot cover is painted
-            // over the top of it and the vanilla UI must not show through. `TITLE_05_000_RUNTIME_STRIP_ARMED`
-            // is set once at attach and never cleared, and the derived buffer is a process-lifetime
-            // `OnceLock` reused "for every later title visit", so without this gate the second
-            // title and every one after it also came up stripped: logo, and nothing to press.
-            //
-            // Measured, run br-20260912-053313-56d4: the strip derived and served at +13002ms with
-            // the cover still up (it released at +31027ms). The user then played, chose System >
-            // Quit Game, and the title rebuilt at +42565ms -- `05_000_Title` re-acquired at +42570,
-            // `title-open-menu: PASS-THROUGH native open_menu #2` at +44778, and the screen sat on
-            // the logo with no prompt and no menu for the next five minutes. There was no way back
-            // to Continue, Load Game or Settings short of killing the process.
-            //
-            // `title_visual_suppression_active()` is the predicate the sibling bug already uses for
-            // the bind-time `PressStart` hide (2026-09-04), and it is re-armable: a Load Character
-            // switch's cover window clears `BOOT_VIEW_RELEASE_READY_MS` through
-            // `boot_view_reset_cover_window`, so a switch still gets its stripped title.
-            if is_title_05_000
-                && TITLE_05_000_RUNTIME_STRIP_ARMED.load(Ordering::SeqCst) != 0
-                && er_telemetry_core::counters::title_visual_suppression_active()
-            {
+            // This site runs once per process -- the engine opens the movie once and caches what
+            // it parsed -- so it is the wrong place to decide anything per title. The decision is
+            // `title_05_000_strip_default_enabled`, which is now false; see the reason there.
+            if is_title_05_000 && TITLE_05_000_RUNTIME_STRIP_ARMED.load(Ordering::SeqCst) != 0 {
                 memory_replacement = unsafe { title_05_000_swap_to_stripped(base, native) };
             } else if is_title_05_000 {
                 TITLE_05_000_RUNTIME_STRIP_DECLINED.fetch_add(1, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
-                    "title-resource-observer: 05_000 runtime strip DECLINED -- no cover is drawing, so the title keeps its own PRESS ANY BUTTON and menu (declines={})",
+                    "title-resource-observer: 05_000 title served VANILLA -- the movie keeps its own PRESS ANY BUTTON and menu, and the per-element hides own the boot title (declines={})",
                     TITLE_05_000_RUNTIME_STRIP_DECLINED.load(Ordering::SeqCst)
                 ));
             }
