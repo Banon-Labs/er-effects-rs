@@ -57,7 +57,17 @@
 //! padsweep [lo] [hi]           hold each pad id in turn, reporting every picker-cursor change
 //! force <code> [polls]         answer the game's own menu-code query "pressed" for N polls
 //! qstats                       which menu-query candidate is live, and what codes it polls
+//! openmenu                     native request for the IngameTop pause menu (CSPopupMenu+0x121)
+//! optionsetting                native submit of the System pause row's MenuJob, opening
+//!                              02_040_OptionSetting on tab 0 (needs the pause menu already up)
 //! ```
+//!
+//! `openmenu` and `optionsetting` are the two verbs that are not read-only, and they are here
+//! because this build's menus do not take injected input. Measured 2026-09-12 on a live session:
+//! `openmenu` opened the pause menu in one frame, while `key 0x1`, `key 0xc8`, `key 0x12` and
+//! `force 0x2d` all reported delivered and left the pause `CS::GridControl` at `selected_cell=0`.
+//! Both verbs go through the game's own job factory and submit path rather than writing menu state,
+//! so what they do is what the row does.
 //!
 //! `sweep` is the verb that makes the others usable. Hunting a row by trying coordinates by hand
 //! costs one command and one poll per guess, and a menu that answers cell 0 everywhere is
@@ -754,6 +764,32 @@ fn run_command(base: usize, line: &str) {
                     "repl: openmenu REFUSED -- the guard event id is already set, CSMenuMan+0x80 is null, or +0x121 is unreadable (menu already open, or no world)"
                 ),
                 None => harness_log!("repl: openmenu -- input manager not resolved yet"),
+            }
+        }
+        Some("optionsetting") => {
+            // The System row, opened the way `openmenu` opens IngameTop rather than by pressing it.
+            // Measured 2026-09-12 on a live session: `openmenu` opened the pause menu in one frame,
+            // and the Confirm that would activate this row -- scancode 0x12 through `key`, and the
+            // native menu event through `force` -- moved the pause `CS::GridControl` not at all.
+            //
+            // It needs the pause menu already up, for the same reason `equip` and `inv` do: the
+            // factory builds its job from the popup's own component stack, and the submit pushes
+            // the current top job to `popup+0xD0` so Back pops natively. Called at the title it
+            // builds nothing.
+            let opened = crate::input_inject::input_manager(base)
+                .map(|im| crate::input_inject::native_open_optionsetting_menu(base, im));
+            match opened {
+                Some(true) => harness_log!(
+                    "repl: optionsetting -> built the System pause-row MenuJob (factory rva \
+                     0x8024d0, resource 02_040_OptionSetting) and submitted it through the native \
+                     CSPopupMenu top-job path; the pane opens on tab 0, not the Quit tab"
+                ),
+                Some(false) => harness_log!(
+                    "repl: optionsetting REFUSED -- CSMenuMan+0x80 is null, the factory has no \
+                     verified address for this build, or the factory returned no job (is the pause \
+                     menu open?)"
+                ),
+                None => harness_log!("repl: optionsetting -- input manager not resolved yet"),
             }
         }
         Some("picker") => log_picker_cursor("picker"),

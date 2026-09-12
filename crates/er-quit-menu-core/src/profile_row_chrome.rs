@@ -96,12 +96,17 @@ impl CharacterRowFacts {
     };
 }
 
+/// What a host answers about one character row, given `(base, row_model, slot,
+/// is_current_player_row)`. Named rather than written inline so the hook table below stays readable
+/// and `clippy::type_complexity` has nothing to object to.
+pub type CharacterRowFactsFn = unsafe fn(usize, usize, i32, bool) -> CharacterRowFacts;
+
 /// The steps around a row populate that only a host with a decoded save, a live layout editor or a
 /// drive strip can perform.
 #[derive(Clone, Copy, Default)]
 pub struct RowPopulateHooks {
     /// Everything a host knows about a character row. Absent means [`CharacterRowFacts::UNKNOWN`].
-    pub character_row_facts: Option<unsafe fn(usize, usize, i32, bool) -> CharacterRowFacts>,
+    pub character_row_facts: Option<CharacterRowFactsFn>,
     /// Is the row being populated right now the transient current-player summary rather than a save
     /// slot? The two share slot index 0, so this cannot be read off the row model.
     pub building_current_player_row: Option<fn() -> bool>,

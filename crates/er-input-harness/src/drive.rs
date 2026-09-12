@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicU64, AtomicUsize,
 use crate::game_mem::{
     flip_fixed_spf, flip_mode_current, menu_data_ptr, menu_flags, now_loading,
     optionsetting_tab_index, pause_menu_open, read_drive_mode_flag, return_title_requested,
-    save_state, top_menu_id, top_menu_job_ptr, world_simulating,
+    save_state, saved_map, top_menu_id, top_menu_job_ptr, world_map_mounted, world_simulating,
 };
 use crate::input_inject::{
     MenuEvent, advance_press_any_button, input_manager, keep_input_active, native_open_equip_menu,
@@ -57,6 +57,12 @@ const LOAD_BUDGET: u64 = 9000;
 const NAV_BUDGET: u64 = 480;
 /// Native quit-to-menu confirm + world teardown. ~10s.
 const QUIT_BUDGET: u64 = 600;
+/// How many consecutive frames the title dialog's `a40` latch must read 1 before `Phase::Continue`
+/// writes anything. The latch is set when the native `open_menu` starts building the rows, not when
+/// it has finished, so a cursor written on the first such frame goes into a `CS::GridControl` that
+/// is still being filled. Half a second at 60fps, and it gates the input only -- the phase still
+/// advances on the world coming up, never on frames elapsing.
+const TITLE_MENU_SETTLE_FRAMES: u64 = 30;
 /// Dwell on the opened Equipment menu (mode `equip`) so its armament tiles populate, the menu
 /// renders (fade-in settles), and the oracle can capture + process before teardown. 3s at 60fps
 /// (user 2026-07-23: reduced 9s -> 3s teardown delay).
@@ -237,6 +243,8 @@ struct Sem {
     world_sim: bool,
     now_loading: bool,
     save_state: i32,
+    world_map_mounted: bool,
+    saved_map: i32,
 }
 
 impl Sem {
@@ -246,12 +254,21 @@ impl Sem {
             world_sim,
             now_loading: now_loading(),
             save_state: save_state(),
+            world_map_mounted: world_map_mounted(),
+            saved_map: saved_map(),
         }
     }
-    /// A load has actually started (Continue took effect): the load FSM left idle, the now-loading latch
-    /// tripped, or the world is already simulating.
-    fn load_started(&self) -> bool {
-        self.world_sim || self.now_loading || self.save_state > 0
+    /// A character's world is actually coming up: the loading screen latched, `GameMan::savedMap`
+    /// names a real map, or the world is already simulating.
+    ///
+    /// `save_state > 0` used to be the fourth clause and is deliberately gone (bd
+    /// er-effects-rs-9gxt). That field is the shared save/load device, and the title's own profile
+    /// list reads the save through it, so it reaches 2 at a title where nothing is loading -- which
+    /// made `Phase::Continue` report a press that had not taken. `save_state` is still carried on
+    /// `Sem` because `Phase::QuitTeardown` wants exactly its real meaning, "the device is idle", and
+    /// because every phase line logs it.
+    fn world_coming_up(&self) -> bool {
+        self.world_sim || self.now_loading || self.world_map_mounted
     }
 }
 
@@ -375,12 +392,113 @@ impl Phase {
         let advanced = match self {
             Phase::Startup => title_scan::title_pab_parked(base),
             Phase::PressAnyButton => {
-                advance_press_any_button(base);
-                title_scan::title_menu_up(base)
+                // Write the accept byte only into a title that can consume it, and refuse to call
+                // the result an effect until at least one write has been made.
+                //
+                // Both halves are the same defect seen from two sides (bd er-effects-rs-9gxt). The
+                // body this replaced wrote the byte unconditionally and advanced on `a40 == 1`, so
+                // a title whose menu was already open -- or one whose a40 latch was transiently set
+                // during a teardown -- satisfied the check on the phase's first frame, before the
+                // write could possibly have been read. Measured on the 2026-09-11 18:13 run:
+                // `press_any_button ADVANCED after 1f`.
+                //
+                // `title_ready_for_accept` is the game's own precondition: `TitleTopDialog::update`
+                // opens the menu when the accept byte is non-zero and a40 is still 0, and only once
+                // the dialog's state machine has settled in `Loop`. Outside that window the write
+                // lands in a byte nobody reads.
+                let ready = title_scan::title_ready_for_accept(base);
+                if ready && frame.is_multiple_of(TAP_CYCLE_FRAMES) {
+                    let wrote = advance_press_any_button(base);
+                    let issued = ACCEPT_BYTE_WRITES.fetch_add(u64::from(wrote), Ordering::Relaxed);
+                    if wrote && issued == 0 {
+                        harness_log!(
+                            "title-accept: first accept-byte write at f{frame} (dialog settled in \
+                             Loop, a40=0) -- press any button"
+                        );
+                    }
+                } else if !ready && frame == 0 {
+                    // One line, on entry, for the case that produced the false pass: the phase was
+                    // handed a title it cannot press. It is not a derail by itself -- the dialog may
+                    // still be settling -- but it is the difference between "the press did nothing"
+                    // and "there was no press".
+                    harness_log!(
+                        "title-accept: not ready to press at f0 (a40={} in_loop={}) -- holding \
+                         until the title dialog settles in Loop with its menu closed",
+                        title_scan::title_dialog_a40(base),
+                        title_scan::title_dialog_in_loop(base) as u8
+                    );
+                }
+                // The one pass this phase makes without a press, and it says so.
+                //
+                // A reload cycle re-enters here after a return to title, and the title it comes
+                // back to can already have its menu open. Turning "we pressed nothing" into a
+                // derail there would break the reload and full modes over a title that is in
+                // exactly the state the next phase wants. The product takes the same shortcut for
+                // the same case and with the same precondition -- settled in `Loop`, menu genuinely
+                // open, which is what separates this from the stale-latch pass that bd
+                // er-effects-rs-9gxt is about (`maybe_set_title_accept_byte` marks its one-shot
+                // fired and returns). The log line is the difference: a run can tell a press from a
+                // window that was already there.
+                if frame == 0
+                    && title_scan::title_menu_up(base)
+                    && title_scan::title_dialog_in_loop(base)
+                {
+                    MENU_WAS_ALREADY_OPEN.store(true, Ordering::Relaxed);
+                    harness_log!(
+                        "title-accept: the title menu was already open and settled at f0 -- \
+                         advancing without pressing anything"
+                    );
+                }
+                MENU_WAS_ALREADY_OPEN.load(Ordering::Relaxed)
+                    || (ACCEPT_BYTE_WRITES.load(Ordering::Relaxed) > 0
+                        && title_scan::title_menu_up(base))
             }
             Phase::Continue => {
-                advance_press_any_button(base);
-                sem.load_started()
+                // Continue is two writes, not one, and its effect is the world -- not the save
+                // device (bd er-effects-rs-9gxt, recipe from bd
+                // `TITLE-CONTINUE-is-accept-byte-not-keystate-...-2026-07-22`).
+                //
+                // The recipe that phase reverses is: at the open menu, write the row cursor
+                // `dialog+0xb0c` to the Continue row, then write the global accept byte; the title's
+                // Continue selector (1.16.2 `0x1409a8eb0`) consumes the byte and dispatches the
+                // load. The body this replaced wrote only the byte, so it depended on the cursor
+                // already sitting on Continue, and it advanced on `sem.load_started()`, whose
+                // `save_state > 0` clause is satisfied by the title reading its own profile list.
+                //
+                // The menu has to be up before either write: the selector does not exist until the
+                // rows build, and `TITLE_MENU_SETTLE_FRAMES` of a40 == 1 is the cheapest honest way to
+                // say "it has built" without a second oracle. That settle gates the input, never the
+                // effect check -- a phase that advances because frames elapsed is the defect this
+                // whole comment is about.
+                if title_scan::title_menu_up(base) {
+                    let settled = MENU_SETTLE_STREAK.fetch_add(1, Ordering::Relaxed) + 1;
+                    if settled >= TITLE_MENU_SETTLE_FRAMES {
+                        if settled == TITLE_MENU_SETTLE_FRAMES {
+                            let before = title_scan::title_cursor(base);
+                            let moved = title_scan::set_title_cursor_continue(base);
+                            harness_log!(
+                                "title-continue: menu settled after {TITLE_MENU_SETTLE_FRAMES}f at \
+                                 a40=1; cursor {before} -> Continue (written={})",
+                                moved as u8
+                            );
+                        }
+                        if frame.is_multiple_of(TAP_CYCLE_FRAMES) {
+                            let wrote = advance_press_any_button(base);
+                            let issued =
+                                ACCEPT_BYTE_WRITES.fetch_add(u64::from(wrote), Ordering::Relaxed);
+                            if wrote && issued == 0 {
+                                harness_log!(
+                                    "title-continue: first accept-byte write at f{frame} (cursor={}) \
+                                     -- pressing Continue",
+                                    title_scan::title_cursor(base)
+                                );
+                            }
+                        }
+                    }
+                } else {
+                    MENU_SETTLE_STREAK.store(0, Ordering::Relaxed);
+                }
+                ACCEPT_BYTE_WRITES.load(Ordering::Relaxed) > 0 && sem.world_coming_up()
             }
             Phase::WaitLoadIn => sem.world_sim,
             Phase::OpenPauseMenu => {
@@ -435,127 +553,113 @@ impl Phase {
                 }
             }
             Phase::NavToOptionSetting => {
-                // Install the reader detours here, not only in `Phase::DumpMenuBindings`.
+                // The System row, opened by the game's own factory rather than by a Confirm.
                 //
-                // They are the input channel and nothing else is: `set_menu_scroll` and
-                // `set_menu_buttons` below only
-                // arm a value, and `menu_scroll_reader_hook` / `menu_button_hook` are what hand it
-                // to the game when it reads. With them uninstalled every tap this phase issues goes
-                // nowhere, silently, and the phase spends its whole budget pressing into a menu
-                // that never hears it.
+                // Why the input was abandoned here (measured 2026-09-12 on a live `er-quit-rows`
+                // session, every one of these reporting `delivered=true` from the harness's own
+                // command loop):
                 //
-                // Until now the only call site was the diagnostic phase, so a mode table that did
-                // not list `DumpMenuBindings` produced exactly that. Measured on run
-                // br-20260910-200831-c1cb: eight nav attempts over 480 frames, every one reporting
-                // `axis_reader_calls=0 button_calls=0` with the gate open (`+0x19=1 +0x798=0x0`)
-                // and the escape menu up -- an input phase that had no input path at all. The
-                // install is idempotent and guarded, so calling it from the phase that depends on
-                // it costs one atomic load per frame and makes the dependency impossible to forget.
-                crate::pad_inject::install_menu_scroll_hook(base);
-                // TAP, do not hold -- and press one candidate button per attempt (rewritten
-                // 2026-09-05 after br-20260905-234626-ce9a).
+                //   `key 0x1`  (DirectInput Escape, twice)  pause menu did not open, grid count 5
+                //   `openmenu` (native `CSPopupMenu+0x121`) pause menu opened, grids 5 -> 6
+                //   `key 0xc8` (DirectInput Up)             `GridControl selected_cell=0`, unmoved
+                //   `key 0x12` (DirectInput E, confirm)     nothing; the tab read stayed `none`
+                //   `force 0x2d` (native menu event, up)    `selected_cell=0`, still unmoved
                 //
-                // What the previous body actually did, measured rather than reasoned about. It
-                // called `stamp_menu_scroll_direct(base, 1)` on every frame, and the delivery
-                // channel is not the memory write that call also attempts -- it is
-                // `menu_scroll_reader_hook`, which returns the armed value to the game on every
-                // read. So the menu was told "one row down" 1,553 consecutive times across 480
-                // frames: a runaway scroll that can never come to rest on a row, not a press. On
-                // top of that it cycled both candidate confirm buttons (`+0x08` and `+0x10`) at
-                // once, so a Confirm landed on whatever row the runaway had reached and there was
-                // no way to attribute the result to either button. The phase derailed with
-                // `pause_menu=0`: something in that spray closed the escape menu.
+                // So neither the scancode channel nor the menu-event channel moves this build's
+                // pause menu, while the one native request opened it in a single frame. That is the
+                // same shape as the title, where the accept byte works and both input channels do
+                // not. This phase spent its whole 480-frame budget pressing into that, on every run
+                // since 2026-09-05, and derailed with `effect not seen within 480f` -- which bd
+                // er-effects-rs-h09b recorded as a `top_window()` defect and which is in fact two
+                // defects, the resolver and this press, either of which alone is enough to derail.
                 //
-                // The two diagnostics that make this readable are worth keeping in mind:
-                //   * `menu-gate: +0x19=1 +0x798=0x0 open=true` for all 480 frames -- the menu was
-                //     never refusing input, so this was never a gate problem.
-                //   * `raw_axis=0` at every sample -- the direct write half never reaches the
-                //     device the reader uses (it resolves from PadDevices; the reader's comes from
-                //     the padMaps tree). Only the hook's return value was ever the input.
+                // What replaces it is the route `Phase::OpenEquipMenu` already proves for
+                // `EquipTop`: build the row's `CS::MenuJob` with the game's own pause-row factory
+                // and submit it through the native `CSPopupMenu` top-job path, so the pane is
+                // pushed and `Back` pops natively. The System factory is
+                // `input_inject::native_open_optionsetting_menu`, statically identified as the
+                // System entry of the same `st_pauseMenuClickHandlerInfoList` the Equipment and
+                // Inventory factories come from.
                 //
-                // So: one discrete tap of up, then one Confirm, then wait; repeat with the other
-                // button if the first attempt produced nothing. Up-then-Confirm is the reversed
-                // route (2026-07-17, bd menu-gaps-closed): from IngameTop the cursor starts at row
-                // 0 and up wraps to the last row, System/OptionSetting.
-                let slot = frame % NAV_ATTEMPT_FRAMES;
-                let attempt = frame / NAV_ATTEMPT_FRAMES;
-                // Alternate which CSEzMenuViewerPad button this attempt treats as confirm, so the
-                // run distinguishes them instead of pressing both and learning nothing.
-                let confirm_button = if attempt.is_multiple_of(2) { 1 } else { 2 };
-                if slot < NAV_TAP_FRAMES {
-                    // Up, for one tap window only.
-                    crate::pad_inject::set_menu_scroll(-1);
-                    crate::pad_inject::set_menu_buttons(0);
-                } else if slot < NAV_TAP_FRAMES + NAV_SETTLE_FRAMES {
-                    // Release and let the cursor come to rest. Without this the next read is still
-                    // being handed a direction and the row under the cursor keeps moving.
-                    crate::pad_inject::set_menu_scroll(0);
-                    crate::pad_inject::set_menu_buttons(0);
-                } else if slot < NAV_TAP_FRAMES + NAV_SETTLE_FRAMES + NAV_TAP_FRAMES {
-                    crate::pad_inject::set_menu_scroll(0);
-                    crate::pad_inject::set_menu_buttons(confirm_button);
-                } else {
-                    crate::pad_inject::set_menu_scroll(0);
-                    crate::pad_inject::set_menu_buttons(0);
-                }
-                // One diagnostic block per attempt, not one per 120 frames. The old cadence was
-                // unaligned with anything the phase did, so a sample could land mid-tap or mid-wait
-                // and there was no way to say which press it described. At `slot == 0` every field
-                // below describes the state the attempt starts from.
-                if slot == 0 {
-                    crate::pad_inject::sample_menu_pointer();
-                    crate::pad_inject::sample_pointer_correction(base);
-                    let (px, py) = crate::pad_inject::menu_pointer_observed();
-                    let (cx, cy) = crate::pad_inject::menu_pointer_correction();
-                    let (device, raw, calls) = crate::pad_inject::menu_scroll_reader_state();
-                    harness_log!(
-                        "nav-attempt {attempt} (f{frame}): confirm_button={confirm_button} pause_menu={} axis_reader_calls={calls} button_calls={} device=0x{device:x} raw_axis={raw} pointer x={px} y={py} correction x={} y={} (bits 0x{cx:x}/0x{cy:x})",
-                        pause_menu_open() as u8,
-                        crate::pad_inject::menu_button_reader_calls(),
-                        f32::from_bits(cx),
-                        f32::from_bits(cy)
-                    );
-                    // The gate first, because it decides whether anything above is even readable as
-                    // evidence. `FUN_140758050` shuts every menu pad read when CSMenuMan+0x19 == 0,
-                    // or +0x798 != 0, or (disableMouseCursor && the fade plate timer 2 is still
-                    // running). A derail with the gate shut is not a failed press, it is a menu that
-                    // refused input -- and the fix for those two is nothing alike.
-                    match crate::game_mem::menu_input_gate() {
-                        Some((gate19, disable_cursor, gate798)) => harness_log!(
-                            "menu-gate(nav a{attempt}): +0x19={gate19} disableMouseCursor={disable_cursor} +0x798=0x{gate798:x} open={}",
-                            gate19 != 0 && gate798 == 0
-                        ),
-                        None => harness_log!("menu-gate(nav a{attempt}): CSMenuMan not up"),
-                    }
-                    match crate::game_mem::pause_menu_grid() {
-                        Some((offset, selected)) => harness_log!(
-                            "menu-grid(nav a{attempt}): GridControl at window+0x{offset:x} selected_cell={selected}"
-                        ),
-                        None => harness_log!(
-                            "menu-grid(nav a{attempt}): no GridControl found in the top menu window"
-                        ),
-                    }
-                }
-                // The menu closing is a result, not a timeout. If our input shut the escape menu
-                // there is nothing left to navigate, and spending the rest of the 480-frame budget
-                // pressing into a closed menu buys no evidence -- so say so immediately, with the
-                // attempt and button that did it, and let the phase derail on the next tick.
-                if !pause_menu_open() && !NAV_MENU_CLOSED_LOGGED.swap(true, Ordering::Relaxed) {
-                    harness_log!(
-                        "nav: THE ESCAPE MENU CLOSED at f{frame} during attempt {attempt} with confirm_button={confirm_button} -- our input dismissed it rather than entering a pane"
-                    );
-                }
-                // Effect read as a pointer change, not as a menu id. `top_menu_id()` reads
-                // top_window+0x180, and on the installed 1.17 build that read returns -1 or garbage
-                // (measured across br-20260905-041435-e8d0 and -041731-2bc4: 53724, 25445, -1, while
-                // `pause_menu_open()` was correctly true) -- the offset is 1.16.2 and has drifted, so
-                // waiting for it to equal 0x25 waits forever and the phase DERAILs on a nav that may
-                // well have worked. `currentTopMenuJob` (popupMenu+0xB0) is the semaphore this module
-                // already documents as the passive "entered a submenu" signal: the game replaces that
-                // pointer when a submenu opens, pushing the old one to popupMenu+0xD0. A change in it
-                // is the game telling us our Confirm entered a pane.
+                // Await first, then call, then keep awaiting -- the shape `Phase::OpenPauseMenu`
+                // settled on. An OptionSetting pane that is already up (someone else opened it, or
+                // a previous cycle left it) is honoured rather than stacked on top of.
                 let entered = top_menu_job_ptr();
-                entered != 0 && entered != SUBMENU_BASELINE_JOB.load(Ordering::Relaxed)
+                let baseline = SUBMENU_BASELINE_JOB.load(Ordering::Relaxed);
+                let changed = entered != 0 && entered != baseline;
+                if !changed {
+                    if frame >= NAV_NATIVE_AWAIT_FRAMES
+                        && frame.is_multiple_of(NAV_NATIVE_RETRY_FRAMES)
+                    {
+                        let submitted =
+                            crate::input_inject::native_open_optionsetting_menu(base, im);
+                        if !NAV_NATIVE_LOGGED.swap(true, Ordering::Relaxed) {
+                            harness_log!(
+                                "nav: submitting the System pause-row MenuJob natively at f{frame} \
+                                 (submitted={submitted} baseline_job=0x{baseline:x}) -- injected \
+                                 Confirm does not reach this build's pause menu"
+                            );
+                        }
+                    }
+                    // The channel diagnostic, kept whole from the input-driven body on purpose.
+                    //
+                    // The injected channel is not driven here any more, but whether the game is
+                    // still reading it is the open question this phase used to answer by accident,
+                    // and it is the measurement that would show the channel coming back on a future
+                    // build. `axis_reader_calls` / `button_calls` rising with the menu up says the
+                    // game polls the hooks; both at zero says it does not poll them at all. Neither
+                    // reading costs a press.
+                    if frame == 0 {
+                        crate::pad_inject::sample_menu_pointer();
+                        crate::pad_inject::sample_pointer_correction(base);
+                        let (px, py) = crate::pad_inject::menu_pointer_observed();
+                        let (cx, cy) = crate::pad_inject::menu_pointer_correction();
+                        let (device, raw, calls) = crate::pad_inject::menu_scroll_reader_state();
+                        harness_log!(
+                            "nav-channel (f{frame}): pause_menu={} axis_reader_calls={calls} \
+                             button_calls={} device=0x{device:x} raw_axis={raw} pointer x={px} \
+                             y={py} correction x={} y={} (bits 0x{cx:x}/0x{cy:x})",
+                            pause_menu_open() as u8,
+                            crate::pad_inject::menu_button_reader_calls(),
+                            f32::from_bits(cx),
+                            f32::from_bits(cy)
+                        );
+                    }
+                    if frame == 0 {
+                        match crate::game_mem::menu_input_gate() {
+                            Some((gate19, disable_cursor, gate798)) => harness_log!(
+                                "menu-gate(nav): +0x19={gate19} disableMouseCursor={disable_cursor} \
+                                 +0x798=0x{gate798:x} open={}",
+                                gate19 != 0 && gate798 == 0
+                            ),
+                            None => harness_log!("menu-gate(nav): CSMenuMan not up"),
+                        }
+                        match crate::game_mem::pause_menu_grid() {
+                            Some((offset, selected)) => harness_log!(
+                                "menu-grid(nav): GridControl at window+0x{offset:x} \
+                                 selected_cell={selected}"
+                            ),
+                            None => harness_log!(
+                                "menu-grid(nav): no GridControl found in the top menu window"
+                            ),
+                        }
+                    }
+                    // The menu closing is a result, not a timeout. Nothing this phase does should
+                    // close it any more, so if it shuts, something else did and the rest of the
+                    // budget buys no evidence.
+                    if !pause_menu_open() && !NAV_MENU_CLOSED_LOGGED.swap(true, Ordering::Relaxed) {
+                        harness_log!(
+                            "nav: the escape menu closed at f{frame} -- nothing here presses keys, \
+                             so this was not our input"
+                        );
+                    }
+                }
+                // Effect read as a pointer change, not as a menu id. The game replaces
+                // `currentTopMenuJob` when it opens a pane, pushing the old one to `popupMenu+0xD0`,
+                // so a change in that pointer is the game saying a pane opened. `top_menu_id()` is
+                // logged beside it and decides nothing -- see the note on `INGAMETOP_MENU_ID` in
+                // `game_mem` for why that read spent a year answering garbage.
+                changed
             }
             Phase::TabToQuit => {
                 // The tab-switch (the D_van blocker): one TabLeft = native-binding menu-event 0x30. From
@@ -579,6 +683,34 @@ impl Phase {
                 // row walk answering at all is the game saying the Quit tab is up and its rows are
                 // ready. It is also precisely the question the next phase asks, which means this
                 // phase can no longer advance into a pane the next one cannot read.
+                // Audit, 2026-09-12, and it is a negative result: there is no native request for
+                // a tab the way there is for a pane, so this phase still presses.
+                //
+                // What the chain is, read statically. `window+0x1870` is
+                // `CS::OptionSettingTopDialog::_SettingTabControl`; its `+0x10` is the tab
+                // `CS::GridControl` whose `+0xd4` is the selected cell, and its `+0x18` is the
+                // `CS::CompositeOptionSettingDialog` at `window+0x1768`, which holds ten pane
+                // pointers at `+0x68` and the displayed one at `+0xb8` -- the field
+                // `game_mem::optionsetting_current_pane` reads.
+                //
+                // Why none of that is a native tab-select. `_SettingTabControl`'s only real virtual
+                // (1.16.2 `FUN_140966f30`) reads the cursor, calls the `GridControl` pager
+                // `FUN_1407392f0`, re-reads the cursor and forwards to the composite if it moved --
+                // and that pager takes no direction argument. It decides by asking the menu input
+                // predicates (`FUN_14075d970`, gated by `FUN_140758050`), the same predicates the
+                // 2026-09-12 session measured as never firing for either injected channel. So
+                // calling it does exactly what pressing does: nothing. And `FUN_14093c440`, the
+                // call it forwards to, is not a pane switch either -- it is four instructions that
+                // pump `composite->currentPane`'s own handler.
+                //
+                // That leaves two honest routes, neither taken here because neither is proven. A
+                // writer of `composite+0xb8` exists somewhere and would be the real tab-select; a
+                // capstone sweep of `0x140930000..0x140970000` found no qword store to that offset,
+                // so it is not in the OptionSetting neighbourhood and has to be found another way.
+                // Failing that, `tabGrid+0xd4 = 8` plus `composite+0xb8 = paneTable[8]` would put
+                // the Quit pane up -- but that is two field pokes that skip whatever the game does
+                // on a tab change, including the pane build our own row cloner hangs off, so it
+                // would not be the same event and must not be called one.
                 issue_menu_taps_once(im, &[MenuEvent::TabLeft], frame);
                 let row = crate::game_mem::optionsetting_load_build_url_row();
                 if row >= 0 {
@@ -1159,9 +1291,32 @@ static SUBMENU_BASELINE_JOB: AtomicUsize = AtomicUsize::new(0);
 /// One `Phase::NavToOptionSetting` attempt: tap up, let the cursor settle, tap Confirm, wait.
 /// The waits are the point -- the phase it replaced held a direction for 480 straight frames and the
 /// cursor could never come to rest on a row.
+/// Frames `Phase::NavToOptionSetting` waits before submitting the System job itself, and how often
+/// it retries. Same await-then-call shape as `Phase::OpenPauseMenu`, and for the same reason: a
+/// pane someone else opened in that window is used as it is rather than stacked on top of.
+const NAV_NATIVE_AWAIT_FRAMES: u64 = 30;
+const NAV_NATIVE_RETRY_FRAMES: u64 = 60;
+/// One line per visit for the native submit, so a pane that takes several retries says so once.
+static NAV_NATIVE_LOGGED: AtomicBool = AtomicBool::new(false);
+/// One `Phase::NavToOptionSetting` attempt, back when that phase drove the pause menu with injected
+/// input: tap up, let the cursor settle, tap Confirm, wait.
+///
+/// Kept rather than deleted because the cadence is not what failed. Measured 2026-09-12 on a live
+/// session, this build's pause menu does not move for the injected scancode channel or for the
+/// native menu-event channel at all -- `selected_cell` stayed 0 through both -- so the phase now
+/// submits the System row's `CS::MenuJob` natively and presses nothing. If a future build starts
+/// reading those channels again, the timing that was already reasoned out is here rather than
+/// re-derived from another set of runs.
+#[expect(
+    dead_code,
+    reason = "the injected-input nav these paced was retired 2026-09-12; see the note above"
+)]
 const NAV_TAP_FRAMES: u64 = 4;
+#[expect(dead_code, reason = "paired with NAV_TAP_FRAMES")]
 const NAV_SETTLE_FRAMES: u64 = 20;
+#[expect(dead_code, reason = "paired with NAV_TAP_FRAMES")]
 const NAV_WAIT_FRAMES: u64 = 36;
+#[expect(dead_code, reason = "paired with NAV_TAP_FRAMES")]
 const NAV_ATTEMPT_FRAMES: u64 =
     NAV_TAP_FRAMES + NAV_SETTLE_FRAMES + NAV_TAP_FRAMES + NAV_WAIT_FRAMES;
 /// One-shot for the "the escape menu closed under us" line, so it names the attempt that did it
@@ -1178,6 +1333,17 @@ static PAUSE_MENU_REQUESTED: AtomicBool = AtomicBool::new(false);
 static PHASE_PAUSE_LOGGED: AtomicBool = AtomicBool::new(false);
 /// `currentTopMenuJob` as it stood on the OptionSetting pane, recorded when
 /// `Phase::ActivateLoadFromFile` starts. Its replacement is that phase's effect.
+/// How many accept-byte writes this visit to `Phase::PressAnyButton` / `Phase::Continue` has
+/// actually made. Both phases refuse to report an effect until it is non-zero, which is the whole
+/// of bd er-effects-rs-9gxt: a check that can pass before the input could have landed is not an
+/// effect check, and these two were passing on frame 1 and frame 39 of a title that never loaded.
+static ACCEPT_BYTE_WRITES: AtomicU64 = AtomicU64::new(0);
+/// Set when `Phase::PressAnyButton` is entered on a title whose menu is already open and settled,
+/// so the phase advances without a press and the log says which of the two happened.
+static MENU_WAS_ALREADY_OPEN: AtomicBool = AtomicBool::new(false);
+/// Consecutive frames `Phase::Continue` has seen the title menu's `a40` latch set. Reset the moment
+/// it clears, so a latch that flickers does not accumulate into a settle it never reached.
+static MENU_SETTLE_STREAK: AtomicU64 = AtomicU64::new(0);
 static ACTIVATE_BASELINE_JOB: AtomicUsize = AtomicUsize::new(0);
 /// The carried inventory's acquisition counter as it stood before the first tap of
 /// `Phase::ActivateLoadBuildFromUrl`, stored `+1` so that zero still means "not taken yet". Its
@@ -1324,6 +1490,12 @@ fn emit_phase_telemetry(
     let duration_ms = end_tick.saturating_sub(start_tick);
     let title_state = title_scan::title_state(base);
     let a40 = title_scan::title_dialog_a40(base);
+    // The three fields that name the title half of a phase, added with bd er-effects-rs-9gxt: a run
+    // whose Continue did nothing used to be indistinguishable from one that never pressed, because
+    // the line carried neither the press count nor the row it would have activated.
+    let in_loop = title_scan::title_dialog_in_loop(base) as u8;
+    let title_cursor = title_scan::title_cursor(base);
+    let accept_writes = ACCEPT_BYTE_WRITES.load(Ordering::Relaxed);
     let menu_id = top_menu_id();
     let tab = optionsetting_tab_index();
     let shown_flags = PHASE_SHOWN_FLAGS.swap(0, Ordering::Relaxed);
@@ -1332,13 +1504,14 @@ fn emit_phase_telemetry(
     let fixed_spf = flip_fixed_spf();
     let flip_mode = flip_mode_current();
     let line = format!(
-        "{{\"phase\":\"{name}\",\"idx\":{idx},\"outcome\":\"{outcome}\",\"start_tick_ms\":{start_tick},\"end_tick_ms\":{end_tick},\"duration_ms\":{duration_ms},\"start_frame\":0,\"end_frame\":{frame},\"duration_frames\":{frame},\"title_state\":{title_state},\"a40\":{a40},\"pause_menu_open\":{},\"menu_id\":{menu_id},\"tab_index\":{tab},\"return_title\":{},\"fixed_spf\":{fixed_spf:.4},\"flip_mode\":{flip_mode},\"menu\":\"0x{:x}\",\"world_sim\":{},\"now_loading\":{},\"save_state\":{},\"shown_menu_flags\":\"0x{shown_flags:x}\"}}",
+        "{{\"phase\":\"{name}\",\"idx\":{idx},\"outcome\":\"{outcome}\",\"start_tick_ms\":{start_tick},\"end_tick_ms\":{end_tick},\"duration_ms\":{duration_ms},\"start_frame\":0,\"end_frame\":{frame},\"duration_frames\":{frame},\"title_state\":{title_state},\"a40\":{a40},\"title_in_loop\":{in_loop},\"title_cursor\":{title_cursor},\"accept_byte_writes\":{accept_writes},\"pause_menu_open\":{},\"menu_id\":{menu_id},\"tab_index\":{tab},\"return_title\":{},\"fixed_spf\":{fixed_spf:.4},\"flip_mode\":{flip_mode},\"menu\":\"0x{:x}\",\"world_sim\":{},\"now_loading\":{},\"save_state\":{},\"saved_map\":\"0x{:x}\",\"shown_menu_flags\":\"0x{shown_flags:x}\"}}",
         pause_menu_open() as u8,
         return_title_requested() as u8,
         sem.menu,
         sem.world_sim as u8,
         sem.now_loading as u8,
-        sem.save_state
+        sem.save_state,
+        sem.saved_map as u32,
     );
     log_phase(&line);
 }
@@ -1431,7 +1604,11 @@ pub fn on_frame(base: usize) {
         // answer at all.
         PAUSE_MENU_REQUESTED.store(false, Ordering::Relaxed);
         NAV_MENU_CLOSED_LOGGED.store(false, Ordering::Relaxed);
+        NAV_NATIVE_LOGGED.store(false, Ordering::Relaxed);
         PHASE_PAUSE_LOGGED.store(false, Ordering::Relaxed);
+        ACCEPT_BYTE_WRITES.store(0, Ordering::Relaxed);
+        MENU_SETTLE_STREAK.store(0, Ordering::Relaxed);
+        MENU_WAS_ALREADY_OPEN.store(false, Ordering::Relaxed);
         ACTIVATE_BASELINE_JOB.store(0, Ordering::Relaxed);
         ACTIVATE_BASELINE_SORT_ID.store(0, Ordering::Relaxed);
         IMPORT_LAST_SORT_ID.store(-1, Ordering::Relaxed);
@@ -1446,7 +1623,7 @@ pub fn on_frame(base: usize) {
         Status::Running => {}
         Status::Advanced => {
             harness_log!(
-                "phase[{idx}] {} ADVANCED after {frame}f (pause_menu={} menu_id={} tab={} return_title={} world_sim={} save_state={} title_state={})",
+                "phase[{idx}] {} ADVANCED after {frame}f (pause_menu={} menu_id={} tab={} return_title={} world_sim={} save_state={} title_state={} a40={} saved_map=0x{:x} accept_writes={})",
                 phase.name(),
                 pause_menu_open() as u8,
                 top_menu_id(),
@@ -1454,7 +1631,10 @@ pub fn on_frame(base: usize) {
                 return_title_requested() as u8,
                 sem.world_sim as u8,
                 sem.save_state,
-                title_scan::title_state(base)
+                title_scan::title_state(base),
+                title_scan::title_dialog_a40(base),
+                sem.saved_map as u32,
+                ACCEPT_BYTE_WRITES.load(Ordering::Relaxed)
             );
             emit_phase_telemetry(base, phase.name(), idx, "advanced", start_tick, frame, &sem);
             PHASE_IDX.store(idx + 1, Ordering::SeqCst);
@@ -1465,7 +1645,7 @@ pub fn on_frame(base: usize) {
         }
         Status::Derailed => {
             harness_log!(
-                "phase[{idx}] {} DERAILED: effect not seen within {}f (pause_menu={} menu_id={} tab={} return_title={} world_sim={} save_state={} title_state={}) -- STOPPING drive; tear down and analyze",
+                "phase[{idx}] {} DERAILED: effect not seen within {}f (pause_menu={} menu_id={} tab={} return_title={} world_sim={} save_state={} title_state={} a40={} saved_map=0x{:x} accept_writes={}) -- STOPPING drive; tear down and analyze",
                 phase.name(),
                 phase.budget(),
                 pause_menu_open() as u8,
@@ -1474,7 +1654,10 @@ pub fn on_frame(base: usize) {
                 return_title_requested() as u8,
                 sem.world_sim as u8,
                 sem.save_state,
-                title_scan::title_state(base)
+                title_scan::title_state(base),
+                title_scan::title_dialog_a40(base),
+                sem.saved_map as u32,
+                ACCEPT_BYTE_WRITES.load(Ordering::Relaxed)
             );
             emit_phase_telemetry(base, phase.name(), idx, "derailed", start_tick, frame, &sem);
             DERAILED.store(true, Ordering::SeqCst);
