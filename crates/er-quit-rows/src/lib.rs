@@ -6,6 +6,9 @@ pub fn host_diagnostic_stub() {}
 pub mod menu_window_run_install;
 // Same reason, same shape: the `05_010_ProfileSelect` chrome decision, host-testable.
 pub mod profile_select_chrome_gate;
+// Same reason again: which menu window the switch left behind on the title, and why it is the only
+// one this crate may ask to close.
+pub mod orphan_title_window;
 
 #[cfg(windows)]
 use std::{

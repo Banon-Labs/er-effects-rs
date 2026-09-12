@@ -1099,6 +1099,70 @@ pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_wi
 /// MinHook installs only one, so this hook's own install fails `MH_ERROR_ALREADY_CREATED` and none of this
 /// would otherwise run (2026-07-15 root cause: dead hook -> profile load never completes + System menu never
 /// hidden). `title_custom_cover_menu_window_run_hook` calls this after it runs the original.
+/// Ask the game to take back a title window that outlived the title, and count the ones still there.
+///
+/// Two jobs, deliberately in this order. The count comes first and is unconditional on everything
+/// except the map: every pump tick in which a title surface runs while `GameMan+0xc30` names a real
+/// map is the defect happening, whether or not this crate is allowed to act on it. That is the
+/// number a checker reads, and it must not be silenced by the fix being armed.
+///
+/// The act is `MENU_WINDOW_CLOSE_AS_FAILED_RVA`, the game's own `CloseAsFailed(MenuWindow*)`. We do
+/// not tear anything down: the window sets its own result, its `MenuWindowJob` reads that on a later
+/// tick and runs `FUN_1407ada40`, and `ExecuteMenuJob` reaps the chain above it. Every step but the
+/// request is the engine's.
+///
+/// The window pointer is read from `job+0x130` on the frame that job is running, so there is no
+/// stored pointer to go stale -- the same discipline the `OptionSetting` branch below uses. A
+/// resolver refusal on an unrecognised build leaves the orphan and logs, which is today's behaviour
+/// rather than a new failure.
+#[allow(clippy::used_underscore_items)]
+unsafe fn system_quit_close_orphaned_title_window(job: usize, filename: &str) {
+    let gm = crate::constants::game_man_ptr_or_null();
+    if gm == 0 {
+        return;
+    }
+    let Some(c30) = (unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }) else {
+        return;
+    };
+    if c30 == crate::orphan_title_window::C30_TITLE_DEFAULT {
+        return;
+    }
+    er_telemetry_core::counters::TITLE_SURFACE_RUN_TICKS_IN_WORLD.fetch_add(1, Ordering::SeqCst);
+    let committed = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 1;
+    let spent =
+        er_telemetry_core::counters::ORPHAN_TITLE_WINDOW_CLOSE_REQUESTS.load(Ordering::SeqCst);
+    if !crate::orphan_title_window::orphan_title_window_close_required(
+        filename, c30, committed, spent,
+    ) {
+        return;
+    }
+    let window =
+        unsafe { safe_read_usize(job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET) }.unwrap_or(0);
+    if window == 0 {
+        return;
+    }
+    let Some(close_addr) = crate::experiments::gated_game_fn(
+        MENU_WINDOW_CLOSE_AS_FAILED_RVA,
+        "MENU_WINDOW_CLOSE_AS_FAILED_RVA",
+    ) else {
+        return;
+    };
+    // Justify the transmute: `MENU_WINDOW_CLOSE_AS_FAILED_RVA` is resolved through the same
+    // build-verified translator every other direct call in this crate uses, and the signature
+    // matches the static decompile of `FUN_1407ac890` -- one `MenuWindow*` in rcx, no return.
+    let close: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(close_addr) };
+    let requested = er_telemetry_core::counters::ORPHAN_TITLE_WINDOW_CLOSE_REQUESTS
+        .fetch_add(1, Ordering::SeqCst)
+        + 1;
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        close(window);
+    }));
+    append_autoload_debug(format_args!(
+        "orphan-title-window: asked the game to close '{filename}' window=0x{window:x} job=0x{job:x} via CloseAsFailed 0x{close_addr:x} #{requested} (c30=0x{c30:x} is a real map and this switch committed, so the title job the switch abandoned is drawing over the world) panicked={}",
+        outcome.is_err()
+    ));
+}
+
 pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
     let finalized_profile = system_windows::take_finalized_profile_select();
     if finalized_profile != 0
@@ -1130,6 +1194,18 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
     }
     let filename_ptr = unsafe { safe_read_usize(job + 0x60) }.unwrap_or(0);
     let filename = system_quit_read_wide_resource_name(filename_ptr);
+    // The title window a switch leaves behind. `crate::orphan_title_window` carries the mechanism;
+    // the short version is that `continue_confirm` takes `CS::TitleStep` out of `STEP_MenuJobWait`
+    // while the title's own job chain is still running, so neither of the game's two reapers ever
+    // sees a terminal result and `PRESS ANY BUTTON` keeps drawing over the loaded character.
+    //
+    // Done here because here is the menu pump. This function runs inside `CS::MenuWindowJob::Run`,
+    // which is the thread and the frame the game issues its own window closes from; the game-task
+    // tick is the wrong owner for menu-job work, and `product_core_autoload_tick` already says so
+    // where it defers the return-title submit to this same hook rather than submitting it itself.
+    if crate::orphan_title_window::is_title_surface(filename.as_str()) {
+        unsafe { system_quit_close_orphaned_title_window(job, filename.as_str()) };
+    }
     // Two fields, two resource names, two placements. The link field used to pass the path
     // editor's cache key, so both windows arrived here under one name and had to be told apart by
     // `build_url_keyboard_active()` -- with the Quit tab's field then getting no placement at all,

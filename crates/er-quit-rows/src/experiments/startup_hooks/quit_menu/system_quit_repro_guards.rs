@@ -236,6 +236,12 @@ pub(crate) unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, sour
     // fresh deserialize of this switch's picked slot before it streams (the hook itself is installed
     // unconditionally at attach; see install_system_quit_continue_confirm_hook).
     SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.store(0, Ordering::SeqCst);
+    // Hand back the orphaned-title-window close budget for the switch about to run. It is spent per
+    // switch by design (`MAX_CLOSE_REQUESTS_PER_SWITCH`), and this is the one place a new switch
+    // begins -- the same statement as the line above, which is the latch that tells the close gate
+    // whether a switch has committed. A process-wide budget would leave the third or fourth switch
+    // unable to ask.
+    er_telemetry_core::counters::ORPHAN_TITLE_WINDOW_CLOSE_REQUESTS.store(0, Ordering::SeqCst);
     // Re-arm the menu-free clean-title switch reload one-shot so every switch (not just the first) can
     // drive its own picked-slot feed-deserialize -> continue_confirm (own_load_switch_reload_fire).
     SYSTEM_QUIT_SWITCH_MENU_FREE_RELOAD_FIRED.store(0, Ordering::SeqCst);

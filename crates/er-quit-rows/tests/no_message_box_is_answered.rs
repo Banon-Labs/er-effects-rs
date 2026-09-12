@@ -66,6 +66,48 @@ fn code_only(line: &str) -> &str {
     }
 }
 
+/// The one native close this crate is allowed to call, and the decision that must gate it.
+///
+/// `MENU_WINDOW_CLOSE_AS_FAILED_RVA` is `CloseAsFailed(MenuWindow*)`, and a `CS::MessageBoxDialog`
+/// is a `MenuWindow` -- so an ungated call to it would dismiss a box for the player by another
+/// route, which is the whole thing this file exists to prevent. It landed for one reason only: the
+/// title windows a `System>Quit -> Load Character` switch abandons (see `orphan_title_window`).
+///
+/// So it is pinned to that reason. Every file that names the close must also name the decision that
+/// says which windows may be asked, and that decision refuses everything but the three title
+/// resources -- which its own tests assert.
+const NATIVE_WINDOW_CLOSE: &str = "MENU_WINDOW_CLOSE_AS_FAILED_RVA";
+
+/// The gate that has to be on the same page as any call to the close above.
+const NATIVE_WINDOW_CLOSE_GATE: &str = "orphan_title_window";
+
+#[test]
+fn the_native_window_close_is_only_reachable_behind_the_title_surface_decision() {
+    let mut files = Vec::new();
+    rust_sources(&source_root(), &mut files);
+    let mut offences = Vec::new();
+    for file in &files {
+        let text = std::fs::read_to_string(file).expect("a readable source file");
+        let code: String = text.lines().map(code_only).collect::<Vec<_>>().join("\n");
+        // The constant's own declaration is not a call site. It is the only place the name may
+        // appear without the gate, and it is named by path so a second declaration elsewhere is
+        // still an offence.
+        if file.ends_with("constants/anti_debug.rs") {
+            continue;
+        }
+        if code.contains(NATIVE_WINDOW_CLOSE) && !code.contains(NATIVE_WINDOW_CLOSE_GATE) {
+            offences.push(file.display().to_string());
+        }
+    }
+    assert!(
+        offences.is_empty(),
+        "{NATIVE_WINDOW_CLOSE} closes any menu window, including a message box, so it may only be \
+         called on a page that also consults `{NATIVE_WINDOW_CLOSE_GATE}`; these files call it \
+         without one:\n  {}",
+        offences.join("\n  ")
+    );
+}
+
 #[test]
 fn no_source_file_presses_a_button_on_a_message_box() {
     let mut files = Vec::new();

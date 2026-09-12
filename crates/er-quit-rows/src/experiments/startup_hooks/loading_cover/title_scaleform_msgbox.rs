@@ -804,6 +804,24 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
         // the game task can dismiss it via the real OK handler. Post-load/in-world dialogs are
         // never auto-dismissed; they are only latched for telemetry so the oracle fails instead of
         // reporting a false 1400 when a blocking popup remains on screen.
+        // The load that was refused, counted rather than left on screen for someone to read.
+        //
+        // Every message box built before a world exists is counted, and the immediate game caller
+        // recorded beside it -- that caller is the discriminator, not the count. The box that
+        // answers a Continue with "Failed to load save data" comes back through `game+0x7b1347`;
+        // the offline/connection box comes from the network-check family.
+        //
+        // An earlier version of this gate also required `PRODUCT_CORE_LAST_MENU_OPENED_LATCH`, on
+        // the theory that a boot modal builds before the title menu exists. Measured 2026-09-11
+        // 18:47 on `er-quit-rows`: the count stayed 0 while the modal was on screen, because that
+        // latch is written on a path this shell compiles out with the boot autoload. A
+        // discriminator that is dead in the build being measured is worse than none.
+        if is_msgbox && !in_world {
+            er_telemetry_core::counters::TITLE_LOAD_BLOCKED_BY_MODAL_COUNT
+                .fetch_add(1, Ordering::SeqCst);
+            er_telemetry_core::counters::TITLE_LOAD_BLOCKED_MODAL_CALLER_RVA
+                .store(trace_first_game_caller_rva(), Ordering::SeqCst);
+        }
         if is_msgbox {
             MSGBOX_LAST_DIALOG.store(ret, Ordering::SeqCst);
             MSGBOX_LAST_ARG_RCX.store(a, Ordering::SeqCst);

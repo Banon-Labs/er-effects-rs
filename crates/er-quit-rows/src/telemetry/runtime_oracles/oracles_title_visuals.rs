@@ -500,6 +500,52 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
         er_telemetry_core::counters::WORLD_LOST_TO_TITLE_COUNT.load(Ordering::SeqCst),
         er_telemetry_core::counters::SWITCH_RETURN_TITLE_REQUEST_RETIRED_COUNT.load(Ordering::SeqCst)
     ));
+    // The title left standing over a loaded world, as three numbers instead of a screenshot.
+    //
+    // `run_ticks_in_world` is the defect: menu-pump ticks in which `05_000_Title`,
+    // `05_001_Title_Logo` or `05_020_TitleInformation` ran its `MenuWindowJob` while `GameMan+0xc30`
+    // named a real map. A switch that ends with this at 0 put no title surface over the character.
+    // `close_requests` is what this crate did about it; a non-zero `run_ticks_in_world` with 0
+    // requests means the gate refused (wrong build, no window, budget spent) rather than the defect
+    // being absent. `menu_window_count` is the game's own tally at `TitleStep+0x128` -- the vector
+    // `STEP_MenuJobWait` pumps -- and `-1` means no title owner was resolvable this run, which is
+    // "not proven", not "proven zero".
+    // Sampled from the owner the title tick already latched, not from a fresh scan: `title_owner`
+    // walks committed memory when its cache is cold, and a telemetry write must not pay for that.
+    let latched_title_owner =
+        er_telemetry_core::counters::SYSTEM_QUIT_QUICKLOAD_LAST_TITLE_OWNER.load(Ordering::SeqCst);
+    if latched_title_owner != NULL_PTR
+        && let Some(count) = unsafe {
+            crate::experiments::safe_read_i32(
+                latched_title_owner + crate::constants::TITLE_OWNER_MENU_WINDOW_COUNT_128_OFFSET,
+            )
+        }
+        && count >= 0
+    {
+        er_telemetry_core::counters::TITLE_OWNER_MENU_WINDOW_COUNT
+            .store(count as usize, Ordering::SeqCst);
+    }
+    let title_menu_window_count =
+        er_telemetry_core::counters::TITLE_OWNER_MENU_WINDOW_COUNT.load(Ordering::SeqCst);
+    let title_menu_window_count_json = if title_menu_window_count == usize::MAX {
+        -1i64
+    } else {
+        title_menu_window_count as i64
+    };
+    body.push_str(&format!(
+        "  \"oracle_title_surface_run_ticks_in_world\": {},\n  \"oracle_orphan_title_window_close_requests\": {},\n  \"oracle_title_owner_menu_window_count\": {title_menu_window_count_json},\n",
+        er_telemetry_core::counters::TITLE_SURFACE_RUN_TICKS_IN_WORLD.load(Ordering::SeqCst),
+        er_telemetry_core::counters::ORPHAN_TITLE_WINDOW_CLOSE_REQUESTS.load(Ordering::SeqCst)
+    ));
+    // The refused load, as a number rather than as words on a screen. Non-zero means the game put a
+    // MessageBoxDialog up after the title menu had opened and no world followed -- "Failed to load
+    // save data. Select OK to try again." The caller RVA rides along because the words are shared
+    // by more than one failure and the caller is not.
+    body.push_str(&format!(
+        "  \"oracle_title_load_blocked_by_modal_count\": {},\n  \"oracle_title_load_blocked_modal_caller_rva\": {},\n",
+        er_telemetry_core::counters::TITLE_LOAD_BLOCKED_BY_MODAL_COUNT.load(Ordering::SeqCst),
+        er_telemetry_core::counters::TITLE_LOAD_BLOCKED_MODAL_CALLER_RVA.load(Ordering::SeqCst)
+    ));
     body.push_str(&format!(
         "  \"oracle_msgbox_total_builds\": {},\n  \"oracle_blocking_modal_present\": {},\n  \"oracle_blocking_modal_ptr\": {},\n  \"oracle_blocking_modal_vtable\": {},\n  \"oracle_blocking_modal_closing_latch\": {},\n  \"oracle_policy_window_total_builds\": {},\n  \"oracle_policy_window_any_seen\": {},\n  \"oracle_policy_window_ptr\": {},\n  \"oracle_policy_window_vtable\": {},\n  \"oracle_policy_window_args\": [{}, {}, {}, {}, {}],\n  \"oracle_policy_window_stack_arg0\": {},\n  \"oracle_policy_window_backing_flag_ptr\": {},\n  \"oracle_policy_window_stored_backing_flag_ptr\": {},\n  \"oracle_policy_window_backing_flag_value\": {},\n  \"oracle_policy_window_requested_flag_value\": {},\n  \"oracle_policy_window_caller_rva\": {},\n  \"oracle_policy_ctor_wrapper_hits\": {},\n  \"oracle_policy_ctor_wrapper_record\": {},\n  \"oracle_policy_ctor_wrapper_original_this\": {},\n  \"oracle_policy_ctor_wrapper_original_vtable\": {},\n  \"oracle_policy_ctor_wrapper_record_id\": {},\n  \"oracle_policy_ctor_wrapper_stack_arg0\": {},\n  \"oracle_policy_ctor_wrapper_backing_flag_ptr\": {},\n  \"oracle_policy_ctor_wrapper_ret\": {},\n  \"oracle_policy_ctor_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_wrapper_hits\": {},\n  \"oracle_policy_selector_wrapper_record\": {},\n  \"oracle_policy_selector_wrapper_original_this\": {},\n  \"oracle_policy_selector_wrapper_original_vtable\": {},\n  \"oracle_policy_selector_wrapper_owner\": {},\n  \"oracle_policy_selector_wrapper_requested_flag\": {},\n  \"oracle_policy_selector_wrapper_selector_arg\": {},\n  \"oracle_policy_selector_wrapper_ret\": {},\n  \"oracle_policy_selector_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_ctor_hits\": {},\n  \"oracle_policy_selector_ctor_this\": {},\n  \"oracle_policy_selector_ctor_vtable\": {},\n  \"oracle_policy_selector_ctor_owner\": {},\n  \"oracle_policy_selector_ctor_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_requested_flag_value\": {},\n  \"oracle_policy_selector_ctor_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_ret\": {},\n  \"oracle_policy_selector_ctor_caller_rva\": {},\n  \"oracle_policy_status_predicate_hits\": {},\n  \"oracle_policy_status_predicate_this\": {},\n  \"oracle_policy_status_predicate_owner\": {},\n  \"oracle_policy_status_predicate_flag_ptr\": {},\n  \"oracle_policy_status_predicate_flag_value\": {},\n  \"oracle_policy_status_predicate_ret\": {},\n  \"oracle_policy_status_predicate_caller_rva\": {},\n  \"oracle_policy_flag_setter_hits\": {},\n  \"oracle_policy_flag_setter_owner\": {},\n  \"oracle_policy_flag_setter_value\": {},\n  \"oracle_policy_flag_setter_force\": {},\n  \"oracle_policy_flag_setter_before\": {},\n  \"oracle_policy_flag_setter_after\": {},\n  \"oracle_policy_flag_setter_caller_rva\": {},\n  \"oracle_server_status_total_seen\": {},\n  \"oracle_server_status_any_seen\": {},\n  \"oracle_server_status_state\": {},\n  \"oracle_server_status_text_id\": {},\n",
         msgbox_total_builds,

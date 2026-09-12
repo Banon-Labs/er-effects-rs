@@ -353,6 +353,31 @@ pub(crate) static TITLE_CUSTOM_COVER_BLACK_LAST_CALLER_RVA: AtomicUsize =
 /// preserved title job, instead of replacing the authoritative BeginTitle out-slot.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const MENU_WINDOW_JOB_RUN_RVA: usize = 0x7ad1c0;
+/// `CloseAsFailed(MenuWindow*)` 1.16.2 `0x1407ac890` -- the game's own per-window close.
+///
+/// Four instructions: build a `MenuJobResult` of `Failed` (the 3 is byte-proven at `0x1407ac8a1`)
+/// and invoke the window's own virtual at `vtable+0x60`, `MenuWindow::Close(MenuJobResult)`
+/// (`0x140746e80`, slot 12). `CS::MenuWindowJob::Run` calls it itself when the close policy at
+/// `job+0xf0` returns that verdict, so it is not a lever added from outside the engine -- it is the
+/// engine's own.
+///
+/// Everything after it is the game's: `MenuWindow::Close` latches `MenuWindow+0x3b0` so a second
+/// request is ignored, plays the fade, and schedules the write of the terminal result to
+/// `MenuWindow+0x1e8`; the next `MenuWindowJob::Run` reads that, `MenuJobResult::ShouldContinue`
+/// (`0x1407a9200`, `CMP dword ptr [RCX],0x1; SETA AL`) answers true, and `FUN_1407ada40`
+/// deregisters the window from `CSMenuMan+0x90`/`+0xdc`, erases it from its owner list via
+/// `FUN_140733d70`, unrefs it and unloads its movie.
+///
+/// `orphan_title_window` decides who may be asked. See that module for why the title's windows
+/// outlive a `System>Quit -> Load Character` switch.
+pub(crate) const MENU_WINDOW_CLOSE_AS_FAILED_RVA: usize = 0x7ac890;
+/// `CS::TitleStep+0x128` -- the element count of the `DLFixedVector<MenuWindow*>` at `TitleStep+0xe0`
+/// that `STEP_MenuJobWait` pumps through `FUN_140733f20`.
+///
+/// Zeroed in the `TitleStep` constructor, grown as the title builds its windows, decremented by
+/// `FUN_140733d70` inside the teardown. Read in a live world it is the whole defect as a number: a
+/// non-zero count while a real map is mounted means title windows are still being updated over it.
+pub(crate) const TITLE_OWNER_MENU_WINDOW_COUNT_128_OFFSET: usize = 0x128;
 #[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static TITLE_CUSTOM_COVER_RUN_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry_core::counters::TITLE_CUSTOM_COVER_RUN_RECURSION;
