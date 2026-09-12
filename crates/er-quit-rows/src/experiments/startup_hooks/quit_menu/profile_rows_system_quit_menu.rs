@@ -1169,7 +1169,7 @@ unsafe fn system_quit_close_orphaned_title_window(job: usize, filename: &str) {
         // which means this gate declined and said nothing. A predicate with four terms that logs
         // only when it passes cannot be diagnosed from a run; it can only be guessed at, which is
         // what the last three rebuilds were.
-        if ORPHAN_TITLE_GATE_DECLINED_LOGGED.swap(true, Ordering::SeqCst) == false {
+        if !ORPHAN_TITLE_GATE_DECLINED_LOGGED.swap(true, Ordering::SeqCst) {
             append_autoload_debug(format_args!(
                 "orphan-title-window: gate DECLINED for '{filename}' -- is_title_surface={} c30=0x{c30:x} (title default 0x{:x}) switch_committed={committed} spent={spent}/{} -- the false term is the one to fix",
                 crate::orphan_title_window::is_title_surface(filename),
@@ -1191,7 +1191,7 @@ unsafe fn system_quit_close_orphaned_title_window(job: usize, filename: &str) {
     let window =
         unsafe { safe_read_usize(job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET) }.unwrap_or(0);
     if window == 0 {
-        if ORPHAN_TITLE_NO_WINDOW_LOGGED.swap(true, Ordering::SeqCst) == false {
+        if !ORPHAN_TITLE_NO_WINDOW_LOGGED.swap(true, Ordering::SeqCst) {
             append_autoload_debug(format_args!(
                 "orphan-title-window: REFUSED -- '{filename}' job=0x{job:x} has no owning window at +0x{MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET:x}, so there is nothing to ask the game to close"
             ));
@@ -1202,7 +1202,7 @@ unsafe fn system_quit_close_orphaned_title_window(job: usize, filename: &str) {
         MENU_WINDOW_CLOSE_AS_FAILED_RVA,
         "MENU_WINDOW_CLOSE_AS_FAILED_RVA",
     ) else {
-        if ORPHAN_TITLE_NO_ADDRESS_LOGGED.swap(true, Ordering::SeqCst) == false {
+        if !ORPHAN_TITLE_NO_ADDRESS_LOGGED.swap(true, Ordering::SeqCst) {
             append_autoload_debug(format_args!(
                 "orphan-title-window: REFUSED -- MENU_WINDOW_CLOSE_AS_FAILED_RVA 0x{MENU_WINDOW_CLOSE_AS_FAILED_RVA:x} did not resolve on this build, so '{filename}' stays over the world. Add a verified row for it to docs/recon/rva-map-1162-to-1170.verified.tsv"
             ));
