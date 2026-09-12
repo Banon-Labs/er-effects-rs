@@ -35,7 +35,7 @@
 //! installer is left exactly as it is rather than converted, and the body below is the single copy
 //! of the decision both run.
 
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use er_game_base::mem::{game_module_base, game_rva_for_hook, safe_read_usize};
 use er_game_base::stack::trace_first_game_caller_rva;
@@ -271,6 +271,9 @@ unsafe extern "system" fn profile_table_guard_hook(
     let next: er_hook::UnionFn = unsafe { std::mem::transmute(orig) };
     unsafe { next(a, b, c, d) }
 }
+/// Raised once the guard is on the union, so a second host arming a character row does not add the
+/// same handler again.
+static GUARD_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 
 /// Install the guard on the native profile-renderer refresh.
 ///
@@ -281,7 +284,17 @@ unsafe extern "system" fn profile_table_guard_hook(
 ///
 /// Process attach or startup-hook context.
 pub unsafe fn install_profile_table_guard() -> bool {
+    // Once per process. Both character rows want this guard and two hosts can now arm rows in one
+    // process, so without the latch the same handler would go onto the union twice and the native
+    // refresh would run through it twice per call.
+    if GUARD_INSTALLED
+        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return true;
+    }
     let Ok(addr) = game_rva_for_hook(PROFILE_RENDERER_REFRESH_RVA as u32) else {
+        GUARD_INSTALLED.store(0, Ordering::SeqCst);
         append_autoload_debug(format_args!(
             "profileselect-table-guard: failed to resolve the native profile refresh rva 0x{PROFILE_RENDERER_REFRESH_RVA:x}; ProfileSelect cannot be opened safely"
         ));

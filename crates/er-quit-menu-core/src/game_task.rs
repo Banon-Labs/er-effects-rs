@@ -10,6 +10,9 @@
 //! established.
 
 use crate::host::append_autoload_debug;
+/// Raised once the recurring build-row task is registered, so a second host arming a build row does
+/// not register another one.
+static TASK_INSTALLED: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
 /// Register the `FrameBegin` task that drives the import and the export.
 ///
@@ -19,6 +22,19 @@ use crate::host::append_autoload_debug;
 /// Returns false when the task manager never resolved, which means neither row will ever apply
 /// anything -- a press would latch a request that nothing consumes.
 pub fn install_build_row_game_task() -> bool {
+    // Once per process. Two hosts can now arm rows in one process, and a second registration would
+    // put a second recurring task on `CSTaskImp` driving the same phase machine.
+    if TASK_INSTALLED
+        .compare_exchange(
+            0,
+            1,
+            core::sync::atomic::Ordering::SeqCst,
+            core::sync::atomic::Ordering::SeqCst,
+        )
+        .is_err()
+    {
+        return true;
+    }
     use eldenring::cs::{CSTaskGroupIndex, CSTaskImp};
     use eldenring::fd4::FD4TaskData;
     use fromsoftware_shared::{FromStatic, SharedTaskImpExt};
@@ -30,6 +46,7 @@ pub fn install_build_row_game_task() -> bool {
         append_autoload_debug(format_args!(
             "system-quit-build-url: CSTaskImp never resolved; the build rows would latch requests nothing consumes"
         ));
+        TASK_INSTALLED.store(0, core::sync::atomic::Ordering::SeqCst);
         return false;
     };
     let handle = task.run_recurring(
