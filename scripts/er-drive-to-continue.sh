@@ -9,18 +9,18 @@
 # cloud-save notice, a network warning -- so the loop presses confirm until the menu opens rather
 # than assuming a count.
 #
-# The one dialog that must NOT be dismissed
+# The one dialog that must not be dismissed
 # -----------------------------------------
 # If the terms-of-service dialog builds, this run has no save to continue from: the game only shows
 # it before the profile exists. Confirming through it would start a fresh character and quietly
-# destroy the premise of whatever test asked for a Continue. So it is a HARD FAILURE, detected
+# destroy the premise of whatever test asked for a Continue. So it is a hard failure, detected
 # natively rather than by reading the screen -- the product logs `policy-oracle: TosTitle ctor
 # 0x... built` from a detour on the dialog's own constructor (`POLICY_TOS_TITLE_CTOR_RVA`), which
 # AGENTS.md requires in place of OCR.
 #
 # Usage
 # -----
-#   scripts/er-drive-to-continue.sh --arm      write the harness mode flag (BEFORE launching)
+#   scripts/er-drive-to-continue.sh --arm      write the harness mode flag (before launching)
 #   scripts/er-drive-to-continue.sh            watch the armed run through to an open menu
 #   scripts/er-drive-to-continue.sh --to <row> ...and on to one Quit-tab row, which is one of
 #                                              save-game, return-to-desktop, load-character,
@@ -49,7 +49,7 @@ harness_log() { printf '%s/er-input-harness.log\n' "$(game_dir)"; }
 EULA_BUILT='policy-oracle: TosTitle ctor'
 TITLE_MOVIE='title-resource-observer:.*label=05_000_title'
 MENU_OPEN='title-open-menu: PASS-THROUGH native open_menu'
-# Reaching the world is read from the HARNESS log, not the product's. `STEP_MoveMap_Update` and
+# Reaching the world is read from the harness log, not the product's. `STEP_MoveMap_Update` and
 # `EVENT T_controllable` were the obvious choices and are the wrong ones here: both are written by
 # autoload-path telemetry, so in a build with the `autoload` feature compiled out they never appear
 # and a watcher keyed on them waits out its cap on a world that is already up. Measured
@@ -76,7 +76,7 @@ KEY_RIGHT=0xcd
 KEY_TAB_LEFT=0x2c # Z -- and not Q, which is back
 # The System menu is up: the game acquires its own menu resource, once, when it opens.
 OPTION_MENU="AcquireMenuResource.*02_040_Option"
-# The Quit tab is up AND carries our rows. This is the one that matters -- it is written by the
+# The Quit tab is up and carries our rows. This is the one that matters -- it is written by the
 # row cloner as the tab builds, so it proves the destination and the feature in the same line.
 QUIT_ROWS='system-quit-dup: cloned Quit rows'
 
@@ -154,7 +154,7 @@ drive() {
 	fi
 	abort_if_eula "$start"
 
-	# The title is NOT driven from here, and the first version of this script spent two live boots
+	# The title is not driven from here, and the first version of this script spent two live boots
 	# learning that. `er-input-harness`'s own `drive.rs` says it, from bd
 	# `title-continue-is-accept-byte-not-keystate`: press any button -> menu -> Continue is the
 	# global accept byte, not the `inputmgr+0x90` keystate bitmap that the repl's `key` verb writes.

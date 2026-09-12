@@ -320,15 +320,19 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     // the first autoload: the world loads and is playable, then ~2.2 s after world
                     // entry this evaluator raises `menuData+0x5e` and the session ends. Idempotent.
                     er_title_flow::install_movemap_advancer_probe();
-                    // Install the MessageBoxDialog builder hook for native telemetry. Product
-                    // autoload must not auto-accept: every pre/post-load message box is a hard
-                    // investigation trigger whose semantic side effect must be skipped directly.
-                    // The legacy OK-handler dismiss path remains only for non-product probes.
+                    // Install the MessageBoxDialog builder hook. It captures each built dialog
+                    // for the save-flow confirm poll and the blocking-modal oracle, and it answers
+                    // none of them: every pre/post-load message box is a hard investigation
+                    // trigger whose semantic side effect must be skipped directly.
+                    //
+                    // The `!product_autoload_enabled()` branch that used to sit here called
+                    // `force_dismiss_startup_dialog()`, which pressed the first button on every
+                    // dialog this hook captured while the player did not yet exist. In a shell
+                    // whose whole purpose is menu rows, that reached the title's Load Game
+                    // confirmation and answered it for the player; both the call and the function
+                    // are deleted (see `startup_modals_menu_cover.rs`).
                     if online_disable_enabled() {
                         install_auto_accept_hook();
-                        if !product_autoload_enabled() {
-                            force_dismiss_startup_dialog();
-                        }
                     }
                     // Observe the natural flow past the modal: tap Confirm (game's own input).
                     if auto_confirm_enabled() {

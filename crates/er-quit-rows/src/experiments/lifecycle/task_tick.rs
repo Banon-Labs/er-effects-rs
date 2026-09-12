@@ -300,11 +300,27 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // the rows never built (continue-scan = 0 nodes, stage 3). Zero-input (decoded accept
     // flag, not a synthesized event). bd er-effects-rs-e9e + rowbuild-mechanism-incontext-
     // openmenu-2026-06-23.
-    if pab_advance_enabled()
-        && let Ok(base) = game_module_base()
-    {
-        unsafe { install_pab_advance_hook(base) };
-        unsafe { maybe_set_title_accept_byte(base) };
+    //
+    // The install and the accept byte are two separate questions, and answering both with
+    // `pab_advance_enabled` is what put a submitted `05_010_ProfileSelect` behind the pause menu in
+    // a build without the `autoload` feature. The detour `install_pab_advance_hook` places at
+    // `PAB_NODE_UPDATE_RVA` has a second consumer: `pab_node_update_detour` calls `pab_advance_try`
+    // -- which gates itself on `pab_advance_enabled`, so it costs one atomic read here -- and then
+    // `system_quit_menu_window_run_post`, the menu pump frame the System>Quit rows hide the System
+    // windows from. See `menu_window_job_run_hook_required` for what that pump owns and for the
+    // measured failure.
+    if let Ok(base) = game_module_base() {
+        let boot_autoload = pab_advance_enabled();
+        if crate::menu_window_run_install::menu_window_job_run_hook_required(
+            boot_autoload,
+            crate::menu_window_run_install::quit_rows_armed(),
+        ) {
+            unsafe { install_pab_advance_hook(base) };
+        }
+        // The accept byte is the boot autoload's alone, so it keeps the old gate.
+        if boot_autoload {
+            unsafe { maybe_set_title_accept_byte(base) };
+        }
     }
     // Now-loading helper observer: attach only after the native title accept byte fired.
     // Attach-time detours on CSNowLoadingHelperImp exited before readiness; this delayed

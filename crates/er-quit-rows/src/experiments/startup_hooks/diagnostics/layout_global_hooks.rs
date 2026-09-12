@@ -243,18 +243,28 @@ pub(crate) unsafe extern "system" fn sound_post_event_core_hook(
     external_sources: *const c_void,
     event_type: u32,
 ) -> u32 {
+    // Observe, never silence. This detour used to return 0 -- dropping the event -- whenever the
+    // world was not up, the player was absent, or a Quit-row switch was in flight, which is every
+    // Wwise event on the title screen and in every menu that precedes a world, and every event for
+    // the whole duration of a character switch.
+    //
+    // That muting belonged to the title cover: it existed so the title-logo sting could not be heard
+    // through a cover that was hiding the title. The cover is deleted from this shell, so the mute
+    // had nothing left to protect and silenced the Quit menus instead -- reported from a live run,
+    // 2026-09-11. The install site's own comment already described the intended behaviour
+    // ("Read-only; forwards the event unchanged"); the code had drifted from it.
+    //
+    // The counters stay. Hearing a regression is sometimes the only way to notice it, and the event
+    // ids are what turn that into something a log can carry.
     let in_world_seen = IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
     let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
-    let quickload_active = quickload_phase != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE;
     let player_present = if in_world_seen {
         unsafe { PlayerIns::local_player_mut() }.is_ok()
     } else {
         false
     };
-    let muted = !in_world_seen || quickload_active || !player_present;
-    let ret = if muted {
-        0
-    } else {
+    let muted = false;
+    let ret = {
         let orig = SOUND_POST_EVENT_CORE_ORIG.load(Ordering::SeqCst);
         let call: SoundPostEventCoreFn = unsafe { std::mem::transmute(orig) };
         SOUND_POST_EVENT_FORWARDED_HITS.fetch_add(1, Ordering::SeqCst);
@@ -275,13 +285,9 @@ pub(crate) unsafe extern "system" fn sound_post_event_core_hook(
         .compare_exchange(0, event_id as usize, Ordering::SeqCst, Ordering::SeqCst)
         .ok();
     SOUND_POST_EVENT_LAST_ID.store(event_id as usize, Ordering::SeqCst);
-    if muted {
-        SOUND_POST_EVENT_MUTED_HITS.fetch_add(1, Ordering::SeqCst);
-        SOUND_POST_EVENT_FIRST_MUTED_ID
-            .compare_exchange(0, event_id as usize, Ordering::SeqCst, Ordering::SeqCst)
-            .ok();
-        SOUND_POST_EVENT_LAST_MUTED_ID.store(event_id as usize, Ordering::SeqCst);
-    }
+    // Kept so the oracles that read them stay at their honest value, which is now always zero: a
+    // muted-hit count that can never rise is the cheapest proof this shell silences nothing.
+    let _ = muted;
     SOUND_POST_EVENT_LAST_PLAYING_ID.store(ret as usize, Ordering::SeqCst);
     SOUND_POST_EVENT_LAST_GAME_OBJECT.store(game_object as usize, Ordering::SeqCst);
     SOUND_POST_EVENT_LAST_FLAGS.store(flags as usize, Ordering::SeqCst);
@@ -289,7 +295,7 @@ pub(crate) unsafe extern "system" fn sound_post_event_core_hook(
     SOUND_POST_EVENT_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
     if hit <= 64 || hit.is_power_of_two() {
         append_autoload_debug(format_args!(
-            "sound-post-event: hit={hit} muted={muted} event_id={event_id} playing_id={ret} game_obj=0x{game_object:x} flags=0x{flags:x} event_type={event_type} in_world_seen={in_world_seen} player_present={player_present} quickload_phase={quickload_phase} caller_rva=0x{caller_rva:x}"
+            "sound-post-event: hit={hit} forwarded=true in_world={in_world_seen} player={player_present} event_id={event_id} playing_id={ret} game_obj=0x{game_object:x} flags=0x{flags:x} event_type={event_type} in_world_seen={in_world_seen} player_present={player_present} quickload_phase={quickload_phase} caller_rva=0x{caller_rva:x}"
         ));
     }
     ret

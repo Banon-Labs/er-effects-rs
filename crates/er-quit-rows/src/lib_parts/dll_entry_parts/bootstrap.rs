@@ -441,8 +441,9 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // completes and the world comes up -- unwanted product behavior. The old 2026-06-21 "keep it on"
     // directive (full-speed unfocused probes) is superseded; the game now uses its real focus state.
 
-    // Audio-side startup/title-logo semaphore: log actual Wwise PostEvent IDs because this regression
-    // can be heard without a reliable visual artifact. Read-only; forwards the event unchanged.
+    // Audio-side startup/title-logo semaphore: log actual Wwise PostEvent ids because this kind of
+    // regression can be heard without leaving a reliable visual artifact. Read-only; it forwards
+    // every event unchanged, which the detour itself now does rather than merely claiming to.
     START_SOUND_POST_EVENT_OBSERVER.call_once(|| {
         let _ = std::thread::Builder::new()
             .name("er-quickload-sound-post-event".to_owned())

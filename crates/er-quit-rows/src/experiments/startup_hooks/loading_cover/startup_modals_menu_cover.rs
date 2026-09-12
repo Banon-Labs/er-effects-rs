@@ -1,118 +1,29 @@
 use super::*;
 
-/// Dismiss the captured startup MessageBoxDialog (connection-error / EULA / warning) by calling
-/// its verified OnDecide/finalize 0x140927ba0(rcx=dialog) -- the genuine OK handler that
-/// dispatches the chosen button (builder-defaulted to OK) and drives the dialog to emit "stop"
-/// so the parent MenuWindowJob tears it down. Called each frame pre-in-world from the game task
-/// (the menu/game thread, where OnDecide's input-registrar singleton access is valid) until the
-/// closing latch [dialog+0x3b0]==1 or the dialog is freed/reused (vtable mismatch) -- both stop
-/// the calls, avoiding re-dispatch / UAF. Fault-tolerant reads never AV.
-pub(crate) fn force_dismiss_startup_dialog() {
-    let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let dialog = CONNECTION_ERROR_DIALOG.load(Ordering::SeqCst);
-    if dialog == null {
-        return;
-    }
-    let base = {
-        let own = OWN_STEPPER_BASE.load(Ordering::SeqCst);
-        if own != null {
-            own
-        } else {
-            game_module_base().unwrap_or(null)
-        }
-    };
-    let vt = unsafe { safe_read_usize(dialog) }.unwrap_or(null);
-    if base == null || !is_startup_msgbox_vtable(vt, base) {
-        // Dialog consumed/freed/reused -> stop (and let the builder hook re-capture a new one).
-        CONNECTION_ERROR_DIALOG.store(null, Ordering::SeqCst);
-        return;
-    }
-    // Stop once the dialog has begun teardown (EmitResult set the closing latch) -- calling
-    // OnDecide again risks re-dispatch / UAF as the job frees it.
-    let closing = unsafe { safe_read_usize(dialog + MSGBOX_CLOSING_LATCH_3B0_OFFSET) }
-        .map(|v| v & MSGBOX_LATCH_BYTE_MASK)
-        .unwrap_or(MSGBOX_CLOSING_YES);
-    if closing == MSGBOX_CLOSING_YES {
-        CONNECTION_ERROR_DIALOG.store(null, Ordering::SeqCst);
-        let n = DISMISS_WRITE_LOG.load(Ordering::SeqCst);
-        append_autoload_debug(format_args!(
-            "auto-accept: MessageBoxDialog 0x{dialog:x} closing (latch+0x3b0=1) after {n} OnDecide calls -- dismissed"
-        ));
-        return;
-    }
-    // Drive the dialog Decided + OK + fade-complete before the OK-handler so (a) the title-flow's
-    // modal-build poll ([dialog+0x25e8]>0 at 0x1407b04f5) treats it as resolved and proceeds to the
-    // menu, and (b) the OK-handler's fade gate (commit only when fade_current<=fade_target) fires this
-    // frame -> instant commit/close, no fade-in render = no flash (vs the ~20 OnDecide frames before).
-    // The dialog is vtable-validated above (base MessageBoxDialog or SaveRetryDialog). bd
-    // press-any-button-golden-lever-job1e8-readiness-2026-06-23 + offline-title-modal-is-saveretrydialog.
-    // Field semantics corrected 2026-07-28 (RE of the 1.16.2 ctor `FUN_1409275b0`; the writes
-    // themselves are byte-for-byte unchanged so this deprecated path keeps behaving as it did):
-    //   * `+0x25e8` is the button count, not a state. Writing 2 makes the multi-choice getter
-    //     `1 < count` (0x1407b0cf0) -- which the title flow's modal poll at 0x1407b04f5 reads --
-    //     report the box as resolved. It CORRUPTS the real count; acceptable only here, on a
-    //     startup notice this path is about to force closed.
-    //   * `+0x25e0` is the default cursor index. Writing 0 makes `OnDecide` dispatch button 0
-    //     instead of taking its `index == -1` cancel arm.
-    unsafe {
-        *((dialog + MSGBOX_BUTTON_COUNT_25E8_OFFSET) as *mut i32) =
-            MSGBOX_BUTTON_COUNT_MULTI_CHOICE;
-        *((dialog + MSGBOX_DEFAULT_CURSOR_25E0_OFFSET) as *mut i32) = MSGBOX_FIRST_BUTTON_INDEX;
-    }
-    if let Some(fade_target_bits) =
-        unsafe { safe_read_i32(dialog + MSGBOX_FADE_TARGET_2300_OFFSET) }
-    {
-        unsafe {
-            *((dialog + MSGBOX_FADE_CURRENT_1278_OFFSET) as *mut i32) = fade_target_bits;
-        }
-    }
-    // Proper OK (not force-stop): OnDecide 0x140927ba0 branches on the chosen button [dialog+0x25e0]
-    // -- if == -1 it calls 0x14078dfd0 (the CANCEL/notify-closed path, which kicks the title flow
-    // back to press-any-button); if != -1 it dispatches that button (= press OK -> proceed to the
-    // main menu offline). The prior force-stop 0x14078dfd0 was exactly the cancel path, so the game
-    // bounced back to press-any-button. Fix: set the chosen button to OK (index 0), then OnDecide.
-    // Press OK every frame (runtime-confirmed: one-shot only highlights OK; the modal needs the
-    // per-frame re-dispatch to progress its decide animation -> activate -> close -> proceed to
-    // the main menu). [dialog+0x25e0]=0 selects OK so OnDecide takes the dispatch (not cancel) arm.
-    // Call the real OK-button handler 0x14078e030(rcx=dialog) -- captured from a live OK-press.
-    // It reads the dialog cursor, gets the OK callback, and commits (0x14078ef20) which actually
-    // closes the dialog and emits its result so the title flow proceeds. This is what a real OK
-    // does; OnDecide/field-writes/input-injection all failed to close it. Runs each frame on every
-    // captured MessageBoxDialog -> skips all of them (connection-error, starting-offline, ...).
-    let ok_handler: unsafe extern "system" fn(usize) = unsafe {
-        std::mem::transmute(
-            match crate::experiments::gated_game_fn(MSGBOX_OK_HANDLER_RVA, "MSGBOX_OK_HANDLER_RVA")
-            {
-                Some(address) => address,
-                None => return,
-            },
-        )
-    };
-    unsafe { ok_handler(dialog) };
-    let n = DISMISS_WRITE_LOG.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
-    if n % AUTO_ACCEPT_LOG_INTERVAL == null {
-        append_autoload_debug(format_args!(
-            "auto-accept: OK-handler 0x{:x}(MessageBoxDialog 0x{dialog:x}) -- real OK-press to close + proceed #{n}",
-            er_game_base::mem::game_data_addr(base, MSGBOX_OK_HANDLER_RVA, "MSGBOX_OK_HANDLER_RVA")
-        ));
-    }
-    let _ = (
-        &LAST_ONDECIDE_DIALOG,
-        MSGBOX_DEFAULT_CURSOR_25E0_OFFSET,
-        MSGBOX_FIRST_BUTTON_INDEX,
-        MSGBOX_CONFIRM_LATCH_1BC0_OFFSET,
-        MSGBOX_CONFIRM_LATCH_SET,
-        MSGBOX_ONDECIDE_RVA,
-        INPUTMGR_BITMAP_90_OFFSET,
-        MENU_EVENT_CONFIRM_3D,
-        MENU_EVENT_PRESSED_BIT,
-    );
-}
+// `force_dismiss_startup_dialog()` was deleted here on 2026-09-11, with its only caller in
+// `lib_parts/dll_entry_parts/task_registration.rs`. It read the dialog the builder hook below had
+// captured, wrote `+0x25e8` (the button count) and `+0x25e0` (the default cursor index) so the
+// dialog would dispatch its first button instead of taking the cancel arm, copied the fade target
+// over the fade current so the commit landed on the same frame, and then called the game's own
+// `MsgBoxRva::OkHandler` on it. That is a synthetic press of the first button, once per pre-world
+// game-task tick, on every `CS::MessageBoxDialog` the builder had captured.
+//
+// It is why a character picked from the title's Load Game list answered its own confirmation box:
+// that box is built before the player exists, so `in_world` is false, `msgbox_builder_hook` stores
+// it in `CONNECTION_ERROR_DIALOG`, and the next tick pressed the button. Measured in this shell's
+// own log on 2026-09-11 (`er-quit-rows-debug.log`, run `dll:4ef8325f`): `msgbox-builder #0 ...
+// captured=true in_world=false` at +300349ms, then `auto-accept: OK-handler 0x14078eeb0 ... real
+// OK-press to close + proceed #0` 14 ms later, and the closing latch at +300380ms.
+//
+// This crate puts rows in front of a player who is sitting at the menu, so no box it can reach may
+// be answered on their behalf. `er-quickload` keeps its own copy of this path, where the boxes it
+// answers belong to an autoload the player asked for.
 
 /// Install the startup-popup capture hook once (minhook on the MessageBoxDialog builder
 /// 0x1409275b0). The builder hook captures each created MessageBoxDialog into
-/// CONNECTION_ERROR_DIALOG; `force_dismiss_startup_dialog` then dismisses it via OnDecide each
-/// frame. Idempotent; safe to call every frame from the game task until it succeeds.
+/// CONNECTION_ERROR_DIALOG, which the save-flow confirm poll and the blocking-modal oracle read.
+/// Nothing in this crate answers a captured dialog. Idempotent; safe to call every frame from
+/// the game task until it succeeds.
 pub(crate) fn install_auto_accept_hook() {
     if AUTO_ACCEPT_INSTALLED.load(Ordering::SeqCst) != AUTO_ACCEPT_NOT_INSTALLED {
         return;

@@ -1,6 +1,12 @@
 #[cfg(not(windows))]
 pub fn host_diagnostic_stub() {}
 
+// Deliberately outside the `#[cfg(windows)]` block below: a pure install decision whose tests run
+// on the host, where every other gate in this crate is only ever type-checked by the cross-compile.
+pub mod menu_window_run_install;
+// Same reason, same shape: the `05_010_ProfileSelect` chrome decision, host-testable.
+pub mod profile_select_chrome_gate;
+
 #[cfg(windows)]
 use std::{
     ffi::c_void,

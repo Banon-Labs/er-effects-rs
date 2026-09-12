@@ -90,26 +90,18 @@ pub(crate) const VK_W: u8 = 0x57;
 // INJECT_NAV_NO_BUTTONS went with the inject-NAV branch: it existed only to compare against that
 // schedule's per-frame wButtons.
 pub(crate) use er_title_flow::MSGBOX_CLOSING_LATCH_3B0_OFFSET;
-pub(crate) use er_title_flow::MSGBOX_CLOSING_YES;
-pub(crate) use er_title_flow::MSGBOX_LATCH_BYTE_MASK;
-/// The OK-button handler 0x14078e030(rcx=dialog) -- the std::function the menu router invokes when
-/// OK is pressed. Captured from a real OK-press (commit 0x14078ef20 fired with caller 0x78e09c, in
-/// the function entered at 0x78e030). It takes only rcx=dialog: reads the dialog cursor (0x140739e20
-/// = [dialog+0xd4]), gets the OK callback (0x14078fbd0 from [dialog+0x1298]), builds the result
-/// struct (0x1407411e0), and commits (0x14078ef20(dialog, &struct, 1)) -- which closes the dialog
-/// and emits its result to the parent so the title flow proceeds. Calling this each frame on every
-/// captured MessageBoxDialog skips all of them generically (connection-error, starting-offline, ...)
-/// with no input -- it is exactly what a real OK-press runs. Verified entry: `rex push rbx; ... mov
-/// rbx,rcx` at 0x78e030; only rcx used.
-pub(crate) const MSGBOX_OK_HANDLER_RVA: usize = MsgBoxRva::OkHandler as usize;
-/// Confirm latch [dialog+0x1bc0] u8 -- the field a real OK-press sets. The dialog's own per-frame
-/// update 0x140927d30 reads it -> commit 0x14078ef20 builds the result functor into [dialog+0x10]
-/// -> next update emits stop via EmitResult (sets the +0x3b0 closing latch) -> the dialog tears
-/// down. OnDecide alone only highlights/dispatches OK without closing (the modal stays visible and
-/// blocks the title flow); setting this latch is what actually closes it like a real press.
-pub(crate) const MSGBOX_CONFIRM_LATCH_1BC0_OFFSET: usize =
-    core::mem::offset_of!(MsgBoxDialogLayout, confirm_latch);
-pub(crate) const MSGBOX_CONFIRM_LATCH_SET: u8 = true as u8;
+// Five names went with `force_dismiss_startup_dialog()` on 2026-09-11, the function that answered
+// a message box for the player. Three were declarations and are deleted: `MSGBOX_OK_HANDLER_RVA`
+// (the dialog's own first-button handler, which that function called) and
+// `MSGBOX_CONFIRM_LATCH_1BC0_OFFSET` / `MSGBOX_CONFIRM_LATCH_SET` (the latch a real press sets,
+// kept alive only by that function's trailing `let _ = (...)`). Every address they named is still
+// declared once in `er-game-base`'s `MsgBoxRva` and `MsgBoxDialogLayout`, so a host with a reason
+// to press a button again reads it from there rather than from a copy left behind here.
+//
+// The other two, `MSGBOX_CLOSING_YES` and `MSGBOX_LATCH_BYTE_MASK`, were re-exports rather than
+// declarations, and the `loading-cover` oracle still reads both. They resolve through the
+// `pub(crate) use er_title_flow::*;` glob that `constants.rs` carries in the module this file is
+// included into, which is the same item by the same path.
 pub(crate) const PAGE_EXECUTE_READWRITE: u32 = 0x40;
 pub(crate) const PAGE_PROTECT_UNSET: u32 = 0;
 /// IngameInit drive (recipe B, flagless). The SimpleTitleStep container that

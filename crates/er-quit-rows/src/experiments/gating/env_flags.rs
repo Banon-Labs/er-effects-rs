@@ -297,11 +297,16 @@ pub(crate) fn autoload_disabled() -> bool {
 /// real product autoload run, off for telemetry-only runs. A single disable
 /// override turns the stats panel off for A/B, mirroring `autoload_disabled()`'s `ER_QUICKLOAD_NO_AUTOLOAD`
 /// shape: env `ER_QUICKLOAD_NO_STATS_PANEL=1` or the GAME_DIR file `er-quickload-no-stats-panel.txt`.
+///
+/// The two consumers are split out into `crate::profile_select_chrome_gate` so the decision has a
+/// host test: asking only `autoload_disabled()` served the vanilla movie to the three System>Quit
+/// rows once `autoload` left this shell's feature set, with no build failure and no log line.
 pub(crate) fn stats_panel_enabled() -> bool {
-    if autoload_disabled() || save_override_telemetry_only() {
-        return false;
-    }
-    true
+    crate::profile_select_chrome_gate::profile_select_chrome_required(
+        !autoload_disabled(),
+        crate::menu_window_run_install::quit_rows_armed(),
+        save_override_telemetry_only(),
+    )
 }
 // ENV-gate RATIONALE: ER_QUICKLOAD_NATIVE_CONTINUE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn native_continue_enabled() -> bool {

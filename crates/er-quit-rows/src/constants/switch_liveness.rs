@@ -7,9 +7,11 @@
 // Down taps in-process (no host input, no window focus) until d180 is captured, then stage 2
 // invokes its functor directly -- so we never Confirm a wrong item (no New-Game/save-write risk).
 // ============================================================================================
-pub(crate) use er_title_flow::INPUTMGR_BITMAP_90_OFFSET;
-pub(crate) use er_title_flow::MENU_EVENT_PRESSED_BIT;
-pub(crate) use er_title_flow::MENU_EVENT_CONFIRM_3D;
+// The three names this block describes -- `INPUTMGR_BITMAP_90_OFFSET`, `MENU_EVENT_PRESSED_BIT`
+// and `MENU_EVENT_CONFIRM_3D` -- were re-exported here by name until 2026-09-11. Their last
+// reader in this crate was the trailing `let _ = (...)` of `force_dismiss_startup_dialog()`, which
+// is deleted, and `constants.rs` already carries `pub(crate) use er_title_flow::*;` in the same
+// module, so any feature build that drives menu input again resolves them through that glob.
 /// Menu list cursor (highlighted index) and item count, on the list object (cursor getter
 /// 0x140739e20 = `mov eax,[rcx+0xd4]`). Used to log the live cursor (diagnostic) while injecting.
 #[repr(C)]

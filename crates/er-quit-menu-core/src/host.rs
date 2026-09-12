@@ -212,6 +212,17 @@ fn default_normalize(_bytes: &mut [u8]) -> bool {
 /// from staging a single row -- which is what left the standalone **Load Character from File** row
 /// inert with `cannot stage rows -- live ProfileSummary unavailable` (2026-09-11). A host that
 /// tracks the allocation itself still overrides it.
+///
+/// The body reads the game's memory through `er-game-base`, which is a `cfg(windows)`-only
+/// dependency, so the host build gets the same answer the windows build gives when there is no
+/// game module: zero. Without the split, a host `cargo test -p er-quit-menu-core` fails to
+/// compile on five unresolved paths rather than running the crate's tests.
+#[cfg(not(windows))]
+unsafe fn default_summary_ptr() -> usize {
+    0
+}
+
+#[cfg(windows)]
 unsafe fn default_summary_ptr() -> usize {
     let Ok(base) = er_game_base::mem::game_module_base() else {
         return 0;
