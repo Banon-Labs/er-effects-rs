@@ -22,9 +22,11 @@ runs_dir="${ER_ME3_RUNS_DIR:-$HOME/.cache/er-me3-runs}"
 # profile -- so this reads whichever one has appeared rather than one named file. It used to read
 # only er-invasion-warp.log, which made the answer depend on a DLL being in the profile at all.
 #
-# `+dirty` disqualifies a log, matching scripts/check-runtime-evidence.sh. Two readers of the same
-# evidence line disagreeing about what counts is how a push gets waved through on a build whose
-# tree was not the commit.
+# `+dirty` disqualifies a log here, which is stricter than the push guard: since 2026-09-11
+# `scripts/er-runtime-evidence.py` accepts a dirty build line when a provenance record proves the
+# shell's own dependency closure was committed, and this reader does not implement that proof. The
+# difference only ever makes this rebuild when the guard would not have asked for one, which is the
+# safe direction for a script whose job is to order commit-build-run-push.
 newest_run_dir() {
 	find "$runs_dir" -maxdepth 1 -name 'br-*' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2- || true
 }

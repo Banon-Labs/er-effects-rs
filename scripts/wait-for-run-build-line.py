@@ -12,9 +12,11 @@ The wait is on inotify rather than on a poll loop, because a poll loop is a slee
 inotify descriptor returns when the kernel says a file in the directory changed, and its timeout
 is the safety cap rather than the mechanism.
 
-A `+dirty` line is not an answer: the tree carried uncommitted changes when the DLL was built, so
-the binary is not the commit even when the sha matches. That is the same rule
-`scripts/check-runtime-evidence.sh` applies, and the two must not disagree about what counts.
+A `+dirty` line is not an answer here: the tree carried uncommitted changes when the DLL was
+built, so this cannot tell whether the binary is the commit. The push guard can, and since
+2026-09-11 it does -- `scripts/er-runtime-evidence.py` accepts a dirty build line when a provenance
+record proves the shell's own dependency closure was committed. Waiting past one is the safe
+difference: it costs a rebuild the guard might not have demanded, never a push of unrun code.
 
     python3 scripts/wait-for-run-build-line.py <run-dir> [--timeout-seconds N]
     python3 scripts/wait-for-run-build-line.py --selftest
