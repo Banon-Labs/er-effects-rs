@@ -19,6 +19,9 @@ use crate::{crashlog::*, ffi::*, telemetry::*};
 use eldenring::cs::PlayerIns;
 use std::{ffi::c_void, sync::atomic::Ordering};
 
+pub(crate) mod scaleform_handler_hooks;
+pub(crate) use scaleform_handler_hooks::*;
+
 pub(crate) mod system_quit_ownership_repro;
 pub(crate) use system_quit_ownership_repro::*;
 

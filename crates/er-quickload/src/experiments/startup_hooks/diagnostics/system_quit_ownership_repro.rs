@@ -1034,7 +1034,7 @@ pub(crate) fn install_system_quit_save_game_text_hook() {
     match unsafe {
         MhHook::new(
             addr as *mut c_void,
-            system_quit_save_game_get_and_format_hook as *mut c_void,
+            crate::experiments::system_quit_save_game_get_and_format_hook as *mut c_void,
         )
     } {
         Ok(hook) => {
@@ -1090,7 +1090,7 @@ pub(crate) fn install_system_quit_save_game_confirm_hook() {
     match unsafe {
         MhHook::new(
             addr as *mut c_void,
-            system_quit_save_game_return_title_request_hook as *mut c_void,
+            crate::experiments::system_quit_save_game_return_title_request_hook as *mut c_void,
         )
     } {
         Ok(hook) => {

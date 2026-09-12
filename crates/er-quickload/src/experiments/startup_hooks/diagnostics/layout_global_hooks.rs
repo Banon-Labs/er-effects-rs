@@ -86,8 +86,10 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
             er_quit_menu_core::row_cloner::QuitRowActions {
                 open_profile_load_dialog: Some(system_quit_open_profile_load_dialog),
                 open_save_picker_menu: Some(open_save_picker_menu_for_row),
-                save_game_start_flow: Some(system_quit_save_game_start_flow),
-                save_game_request_save_only: Some(system_quit_save_game_request_save_only),
+                save_game_start_flow: Some(crate::experiments::system_quit_save_game_start_flow),
+                save_game_request_save_only: Some(
+                    crate::experiments::system_quit_save_game_request_save_only,
+                ),
                 // No product half: the moved reset already clears the row table, the link
                 // field and the export latch, which is everything this side used to do.
                 row_table_reset: None,
