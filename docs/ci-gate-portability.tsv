@@ -225,6 +225,8 @@ blocked	user-launcher	er-run-branch.py --selftest	asserts the user launcher it d
 portable	-	er-release-bisect.py --selftest	source/AST/text analysis only
 portable	-	check-single-dll-product-contract.py --selftest	source/AST/text analysis only
 portable	-	check-single-dll-product-contract.py	source/AST/text analysis only
+portable	-	check-feature-gates-bite.py --selftest	source/AST/text analysis only
+portable	-	check-feature-gates-bite.py	source/AST/text analysis only
 portable	-	check-rust-build.sh	full cross-linked DLL build plus wine lib tests; the one step over the 30s audit cap, so not measured by the sweep -- CI has always run it
 blocked	minhook	check-committed-compiles.sh --selftest	compiles the workspace; er-hook needs vendor/minhook
 blocked	minhook	check-committed-compiles.sh	compiles the workspace; er-hook needs vendor/minhook
