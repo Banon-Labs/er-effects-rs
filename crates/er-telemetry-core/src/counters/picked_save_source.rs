@@ -99,13 +99,28 @@ pub static ORPHAN_TITLE_WINDOW_CLOSE_REQUESTS: AtomicUsize = AtomicUsize::new(0)
 /// "proven zero". In a world reached through a switch the pass value is 0.
 pub static TITLE_OWNER_MENU_WINDOW_COUNT: AtomicUsize = AtomicUsize::new(usize::MAX);
 
-/// Times a genuinely loaded world reverted to the title/new-game map default -- the black screen,
-/// counted as a transition (real map id -> `FULLREAD_C30_M10_DEFAULT`) rather than as a level, so
-/// the long stretch of every boot that legitimately sits at the default cannot trip it.
+/// Times a genuinely loaded world reverted to the title/new-game map default, counted as a
+/// transition (real map id -> `FULLREAD_C30_M10_DEFAULT`) rather than as a level, so the long
+/// stretch of every boot that legitimately sits at the default cannot trip it.
 ///
-/// This is the run-stopping oracle for the second-load teardown. It is deliberately blind to how
-/// the switch was driven, so a run driven through the real ProfileSelect rows and a run driven by
-/// the diagnostic control file are scored by the same measurement.
+/// # It is not a defect count on a `System>Quit -> Load Character` switch
+///
+/// This doc used to open "the black screen" and call itself the run-stopping oracle for the
+/// second-load teardown. On the switch flow that reading is wrong, and it misled a reader the day
+/// it was measured: a switch tears the world down on purpose before rebuilding it, so a **working**
+/// load raises this twice. The 2026-09-11 20:24 run reached 4 across two consecutive switches while
+/// every load succeeded -- `oracle_load_correctness_seen` 1, `T_controllable` on each, and the
+/// player confirmed all three characters loaded.
+///
+/// So read it as a transition count, not a verdict. It says the world went back to the title map;
+/// whether that was the switch doing its job or a load collapsing is answered by what follows it,
+/// which is `T_controllable` and `oracle_load_correctness_seen`. The name is kept because
+/// `scripts/check-world-lost.py` and `scripts/er-switch-timeline.py` read it, and a rename would
+/// silently change what they score.
+///
+/// It is deliberately blind to how the switch was driven, so a run driven through the real
+/// ProfileSelect rows and a run driven by the diagnostic control file are scored by the same
+/// measurement.
 pub static WORLD_LOST_TO_TITLE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// Times a `CS::MessageBoxDialog` was built at the title after its menu had opened, with no world
