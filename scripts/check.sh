@@ -731,6 +731,13 @@ python3 "$repo_root/scripts/test-narrated-action-classifier.py"
 # also re-reads the friction stall's own admission patterns out of that signal and fails if a
 # sentence would ever be charged by both rules.
 python3 "$repo_root/scripts/test-admission-with-defence-classifier.py"
+# The other half of the fix-claim guard. Its Rego suite pins what the policy does with a facts line;
+# this pins where the line comes from, which is the half that decides whether the guard convicts an
+# ordinary sentence. The negatives carry the weight: a branch called fix/..., a fixture, the gerund
+# the promissory closer owns, a quoted or backticked word, and a gate fixed by a lint all have to
+# pass. It also asserts the manifest walk still separates the crates that reach a DLL from the two
+# host-only ones -- an empty walk would make every turn innocent and the guard silently inert.
+python3 "$repo_root/scripts/test-fix-claim-classifier.py"
 # The SessionStart/PreCompact prime hook must stay small enough that the harness INLINES it.
 # At 2452 memories it emitted 157.4 KB, which Claude Code persisted to a file and replaced
 # with a 2 KB preview -- so the priming content never reached the agent while still costing
