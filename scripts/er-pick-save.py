@@ -86,8 +86,47 @@ def oracle():
     return module
 
 
+def main_checkout_root() -> Path | None:
+    """The main working tree, when this file is running out of a linked git worktree.
+
+    The corpus is untracked, so a worktree made with `git worktree add` starts without it, and
+    every launcher that draws a save then refuses with "no save corpus found" -- a missing
+    directory reported as a missing corpus, which reads like the saves are gone rather than like
+    the checkout is new. In a linked worktree `.git` is a file holding `gitdir: <main>/.git/
+    worktrees/<name>`, and that directory's `commondir` points back at the main `.git`, whose
+    parent is the checkout the corpus lives in. Returns `None` in the main checkout itself, where
+    `.git` is a directory and the plain `<repo>/save-files` candidate already applies.
+    """
+    marker = REPO_ROOT / ".git"
+    if not marker.is_file():
+        return None
+    try:
+        pointer = marker.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    prefix = "gitdir:"
+    if not pointer.startswith(prefix):
+        return None
+    gitdir = Path(pointer[len(prefix) :].strip()).expanduser()
+    if not gitdir.is_absolute():
+        gitdir = (REPO_ROOT / gitdir).resolve()
+    try:
+        common = Path((gitdir / "commondir").read_text(encoding="utf-8").strip())
+    except OSError:
+        return None
+    if not common.is_absolute():
+        common = (gitdir / common).resolve()
+    return common.parent
+
+
 def resolve_root(cli_root: str | None) -> Path:
-    for candidate in (cli_root, os.environ.get("ER_SAVE_CORPUS_ROOT"), REPO_ROOT / "save-files"):
+    sibling = main_checkout_root()
+    for candidate in (
+        cli_root,
+        os.environ.get("ER_SAVE_CORPUS_ROOT"),
+        REPO_ROOT / "save-files",
+        sibling / "save-files" if sibling else None,
+    ):
         if not candidate:
             continue
         path = Path(candidate).expanduser()
@@ -95,7 +134,9 @@ def resolve_root(cli_root: str | None) -> Path:
             return path
     raise RuntimeError(
         "no save corpus found; pass --root or set ER_SAVE_CORPUS_ROOT to a directory of "
-        "ER0000.sl2 / ER0000.co2 files"
+        f"ER0000.sl2 / ER0000.co2 files (looked in {REPO_ROOT / 'save-files'}"
+        + (f" and {main_checkout_root() / 'save-files'}" if main_checkout_root() else "")
+        + ")"
     )
 
 
