@@ -1230,7 +1230,16 @@ pub(crate) unsafe extern "system" fn title_logo_ctor_force_hidden_hook(
     } else {
         logo
     };
-    unsafe { force_hide_title_logo_surface(base, logo, 0, "ctor detour") };
+    // Only while the cover owns the screen. This detour supplies its own `visible = 0` instead of
+    // relaying one the game asked for, so after release it hides a logo nobody asked to hide -- and
+    // does it silently, because `force_hide_title_logo_surface` returns before the log line and the
+    // counter once the cover is gone. That is what left the logo missing on the title the player
+    // quits back to while `oracle_title_logo_gfx_hide_calls` stayed frozen at its boot value
+    // (user report 2026-09-12: logo absent until the save-check dialog was dismissed, at which
+    // point a later native `SetVisible(1)` finally reached the surface).
+    if er_telemetry_core::counters::title_visual_suppression_active() {
+        unsafe { force_hide_title_logo_surface(base, logo, 0, "ctor detour") };
+    }
     ret
 }
 
@@ -1247,6 +1256,12 @@ pub(crate) unsafe extern "system" fn title_top_start_login_hide_hook(
         unsafe { original(dialog, param_2) };
     }
     if base == null || dialog == null || dialog == TITLE_OWNER_SCAN_START_ADDRESS {
+        return;
+    }
+    // The native start-login path just made the logo visible, and undoing that is the cover's
+    // business alone. This hide had no release gate at all, so it was the second way a title built
+    // after the cover stopped came up without its logo.
+    if !er_telemetry_core::counters::title_visual_suppression_active() {
         return;
     }
     let logo = dialog + TITLE_LOGO_BACK_VIEW_PARTS_AA8_OFFSET;
