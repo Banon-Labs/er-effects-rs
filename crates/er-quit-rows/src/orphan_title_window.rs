@@ -3,27 +3,47 @@
 //! Its own module, and outside the `#[cfg(windows)]` half of this crate, so the decision runs under
 //! `cargo test -p er-quit-rows` on the host -- the same reason `menu_window_run_install` sits here.
 //!
-//! # The defect
+//! # The defect, and what was actually holding the window
 //!
-//! `System>Quit -> Load Character` returns to the title on purpose and loads from there. Measured in
-//! `er-quit-rows-debug.log`, 2026-09-11 17:34, build `65dce10a`, on the `ProfileSelectSlotActivate`
-//! switch, four log lines in order:
+//! `PRESS ANY BUTTON` and the publisher footer stay on screen over a character loaded through
+//! `System>Quit -> Load Character`, on every load after the first. Reported 2026-09-11, withdrawn
+//! once on the reasoning that the run had this shell's auto-accept removed, then reproduced by hand
+//! five loads in a row: "first load is fine, second load is fine except I still see PAB and the
+//! footer legal. Same for third ... and the fourth, and fifth."
 //!
-//! ```text
-//! +38919ms  WORLD LOST #1: c30 0x1c000000 -> 0xa010000     the outgoing world reverts to the title
-//! +38924ms  AcquireMenuResource ... filename='05_000_Title'  the title screen is genuinely rebuilt
-//! +39246ms  own-load-feed: ... c30 0xa010000->0x1c000000   323 ms later the switch mounts its slot
-//! +39247ms  own-load-continue: COMMIT continue_confirm     and hands the world off
-//! ```
+//! Two measurements out of the live process (pid 3031799, the 19:39 run, read at 19:44 through
+//! `scripts/er-live-fields.py`) name the cause, and neither of them is the job:
 //!
-//! The world streams and `T_controllable` lands at `+40473ms` -- and the title's `PRESS ANY BUTTON`
-//! prompt and its publisher footer are still drawn over it, permanently.
+//! * The surviving window is the `TitleTopDialog` at `TitleStep+0xe0`, `0x318ca880` -- the same
+//!   pointer the product's own post-world gate logged at `+27947ms`. Its `MenuWindow+0x3b0`
+//!   re-entry latch read 0 six minutes later, so `MenuWindow::Close` had never run on it once.
+//! * That gate was calling `TITLE_TOP_DIALOG_CLEANUP_RVA`, which the 1.16.2 decompile shows is
+//!   `CS::TitleTopDialog::~TitleTopDialog` -- it rewrites the vtable, frees `+0xd60`, destroys six
+//!   `CSScaleformValue`s and chains to `~MenuWindow`. It deregisters nothing and closes nothing.
+//!   It was also latched once per process, which is exactly why the first load looked clean and
+//!   every later one did not.
 //!
-//! The same log carries the negative case. The second switch, `Load Character from File` at
-//! `+169567ms`, never lost its world (`c30` holds `0x1c000000` until the feed moves it straight to
-//! `0xe000000`), never acquired `05_000_Title`, and has no orphan. So the defect is not a property
-//! of the row: it is a property of whether the outgoing teardown reached the title before the
-//! switch committed, which is a race the switch does not control.
+//! Both are fixed where they live, in `er_title_flow::product_autoload_gates`: that gate now asks
+//! the engine's own `CloseAsFailed(MenuWindow*)` and re-arms on the dialog pointer.
+//!
+//! # Why this module no longer issues the close itself
+//!
+//! It asked from inside `CS::MenuWindowJob::Run`, on the reasoning that `Run` is the frame the
+//! engine issues its own closes from. That is true of the engine and useless here, because **after
+//! a switch commits the title's job stops being run at all**.
+//!
+//! The run that settled it: the gate's decline line fired once at `+14397ms` -- before the switch,
+//! with `switch_committed=false`, which is the correct answer there -- and then never again, while
+//! the switch committed at `+26006ms`. The line re-arms at every switch arm, so a second decline
+//! would have printed had the gate been consulted at all. It was not:
+//! `system_quit_menu_window_run_post` never saw `05_000_Title` again after the commit. A close
+//! issued from a frame that never arrives is not a fix, and this module has never once acted.
+//!
+//! What is kept is the decision and its number. `orphan_title_window_close_required` still refuses
+//! everything but the three title resources after a committed switch, and
+//! `TITLE_SURFACE_RUN_TICKS_IN_WORLD` -- now counted only once a switch has committed -- still says
+//! whether a title surface is being pumped over a live world. The close belongs to a per-frame
+//! owner that survives the switch; the judgement of whether one is owed belongs here.
 //!
 //! # Who should have torn the window down
 //!
@@ -142,6 +162,22 @@ pub fn orphan_title_window_close_required(
         && close_requests_spent < MAX_CLOSE_REQUESTS_PER_SWITCH
 }
 
+/// Whether the switch may ask the engine to close the title menu it just made the game rebuild.
+///
+/// The other predicate in this module judges a window by its resource name, because it is consulted
+/// from the menu pump where a name is in hand. This one is consulted from the switch drive, where
+/// the only things known are the title owner's own window count and how many closes this switch has
+/// already spent -- so those are what it judges. The owner is the title's, the slot is the title's
+/// holder at `owner+0xe0`, and the caller has already established that a switch it armed is in
+/// flight; a count above zero there is the menu the switch caused.
+///
+/// The budget is the same one the resource-name predicate uses, for the same reason: a close that
+/// has to be asked more than a handful of times is not going to be answered, and a load must never
+/// be held hostage to a teardown.
+pub fn switch_title_menu_close_required(window_count: usize, close_requests_spent: usize) -> bool {
+    window_count > 0 && close_requests_spent < MAX_CLOSE_REQUESTS_PER_SWITCH
+}
+
 #[cfg(test)]
 mod orphan_title_window_tests {
     use super::{
@@ -236,5 +272,28 @@ mod orphan_title_window_tests {
             true,
             MAX_CLOSE_REQUESTS_PER_SWITCH - 1
         ));
+    }
+
+    #[test]
+    fn the_switch_asks_for_a_close_only_while_the_title_still_holds_a_window() {
+        use super::switch_title_menu_close_required;
+        assert!(switch_title_menu_close_required(1, 0));
+        assert!(
+            !switch_title_menu_close_required(0, 0),
+            "a drained owner is the pass condition, not a reason to ask again"
+        );
+    }
+
+    #[test]
+    fn the_switch_close_budget_is_the_same_one_the_pump_uses() {
+        use super::{MAX_CLOSE_REQUESTS_PER_SWITCH, switch_title_menu_close_required};
+        assert!(switch_title_menu_close_required(
+            1,
+            MAX_CLOSE_REQUESTS_PER_SWITCH - 1
+        ));
+        assert!(
+            !switch_title_menu_close_required(1, MAX_CLOSE_REQUESTS_PER_SWITCH),
+            "a load must never be held hostage to a teardown that is not answering"
+        );
     }
 }

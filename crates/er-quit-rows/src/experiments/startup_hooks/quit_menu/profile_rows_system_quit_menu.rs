@@ -1099,6 +1099,26 @@ pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_wi
 /// MinHook installs only one, so this hook's own install fails `MH_ERROR_ALREADY_CREATED` and none of this
 /// would otherwise run (2026-07-15 root cause: dead hook -> profile load never completes + System menu never
 /// hidden). `title_custom_cover_menu_window_run_hook` calls this after it runs the original.
+/// One-shot log guards for the two ways the orphan close can decline. Each fires once per run so a
+/// refusal is visible without turning the menu frame into a log loop.
+/// Hand the orphan-close gate's one-shot log guards back, so each switch reports for itself.
+///
+/// Called from `system_quit_arm_quickload_autoload`, beside the close budget it resets for the same
+/// reason: a guard that is spent once per process reports whichever occurrence came first, and the
+/// first one is the boot Continue, where the gate is supposed to decline.
+pub(crate) fn reset_orphan_title_window_diagnostics() {
+    ORPHAN_TITLE_GATE_DECLINED_LOGGED.store(false, Ordering::SeqCst);
+    ORPHAN_TITLE_NO_WINDOW_LOGGED.store(false, Ordering::SeqCst);
+    ORPHAN_TITLE_NO_ADDRESS_LOGGED.store(false, Ordering::SeqCst);
+}
+
+static ORPHAN_TITLE_GATE_DECLINED_LOGGED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static ORPHAN_TITLE_NO_WINDOW_LOGGED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static ORPHAN_TITLE_NO_ADDRESS_LOGGED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Ask the game to take back a title window that outlived the title, and count the ones still there.
 ///
 /// Two jobs, deliberately in this order. The count comes first and is unconditional on everything
@@ -1127,24 +1147,66 @@ unsafe fn system_quit_close_orphaned_title_window(job: usize, filename: &str) {
     if c30 == crate::orphan_title_window::C30_TITLE_DEFAULT {
         return;
     }
-    er_telemetry_core::counters::TITLE_SURFACE_RUN_TICKS_IN_WORLD.fetch_add(1, Ordering::SeqCst);
     let committed = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 1;
+    // Counted only once a switch has committed, because the boot handoff legitimately runs the
+    // title's windows for a fraction of a second after `GameMan+0xc30` names the incoming map. A
+    // 2026-09-11 boot that took no switch left this at 36, and a defect counter whose pass value is
+    // 0 cannot carry a floor of 36 on a clean load.
+    if committed {
+        er_telemetry_core::counters::TITLE_SURFACE_RUN_TICKS_IN_WORLD
+            .fetch_add(1, Ordering::SeqCst);
+    }
     let spent =
         er_telemetry_core::counters::ORPHAN_TITLE_WINDOW_CLOSE_REQUESTS.load(Ordering::SeqCst);
     if !crate::orphan_title_window::orphan_title_window_close_required(
         filename, c30, committed, spent,
     ) {
+        // Say which term declined, once per run.
+        //
+        // Measured 2026-09-11 20:0x: five loads left the title over the world
+        // (`oracle_title_surface_run_ticks_in_world` 41, `oracle_title_owner_menu_window_count` 1)
+        // with no `orphan-title-window` line of any kind -- not even one of the two refusals below,
+        // which means this gate declined and said nothing. A predicate with four terms that logs
+        // only when it passes cannot be diagnosed from a run; it can only be guessed at, which is
+        // what the last three rebuilds were.
+        if ORPHAN_TITLE_GATE_DECLINED_LOGGED.swap(true, Ordering::SeqCst) == false {
+            append_autoload_debug(format_args!(
+                "orphan-title-window: gate DECLINED for '{filename}' -- is_title_surface={} c30=0x{c30:x} (title default 0x{:x}) switch_committed={committed} spent={spent}/{} -- the false term is the one to fix",
+                crate::orphan_title_window::is_title_surface(filename),
+                crate::orphan_title_window::C30_TITLE_DEFAULT,
+                crate::orphan_title_window::MAX_CLOSE_REQUESTS_PER_SWITCH
+            ));
+        }
         return;
     }
+    // Both refusals below say so out loud, once per run each.
+    //
+    // They used to return silently, and that cost a whole measurement: on 2026-09-11 19:20 a switch
+    // left the title over the world with `oracle_title_surface_run_ticks_in_world` at 43 and
+    // `oracle_orphan_title_window_close_requests` at 0, and the log carried not one line explaining
+    // the gap. The cause was the second refusal -- `MENU_WINDOW_CLOSE_AS_FAILED_RVA` had no row in
+    // `docs/recon/rva-map-1162-to-1170.verified.tsv`, so the translator correctly refused a 1.16.2
+    // address on 1.17.1 and this function did nothing, invisibly. A gate that declines has to be
+    // distinguishable from a gate that was never asked.
     let window =
         unsafe { safe_read_usize(job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET) }.unwrap_or(0);
     if window == 0 {
+        if ORPHAN_TITLE_NO_WINDOW_LOGGED.swap(true, Ordering::SeqCst) == false {
+            append_autoload_debug(format_args!(
+                "orphan-title-window: REFUSED -- '{filename}' job=0x{job:x} has no owning window at +0x{MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET:x}, so there is nothing to ask the game to close"
+            ));
+        }
         return;
     }
     let Some(close_addr) = crate::experiments::gated_game_fn(
         MENU_WINDOW_CLOSE_AS_FAILED_RVA,
         "MENU_WINDOW_CLOSE_AS_FAILED_RVA",
     ) else {
+        if ORPHAN_TITLE_NO_ADDRESS_LOGGED.swap(true, Ordering::SeqCst) == false {
+            append_autoload_debug(format_args!(
+                "orphan-title-window: REFUSED -- MENU_WINDOW_CLOSE_AS_FAILED_RVA 0x{MENU_WINDOW_CLOSE_AS_FAILED_RVA:x} did not resolve on this build, so '{filename}' stays over the world. Add a verified row for it to docs/recon/rva-map-1162-to-1170.verified.tsv"
+            ));
+        }
         return;
     };
     // Justify the transmute: `MENU_WINDOW_CLOSE_AS_FAILED_RVA` is resolved through the same

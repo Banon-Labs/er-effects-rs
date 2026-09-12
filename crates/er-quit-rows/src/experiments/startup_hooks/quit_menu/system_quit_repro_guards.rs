@@ -242,6 +242,13 @@ pub(crate) unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, sour
     // whether a switch has committed. A process-wide budget would leave the third or fourth switch
     // unable to ask.
     er_telemetry_core::counters::ORPHAN_TITLE_WINDOW_CLOSE_REQUESTS.store(0, Ordering::SeqCst);
+    // And re-arm that gate's one-shot diagnostics, for the same per-switch reason.
+    //
+    // Measured 2026-09-11 19:35: the decline line fired once at `+34442ms`, on the boot Continue --
+    // where `switch_committed=false` is the correct answer and the decline is right -- and was
+    // therefore already spent when the real switch ran at `+130846ms`. A one-shot per run reports
+    // the first occurrence, which is reliably the least interesting one.
+    crate::experiments::startup_hooks::quit_menu::profile_rows_system_quit_menu::reset_orphan_title_window_diagnostics();
     // Re-arm the menu-free clean-title switch reload one-shot so every switch (not just the first) can
     // drive its own picked-slot feed-deserialize -> continue_confirm (own_load_switch_reload_fire).
     SYSTEM_QUIT_SWITCH_MENU_FREE_RELOAD_FIRED.store(0, Ordering::SeqCst);

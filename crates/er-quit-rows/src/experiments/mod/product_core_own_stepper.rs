@@ -182,6 +182,14 @@ pub(crate) use er_telemetry_core::counters::OWN_LOAD_PUMP_FIRED;
 /// was handled, so we never re-pump or re-transition. Exposed as `oracle_own_load_pump_done`.
 pub(crate) static OWN_LOAD_PUMP_DONE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+/// Set true once the pumped job reached Success and the transition is waiting on the engine's own
+/// teardown of the title menu the switch made the game rebuild.
+///
+/// A separate latch from `OWN_LOAD_PUMP_DONE` on purpose: `DONE` stops the tick, and the tick is
+/// what re-asks whether the teardown has finished. This one stops the job being run a second time
+/// without stopping the tick.
+pub(crate) static OWN_LOAD_PUMP_SUCCESS_HELD: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 pub(crate) use er_telemetry_core::counters::PRODUCT_CORE_AUTOLOAD_TICKS;
 pub(crate) use er_telemetry_core::counters::PRODUCT_CORE_CALLSITE_BASE_OK_TICKS;
 pub(crate) use er_telemetry_core::counters::PRODUCT_CORE_CALLSITE_LAST_SLOT;

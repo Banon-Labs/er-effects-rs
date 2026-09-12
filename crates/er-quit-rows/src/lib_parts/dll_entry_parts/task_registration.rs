@@ -656,6 +656,13 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                             cleanup_title_dialog_after_world_once(base, state.game_task_ticks)
                         };
                     }
+                // A commit held back waiting for the engine to take down the title menu the switch
+                // made it rebuild. The retry lives on this tick because the tick demonstrably keeps
+                // running across the whole switch, and whatever called `own_load_continue_fire` the
+                // first time does not: three runs logged its `GUARD PASS` line exactly once.
+                unsafe {
+                    crate::experiments::own_load_continue_retry_deferred(state.game_task_ticks)
+                };
                 // In-world correctness oracle: on the first frame the local player exists, log
                 // the load-correctness record + the T_controllable timeline marker once. Fires
                 // for both a native-menu load (observe) and a DLL-driven load (own-stepper), so

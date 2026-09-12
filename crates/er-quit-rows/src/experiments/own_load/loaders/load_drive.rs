@@ -172,6 +172,145 @@ pub(crate) unsafe fn own_load_drive(base: usize, gm: usize, owner: usize, want_s
     OWN_LOAD_PHASE_PUB.store(PHASE_DONE + 1, Ordering::SeqCst);
 }
 
+/// Publish the arguments a deferred `own_load_continue_fire` needs so the game task can call back.
+///
+/// `c30_real` and `fp_real` are not stored: both are recomputed by the retry from the values it
+/// passes, and `own_load_continue_fire` re-checks them itself before it writes anything.
+fn defer_own_load_continue(base: usize, title_owner: usize, c30: i32, fp_level: u32) {
+    OWN_LOAD_CONTINUE_DEFER_BASE.store(base, Ordering::SeqCst);
+    OWN_LOAD_CONTINUE_DEFER_OWNER.store(title_owner, Ordering::SeqCst);
+    OWN_LOAD_CONTINUE_DEFER_C30.store(c30 as usize, Ordering::SeqCst);
+    OWN_LOAD_CONTINUE_DEFER_LEVEL.store(fp_level as usize, Ordering::SeqCst);
+    OWN_LOAD_CONTINUE_DEFERRED.store(true, Ordering::SeqCst);
+}
+
+/// Call `own_load_continue_fire` again for a commit that was held back waiting on the title
+/// teardown. Does nothing unless a commit is actually deferred.
+///
+/// # Safety
+///
+/// Game-task context. The callee re-checks every save-safety condition and aborts without a write
+/// on any failure, so a stale owner cannot turn into a save.
+pub(crate) unsafe fn own_load_continue_retry_deferred(n: u64) {
+    if !OWN_LOAD_CONTINUE_DEFERRED.load(Ordering::SeqCst) {
+        return;
+    }
+    let base = OWN_LOAD_CONTINUE_DEFER_BASE.load(Ordering::SeqCst);
+    let owner = OWN_LOAD_CONTINUE_DEFER_OWNER.load(Ordering::SeqCst);
+    let c30 = OWN_LOAD_CONTINUE_DEFER_C30.load(Ordering::SeqCst) as i32;
+    let fp_level = OWN_LOAD_CONTINUE_DEFER_LEVEL.load(Ordering::SeqCst) as u32;
+    let c30_real = c30 != GAME_MAN_C30_UNSET && c30 != 0 && c30 != FULLREAD_C30_M10_DEFAULT;
+    let (fp_real, _live_level, _name_len) = unsafe { char_fingerprint(base) };
+    unsafe { own_load_continue_fire(base, owner, c30, c30_real, fp_real, fp_level, n) };
+}
+
+static OWN_LOAD_CONTINUE_DEFERRED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static OWN_LOAD_CONTINUE_DEFER_BASE: AtomicUsize = AtomicUsize::new(0);
+static OWN_LOAD_CONTINUE_DEFER_OWNER: AtomicUsize = AtomicUsize::new(0);
+static OWN_LOAD_CONTINUE_DEFER_C30: AtomicUsize = AtomicUsize::new(0);
+static OWN_LOAD_CONTINUE_DEFER_LEVEL: AtomicUsize = AtomicUsize::new(0);
+
+/// Ask the title to close the menu the switch made it rebuild, and answer whether it is gone.
+///
+/// Which window may be asked is `crate::orphan_title_window`'s judgement and nothing else's: this
+/// calls `MENU_WINDOW_CLOSE_AS_FAILED_RVA`, which closes any `MenuWindow` including a
+/// `CS::MessageBoxDialog`, so it is only ever pointed at the title owner's own holder slot while a
+/// switch this crate armed is mid-flight.
+///
+/// Returns `true` when the commit may proceed: either the owner's `DLFixedVector<MenuWindow*>` at
+/// `owner+0xe0` has drained to zero elements, or the budget below is spent. Returns `false` while
+/// the engine is still working, which leaves `OWN_LOAD_PHASE` where it was so the next tick asks
+/// again -- the phase must not advance to `PHASE_DONE` on a tick that did not commit.
+///
+/// The budget exists because a load must never be hostage to a teardown. If the count has not
+/// drained within `TITLE_MENU_DRAIN_BUDGET_TICKS`, this gives up, says so, and lets the commit run:
+/// a title window over a loaded world is the defect this is trying to remove, and it is still far
+/// better than a character that never loads.
+///
+/// # Safety
+///
+/// Game-task context, and every read is a fault-tolerant `safe_read_usize`. The one call it makes
+/// is the engine's own `CloseAsFailed(MenuWindow*)`, resolved through the build-verified translator.
+unsafe fn title_menu_drained_for_commit(owner: usize, n: u64) -> bool {
+    /// Ticks the commit will wait for the engine to finish its own teardown before giving up.
+    ///
+    /// Measured, not chosen. At 240 the hold outlived the teardown it was waiting inside: the 20:21
+    /// run asked for the close at `+36960ms` and the log carried a second world-loss line at
+    /// `+37488ms`, 528 ms later, so holding that long let the switch's teardown run to completion
+    /// and drop the player on a real title screen -- a view this flow is never meant to reach. The
+    /// budget is now well inside that window, so the engine gets frames to reap and the hold can
+    /// never be what takes the world down.
+    const TITLE_MENU_DRAIN_BUDGET_TICKS: usize = 12;
+    static DRAIN_WAITED_TICKS: AtomicUsize = AtomicUsize::new(0);
+    static CLOSE_REQUESTED_FOR_WINDOW: AtomicUsize = AtomicUsize::new(0);
+    static CLOSE_REQUESTS_SPENT: AtomicUsize = AtomicUsize::new(0);
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if owner == null {
+        return true;
+    }
+    let Some(count) = (unsafe {
+        safe_read_usize(owner + crate::constants::TITLE_OWNER_MENU_WINDOW_COUNT_128_OFFSET)
+    }) else {
+        // The count is unreadable, so there is nothing to wait on and nothing to prove. Commit.
+        return true;
+    };
+    if count == 0 {
+        let waited = DRAIN_WAITED_TICKS.load(Ordering::SeqCst);
+        if waited != 0 {
+            append_autoload_debug(format_args!(
+                "title-menu-drain: owner=0x{owner:x} window count reached 0 after {waited} tick(s) -- the engine reaped the title menu the switch rebuilt; commit may proceed (#{n})"
+            ));
+            DRAIN_WAITED_TICKS.store(0, Ordering::SeqCst);
+            CLOSE_REQUESTED_FOR_WINDOW.store(0, Ordering::SeqCst);
+            CLOSE_REQUESTS_SPENT.store(0, Ordering::SeqCst);
+        }
+        return true;
+    }
+    let window =
+        unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(null);
+    let spent = CLOSE_REQUESTS_SPENT.load(Ordering::SeqCst);
+    if !crate::orphan_title_window::switch_title_menu_close_required(count, spent) {
+        return true;
+    }
+    if window != null && CLOSE_REQUESTED_FOR_WINDOW.swap(window, Ordering::SeqCst) != window {
+        CLOSE_REQUESTS_SPENT.fetch_add(1, Ordering::SeqCst);
+        match crate::experiments::gated_game_fn(
+            MENU_WINDOW_CLOSE_AS_FAILED_RVA,
+            "MENU_WINDOW_CLOSE_AS_FAILED_RVA",
+        ) {
+            Some(close_addr) => {
+                // Justify the transmute: the address is resolved through the same build-verified
+                // translator every other direct call here uses, and the signature matches the
+                // static decompile of `FUN_1407ac890` -- one `MenuWindow*` in rcx, no return.
+                let close: unsafe extern "system" fn(usize) =
+                    unsafe { std::mem::transmute(close_addr) };
+                unsafe { close(window) };
+                append_autoload_debug(format_args!(
+                    "title-menu-drain: asked CloseAsFailed 0x{close_addr:x} for the title window the switch rebuilt (owner=0x{owner:x} window=0x{window:x} count={count}) -- holding the commit so STEP_MenuJobWait can run FUN_1407ada40 itself (#{n})"
+                ));
+            }
+            None => {
+                append_autoload_debug(format_args!(
+                    "title-menu-drain: MENU_WINDOW_CLOSE_AS_FAILED_RVA 0x{MENU_WINDOW_CLOSE_AS_FAILED_RVA:x} did not resolve on this build -- committing without a drain, so the title menu will stay over the world (#{n})"
+                ));
+                return true;
+            }
+        }
+    }
+    let waited = DRAIN_WAITED_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
+    if waited >= TITLE_MENU_DRAIN_BUDGET_TICKS {
+        append_autoload_debug(format_args!(
+            "title-menu-drain: GIVING UP after {waited} tick(s) with owner=0x{owner:x} count={count} window=0x{window:x} -- committing anyway; a character that loads under a stale title beats one that never loads (#{n})"
+        ));
+        DRAIN_WAITED_TICKS.store(0, Ordering::SeqCst);
+        CLOSE_REQUESTED_FOR_WINDOW.store(0, Ordering::SeqCst);
+        CLOSE_REQUESTS_SPENT.store(0, Ordering::SeqCst);
+        return true;
+    }
+    false
+}
+
 /// Own-load final step (er-effects-rs-mr2): after the proven verify-only parse mounted a real c30 +
 /// real character, fire the guarded native `continue_confirm` 0x140b0e180 -> `SetState5` 0x140b0d960
 /// to stream the character into the playable world. `continue_confirm` reads owner = [rcx+8] off
@@ -249,6 +388,33 @@ pub(crate) unsafe fn own_load_continue_fire(
         ));
         return;
     }
+    // Hold the commit until the engine has taken down the title menu this switch made it rebuild.
+    //
+    // Measured three runs in a row, 2026-09-11. The switch tears the world down (`c30 0xe000000 ->
+    // 0xa010000`), the game acquires `05_000_Title` and `05_001_Title_Logo` four milliseconds later,
+    // and `continue_confirm` then takes `CS::TitleStep` to `STEP_PlayGame` about 200 ms after that
+    // -- while the title's own job chain is still mid-flight. `STEP_MenuJobWait` never runs again,
+    // so `ExecuteMenuJob` never asks the job for a result and `FUN_1407ada40`, the only thing that
+    // deregisters the window from `CSMenuMan+0x90` and erases it from the owner's vector, never
+    // runs. The world then arrives underneath a title menu nothing will take down, and that window
+    // holds the player's input: the report each time was "everything rendered but no ability to
+    // press any button", on a character telemetry showed as `T_controllable`.
+    //
+    // The check sits here rather than at a caller because two earlier attempts put it at call sites
+    // this build does not take -- `own_load_drive`'s final step (its `own_load_continue_enabled()`
+    // branch is false) and `own_load_pump_tick`'s Success arm (no `own-load-pump` Success line was
+    // ever logged) -- and both produced runs with zero `title-menu-drain` lines. This function is
+    // the one every path provably reaches: its own `GUARD PASS` line is in all three logs.
+    //
+    // Re-entry belongs to the game task, not to whoever called here: `own_load_continue_deferred`
+    // publishes the arguments and `product_core_autoload_tick` calls back each frame until the
+    // count drains or the budget is spent. Nothing is pumped and no field is written -- the close is
+    // the engine's own `CloseAsFailed`, and the wait is on the engine's own count.
+    if !unsafe { title_menu_drained_for_commit(title_owner, n) } {
+        defer_own_load_continue(base, title_owner, c30, fp_level);
+        return;
+    }
+    OWN_LOAD_CONTINUE_DEFERRED.store(false, Ordering::SeqCst);
     // Guard passed. Build the {[OWNER_IDX]=title_owner} shim and fire the native continue_confirm.
     let shim = &raw mut OWN_STEPPER_SHIM;
     unsafe { (*shim)[OWN_STEPPER_SHIM_OWNER_IDX] = title_owner };
@@ -622,6 +788,10 @@ unsafe fn own_load_pump_fire(
 /// owner's new-game flag clear -- mirroring `own_load_continue_fire`. No save write before the world is
 /// confirmed loading. Every native call is wrapped in `catch_unwind` (a Rust panic is caught; a hardware
 /// AV is not). Keeps `simulated_button_presses_total = 0`.
+/// Pump number logged by a commit that came from the held path, where the real number belongs to a
+/// `Run` several ticks back.
+const HELD_COMMIT_PUMP_NUMBER: u64 = 0;
+
 pub(crate) unsafe fn own_load_pump_tick(base: usize, gm: usize, frame_delta: f32) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let job = OWN_LOAD_PUMP_JOB.load(Ordering::SeqCst);
@@ -629,6 +799,21 @@ pub(crate) unsafe fn own_load_pump_tick(base: usize, gm: usize, frame_delta: f32
         return;
     }
     if OWN_LOAD_PUMP_DONE.load(Ordering::SeqCst) {
+        return;
+    }
+    // Success was already reached on an earlier tick and the transition is being held back until the
+    // engine has taken down the title menu the switch made it rebuild. Do not run the job again --
+    // it has already deserialised and streamed the map -- just re-ask the drain and, when it
+    // answers, commit.
+    if OWN_LOAD_PUMP_SUCCESS_HELD.load(Ordering::SeqCst) {
+        if !unsafe {
+            title_menu_drained_for_commit(OWN_LOAD_OWNER_CACHED.load(Ordering::SeqCst), 0)
+        } {
+            return;
+        }
+        OWN_LOAD_PUMP_SUCCESS_HELD.store(false, Ordering::SeqCst);
+        OWN_LOAD_PUMP_DONE.store(true, Ordering::SeqCst);
+        unsafe { own_load_commit_after_pump(base, gm, HELD_COMMIT_PUMP_NUMBER) };
         return;
     }
     // Build the call buffers exactly as native ExecuteMenuJob/STEP_MenuJobWait do: a zero-init
@@ -695,17 +880,45 @@ pub(crate) unsafe fn own_load_pump_tick(base: usize, gm: usize, frame_delta: f32
         // Still working (Continue) -- keep pumping next frame.
         return;
     }
-    // Terminal: Success (2) or Failed (3). Latch done so we stop pumping regardless of the transition.
-    OWN_LOAD_PUMP_DONE.store(true, Ordering::SeqCst);
+    // Terminal: Failed (3) stops here and latches done. Success (2) does not latch yet -- see below.
     if state == MENUJOB_STATE_FAILED {
+        OWN_LOAD_PUMP_DONE.store(true, Ordering::SeqCst);
         append_autoload_debug(format_args!(
             "own-load-pump: pump #{fired} reached state=Failed(3) subcode={subcode} -- deser/map FAILED -> NO transition, latch DONE (save-safe)"
         ));
         return;
     }
-    // state == Success: the job deserialized + map-streamed (m28). Drive the title->ingame transition
-    // once via the guarded SetState5. RE-verify the parse from live state (the build+pump can change
-    // GameMan+0xc30) so the save-write transition is gated exactly like own_load_continue_fire.
+    // state == Success: the job deserialized + map-streamed (m28).
+    //
+    // The transition is held here, not fired here, until the engine has taken down the title menu
+    // this switch made it rebuild. The latch is deliberately not set on this path: `OWN_LOAD_PUMP_DONE`
+    // would stop the tick, and the tick is what re-asks the drain. `OWN_LOAD_PUMP_SUCCESS_HELD` keeps
+    // the tick alive while stopping the job from being run a second time.
+    if !unsafe {
+        title_menu_drained_for_commit(OWN_LOAD_OWNER_CACHED.load(Ordering::SeqCst), fired)
+    } {
+        OWN_LOAD_PUMP_SUCCESS_HELD.store(true, Ordering::SeqCst);
+        return;
+    }
+    OWN_LOAD_PUMP_DONE.store(true, Ordering::SeqCst);
+    unsafe { own_load_commit_after_pump(base, gm, fired) };
+}
+
+/// Re-verify the parse from live state and fire the guarded transition.
+///
+/// Split out of `own_load_pump_tick` so the held path and the straight-through path commit through
+/// one body rather than two copies that can drift. `subcode` is not re-read here: it belongs to the
+/// `Run` that reached Success, which may have been several ticks ago.
+///
+/// # Safety
+///
+/// Game-task context. Every read is fault-tolerant; the transition itself re-checks
+/// `c30_real && fp_real` and the owner's new-game flag inside `own_load_continue_fire` and aborts
+/// without a write on any failure.
+unsafe fn own_load_commit_after_pump(base: usize, gm: usize, fired: u64) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    // RE-verify the parse from live state (the build+pump can change GameMan+0xc30) so the
+    // save-write transition is gated exactly like own_load_continue_fire.
     let owner = OWN_LOAD_OWNER_CACHED.load(Ordering::SeqCst);
     let c30_live = if gm != null && gm != 0 {
         unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }.unwrap_or(0)
@@ -716,7 +929,7 @@ pub(crate) unsafe fn own_load_pump_tick(base: usize, gm: usize, frame_delta: f32
         c30_live != GAME_MAN_C30_UNSET && c30_live != 0 && c30_live != FULLREAD_C30_M10_DEFAULT;
     let (fp_real, fp_level, _fp_name_len) = unsafe { char_fingerprint(base) };
     append_autoload_debug(format_args!(
-        "own-load-pump: *** pump #{fired} reached state=Success(2) subcode={subcode} -- deser+map-stream DONE (m28 mounted); driving title->ingame transition ONCE (owner=0x{owner:x} c30_live=0x{c30_live:x} c30_real={c30_real} fp_real={fp_real} level={fp_level}) ***"
+        "own-load-pump: *** pump #{fired} reached state=Success(2) -- deser+map-stream DONE (m28 mounted); driving title->ingame transition ONCE (owner=0x{owner:x} c30_live=0x{c30_live:x} c30_real={c30_real} fp_real={fp_real} level={fp_level}) ***"
     ));
     // A `own_load_pump_verify_only()` early return used to sit here: a save-safe probe that stopped
     // at Success(2) without the save-writing SetState5. Its gate has returned a literal `false`
