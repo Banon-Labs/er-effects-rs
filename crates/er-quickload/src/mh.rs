@@ -9,7 +9,12 @@
 //! The `#[no_mangle] er_effects_union_register` C export stays here (not in `er-hook`): it is a
 //! cross-DLL contract other DLLs resolve by name, and keeping it in this crate ensures only
 //! `er_quickload.dll` exports it -- exactly as before the extraction.
-use std::sync::atomic::AtomicUsize;
+use std::ffi::c_void;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+// `mh_install_hook_once` logs its own outcome, and this DLL's debug log is the one place a
+// failed install is visible at runtime.
+use crate::append_autoload_debug;
 
 pub use er_hook::*;
 
@@ -190,4 +195,55 @@ pub extern "system" fn er_quickload_hold_cursor_pos(packed: u64) {
 pub extern "system" fn er_quickload_loading_screen_data() -> usize {
     er_loading_portrait_core::layout::LOADING_SCREEN_LAST_DATA
         .load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Robust "install this MinHook detour exactly once" primitive shared by the boot-time hook installs. Fixes
+/// the non-deterministic MinHook install races (2026-07-15): these installs are retried per game-tick until
+/// they land, and the old `load()!=NOT?return` guard did not block a REENTRANT call while the first was
+/// mid-install (the flag was only set on full success), so an install ran twice -> double MhHook::new
+/// (ALREADY_CREATED) + a `queue_enable`+shared-`MH_ApplyQueued` race -> the handler non-deterministically
+/// never fired (intermittent ghosting, dead slot-pick, reload crash). This helper: (1) atomic once-claim on
+/// `flag` so only the first caller proceeds; (2) atomic single-target `MH_EnableHook` (no shared queue);
+/// (3) adopts `MH_ERROR_ALREADY_CREATED` and treats `MH_ERROR_ENABLED` as success. Rolls `flag` back to
+/// `not_installed` only on a real failure so a later tick retries. `addr` is the already-resolved target VA.
+pub(crate) fn mh_install_hook_once(
+    flag: &AtomicUsize,
+    not_installed: usize,
+    installed_yes: usize,
+    addr: usize,
+    handler: *mut c_void,
+    orig: &'static AtomicUsize,
+    name: &str,
+) -> bool {
+    if flag
+        .compare_exchange(
+            not_installed,
+            installed_yes,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        )
+        .is_err()
+    {
+        return flag.load(Ordering::SeqCst) == installed_yes;
+    }
+    // Union (2026-07-16): register through the hook union instead of a bare MhHook. If another feature
+    // already hooks this game address, we chain onto it (no silent drop, no install-order race) rather
+    // than losing the single MinHook slot. `orig` is wired to the next handler (or the real trampoline).
+    let handler_fn: crate::mh::UnionFn =
+        unsafe { std::mem::transmute::<*mut c_void, crate::mh::UnionFn>(handler) };
+    match unsafe { crate::mh::register_union_hook(addr, handler_fn, orig) } {
+        Ok(()) => {
+            append_autoload_debug(format_args!(
+                "mh-install: {name} registered on union 0x{addr:x}"
+            ));
+            true
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!(
+                "mh-install: register_union_hook {name} failed: {status:?}"
+            ));
+            flag.store(not_installed, Ordering::SeqCst);
+            false
+        }
+    }
 }

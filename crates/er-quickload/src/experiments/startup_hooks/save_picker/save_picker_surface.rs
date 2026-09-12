@@ -1,5 +1,39 @@
 use super::*;
 
+// Moved out of `quit_menu/system_quit_dialog_handlers.rs` with the rows feature: these resolve
+// where the live save is, which the picker needs whether or not a cloned row exists.
+/// The active save file the character-switch feature snapshots + restores + writes to. Resolved from
+/// runtime ground truth via `active_save_file_for_system_quit()`: a direct-file save selected in the
+/// missing-save picker is a read-only source copied into the private redirected native save tree, so
+/// this returns the game's native `%APPDATA%/EldenRing/<steamid>/ER0000.{co2|sl2}` path for writes.
+/// Explicit/default saves keep using the normal configured/default resolver. Never write back to the
+/// direct source file under `save-files/` or a user-picked path.
+pub(crate) fn system_quit_env_save_path() -> Result<String, &'static str> {
+    let Some(path) = active_save_file_for_system_quit() else {
+        return Err(
+            "no active save file (direct/configured save unset and no default ER0000 save resolved)",
+        );
+    };
+    let path = path.to_string_lossy();
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("resolved active save file is blank");
+    }
+    Ok(trimmed.trim_end_matches(['/', '\\']).to_owned())
+}
+
+pub(crate) fn system_quit_env_save_dir() -> Result<String, &'static str> {
+    let trimmed = system_quit_env_save_path()?;
+    let Some(sep) = trimmed.rfind(['/', '\\']) else {
+        return Err("configured save_file has no parent directory");
+    };
+    let dir = &trimmed[..sep];
+    if dir.is_empty() {
+        return Err("configured save_file parent directory is empty");
+    }
+    Ok(dir.to_owned())
+}
+
 // Product-side surface router. The pure picker surface/outcome decisions live in `er-save-picker-core`;
 // this root shim keeps the compatibility names and owns the runtime hook glue, root config latch,
 // and System>Quit state staging.

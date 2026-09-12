@@ -8,8 +8,11 @@ static TEXT_INPUT_02_990_CANONICAL_URL: &[u8] = b"data0:/menu/win/02_990_textinp
 // Second derivation of the same canonical payload, for the System>Quit link field. Separate cache
 // because the two derivations differ: the picker's hides the movie's chrome, this one keeps and
 // widens it.
+#[cfg(feature = "quit-rows")]
 static BUILD_URL_02_990_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceLock::new();
+#[cfg(feature = "quit-rows")]
 static BUILD_URL_02_990_RUNTIME_SERVES: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "quit-rows")]
 static BUILD_URL_02_990_RUNTIME_FAILURES: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) fn install_profile_select_table_diag_hook() {
@@ -736,6 +739,9 @@ pub(crate) unsafe fn text_input_02_990_swap_to_inline(base: usize, file: usize) 
 
 /// Centre `02_990_textinput` over the Quit tab for the **Load Build from URL** link field, with the
 /// movie's own backing plate and frame art kept and widened to hold a planner link.
+///
+/// The field belongs to a cloned row, so the whole derivation goes with the rows.
+#[cfg(feature = "quit-rows")]
 pub(crate) unsafe fn text_input_02_990_swap_to_build_url(base: usize, file: usize) -> bool {
     unsafe {
         text_input_02_990_swap(
@@ -941,6 +947,7 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
             if is_path_editor_02_990 {
                 memory_replacement = unsafe { text_input_02_990_swap_to_inline(base, native) };
             }
+            #[cfg(feature = "quit-rows")]
             if is_build_url_02_990 {
                 memory_replacement = unsafe { text_input_02_990_swap_to_build_url(base, native) };
             }

@@ -6,4 +6,5 @@
 //! installs before any hook or menu pump can run it, and its generated prologue table moved with
 //! it into that crate's own `build.rs`.
 
+#[cfg(feature = "quit-rows")]
 pub(crate) use er_quit_menu_core::software_keyboard::*;

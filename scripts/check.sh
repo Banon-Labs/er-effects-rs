@@ -2092,6 +2092,13 @@ python3 "$repo_root/scripts/check-single-dll-product-contract.py"
 python3 "$repo_root/scripts/check-feature-gates-bite.py" --selftest
 python3 "$repo_root/scripts/check-feature-gates-bite.py"
 
+# ...and the configuration those gates describe has to keep compiling, or the counts above become
+# a record of attributes nobody builds. This is the trim the rows came off for: the autoload, the
+# save picker, the loading cover, the portraits and the menu trace, with no cloned rows.
+cargo xwin check --manifest-path "$repo_root/Cargo.toml" -p er-quickload \
+  --target x86_64-pc-windows-msvc --no-default-features \
+  --features autoload,save-picker,loading-cover,portrait,menu-trace
+
 bash "$repo_root/scripts/check-rust-build.sh"
 
 # The launch-time freshness gate, shared by five launch scripts as `require_fresh_dlls`. Its

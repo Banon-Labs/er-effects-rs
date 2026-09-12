@@ -18,7 +18,10 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // gate condition is !ShouldSave() -- the suppressed quit-save left GameMan.save_requested set. This
     // clears that spurious flag so the game's own advancer passes 7->8->9 and completes retaining the
     // player (not a state force). Epoch-scoped; no-op on load1 and on a still-progressing load.
-    unsafe { maybe_force_finish_stuck_testnet_step() };
+    #[cfg(feature = "quit-rows")]
+    unsafe {
+        maybe_force_finish_stuck_testnet_step()
+    };
     // Passive controller-input trace (er-quickload-input-trace.txt): record real pad edges +
     // semaphore snapshots to er-quickload-input-trace.jsonl for user-driven runs. Recording only --
     // never blocks, never fabricates; a marker/env-gated no-op by default.

@@ -1,6 +1,6 @@
 // Product (B) System>Quit modules.
 // Shared imports preserved from the former flat startup-hook namespace for child modules.
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook, mh_install_hook_once};
 use crate::*;
 use crate::{crashlog::*, telemetry::*};
 use eldenring::cs::PlayerIns;
@@ -10,12 +10,7 @@ use er_telemetry_core::counters::SAVE_DEST_PICKER_OPEN_RETRY_COUNT;
 use er_telemetry_core::counters::SAVE_PICKER_MODE_ACTIVE;
 use er_telemetry_core::counters::SYSTEM_QUIT_SAVE_SWAP_POLL_TICK;
 use fromsoftware_shared::FromStatic;
-use std::{
-    ffi::c_void,
-    fs,
-    path::Path,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+use std::{ffi::c_void, fs, path::Path, sync::atomic::Ordering};
 
 pub(crate) mod profile_rows_system_quit_menu;
 pub(crate) use profile_rows_system_quit_menu::*;

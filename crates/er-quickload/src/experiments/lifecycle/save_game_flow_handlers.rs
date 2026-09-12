@@ -11,6 +11,12 @@
 
 use super::*;
 
+// Reached through `quit_menu`'s glob until the rows became a feature. These three are the
+// vanilla Save Game row's own text, and `er-quit-menu-core` owns them.
+use er_quit_menu_core::row_text::{
+    SYSTEM_QUIT_SAVE_GAME_DIALOG_W, SYSTEM_QUIT_SAVE_GAME_HELP_W, SYSTEM_QUIT_SAVE_GAME_LABEL_W,
+};
+
 pub(crate) unsafe extern "system" fn system_quit_save_game_get_and_format_hook(
     out: usize,
     getter: usize,
@@ -83,6 +89,7 @@ pub(crate) unsafe fn system_quit_save_game_close_window(window: usize, label: &s
     true
 }
 
+#[cfg(feature = "quit-rows")]
 pub(crate) unsafe fn system_quit_save_game_request_save_only() {
     let Ok(request_save_addr) = game_rva(SYSTEM_QUIT_REQUEST_SAVE_RVA) else {
         append_autoload_debug(format_args!(
@@ -259,6 +266,7 @@ pub(crate) unsafe fn system_quit_save_game_close_menus(
     closed_option || closed_top
 }
 
+#[cfg(feature = "quit-rows")]
 /// Enter the Save Game flow from the row press: Straight to the destination list.
 ///
 /// Captures the System/Quit dialog the whole flow is anchored on, then hands the browser open to

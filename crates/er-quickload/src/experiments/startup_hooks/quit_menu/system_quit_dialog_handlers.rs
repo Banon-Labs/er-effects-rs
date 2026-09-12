@@ -64,38 +64,6 @@ pub(crate) unsafe extern "system" fn system_quit_menu_window_list_push_hook(
     ret
 }
 
-/// The active save file the character-switch feature snapshots + restores + writes to. Resolved from
-/// runtime ground truth via `active_save_file_for_system_quit()`: a direct-file save selected in the
-/// missing-save picker is a read-only source copied into the private redirected native save tree, so
-/// this returns the game's native `%APPDATA%/EldenRing/<steamid>/ER0000.{co2|sl2}` path for writes.
-/// Explicit/default saves keep using the normal configured/default resolver. Never write back to the
-/// direct source file under `save-files/` or a user-picked path.
-pub(crate) fn system_quit_env_save_path() -> Result<String, &'static str> {
-    let Some(path) = active_save_file_for_system_quit() else {
-        return Err(
-            "no active save file (direct/configured save unset and no default ER0000 save resolved)",
-        );
-    };
-    let path = path.to_string_lossy();
-    let trimmed = path.trim();
-    if trimmed.is_empty() {
-        return Err("resolved active save file is blank");
-    }
-    Ok(trimmed.trim_end_matches(['/', '\\']).to_owned())
-}
-
-pub(crate) fn system_quit_env_save_dir() -> Result<String, &'static str> {
-    let trimmed = system_quit_env_save_path()?;
-    let Some(sep) = trimmed.rfind(['/', '\\']) else {
-        return Err("configured save_file has no parent directory");
-    };
-    let dir = &trimmed[..sep];
-    if dir.is_empty() {
-        return Err("configured save_file parent directory is empty");
-    }
-    Ok(dir.to_owned())
-}
-
 /// Validate + ingest a picked save container path (any picker UI feeds this): runtime-flavor
 /// extension filter, BND4 parse, SteamID normalization, ProfileSummary slot preview, candidate
 /// staging, and last-picked-directory persistence. Menu-thread only (preview writes + renderer
@@ -210,22 +178,4 @@ pub(crate) unsafe fn system_quit_ingest_picked_save(selected_path: &str) -> bool
         selected_log
     ));
     true
-}
-
-pub(crate) unsafe fn wide_equals_ascii(ptr: usize, ascii: &[u8]) -> bool {
-    if ptr == 0 || ptr == TITLE_OWNER_SCAN_START_ADDRESS || ascii.is_empty() {
-        return false;
-    }
-    for (idx, want) in ascii.iter().copied().enumerate() {
-        let Some(unit) = (unsafe { safe_read_u16(ptr + idx * core::mem::size_of::<u16>()) }) else {
-            return false;
-        };
-        if unit != want as u16 {
-            return false;
-        }
-    }
-    matches!(
-        unsafe { safe_read_u16(ptr + ascii.len() * core::mem::size_of::<u16>()) },
-        Some(0)
-    )
 }

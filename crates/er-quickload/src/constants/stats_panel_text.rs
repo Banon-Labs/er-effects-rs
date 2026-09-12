@@ -10,6 +10,7 @@
 // (RE: bd profileselect-native-settext-RE-2026-07-04 + Ghidra dump FUN_1408758d0/FUN_14074c630;
 // ARM/CONSUME SetText substitution was rejected because the FMG-static populate pass calls the SetText
 // core directly, so no wrapper-level routing can target a field the row-populate never writes.)
+#[cfg(feature = "quit-rows")]
 /// `CS::CSScaleformValue::~CSScaleformValue` (dump 0x140d7f900) = deobf/live 0xd7f850
 /// (`scripts/dump-deobf-shift.py` -> content-unique). fastcall(rcx=CSScaleformValue*). Releases the
 /// GFx::Value handle a resolved child proxy holds; the stats push calls it exactly like the native
@@ -34,6 +35,7 @@ pub(crate) const COMPONENT_GET_VALUE_VTABLE_SLOT_OFFSET: usize = 0x8;
 /// (the pre-7e7 bug) stamps a vtable over the component-link node and "releases" whatever
 /// `proxy+0x20` holds -- a UAF corrupter.
 pub(crate) const SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET: usize = 0x28;
+#[cfg(feature = "quit-rows")]
 /// Stack size for an out SceneObjProxy passed to `assignComponentWithName`. The native row-populate
 /// reserves 0x70 bytes; the binder fully constructs the out proxy without reading it, so a zeroed
 /// buffer with headroom is safe.
@@ -321,8 +323,10 @@ pub(crate) static PLAYER_GAME_DATA_NAME_GETTER_OVERRIDE_LOGGED: AtomicUsize = At
 /// Per-slot stats cache state (oracle): 0 = not attempted, 1 = loaded (`.sl2` read + parsed), 2 =
 /// load failed (save unreadable/too small) -- the hook then falls back to the loaded character.
 pub(crate) use er_telemetry_core::counters::PROFILE_SLOT_STATS_CACHE_STATE;
+#[cfg(feature = "quit-rows")]
 /// Count of per-slot cache drops on a save swap (oracle).
 pub(crate) use er_telemetry_core::counters::PROFILE_SLOT_CACHE_INVALIDATIONS;
+#[cfg(feature = "quit-rows")]
 /// Count of per-slot cache refills from picker-held bytes (oracle).
 pub(crate) use er_telemetry_core::counters::PROFILE_SLOT_CACHE_PREVIEW_RELOADS;
 /// Bitmask of save slots the per-slot cache named but could not decode stats for (oracle): the
@@ -644,7 +648,9 @@ pub(crate) const DESERIALIZE_SLOT_RVA: usize = 0x67b290;
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const SAVE_WRITE_TO_SLOT_RVA: usize = 0x67b750;
 pub(crate) use er_title_flow::GAME_MAN_SAVED_MAP_C30_OFFSET;
+#[cfg(feature = "quit-rows")]
 pub(crate) use er_title_flow::GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET;
+#[cfg(feature = "quit-rows")]
 pub(crate) use er_title_flow::GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY;
 /// submit_play_game 3-phase states: build CSFeMan -> deserialize slot -> re-submit
 /// the real map. Driven one step per game-task tick.

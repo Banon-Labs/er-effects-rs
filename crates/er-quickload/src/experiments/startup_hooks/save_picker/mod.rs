@@ -19,6 +19,7 @@ pub(crate) mod save_picker_menu;
 pub(crate) use save_picker_menu::*;
 
 pub(crate) mod save_picker_path_editor;
+#[cfg(feature = "quit-rows")]
 pub(crate) use save_picker_path_editor::*;
 
 pub(crate) mod save_picker_os_dialog;

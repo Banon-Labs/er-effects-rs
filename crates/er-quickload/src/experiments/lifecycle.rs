@@ -5,6 +5,9 @@
 
 use super::*;
 
+// The install-once primitive the save-flow boxes retry through, now shared out of `crate::mh`.
+use crate::mh::mh_install_hook_once;
+
 mod save_game_flow_handlers;
 pub(crate) use save_game_flow_handlers::*;
 

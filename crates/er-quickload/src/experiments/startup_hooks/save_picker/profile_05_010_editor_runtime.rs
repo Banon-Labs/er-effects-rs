@@ -7,12 +7,16 @@ use er_gfx::profile_05_010_protocol::{
     CONTROL_FILE_NAME, ProfileEditorCommand, ProfileEditorStatus, RenderMode, STATUS_FILE_NAME,
     SelectedKind,
 };
+// Only the build-url field places its own window and parks its own caret, and that field is a
+// cloned row.
+#[cfg(feature = "quit-rows")]
 pub(crate) use er_quit_menu_core::scaleform_proxy::{
-    apply_build_url_editor_window_position,
+    apply_build_url_editor_window_position, place_text_input_02_990_caret_at_end,
+};
+pub(crate) use er_quit_menu_core::scaleform_proxy::{
     apply_transform_to_proxy as apply_profile_editor_transform_to_proxy,
     component_scaleform_value_for_setter, destroy_resolved_row_child_proxy,
-    place_text_input_02_990_caret_at_end, resolve_row_child_proxy, scaleform_value_setter_guard,
-    set_scaleform_value_position,
+    resolve_row_child_proxy, scaleform_value_setter_guard, set_scaleform_value_position,
 };
 use er_telemetry_core::counters::{
     PROFILE_EDITOR_DEFERRED_APPLIES, PROFILE_SELECT_WINDOW_RUN_TICKS,
@@ -231,6 +235,7 @@ pub(crate) fn remember_profile_editor_field_target(
     });
 }
 
+#[cfg(feature = "quit-rows")]
 /// Drop every cached live component belonging to `active_surface`, because that surface is being
 /// torn down and its GFx objects are about to stop existing.
 ///
@@ -979,9 +984,12 @@ unsafe fn apply_profile_editor_nested_chrome_probe(
     result
 }
 
+#[cfg(feature = "quit-rows")]
 static PATH_EDITOR_WINDOW_POSITION_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "quit-rows")]
 static PATH_EDITOR_WINDOW_POSITION_SUCCESSES: AtomicUsize = AtomicUsize::new(0);
 
+#[cfg(feature = "quit-rows")]
 /// Position the separate 02_990 MenuWindow root over ProfileSelect's CurrentPath field. The native
 /// SoftwareKeyboard controller owns and rewrites its child display object after GFx parsing, so the
 /// external MenuWindow SceneObjProxy is the stable placement boundary.
@@ -1043,6 +1051,7 @@ pub(crate) unsafe fn apply_path_editor_window_position(base: usize, menu_window:
     unsafe { apply_path_editor_caret_to_end(base, menu_window) };
 }
 
+#[cfg(feature = "quit-rows")]
 /// Applications of the end-caret per editor open. The field is not guaranteed to be focused on the
 /// frame the window first runs, and taking focus is what would reset a caret we set too early, so the
 /// request is repeated over the same short window the positioning pass uses. It stays far shorter
@@ -1060,6 +1069,7 @@ pub(crate) fn reset_path_editor_caret_latch() {
     PATH_EDITOR_CARET_RESOLVED.store(0, Ordering::SeqCst);
 }
 
+#[cfg(feature = "quit-rows")]
 /// Put the caret at the end of the prefilled path when the editor opens.
 ///
 /// The editor is prefilled with the current path and the caret sits at index 0, so typing prepends to
